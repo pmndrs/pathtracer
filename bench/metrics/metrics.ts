@@ -50,6 +50,8 @@ export interface PairMetrics {
   fireflyPct: number;
   /** Mean LDR-FLIP, filled in by flip.ts (compareImages leaves it undefined). */
   flip?: number;
+  /** Mean HDR-FLIP (exposure-bracketed), filled in by flip.ts / compare.ts when requested. */
+  flipHdr?: number;
 }
 
 export function assertSameSize(a: Image, b: Image): void {

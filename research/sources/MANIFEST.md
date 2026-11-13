@@ -2,6 +2,7 @@
 |---|---|---|---|---|
 | native/appleseed | https://github.com/appleseedhq/appleseed | c4ba828 | MIT | production renderer |
 | native/bevy-solari | https://github.com/bevyengine/bevy | 493cddd | MIT/Apache-2.0 | Bevy hardware RT GI (sparse crates/bevy_solari) |
+| capsaicin (at `research/sources/capsaicin`, not under native/) | https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin | 914b915 (v1.3, 2025-11-18) | MIT (AMD); vendored `third_party/FidelityFX` MIT; `third_party/gfx` submodule NOT cloned; test media separate repo, licence unchecked | D3D12/DXR framework: reference PT, GI-1.2 (hash-grid cache, screen probes, world ReSTIR). No NVIDIA/NRD content found. Read only, never build; see notes/11-capsaicin.md |
 | native/cycles | https://github.com/blender/cycles | 6abef8c | Apache-2.0 | GPU integrator kernels, sorting, light tree (standalone repo) |
 | native/drjit | https://github.com/mitsuba-renderer/drjit | 847afbf | BSD-3 | JIT megakernel backend |
 | native/embree | https://github.com/RenderKit/embree | 3b7e4ee | Apache-2.0 | CPU BVH reference |

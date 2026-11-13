@@ -21,9 +21,9 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.11 | Runner emits the viewer's `report.json` manifest (schema in `bench/viewer/src/report.ts`) | agent:competitors | ✅ | `bench/runner/report.ts`; `matrix.ts --name X` → `bench/results/reports/X/report.json` |
 | P0.12 | Dedupe PFM IO: `bench/scenes/pfm.ts` → reuse `bench/metrics/pfm.ts` | agent:sponza | ✅ | `bench/scenes/pfm.ts` deleted |
 | P0.13 | Tier 2 "sponza-white": Sponza geometry (glTF sample asset, sha256 in manifest) with untextured grey diffuse, so pbrt/Mitsuba/web match exactly | agent:sponza | ✅ | 262,266 tris, 1280×720, sun + sky; refs 4096 spp (Mitsuba 24 min, pbrt 57 min); pbrt-vs-Mitsuba relMSE 4.1e-3 (noise), bias +0.22% |
-| P0.14 | FLIP validation against NVlabs reference images; HDR-FLIP as an A/B against LDR-FLIP on firefly scenes | — | ⬜ | |
+| P0.14 | FLIP validation against NVlabs reference images; HDR-FLIP as an A/B against LDR-FLIP on firefly scenes | agent:flip | ✅ | LDR mean 0.159693 vs NVlabs 0.159693 (diff 2.6e-8, max pixel 1.6e-5) once sRGB decode is on; HDR-FLIP 0.283547 = theirs; `compare.ts --hdr-flip`, viewer H key, report `flip-ab`; default stays LDR (D18). Follow-ups: D18 decision, in-browser HDR parallelism |
 | P0.15 | Move the quad-light analytic check from `bench/references/compare.ts` into `bench/metrics` | agent:sponza | ✅ | `bench/metrics/analytic.ts` (+ `checkMaskedImage`) |
-| P0.16 | `THIRD_PARTY.md` (FLIP lineage, bvh runner port, any ported code) | — | ⬜ | |
+| P0.16 | `THIRD_PARTY.md` (FLIP lineage, bvh runner port, any ported code) | agent:legal | ✅ | `THIRD_PARTY.md` + `licenses/NVlabs-FLIP-BSD-3-Clause.txt`, linked from README; follow-up: pin the NVlabs commit and verify the licence text in P0.14 |
 | P0.17 | Blue-noise texture generator of our own (void-and-cluster; FAST generator, EA BSD-3) since STBN assets are non-commercial | — | ⬜ | needed by P4, cheap to start |
 | P0.18 | Resource-table and subgroup-matrix compile probes on the caps page (Windows/Chrome Canary) | — | ⬜ | names are guesses until tested |
 | P0.19 | Web adapters load `file` meshes (Sponza) through the glb exporter output; runner/matrix iterate `allScenes` | agent:baseline | ✅ | all three render sponza-white; image mean within -0.2% of Mitsuba and +0.0% of pbrt, no per-renderer fix needed (V19); `directionalLight` now true in the adapters; `matrix.ts` gained `--scenes all`, `--repeat`, `--append`, `runs.json` |
@@ -37,14 +37,23 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.27 | Sponza tgpt-megakernel at 1024 spp (capped at 512 for the 30 min budget) and a longer reference or several reference seeds so 1e-3 becomes measurable | — | ⬜ | reference floor 4.1e-3 (pbrt vs Mitsuba) blocks every target under ~8e-3 on Sponza |
 | P0.28 | Competitor adapters: yield to the event loop without a GPU sync inside tgpt's timed loop (runner now tolerates a busy page, V17) | — | ⬜ | minutes-long synchronous loops made `Runtime.evaluate` time out |
 | P0.29 | Report an unbiased error estimate that subtracts the reference's own noise (V18), or use two independent reference seeds | — | ⬜ | Sponza "time to 1e-2" currently waits for test noise ~8e-3 |
-| P0.30 | Check the shared-machine load before timing and refuse or flag (runner: load average, number of GPU-process Chrome instances) | — | ⬜ | all P0.9 spreads were load-driven |
+| P0.30 | Check the shared-machine load before timing and refuse or flag (runner: load average, number of GPU-process Chrome instances) | agent:legal | ✅ | `bench/runner/load-check.ts`; `--max-load/--max-gpu-procs/--load-wait/--strict-load`; load + procs in run JSON and CSV note, loaded rows `valid=0`; Windows path (CPU delta, CIM) untested, add to W-tasks |
+| P0.31 | Capsaicin as a native GPU reference on Windows (W9) | maintainer (Windows) | ⬜ | research/notes/11-capsaicin.md §9 has the W9 draft (export Tier 0 + sponza-white, matched EXR→PFM refs `capsaicin-*spp.pfm`, compare vs pbrt/Mitsuba, time ref PT + GI-1.2 on the 3060); suggestion: cross-check and timing baseline only, not a D15 reference |
 
 ## Parallel tracks
 
 | ID | Task | Where | Status |
 |---|---|---|---|
-| X1 | Wide BVH: BVH4 / CWBVH8 node formats + WGSL traversal + GPU collapse pass; gate ≥1.3× on 3060L and M5 | ~/Developer/bvh, branch `wide-bvh` | 🟨 running (session `wide-bvh`, started 2026-11-13) |
+| X1 | Wide BVH: BVH4 / CWBVH8 node formats + WGSL traversal + GPU collapse pass; gate ≥1.3× on 3060L and M5 | ~/Developer/bvh, branch `claude/wide-bvh-684631` (not merged) | 🟨 both formats built, all correctness gates pass on M5; Sponza nodes 185→74.5 (BVH4)→40.5 MiB (CWBVH). Provisional (loaded) M5 closest-hit: BVH4 merged 1.28–1.32×, CWBVH ≈1.0×, both slower on instanced incoherent (0.57–0.86×). Needs quiet M5 rerun + 3060 runs (bvh `docs/internals/WINDOWS-RUNBOOK.md` §2d); GPU collapse and single-loop instanced walk are follow-ups |
 
 ## Open questions for the maintainer
+
+- **Capsaicin: a third reference renderer, or a cross-check only?** Suggestion: cross-check and native timing baseline on
+  the RTX 3060, for opaque scenes only. Keep pbrt + Mitsuba as the references (D15).
+  - Pro (cross-check): independent GPU implementation, same 3060 as W6, MIT, already built on the laptop.
+  - Con (as a reference): no glass, f16 output, environment handling needs a patch, Windows-only with a window, its own
+    biases (unclamped RR, dropped NaNs, stochastic MIS light PDF).
+  - Settles it: W9 on Cornell + sponza-white at 1024–4096 spp. Promote only if mean bias vs pbrt and Mitsuba is
+    < 0.3% on both and the error stays within the pbrt-vs-Mitsuba floor.
 
 - ~~Sponza reference spp~~: settled by P0.9: keep 4096 for both (at 2048 the pbrt-vs-Mitsuba floor rises to 6.2e-3 and even 1e-2 becomes unmeasurable on Sponza).

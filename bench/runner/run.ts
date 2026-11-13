@@ -19,6 +19,7 @@ import { appendCsv } from './csv.ts';
 import { buildRows, deviceLabel, makeRunId, planRuns, utcDate } from './plan.ts';
 import { type AdapterSummary, type BenchReport, type RunRecord, type RunSummary } from './contract.ts';
 import { acquireGpuLock } from './gpu-lock.ts';
+import { formatLoadNote, sampleLoad, waitForQuiet } from './load-check.ts';
 import { gitCommit } from './measured-commit.ts';
 import { buildReportManifest, fileSystemIo, slotFor } from './report.ts';
 import { BrowserSession, WebGpuUnavailableError, WrongAdapterError } from './session.ts';
@@ -124,7 +125,27 @@ async function main(): Promise<number> {
     sampler = await startClockSampler();
     console.log(`page: ${options.page}   runs: ${plan.map((run) => run.variant).join(' ')}   clock sampler: ${sampler.kind}`);
 
+    const thresholds = { maxLoad: options.maxLoad, maxGpuProcs: options.maxGpuProcs };
     for (const [index, planned] of plan.entries()) {
+      // P0.30: the lock only excludes agents that take it; check the machine itself before every timed run.
+      const load = await waitForQuiet(
+        {
+          sample: () => sampleLoad(),
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          now: () => Date.now(),
+          onWait: (reasons) => console.log(`machine is loaded (${reasons.join('; ')}); waiting up to ${options.loadWaitS} s${options.strictLoad ? ' (--strict-load: fails after that)' : ''}`),
+        },
+        thresholds,
+        options.loadWaitS * 1000,
+      );
+      const loadRecord = { ...load.sample, loaded: load.loaded, waitedMs: load.waitedMs, reasons: load.reasons };
+      console.log(`  ${formatLoadNote(load.sample, load.loaded)}${load.waitedMs > 1500 ? `  (waited ${(load.waitedMs / 1000).toFixed(0)} s)` : ''}`);
+      if (load.loaded && options.strictLoad) {
+        summary.runs.push({ index: index + 1, variant: planned.variant, args: planned.args, outcome: 'fail', reasons: [`machine still loaded after ${options.loadWaitS} s (--strict-load): ${load.reasons.join('; ')}`], durationMs: 0, result: null, load: loadRecord });
+        failures++;
+        console.error(`FAILED: ${summary.runs[summary.runs.length - 1]?.reasons[0]}`);
+        break;
+      }
       const slot = slotFor(index + 1, planned.variant);
       server.setSlot(slot);
       const result = await session.runPage(options.page, {
@@ -141,6 +162,7 @@ async function main(): Promise<number> {
         reasons: result.verdict.reasons,
         durationMs: result.durationMs,
         result: result.report?.result ?? null,
+        load: loadRecord,
       };
       summary.runs.push(record);
       if (!ok) failures++;

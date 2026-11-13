@@ -107,4 +107,13 @@ export interface RunRecord {
   reasons: string[];
   durationMs: number;
   result: BenchResult | null;
+  /** Machine load measured just before this run (P0.30); absent on records from older runners. */
+  load?: {
+    load1: number;
+    loadSource: 'loadavg' | 'cpu-delta' | 'unavailable';
+    gpuProcs: number | null;
+    loaded: boolean;
+    waitedMs: number;
+    reasons: string[];
+  };
 }

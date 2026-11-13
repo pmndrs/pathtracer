@@ -4,7 +4,7 @@
  *
  * Ported from our own implementation in ~/Developer/Denoiser/examples/realtime-denoiser/src/flip.ts, which was
  * written after NVIDIA's reference (github.com/NVlabs/flip, BSD-3-Clause, Copyright (c) 2020-2024 NVIDIA CORPORATION
- * & AFFILIATES; attribution goes in THIRD_PARTY.md). Pipeline, as in the reference:
+ * & AFFILIATES; attribution in THIRD_PARTY.md, pinned commit d3ab02a). Pipeline, as in the reference:
  *   linear RGB -> YCxCz; per-channel CSF filtering (sums of Gaussians: A, RG, BY); back to linear RGB clamped to
  *   [0,1]; -> L*a*b*, Hunt adjustment; HyAB distance ^ qc (0.7) redistributed with pc = 0.4, pt = 0.95 against
  *   cmax = HyAB(green, blue)^qc; feature (edge / point detector) difference ^ qf (0.5) on normalised Y;
@@ -14,7 +14,17 @@
  * reference decodes sRGB to linear first; our tonemap output is already display-linear, so that step is skipped.
  * Quoted numbers must name the tonemap, EV and ppd. Pixels per degree default to FLIP's standard viewing condition
  * (0.7 m from a 0.7 m wide 3840 px monitor: 67.02 ppd). Borders clamp-to-edge; kernels are separable.
- * HDR-FLIP (max over an exposure range) is not implemented yet: see README follow-ups.
+ *
+ * Validation (P0.14, see DIVERGES V6): NVlabs flip 1.7 (the pip `flip-evaluator`) also uses separable kernels with
+ * clamped borders, so those two are NOT departures from the current reference. The sRGB decode is: `srgbDecode` turns
+ * it back on for validation only (input is then 8-bit-style encoded display values, not tonemapped radiance).
+ *
+ * HDR-FLIP (Andersson et al., "Visualizing Errors in Rendered High Dynamic Range Images", Eurographics 2021; code
+ * NVlabs/flip, BSD-3-Clause, same attribution): LDR-FLIP of exposure-scaled, FLIP-tonemapped, clamped images, per-pixel
+ * MAX over `numExposures` exposures evenly spaced between start = log2(xMax / Ymax) and stop = log2(xMax / Ymedian),
+ * where xMax solves tonemap(x) = 0.85 and Y is the reference's luminance. numExposures = max(2, ceil(stop - start)).
+ * Its tonemap is its own (ACES with the 0.6 pre-exposure cancelled, Reinhard on luminance, Hable); it is NOT our
+ * display tonemap and there is no EV: the exposure range replaces it.
  */
 import type { Image } from '../src/adapter.ts';
 import { assertSameSize } from './metrics.ts';
@@ -231,7 +241,12 @@ export interface FlipOptions {
   tonemap?: TonemapName;
   ev?: number;
   ppd?: number;
+  /** VALIDATION ONLY (V6): treat the tonemapped values as sRGB-encoded and decode them to linear, like the reference does for PNG input. */
+  srgbDecode?: boolean;
 }
+
+/** sRGB electro-optical transfer (encoded [0,1] -> linear). */
+export const srgbDecode = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
 
 /** LDR-FLIP of `test` against `ref` over a fixed tonemap (default ACES, 0 EV, 67 ppd). */
 export function flipLdr(test: Image, ref: Image, opts: FlipOptions = {}): { map: Float32Array; mean: number; tonemap: TonemapName; ev: number; ppd: number } {
@@ -239,8 +254,143 @@ export function flipLdr(test: Image, ref: Image, opts: FlipOptions = {}): { map:
   const tonemap = opts.tonemap ?? 'aces';
   const ev = opts.ev ?? 0;
   const ppd = opts.ppd ?? DEFAULT_PPD;
-  const R = prepareFlip(tonemapImage(ref, tonemap, ev), ref.width, ref.height, ppd);
-  const T = prepareFlip(tonemapImage(test, tonemap, ev), test.width, test.height, ppd);
+  const rr = tonemapImage(ref, tonemap, ev), tt = tonemapImage(test, tonemap, ev);
+  if (opts.srgbDecode) {
+    for (let i = 0; i < rr.length; i++) { rr[i] = srgbDecode(rr[i]!); tt[i] = srgbDecode(tt[i]!); }
+  }
+  const R = prepareFlip(rr, ref.width, ref.height, ppd);
+  const T = prepareFlip(tt, test.width, test.height, ppd);
   const { map, mean } = flipMapPrepared(R, T);
   return { map, mean, tonemap, ev, ppd };
+}
+
+// ---- HDR-FLIP -----------------------------------------------------------------------------------------------------
+
+export type HdrTonemapName = 'aces' | 'reinhard' | 'hable';
+export const HDR_TONEMAPS: readonly HdrTonemapName[] = ['aces', 'reinhard', 'hable'];
+// (a x^2 + b x + c) / (d x^2 + e x + f), as in the reference's ToneMappingCoefficients (Reinhard is luminance-based).
+const HDR_TC: Record<HdrTonemapName, readonly number[]> = {
+  reinhard: [0, 1, 0, 0, 1, 1],
+  aces: [0.6 * 0.6 * 2.51, 0.6 * 0.03, 0, 0.6 * 0.6 * 2.43, 0.6 * 0.59, 0.14], // 0.6 cancels the usual pre-exposure
+  hable: [0.231683, 0.013791, 0, 0.18, 0.3, 0.018],
+};
+
+const lum = (r: number, g: number, b: number) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+/** Start / stop exposure (stops) from the reference image, as the reference implementation computes them. */
+export function hdrFlipExposures(ref: Image, tonemap: HdrTonemapName = 'aces'): { start: number; stop: number; count: number } {
+  const tc = HDR_TC[tonemap];
+  const t = 0.85;
+  const a = tc[0]! - t * tc[3]!, b = tc[1]! - t * tc[4]!, c = tc[2]! - t * tc[5]!;
+  let xMax: number;
+  if (a === 0) xMax = -c / b;
+  else { const d1 = -0.5 * (b / a); xMax = d1 + Math.sqrt(d1 * d1 - c / a); }
+  const n = ref.width * ref.height, ch = ref.channels, d = ref.data;
+  const Y = new Float32Array(n);
+  let ymax = -Infinity;
+  for (let i = 0; i < n; i++) {
+    let r = d[i * ch]!, g = d[i * ch + 1]!, bl = d[i * ch + 2]!;
+    if (!Number.isFinite(r) || r < 0) r = 0;
+    if (!Number.isFinite(g) || g < 0) g = 0;
+    if (!Number.isFinite(bl) || bl < 0) bl = 0;
+    const y = lum(r, g, bl);
+    Y[i] = y;
+    if (y > ymax) ymax = y;
+  }
+  Y.sort();
+  const median = Math.max(Y[n >> 1]!, 1.1920929e-7); // FLT_EPSILON: more than half the image black
+  const start = Math.log2(xMax / Math.max(ymax, 1e-30));
+  const stop = Math.log2(xMax / median);
+  return { start, stop, count: Math.max(2, Math.ceil(stop - start)) };
+}
+
+/** Exposure gain, FLIP tonemap, clamp to [0,1]: display-linear RGB for one exposure (non-finite and negative -> 0). */
+export function hdrFlipLdr(img: Image, exposureStops: number, tonemap: HdrTonemapName = 'aces'): Float32Array {
+  const n = img.width * img.height, ch = img.channels, d = img.data;
+  const out = new Float32Array(n * 3);
+  const gain = Math.pow(2, exposureStops);
+  const tc = HDR_TC[tonemap];
+  const [a, b, c, dd, e, f] = tc as [number, number, number, number, number, number];
+  const sat = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+  for (let i = 0; i < n; i++) {
+    let r = d[i * ch]!, g = d[i * ch + 1]!, bl = d[i * ch + 2]!;
+    r = Number.isFinite(r) && r > 0 ? r * gain : 0;
+    g = Number.isFinite(g) && g > 0 ? g * gain : 0;
+    bl = Number.isFinite(bl) && bl > 0 ? bl * gain : 0;
+    if (tonemap === 'reinhard') {
+      const k = 1 / (1 + lum(r, g, bl));
+      out[3 * i] = sat(r * k); out[3 * i + 1] = sat(g * k); out[3 * i + 2] = sat(bl * k);
+    } else {
+      out[3 * i] = sat((r * r * a + r * b + c) / (r * r * dd + r * e + f));
+      out[3 * i + 1] = sat((g * g * a + g * b + c) / (g * g * dd + g * e + f));
+      out[3 * i + 2] = sat((bl * bl * a + bl * b + c) / (bl * bl * dd + bl * e + f));
+    }
+  }
+  return out;
+}
+
+export interface HdrFlipOptions {
+  tonemap?: HdrTonemapName;
+  ppd?: number;
+  /** Override the reference-derived range (stops) and/or count. */
+  startExposure?: number;
+  stopExposure?: number;
+  numExposures?: number;
+  /** Called after each exposure (progress / parallel drivers). */
+  onExposure?: (index: number, count: number) => void;
+}
+
+export interface HdrFlipResult {
+  map: Float32Array; mean: number;
+  /** Per pixel, the exposure index (0..count-1) that gave the maximum. */
+  exposureIndex: Uint8Array;
+  start: number; stop: number; count: number; tonemap: HdrTonemapName; ppd: number;
+}
+
+/** Plan = the exposure list HDR-FLIP will evaluate (exposed so a parallel driver can split it). */
+export function hdrFlipPlan(ref: Image, opts: HdrFlipOptions = {}): { start: number; stop: number; count: number; exposures: number[] } {
+  const auto = hdrFlipExposures(ref, opts.tonemap ?? 'aces');
+  const start = opts.startExposure ?? auto.start, stop = opts.stopExposure ?? auto.stop;
+  if (start > stop) throw new Error('HDR-FLIP: start exposure must not exceed stop exposure');
+  const count = opts.numExposures ?? Math.max(2, Math.ceil(stop - start));
+  const step = (stop - start) / (count - 1);
+  return { start, stop, count, exposures: Array.from({ length: count }, (_, i) => start + i * step) };
+}
+
+/** LDR-FLIP map (not the mean) of one exposure; HDR-FLIP is the per-pixel max of these. */
+export function hdrFlipExposureMap(test: Image, ref: Image, exposure: number, tonemap: HdrTonemapName, ppd: number): Float32Array {
+  const R = prepareFlip(hdrFlipLdr(ref, exposure, tonemap), ref.width, ref.height, ppd);
+  const T = prepareFlip(hdrFlipLdr(test, exposure, tonemap), test.width, test.height, ppd);
+  return flipMapPrepared(R, T).map;
+}
+
+/** Fold per-exposure maps (in exposure order) into the HDR-FLIP result. */
+export function foldHdrFlip(maps: Float32Array[]): { map: Float32Array; mean: number; exposureIndex: Uint8Array } {
+  const N = maps[0]!.length;
+  const map = new Float32Array(N), exposureIndex = new Uint8Array(N);
+  for (let k = 0; k < maps.length; k++) {
+    const m = maps[k]!;
+    for (let i = 0; i < N; i++) if (m[i]! > map[i]!) { map[i] = m[i]!; exposureIndex[i] = k; }
+  }
+  let sum = 0;
+  for (let i = 0; i < N; i++) sum += map[i]!;
+  return { map, mean: sum / N, exposureIndex };
+}
+
+/** HDR-FLIP of `test` against `ref` (linear radiance, no tonemap/EV choice: the exposure range is derived from `ref`). */
+export function flipHdr(test: Image, ref: Image, opts: HdrFlipOptions = {}): HdrFlipResult {
+  assertSameSize(test, ref);
+  const tonemap = opts.tonemap ?? 'aces';
+  const ppd = opts.ppd ?? DEFAULT_PPD;
+  const plan = hdrFlipPlan(ref, opts);
+  const N = ref.width * ref.height;
+  const map = new Float32Array(N), exposureIndex = new Uint8Array(N);
+  for (let k = 0; k < plan.count; k++) {
+    const m = hdrFlipExposureMap(test, ref, plan.exposures[k]!, tonemap, ppd);
+    for (let i = 0; i < N; i++) if (m[i]! > map[i]!) { map[i] = m[i]!; exposureIndex[i] = k; }
+    opts.onExposure?.(k, plan.count);
+  }
+  let sum = 0;
+  for (let i = 0; i < N; i++) sum += map[i]!;
+  return { map, mean: sum / N, exposureIndex, start: plan.start, stop: plan.stop, count: plan.count, tonemap, ppd };
 }

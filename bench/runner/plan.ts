@@ -3,6 +3,7 @@
 import { configHash, type CsvRow } from './csv.ts';
 import type { RunnerOptions } from './args.ts';
 import type { AdapterSummary, RunRecord } from './contract.ts';
+import { formatLoadNote } from './load-check.ts';
 import { abbaOrder, median } from './stats.ts';
 
 /** UTC date for the CSV; the run's start time, not the write time. */
@@ -62,9 +63,10 @@ export function buildRows(input: {
     const scene = first?.scene ?? '-';
     const renderer = first?.renderer ?? input.page;
     const hash = configHash({ page: input.page, args: runs[0]?.args, config: first?.config });
-    const valid = (run: RunRecord): 0 | 1 => (input.timingValid && run.result?.valid !== false ? 1 : 0);
+    const valid = (run: RunRecord): 0 | 1 => (input.timingValid && run.result?.valid !== false && !run.load?.loaded ? 1 : 0);
+    const loadNote = (run: RunRecord): string => (run.load ? formatLoadNote(run.load, run.load.loaded) : '');
     const base = { date: input.date, commit: input.commit, device: input.device, browser: input.browser, scene, renderer, config_hash: hash };
-    const note = (extra: string) => [variant === '-' ? '' : `variant ${variant}`, extra, input.verdictNote].filter(Boolean).join('; ');
+    const note = (extra: string, load = '') => [variant === '-' ? '' : `variant ${variant}`, extra, input.verdictNote, load].filter(Boolean).join('; ');
     const metricNames = [...new Set(runs.flatMap((run) => Object.keys(run.result?.metrics ?? {})))];
     for (const metric of metricNames) {
       const values: number[] = [];
@@ -72,11 +74,12 @@ export function buildRows(input: {
         const value = run.result?.metrics[metric];
         if (typeof value !== 'number') return;
         values.push(value);
-        rows.push({ ...base, metric, value, valid: valid(run), run: String(index + 1), note: note('') });
+        rows.push({ ...base, metric, value, valid: valid(run), run: String(index + 1), note: note('', loadNote(run)) });
       });
       if (runs.length > 1 && values.length > 0) {
         const allValid = runs.every((run) => valid(run) === 1);
-        rows.push({ ...base, metric, value: median(values), valid: allValid ? 1 : 0, run: 'median', note: note(`median of ${values.length}`) });
+        const loads = runs.filter((run) => run.load?.loaded).map((run) => loadNote(run));
+        rows.push({ ...base, metric, value: median(values), valid: allValid ? 1 : 0, run: 'median', note: note(`median of ${values.length}`, loads.length > 0 ? `loaded in ${loads.length} of ${runs.length} runs` : '') });
       }
     }
   }

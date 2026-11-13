@@ -1,5 +1,5 @@
 /**
- * CLI: node bench/metrics/compare.ts a.pfm b.pfm [--ref r.pfm] [--out dir] [--tonemap aces] [--ev 0] [--no-flip]
+ * CLI: node bench/metrics/compare.ts a.pfm b.pfm [--ref r.pfm] [--out dir] [--tonemap aces] [--ev 0] [--no-flip] [--hdr-flip]
  *
  * With --ref: prints a-vs-ref, b-vs-ref and a-vs-b. Without: a is the test and b the reference (metrics are
  * asymmetric). With --out: writes, per pair, abs diff, signed bias map, relative error (sqrt of the per-pixel relMSE
@@ -11,16 +11,17 @@ import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Image } from '../src/adapter.ts';
 import { relErrToT } from './colormap.ts';
-import { flipLdr } from './flip.ts';
+import { flipLdr, HDR_TONEMAPS, type HdrTonemapName } from './flip.ts';
+import { flipHdrParallel } from './flip-parallel.ts';
 import { absDiffMap, biasMap, compareImages, relMseMap, type PairMetrics } from './metrics.ts';
 import { readPFM, scalarToImage, writePFM } from './pfm.ts';
 import { imageToPNG, scalarToPNG } from './png.ts';
 import { TONEMAPS, type TonemapName } from './tonemap.ts';
 
-interface Args { files: string[]; ref?: string; out?: string; tonemap: TonemapName; ev: number; flip: boolean }
+interface Args { files: string[]; ref?: string; out?: string; tonemap: TonemapName; ev: number; flip: boolean; hdrFlip: boolean; hdrTonemap: HdrTonemapName }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { files: [], tonemap: 'aces', ev: 0, flip: true };
+  const a: Args = { files: [], tonemap: 'aces', ev: 0, flip: true, hdrFlip: false, hdrTonemap: 'aces' };
   for (let i = 0; i < argv.length; i++) {
     const s = argv[i]!;
     if (s === '--ref') a.ref = argv[++i];
@@ -31,7 +32,13 @@ function parseArgs(argv: string[]): Args {
       a.tonemap = t;
     } else if (s === '--ev') a.ev = Number(argv[++i]);
     else if (s === '--no-flip') a.flip = false;
-    else if (s === '-h' || s === '--help') { console.log('usage: node bench/metrics/compare.ts a.pfm b.pfm [--ref r.pfm] [--out dir] [--tonemap clamp|reinhard|aces|agx] [--ev N] [--no-flip]'); process.exit(0); }
+    else if (s === '--hdr-flip') a.hdrFlip = true;
+    else if (s === '--hdr-tonemap') {
+      const t = argv[++i] as HdrTonemapName;
+      if (!HDR_TONEMAPS.includes(t)) throw new Error(`--hdr-tonemap must be one of ${HDR_TONEMAPS.join(', ')}`);
+      a.hdrTonemap = t;
+    }
+    else if (s === '-h' || s === '--help') { console.log('usage: node bench/metrics/compare.ts a.pfm b.pfm [--ref r.pfm] [--out dir] [--tonemap clamp|reinhard|aces|agx] [--ev N] [--no-flip] [--hdr-flip] [--hdr-tonemap aces|reinhard|hable]'); process.exit(0); }
     else if (s.startsWith('--')) throw new Error(`unknown option ${s}`);
     else a.files.push(s);
   }
@@ -43,17 +50,17 @@ const load = (p: string): Image => readPFM(readFileSync(p));
 const f = (v: number, d = 5) => (Number.isFinite(v) ? (Math.abs(v) < 1e-3 && v !== 0 ? v.toExponential(2) : v.toFixed(d)) : String(v));
 
 function table(rows: Array<{ label: string; m: PairMetrics }>): string {
-  const head = ['pair', 'MSE', 'relMSE', 'SMAPE', 'PSNR dB', 'bias', 'relBias', 'firefly %', 'FLIP', 'nonfinite'];
+  const head = ['pair', 'MSE', 'relMSE', 'SMAPE', 'PSNR dB', 'bias', 'relBias', 'firefly %', 'FLIP', 'HDR-FLIP', 'nonfinite'];
   const body = rows.map(({ label, m }) => [
     label, f(m.mse), f(m.relMse), f(m.smape), f(m.psnr, 2), f(m.bias), f(m.relBias), f(m.fireflyPct, 3),
-    m.flip === undefined ? '-' : f(m.flip), `${m.nonFiniteTest}/${m.nonFiniteRef}`,
+    m.flip === undefined ? '-' : f(m.flip), m.flipHdr === undefined ? '-' : f(m.flipHdr), `${m.nonFiniteTest}/${m.nonFiniteRef}`,
   ]);
   const w = head.map((h, i) => Math.max(h.length, ...body.map((r) => r[i]!.length)));
   const line = (r: string[]) => r.map((c, i) => (i === 0 ? c.padEnd(w[i]!) : c.padStart(w[i]!))).join('  ');
   return [line(head), line(w.map((n) => '-'.repeat(n))), ...body.map(line)].join('\n');
 }
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const [pa, pb] = args.files as [string, string];
   const A = load(pa), B = load(pb);
@@ -67,12 +74,19 @@ export function main(argv: string[]): void {
     : [{ label: 'a vs b(ref)', test: A, ref: B }];
   if (args.out) mkdirSync(args.out, { recursive: true });
   const rows: Array<{ label: string; m: PairMetrics }> = [];
+  let hdrNote = '';
   for (const p of pairs) {
     const m = compareImages(p.test, p.ref, { psnrTonemap: args.tonemap, psnrEv: args.ev });
     let flipMap: Float32Array | undefined;
     if (args.flip) {
       const r = flipLdr(p.test, p.ref, { tonemap: args.tonemap, ev: args.ev });
       m.flip = r.mean; flipMap = r.map;
+    }
+    let hdrMap: Float32Array | undefined;
+    if (args.hdrFlip) {
+      const r = await flipHdrParallel(p.test, p.ref, { tonemap: args.hdrTonemap });
+      m.flipHdr = r.mean; hdrMap = r.map;
+      hdrNote = `HDR-FLIP: ${args.hdrTonemap}, ${r.count} exposures ${r.start.toFixed(2)}..${r.stop.toFixed(2)} stops (from the reference)`;
     }
     rows.push({ label: p.label, m });
     if (args.out) {
@@ -90,14 +104,19 @@ export function main(argv: string[]): void {
         write('flip.pfm', writePFM(scalarToImage(w, h, flipMap)));
         write('flip.png', scalarToPNG(w, h, flipMap, 'magma', (x) => x));
       }
+      if (hdrMap) {
+        write('flip_hdr.pfm', writePFM(scalarToImage(w, h, hdrMap)));
+        write('flip_hdr.png', scalarToPNG(w, h, hdrMap, 'magma', (x) => x));
+      }
     }
   }
   console.log(`a=${basename(pa)} b=${basename(pb)}${args.ref ? ` ref=${basename(args.ref)}` : ''}  ${A.width}x${A.height}`);
   console.log(`PSNR/FLIP display: tonemap=${args.tonemap} ev=${args.ev}; relMSE eps=1e-2; firefly = lum > 10x max(ref lum, 1e-2)`);
   console.log(table(rows));
+  if (hdrNote) console.log(hdrNote);
   if (args.out) console.log(`maps written to ${args.out}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { main(process.argv.slice(2)); } catch (e) { console.error((e as Error).message); process.exit(1); }
+  main(process.argv.slice(2)).catch((e: Error) => { console.error(e.message); process.exit(1); });
 }

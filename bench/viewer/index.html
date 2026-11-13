@@ -22,6 +22,7 @@
     </div>
     <label class="ev" title="Exposure in stops. [ and ] step by 0.5, double-click to reset">EV <input id="ev" type="range" min="-10" max="10" step="0.25" value="0"><output id="ev-out">0</output></label>
     <select id="tm" title="Tonemap (key T)"><option>clamp</option><option>reinhard</option><option selected>aces</option><option>agx</option></select>
+    <select id="flipk" title="Which FLIP the FLIP view shows (key H). HDR-FLIP runs several exposures and is computed on demand."><option selected>LDR-FLIP</option><option>HDR-FLIP</option></select>
     <button id="help-btn" title="Keyboard shortcuts">?</button>
   </header>
   <main id="stage">
@@ -46,6 +47,7 @@
         <dt>S / F / D</dt><dd>swipe, flip, side-by-side</dd>
         <dt>A / B / R, space</dt><dd>flip layout: show A, B, reference; space toggles A/B</dd>
         <dt>[ ]  \</dt><dd>exposure -/+ 0.5 EV, reset</dd>
+        <dt>H</dt><dd>FLIP view: toggle LDR-FLIP / HDR-FLIP (HDR is computed on first use)</dd>
         <dt>M</dt><dd>show / hide the metrics table</dd>
         <dt>T</dt><dd>cycle tonemap</dd>
         <dt>0 / Z</dt><dd>fit / toggle fit and 1:1 pixels</dd>

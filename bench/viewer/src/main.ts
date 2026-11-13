@@ -2,7 +2,7 @@
  * A/B image viewer. Slots: A, B and an optional reference R (PFM, linear float, row 0 = top).
  * Views (keys 1-5): image, abs diff, relative error, FLIP map, bias. Layouts (S/F/D): swipe, flip (A/B/R keys,
  * space), side by side. With R loaded, the error views show A-vs-R and B-vs-R; without it, A-vs-B.
- * Metrics (MSE, relMSE, SMAPE, PSNR, bias, firefly %, FLIP) run in a worker with the same code as the CLI, at a
+ * Metrics (MSE, relMSE, SMAPE, PSNR, bias, firefly %, LDR-FLIP; HDR-FLIP on demand with H or the FLIP picker) run in a worker with the same code as the CLI, at a
  * FIXED ACES / 0 EV display so numbers match `node bench/metrics/compare.ts`. The EV slider and tonemap picker only
  * change what you see.
  */
@@ -30,7 +30,7 @@ const LAYOUT_KEYS = ['swipe', 'flip', 'side'] as const;
 const TONEMAP_KEYS = ['clamp', 'reinhard', 'aces', 'agx'] as const;
 
 const st = {
-  content: 0, layout: 0, toggle: 0, showR: false, abDiff: false, split: 0.5, ev: 0, tonemap: 2,
+  content: 0, layout: 0, toggle: 0, showR: false, abDiff: false, split: 0.5, ev: 0, tonemap: 2, hdrFlip: false,
   cx: 0, cy: 0, zoom: 1, // zoom in CSS px per image px
   fitted: true,
 };
@@ -42,7 +42,11 @@ const dpr = () => window.devicePixelRatio || 1;
 // ---- worker + metrics -------------------------------------------------------------------------------------------
 const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 const send = (m: ToWorker, transfer: Transferable[] = []) => worker.postMessage(m, transfer);
-interface PairState { key: string; metrics?: PairMetrics; flip?: number; flipMap?: Float32Array; error?: string }
+interface HdrInfo { start: number; stop: number; count: number }
+interface PairState {
+  key: string; metrics?: PairMetrics; flip?: number; flipMap?: Float32Array; error?: string;
+  hdr?: number; hdrMap?: Float32Array; hdrInfo?: HdrInfo; hdrProgress?: string; hdrRequested?: boolean; w?: number; h?: number;
+}
 const pairs: Array<PairState | undefined> = [undefined, undefined, undefined];
 worker.onmessage = (e: MessageEvent<FromWorker>) => {
   const m = e.data;
@@ -50,11 +54,38 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
   if (p < 0) return; // stale
   const ps = pairs[p]!;
   if (m.type === 'metrics') ps.metrics = m.metrics;
-  else if (m.type === 'flip') { ps.flip = m.mean; ps.flipMap = m.map; gl.setFlipMap(p, m.map, m.width, m.height); }
+  else if (m.type === 'flip') { ps.flip = m.mean; ps.flipMap = m.map; ps.w = m.width; ps.h = m.height; showFlipMap(p); }
+  else if (m.type === 'flipHdr') { ps.hdr = m.mean; ps.hdrMap = m.map; ps.w = m.width; ps.h = m.height; ps.hdrInfo = m; ps.hdrProgress = undefined; showFlipMap(p); }
+  else if (m.type === 'hdrProgress') ps.hdrProgress = `${m.done}/${m.count}`;
   else ps.error = m.message;
   renderMetrics();
   requestDraw();
 };
+
+/** Pushes the map of the active FLIP kind (LDR / HDR) for pair p to the GL view. */
+function showFlipMap(p: number) {
+  const ps = pairs[p];
+  const map = st.hdrFlip ? ps?.hdrMap : ps?.flipMap;
+  if (ps && map) gl.setFlipMap(p, map, ps.w, ps.h); else gl.setFlipMap(p, null);
+}
+
+/** HDR-FLIP is slow (several exposures): only computed once the user asks for it (H or the picker). */
+function requestHdr() {
+  for (const p of [0, 1, 2]) {
+    const ps = pairs[p];
+    if (!ps || ps.hdrRequested) continue;
+    const [t, r] = PAIRS[p]!;
+    ps.hdrRequested = true;
+    send({ type: 'hdr', key: ps.key, test: t, ref: r });
+  }
+}
+function setFlipKind(hdr: boolean) {
+  st.hdrFlip = hdr;
+  $<HTMLSelectElement>('flipk').selectedIndex = hdr ? 1 : 0;
+  if (hdr) requestHdr();
+  for (const p of [0, 1, 2]) showFlipMap(p);
+  refreshUI();
+}
 
 function requestMetrics() {
   const order = loaded[2] ? [1, 2, 0] : [0];
@@ -67,6 +98,7 @@ function requestMetrics() {
     gl.setFlipMap(p, null);
     pairs[p] = { key };
     send({ type: 'pair', key, test: t, ref: r });
+    if (st.hdrFlip) requestHdr();
   }
 }
 
@@ -81,18 +113,20 @@ function renderMetrics() {
     ['MSE', (m) => f(m.mse)], ['relMSE', (m) => f(m.relMse)], ['SMAPE', (m) => f(m.smape)], ['PSNR dB', (m) => f(m.psnr, 2)],
     ['bias', (m) => f(m.bias)], ['firefly %', (m) => f(m.fireflyPct, 3)],
   ];
-  let html = `<table><tr><th>test vs ref</th>${cols.map((c) => `<th>${c[0]}</th>`).join('')}<th>FLIP</th></tr>`;
+  let html = `<table><tr><th>test vs ref</th>${cols.map((c) => `<th>${c[0]}</th>`).join('')}<th>FLIP</th><th>HDR-FLIP</th></tr>`;
   for (const p of rows) {
     const s = pairs[p]!;
     html += `<tr><td>${PAIR_LABEL[p]}</td>`;
-    if (s.error) html += `<td colspan="7">${s.error}</td></tr>`;
+    if (s.error) html += `<td colspan="8">${s.error}</td></tr>`;
     else {
       html += s.metrics ? cols.map((c) => `<td>${c[1](s.metrics!)}</td>`).join('') : `<td class="pending" colspan="6">computing...</td>`;
-      html += `<td class="${s.flip === undefined ? 'pending' : ''}">${s.flip === undefined ? '...' : f(s.flip)}</td></tr>`;
+      html += `<td class="${s.flip === undefined ? 'pending' : ''}">${s.flip === undefined ? '...' : f(s.flip)}</td>`;
+      html += s.hdr !== undefined ? `<td title="HDR-FLIP: ${s.hdrInfo!.count} exposures, ${s.hdrInfo!.start.toFixed(2)}..${s.hdrInfo!.stop.toFixed(2)} stops">${f(s.hdr)}</td></tr>`
+        : s.hdrRequested ? `<td class="pending">${s.hdrProgress ?? '...'}</td></tr>` : `<td class="pending" title="press H to compute">H</td></tr>`;
     }
   }
   const nf = rows.reduce((n, p) => n + (pairs[p]!.metrics ? pairs[p]!.metrics!.nonFiniteTest + pairs[p]!.metrics!.nonFiniteRef : 0), 0);
-  html += `</table><div class="foot">PSNR and FLIP: ACES, 0 EV, 67 ppd. relMSE eps 1e-2. Second image is the reference.${nf ? ` <span style="color:var(--warn)">${nf} non-finite pixel(s) excluded (magenta in the view).</span>` : ''}</div>`;
+  html += `</table><div class="foot">PSNR and LDR-FLIP: ACES, 0 EV, 67 ppd. HDR-FLIP: exposure range taken from the reference, ACES, 67 ppd (press H). relMSE eps 1e-2. Second image is the reference.${nf ? ` <span style="color:var(--warn)">${nf} non-finite pixel(s) excluded (magenta in the view).</span>` : ''}</div>`;
   el.innerHTML = html;
 }
 
@@ -253,7 +287,7 @@ function refreshUI() {
       : 'linear-gradient(90deg, #0d40ff, #fff, #ff1a0d)';
     lg.querySelector<HTMLElement>('.bar')!.style.background = css;
     lg.querySelector('.ticks')!.innerHTML = c === 2 ? '<span>0.1%</span><span>1%</span><span>10%</span><span>100%</span>'
-      : c === 3 ? '<span>0</span><span>0.5</span><span>1 FLIP</span>' : '<span>−1</span><span>0</span><span>+1 (× EV gain)</span>';
+      : c === 3 ? `<span>0</span><span>0.5</span><span>1 ${st.hdrFlip ? 'HDR-FLIP' : 'FLIP'}</span>` : '<span>−1</span><span>0</span><span>+1 (× EV gain)</span>';
   }
   renderMetrics();
   updateURL();
@@ -282,6 +316,7 @@ function setEV(v: number) {
   $('ev-out').textContent = (st.ev > 0 ? '+' : '') + st.ev.toFixed(2).replace(/\.?0+$/, '');
   updateURL(); requestDraw();
 }
+$('flipk').addEventListener('change', () => setFlipKind($<HTMLSelectElement>('flipk').selectedIndex === 1));
 function setTonemap(i: number) { st.tonemap = i; $<HTMLSelectElement>('tm').selectedIndex = i; updateURL(); requestDraw(); }
 
 document.querySelectorAll<HTMLButtonElement>('#seg-content button').forEach((b, i) => b.addEventListener('click', () => setContent(i)));
@@ -395,8 +430,9 @@ function inspect(px: number, py: number) {
     a && b ? rowOf(label, [a[0] - b[0], a[1] - b[1], a[2] - b[2]], '') : '';
   html += diff(vals[0], vals[1], 'A−B') + diff(vals[0], vals[2], 'A−R') + diff(vals[1], vals[2], 'B−R');
   html += '</table>';
-  const flips = [0, 1, 2].filter((i) => pairs[i]?.flipMap).map((i) => `${PAIR_LABEL[i]} ${f(pairs[i]!.flipMap![idx]!, 4)}`);
-  if (flips.length) html += `<div class="muted">FLIP: ${flips.join('   ')}</div>`;
+  const fm = (i: number) => (st.hdrFlip ? pairs[i]?.hdrMap : pairs[i]?.flipMap);
+  const flips = [0, 1, 2].filter((i) => fm(i)).map((i) => `${PAIR_LABEL[i]} ${f(fm(i)![idx]!, 4)}`);
+  if (flips.length) html += `<div class="muted">${st.hdrFlip ? 'HDR-FLIP' : 'FLIP'}: ${flips.join('   ')}</div>`;
   el.innerHTML = html;
 }
 
@@ -419,6 +455,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 't') setTonemap((st.tonemap + 1) % 4);
   else if (k === '0') fit();
   else if (k === 'z') { if (st.fitted) { const sz = imgSize(); if (sz) { st.zoom = 1 / dpr(); st.fitted = false; requestDraw(); } } else fit(); }
+  else if (k === 'h') setFlipKind(!st.hdrFlip);
   else if (k === 'm') { hideMetrics = !hideMetrics; renderMetrics(); }
   else if (k === '?') $('help').hidden = !$('help').hidden;
   else return;

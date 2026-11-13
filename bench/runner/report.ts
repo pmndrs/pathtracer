@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, posix, relative, sep } from 'node:path';
 import type { Image } from '../src/adapter.ts';
-import { flipLdr } from '../metrics/flip.ts';
+import { flipHdr, flipLdr } from '../metrics/flip.ts';
 import { compareImages } from '../metrics/metrics.ts';
 import { readPFM } from '../metrics/pfm.ts';
 import type { ReportCell, ReportManifest } from '../viewer/src/report.ts';
@@ -54,6 +54,8 @@ export interface ReportInput {
   referencesDir: string;
   /** Skip FLIP (it takes about a second per megapixel). */
   flip?: boolean;
+  /** Also compute HDR-FLIP (exposure-bracketed; about 15 s at 1280x720 on one thread). Off by default; LDR-FLIP stays the default metric (D18). */
+  flipHdr?: boolean;
 }
 
 const toUrl = (path: string): string => path.split(sep).join('/');
@@ -138,6 +140,13 @@ export function buildReportManifest(input: ReportInput, io: ReportIo): ReportMan
             metrics.flip = flipLdr(test, ref).mean;
           } catch {
             // FLIP is an extra; the cell is still useful without it.
+          }
+        }
+        if (input.flipHdr === true) {
+          try {
+            metrics.flipHdr = flipHdr(test, ref).mean;
+          } catch {
+            // extra, as above
           }
         }
       }

@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { GPU_CHOICES, type GpuChoice } from './contract.ts';
+import { DEFAULT_LOAD_WAIT_S, DEFAULT_MAX_GPU_PROCS, defaultMaxLoad } from './load-check.ts';
 
 export interface RunnerOptions {
   page: string | null;
@@ -26,6 +27,13 @@ export interface RunnerOptions {
   /** Do not append CSV rows (images and JSON are still written). */
   noCsv: boolean;
   timeoutMs: number | null;
+  /** Machine-load gate (P0.30): loaded when load1 > maxLoad or Chrome GPU processes > maxGpuProcs. */
+  maxLoad: number;
+  maxGpuProcs: number;
+  /** Seconds to wait for the machine to quiet down before running anyway as `loaded`. */
+  loadWaitS: number;
+  /** Fail instead of running loaded. */
+  strictLoad: boolean;
   help: boolean;
 }
 
@@ -48,6 +56,11 @@ export const USAGE = `Usage: node bench/runner/run.ts --page <name> [options]
   --timeout <ms>       Replace the page timeout (default 60000).
   --no-lock            Do not take the shared GPU lock (RT_GPU_LOCK / RT_GPU_QUEUE, see gpu-lock.ts).
   --allow-software     Accept a software adapter (SwiftShader). Also PT_ALLOW_SOFTWARE_ADAPTER=1. GPU-less CI only.
+  --max-load <n>       Machine counts as loaded above this 1-minute load average (default: CPU core count; on Windows the
+                       CPU busy fraction over 1 s times the core count).
+  --max-gpu-procs <n>  Loaded above this many other Chrome GPU processes (default 2).
+  --load-wait <s>      Wait up to this long for the load to drop (default 120), then run anyway, rows marked valid=0 'loaded'.
+  --strict-load        Fail the run instead of running loaded.
   --no-webgpu          Start Chrome with the GPU disabled. The run must fail clearly (self-check).
   --verbose            Print all console output, not only for failing runs.
   --help               Show this text.`;
@@ -96,6 +109,10 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
         timeout: { type: 'string' },
         'no-lock': { type: 'boolean' },
         'allow-software': { type: 'boolean' },
+        'max-load': { type: 'string' },
+        'max-gpu-procs': { type: 'string' },
+        'load-wait': { type: 'string' },
+        'strict-load': { type: 'boolean' },
         'no-webgpu': { type: 'boolean' },
         verbose: { type: 'boolean' },
         help: { type: 'boolean' },
@@ -118,6 +135,15 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
   };
   const repeat = positive('repeat', values.repeat, 1) as number;
   const timeoutMs = positive('timeout', values.timeout, null);
+  const nonNegative = (name: string, text: string | undefined, fallback: number): number => {
+    if (text === undefined) return fallback;
+    const value = Number(text);
+    if (!Number.isFinite(value) || value < 0) throw new UsageError(`--${name} must be a number >= 0, got "${text}".`);
+    return value;
+  };
+  const maxLoad = nonNegative('max-load', values['max-load'], defaultMaxLoad());
+  const maxGpuProcs = nonNegative('max-gpu-procs', values['max-gpu-procs'], DEFAULT_MAX_GPU_PROCS);
+  const loadWaitS = nonNegative('load-wait', values['load-wait'], DEFAULT_LOAD_WAIT_S);
 
   let ab: RunnerOptions['ab'] = null;
   if (values.ab !== undefined) {
@@ -146,6 +172,10 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
     noLock: values['no-lock'] ?? false,
     noCsv: values['no-csv'] ?? false,
     timeoutMs,
+    maxLoad,
+    maxGpuProcs,
+    loadWaitS,
+    strictLoad: values['strict-load'] ?? false,
     help: values.help ?? false,
   };
 }

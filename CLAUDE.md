@@ -113,4 +113,19 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   only time does. tgpt time to the first snapshot is about 2x per-spp price (fixed per-call cost), so fitted k is slightly above 1.
 - `nohup sh -c "a; b" &` chains: killing the `sh` leaves the running child; wait for its pid (`kill -0`) and queue a new chain.
   macOS has no `timeout`; bound loops with a counter.
-
+- The Mac is shared and other agents' Chrome jobs don't take the GPU lock. The runner samples load average and foreign
+  Chrome GPU processes before every run (`bench/runner/load-check.ts`), waits `--load-wait` (120 s), then marks rows
+  `valid=0` with note `loaded` (`--strict-load` fails). Quote timings only from rows without `loaded`. Windows has no
+  `loadavg`, so it uses the CPU busy fraction over 1 s and PowerShell/CIM for process command lines (`tasklist` shows none).
+- FLIP (P0.14): HDR-FLIP derives its exposure range from the REFERENCE only (start = log2(xMax/Ymax), stop = log2(xMax/median)).
+  A flat or dark reference gives 2 identical exposures and a firefly merely saturates (error ~0.07); a reference with a
+  lamp spans the low exposures that expose it. Its tonemap is its own (ACES with 0.6 cancelled), there is no EV, and its mean
+  is always higher than LDR-FLIP's (about 1.5-2x on Cornell): quote the two as separate metrics, never mixed. Mean FLIP of
+  either kind barely moves for 13-52 fireflies in 262k pixels (0.0236 -> 0.0253); check relMSE, firefly % and max FLIP too.
+- FLIP on PNG input needs the sRGB decode; our metric takes tonemapped radiance (display-linear). Feeding encoded values
+  without the decode inflates the mean (0.1737 vs 0.1597). `validate-flip.ts` needs `.cache/flip-validation/` (clone of
+  NVlabs/flip + a venv with pip `flip-evaluator`; `work/prep.py` writes the PFMs). Run Python with `-I`.
+- HDR-FLIP costs one LDR-FLIP per exposure (Cornell: 8, NVlabs pair: 14): ~1.1 s per exposure at 1280x720 single thread, 38 s
+  for the 1080p NVlabs pair serial, 8 s on worker_threads. Use `flipHdrParallel` (Node) and never in a frame loop; the viewer computes it on demand (H).
+- `pnpm typecheck` can fail on another agent's half-written files (seen: `packages/raytracer/src/trace/index.ts` importing a
+  missing `./batch.ts`); check `git status` before chasing it.

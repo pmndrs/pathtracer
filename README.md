@@ -9,6 +9,7 @@ Status: **research phase.** No code yet.
 - [research/notes/](research/notes/) — one notes file per research area
 - [research/INDEX.md](research/INDEX.md) — cross-area synthesis (written once the passes land)
 - [spec/SPEC-draft.md](spec/SPEC-draft.md) — loose spec drafted from the research
+- [THIRD_PARTY.md](THIRD_PARTY.md) — ported or adapted code, third-party assets, and the packages we only run
 - `research/sources/` — shallow clones of third-party code, read-only and git-ignored; see `research/sources/MANIFEST.md`
 
 Built alongside our sibling packages: `@pmndrs/bvh` (geometry and ray walk), `downsampler` (SPD), `Denoiser`,
