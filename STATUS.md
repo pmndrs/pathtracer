@@ -29,7 +29,7 @@ _Last updated 2026-11-13._
 
 **Next**
 - Quiet-machine rerun of the baseline with ABBA across renderers (the first one ran while other jobs loaded the Mac); see `bench/results/BASELINE-P0.md`.
-- Push the `windows-testing` branch with a handoff doc.
+- Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - **Wide-BVH experiment** in the bvh repo: running now on its own branch in the bvh repo.
 
 **Waiting on the maintainer:** nothing right now.
