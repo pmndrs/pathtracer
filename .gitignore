@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+# Cloned third-party source and downloaded papers stay local (re-fetch via research/sources/MANIFEST.md)
+research/sources/*/
+research/papers/**/*.pdf
+dist/
+.vite/
+*.log
+.cache/
+bench/results/incoming/
+bench/references/**/*.pfm
+.claude/

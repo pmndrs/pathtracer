@@ -1,0 +1,9 @@
+{
+  "name": "@pathtracer/bench",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@pmndrs/raytracer": "workspace:*",
+    "@pmndrs/pathtracer": "workspace:*"
+  }
+}
