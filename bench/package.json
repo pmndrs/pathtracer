@@ -4,7 +4,8 @@
   "type": "module",
   "dependencies": {
     "@pmndrs/pathtracer": "workspace:*",
-    "@pmndrs/raytracer": "workspace:*"
+    "@pmndrs/raytracer": "workspace:*",
+    "@pmndrs/bvh": "link:../../bvh"
   },
   "scripts": {
     "bench": "node runner/run.ts",

@@ -1,0 +1,13 @@
+date,commit,device,browser,scene,renderer,config_hash,metric,value,valid,run,note
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l1_primary_ms,9.077237,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l1_primary_mrays_per_s,115.51708961658707,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l1_primary_rays,1048576,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l1_bounce_ms,13.48401,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l1_bounce_mrays_per_s,77.76440391248597,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l1_bounce_rays,1048576,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l0_shadow_ms,12.706849,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l0_shadow_mrays_per_s,82.52022196848328,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l0_shadow_rays,1048572,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l0_ao_ms,4.490143,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l0_ao_mrays_per_s,233.52841991892015,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"
+2026-11-13,62d7ae3-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,77b537f4,l0_ao_rays,1048576,0,1,"timing valid (pmset); load 7.59, gpu-procs 32; loaded"

@@ -40,3 +40,15 @@ export const MISS_T = -1;
 
 /** Largest material id bvh can carry (16 bits, 0xffff reserved). */
 export const BVH_MAX_MATERIAL = 65534;
+
+/**
+ * Optional ray cone (Akenine-Möller et al., "Texture Level of Detail Strategies for Real-Time Ray Tracing"):
+ * `width` is the footprint width at the ray origin (metres), `spread` the spread angle (radians, small-angle form).
+ * The footprint at distance t is `width + spread * t`. Slice 1 only carries it through L1 and the batch ABI; no consumer
+ * reads it yet (texture LOD arrives with the scene copy, D4). 8 bytes, `{ width: f32, spread: f32 }`.
+ */
+export interface RayCone {
+  width: number;
+  spread: number;
+}
+export const RAY_CONE_BYTES = 8;

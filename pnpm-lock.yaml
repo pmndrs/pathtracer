@@ -38,6 +38,9 @@ importers:
 
   bench:
     dependencies:
+      '@pmndrs/bvh':
+        specifier: link:../../bvh
+        version: link:../../bvh
       '@pmndrs/pathtracer':
         specifier: workspace:*
         version: link:../packages/pathtracer
@@ -67,7 +70,11 @@ importers:
         specifier: workspace:*
         version: link:../raytracer
 
-  packages/raytracer: {}
+  packages/raytracer:
+    dependencies:
+      '@pmndrs/bvh':
+        specifier: link:../../../bvh
+        version: link:../../../bvh
 
 packages:
 

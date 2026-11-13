@@ -40,11 +40,26 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.30 | Check the shared-machine load before timing and refuse or flag (runner: load average, number of GPU-process Chrome instances) | agent:legal | ✅ | `bench/runner/load-check.ts`; `--max-load/--max-gpu-procs/--load-wait/--strict-load`; load + procs in run JSON and CSV note, loaded rows `valid=0`; Windows path (CPU delta, CIM) untested, add to W-tasks |
 | P0.31 | Capsaicin as a native GPU reference on Windows (W9) | maintainer (Windows) | ⬜ | research/notes/11-capsaicin.md §9 has the W9 draft (export Tier 0 + sponza-white, matched EXR→PFM refs `capsaicin-*spp.pfm`, compare vs pbrt/Mitsuba, time ref PT + GI-1.2 on the 3060); suggestion: cross-check and timing baseline only, not a D15 reference |
 
+## P1 — Trace core
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| P1.1 | Slice 1: L0 `rtVisible`, L1 `rtClosest`/`rtClosestCone`, lazy `rtSurface`, batch dispatcher (queue ABI v0) on `@pmndrs/bvh` main `dist/` | agent:trace-core | ✅ | `packages/raytracer/src/trace/`, `docs/design/trace-core.md`; correctness page `trace-core` PASSES on M5 (Chrome 157): 589,784 rays over Cornell, quad-light, `edges`, sponza-white × {quantized+records+merged, f32+indexed, SceneTrees GPU trees, SceneTrees refined}: 0 mismatches, 0 watertight slips, 0 escapes; batch variants and inline kernel bit-identical; `rtSurface` max position error 2.3e-7 × scene size. Counted, not failed (f64 CPU walk vs f32 GPU, V27): 14,122 ties, 9,228 grazing, 3,563 tPosition, almost all in the edge-aimed set |
+| P1.2 | Timing page `trace-timing` (rays/s, L0 + L1, A/B by page arg) | agent:trace-core | 🟨 | built; numbers are **provisional** (`valid: false`, loaded machine): sponza-white 1M rays, M5 Pro, wg 64 AoS full: L1 primary 116, L1 bounce 78, L0 shadow 83, L0 AO (0.1 × scene) 234 Mrays/s. Quiet-machine run: `--ab workgroupSize=64,128`, `--ab rayLayout=aos,soa`, `--ab hitRecord=full,compact` |
+| P1.3 | L2 `rtShade` (flat / Lambert / full, 1 NEE ray, cache hook) | — | ⬜ | needs P1.4 |
+| P1.4 | Material/light scene copy (D4), replacing the slice-1 surface table (`buildSurfaceTable`) | — | ⬜ | start from ddgi's scene copy; tangents and material params land with it (V24) |
+| P1.5 | Reflections onto the core (D5): `TraceProvider` over `RtBatchTracer` / inline module; exit gate: delete code, no rays/s regression | — | ⬜ | after P1.3 |
+| P1.6 | Decide the slice-1 settings by A/B on a quiet machine (workgroup 64/128, AoS/SoA, full/compact) → DECISIONS | — | ⬜ | M5 + RTX 3060 (Windows W-task), paired ratios |
+| P1.7 | Bit-exact oracle: ask bvh for an f32-faithful CPU walk, then tighten trace-core to bit equality | — | ⬜ | see bvh requests in the P1.1 report; V27 |
+| P1.8 | `rtSurface` position A/B: ray-based vs barycentric (`positions: true`) self-intersection rate on continuation rays | — | ⬜ | design doc, open choice 4 |
+| P1.9 | Per-ray masks in the queue ABI (v1) if a consumer mixes masks in one queue | — | ⬜ | v0: one mask per batch |
+
 ## Parallel tracks
 
 | ID | Task | Where | Status |
 |---|---|---|---|
 | X1 | Wide BVH: BVH4 / CWBVH8 node formats + WGSL traversal + GPU collapse pass; gate ≥1.3× on 3060L and M5 | ~/Developer/bvh, branch `claude/wide-bvh-684631` (not merged) | 🟨 both formats built, all correctness gates pass on M5; Sponza nodes 185→74.5 (BVH4)→40.5 MiB (CWBVH). Provisional (loaded) M5 closest-hit: BVH4 merged 1.28–1.32×, CWBVH ≈1.0×, both slower on instanced incoherent (0.57–0.86×). Needs quiet M5 rerun + 3060 runs (bvh `docs/internals/WINDOWS-RUNBOOK.md` §2d); GPU collapse and single-loop instanced walk are follow-ups |
+| X2 | Requests from P1.1 to bvh `main`: (1) an f32-faithful CPU walk so trace-core can require bit-exact hits; (2) build workers fail to load via Vite `/@fs/`, and `'auto'` can't fall back for merged groups; (3) export the shared-edge ray generator from `oracle-fixtures`; (4) document that `whenBuilt()` needs `update()` calls; (5) optional indirect count-in-buffer `TraceBatchKernel` | ~/Developer/bvh | ⬜ not started (needs the maintainer's go) |
 
 ## Open questions for the maintainer
 

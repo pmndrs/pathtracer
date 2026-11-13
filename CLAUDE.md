@@ -135,3 +135,17 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Never decode the 16-bit blue-noise PNGs through a canvas or `createImageBitmap` (8-bit); use `decodeBlueNoisePng`.
   Their `.f32` twins are git-ignored; `pnpm bluenoise:generate` rebuilds them (~30 s).
 - Subagents cannot `Write` report-style `.md` files (harness hook): hand the text to the lead to place.
+- bvh's CPU walk (`createCpuTracer`, `CpuSceneBvh.raycast`) does f64 arithmetic on the f32 scene; the GPU walk is f32.
+  Never expect bit equality near edges: `bench/pages/trace-core.ts` classifies ties, grazing contacts and t position
+  error (V27). Two CPU walks over different trees also disagree on rays that merely touch a convex edge.
+- A ray aimed at a convex edge or corner of a solid from outside only *touches* it: hit and miss are both right. Only a
+  miss where the ray *crosses* a shared edge (all triangles around it face the ray the same way) is a watertight slip.
+- A new `link:` dependency in `bench/package.json` needs `pnpm install --offline` before typecheck or Vite see it. Vite
+  serves `~/Developer/bvh/dist` through `/@fs/` without any `fs.allow` change.
+- `trace-core` (all four scenes, 590k rays, CPU oracle in the page) takes ~4 s; `scenes=edges,cornell,quad-light
+  sceneTrees=0` for a quicker loop. A page that hangs until the runner timeout is usually an un-pumped `SceneTrees`.
+- `SceneTrees.whenBuilt()` never resolves on its own: builds start in `update(encoder)`. Pump one update per frame
+  until `timeline.firstTreesMs !== null && !building` (see trace-core's `pump`).
+- bvh's build workers fail to load when a bench page imports bvh through Vite's `/@fs/` (`a BVH worker failed: it could
+  not be loaded`), and `'auto'` cannot fall back for merged groups (their input was already moved). In bench pages use
+  `createMeshBvhBuilder({ worker: 'never' })` and `SceneTrees.create(device, { workers: { worker: 'never' } })`.

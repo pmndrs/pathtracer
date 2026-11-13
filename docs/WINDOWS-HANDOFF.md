@@ -39,6 +39,12 @@ produce the first numbers there you can trust.
    git clone https://github.com/pmndrs/pathtracer.git
    cd pathtracer
    git switch windows-testing
+   ```
+   `@pmndrs/raytracer` links the bvh package from a sibling checkout (`link:../../../bvh`), so clone and build bvh
+   next to this repo first, then install:
+   ```
+   git clone https://github.com/pmndrs/bvh.git ..\bvh
+   cd ..\bvh; pnpm install; pnpm build; cd ..\pathtracer
    pnpm install
    ```
 3. Run the non-GPU checks: `pnpm test`, `pnpm typecheck` and `pnpm lint`. All must pass. Any failure is a Windows

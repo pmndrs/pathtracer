@@ -28,6 +28,11 @@ _Last updated 2026-11-13._
   - NVIDIA's blue-noise textures can't be used (non-commercial licence), so we generate our own.
   - Native wide-BVH traversal is 6.3× ahead of our current BVH, not 3.5×.
 
+- **Trace core started (P1).** `@pmndrs/raytracer` can now trace rays on the GPU: a visibility test, a closest-hit
+  trace and a surface lookup, both callable from WGSL and as a batch over a ray buffer. All 590k test rays agree with
+  the bvh repo's CPU version (the few differences are float-precision ties at edges, counted and explained). Speed not
+  measured yet: the machine was loaded.
+
 **Next**
 - Quiet-machine rerun of the baseline with ABBA across renderers (the first one ran while other jobs loaded the Mac); see `bench/results/BASELINE-P0.md`.
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
