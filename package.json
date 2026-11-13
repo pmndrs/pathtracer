@@ -6,7 +6,9 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "bluenoise:generate": "node packages/raytracer/tools/bluenoise/generate.ts",
+    "bluenoise:report": "node packages/raytracer/tools/bluenoise/report.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

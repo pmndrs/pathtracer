@@ -18,7 +18,8 @@ _Last updated 2026-11-13._
 - **Competitors in the bench.** three-gpu-pathtracer (both its schedulers) and mutracer run with their denoisers off.
   - All three pass the diffuse, glass and single-light checks.
   - Speed numbers so far were measured on a heavily loaded Mac and are not trusted yet.
-  - mutracer's Cornell image stops converging at a small error, which points to a bias (being looked into).
+  - mutracer's Cornell "bias" was our adapter dropping its coverage alpha at the box's silhouette; fixed, it now converges
+    like the others (relMSE 4.8e-5 at 4096 spp).
   - Both libraries add an energy-compensation trick to rough metals that can't be switched off, so that one test is
     reported separately.
 - **Capability detection.** This Mac is "tier 2": subgroups, f16 and timestamps, but no bindless.

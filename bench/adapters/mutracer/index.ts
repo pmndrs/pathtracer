@@ -9,10 +9,12 @@
  * spheres), radiance clamp (0), caustics (undefined), adaptive sampling (undefined), fixed batch size (no
  * targetBatchTimeMs). The linear HDR accumulation is read with `readPixels('hdr')`, not the display canvas.
  * Left at library defaults: Sobol sampling, 4 direct-light candidates per vertex (its NEE strategy).
+ * The readback is premultiplied by its coverage alpha (it is straight colour otherwise; see `MutracerSettings.premultiply`).
  *
  * Timing: one `converge({samples})` per requested spp (each restarts, so snapshots are independent images with
  * their own wall time); the timed region is the awaited converge call, readback comes after.
  */
+import { DataTexture, EquirectangularReflectionMapping, FloatType, LinearFilter, RGBAFormat } from 'three';
 import { Engine, Render, VERSION, fromTHREECamera, fromTHREEScene } from '@meimu/mutracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { SceneDesc } from '../../scenes/schema.ts';
@@ -37,11 +39,48 @@ export function bouncesFor(maxDepth: number): number {
   return Math.min(Math.max(maxDepth - 1, 1), MAX_BOUNCES);
 }
 
+/** Experiment switches (P0.26 A/B); defaults are the bench configuration. */
+export interface MutracerSettings {
+  /** `directLightCandidates` (library default 4, 1..16). */
+  candidates?: number;
+  /** `samplingPattern` (library default sobol). */
+  sampler?: 'sobol' | 'zsobol' | 'random';
+  /** `bevel` (bench default false; library default true). */
+  bevel?: boolean;
+  /** `dispersionWavelengths` (library default 3). */
+  dispersion?: 1 | 3;
+  /** `converge({ sampleSequenceOffset })`. */
+  offset?: number;
+  /**
+   * Multiply the RGB read back by the coverage alpha (default true). mutracer's `readPixels('hdr')` returns straight
+   * (unassociated) colour: the mean over the samples that hit something, with the hit fraction in alpha. Pixels on a
+   * silhouette against an empty background (Cornell box rim) then read as fully lit; the references average black
+   * misses in. P0.26: this alone was the whole "mutracer stops converging" plateau.
+   */
+  premultiply?: boolean;
+  /** Experiment: replace a uniform environment's 4x2 map by a constant map of this many texels across (height half). */
+  envWidth?: number;
+}
+
 export class MutracerAdapter implements RendererAdapter {
   private readonly bouncesOverride: number | undefined;
+  private readonly settings: MutracerSettings;
 
-  constructor(bouncesOverride?: number) {
+  constructor(bouncesOverride?: number, settings: MutracerSettings = {}) {
     this.bouncesOverride = bouncesOverride;
+    this.settings = settings;
+    this.info = {
+      ...this.info,
+      config: {
+        ...this.info.config,
+        bevel: settings.bevel ?? false,
+        sampler: settings.sampler ?? 'sobol',
+        directLightCandidates: settings.candidates ?? 4,
+        ...(settings.dispersion !== undefined ? { dispersionWavelengths: settings.dispersion } : {}),
+        ...(settings.offset !== undefined ? { sampleSequenceOffset: settings.offset } : {}),
+        premultiply: settings.premultiply ?? true,
+      },
+    };
   }
 
   readonly info: RendererInfo = {
@@ -63,7 +102,7 @@ export class MutracerAdapter implements RendererAdapter {
     notes:
       'bounces = maxDepth - 1 (min 1, so direct-only maxDepth 1 is not expressible). Bounces clamp to 50 and total path events to min(3 x bounces, 50): scenes needing maxDepth > 51 (furnace-dielectric: 1000) are truncated. ' +
       'Conductors (eta/k) are OpenPBR F0/F82-tint metals: not exact. Emission follows the glTF (two-sided). ' +
-      'Raw output: no denoiser, bevel off, clamping 0, HDR accumulation read with readPixels("hdr"). ' +
+      'Raw output: no denoiser, bevel off, clamping 0, HDR accumulation read with readPixels("hdr") and multiplied by its coverage alpha (straight colour otherwise: silhouette pixels against an empty background read fully lit). ' +
       'Cannot be turned off: 4 RIS direct-light candidates per vertex (library default, its NEE strategy); 16-pixel alignment of the render target.',
   };
 
@@ -72,6 +111,7 @@ export class MutracerAdapter implements RendererAdapter {
   private engine: Engine | null = null;
   private mt: Render | null = null;
   private scene: SceneDesc | null = null;
+  alphaProbe: number[] = [];
 
   async load(scene: SceneDesc, options?: { device?: GPUDevice; baseUrl?: string }): Promise<{ loadMs: number; compileMs?: number }> {
     const t0 = nowMs();
@@ -79,6 +119,22 @@ export class MutracerAdapter implements RendererAdapter {
     const env = await loadEnvironment(scene, options?.baseUrl ?? '/bench/assets');
     const three = await buildThreeScene(scene, env);
     this.approximations = three.approximations;
+    const envWidth = this.settings.envWidth;
+    const envTex = three.scene.environment as { image?: { data?: Float32Array } } | null;
+    if (envWidth && scene.environment?.type === 'uniform' && envTex?.image?.data) {
+      const [r, g, b] = [envTex.image.data[0]!, envTex.image.data[1]!, envTex.image.data[2]!];
+      const data = new Float32Array(envWidth * (envWidth / 2) * 4);
+      for (let i = 0; i < data.length; i += 4) data.set([r, g, b, 1], i);
+      const tex = new DataTexture(data, envWidth, envWidth / 2, RGBAFormat, FloatType);
+      tex.mapping = EquirectangularReflectionMapping;
+      tex.magFilter = LinearFilter;
+      tex.minFilter = LinearFilter;
+      tex.generateMipmaps = false;
+      tex.flipY = false;
+      tex.needsUpdate = true;
+      three.scene.environment = tex;
+      three.scene.background = tex;
+    }
 
     const engine = new Engine({ backend: 'webgpu' });
     const errors: unknown[] = [];
@@ -112,8 +168,11 @@ export class MutracerAdapter implements RendererAdapter {
       height: scene.film.height,
       bounces,
       clamping: 0,
-      bevel: false,
+      bevel: this.settings.bevel ?? false,
       maxSamples: 1 << 20,
+      ...(this.settings.candidates !== undefined ? { directLightCandidates: this.settings.candidates } : {}),
+      ...(this.settings.sampler !== undefined ? { samplingPattern: this.settings.sampler } : {}),
+      ...(this.settings.dispersion !== undefined ? { dispersionWavelengths: this.settings.dispersion } : {}),
     });
   }
 
@@ -121,6 +180,9 @@ export class MutracerAdapter implements RendererAdapter {
     const scene = this.scene!;
     const pixels = await this.mt!.readPixels('hdr');
     const { width: w, height: h } = scene.film;
+    const src = pixels.data as Float32Array;
+    this.alphaProbe = [0, 0, 0, 0].map((_, k) => src[((k === 0 ? 8 : k === 1 ? 100 : k === 2 ? 7 : 256) * pixels.width + (k === 2 ? 256 : 256)) * 4 + 3]!);
+    if (this.settings.premultiply ?? true) for (let i = 0; i < src.length; i += 4) { const a = src[i + 3]!; src[i] = src[i]! * a; src[i + 1] = src[i + 1]! * a; src[i + 2] = src[i + 2]! * a; }
     if (pixels.width === w && pixels.height === h) return { width: w, height: h, channels: 4, data: pixels.data as Float32Array };
     // The target is rounded up to a multiple of 16; the image is the top-left w x h block.
     const data = new Float32Array(w * h * 4);
@@ -133,7 +195,7 @@ export class MutracerAdapter implements RendererAdapter {
     render.restart();
     await this.engine!.device?.queue.onSubmittedWorkDone();
     const t0 = nowMs();
-    await render.converge({ samples: spp });
+    await render.converge({ samples: spp, ...(this.settings.offset !== undefined ? { sampleSequenceOffset: this.settings.offset } : {}) });
     await this.engine!.device?.queue.onSubmittedWorkDone();
     const wallMs = nowMs() - t0;
     return { wallMs, image: await this.read() };
@@ -148,7 +210,7 @@ export class MutracerAdapter implements RendererAdapter {
       snapshots.push({ spp: s, wallMs: r.wallMs, image: r.image });
     }
     const final = await this.render_(budget.spp);
-    return { image: final.image, spp: budget.spp, timings: { wallMs: final.wallMs }, snapshots, stats: { bouncesUsed: this.bouncesOverride ?? bouncesFor(this.scene!.integrator.maxDepth) } };
+    return { image: final.image, spp: budget.spp, timings: { wallMs: final.wallMs }, snapshots, stats: { alphaRim8: this.alphaProbe[0] ?? -1, alphaMid100: this.alphaProbe[1] ?? -1, alphaTop7: this.alphaProbe[2] ?? -1, bouncesUsed: this.bouncesOverride ?? bouncesFor(this.scene!.integrator.maxDepth) } };
   }
 
   dispose(): void {
@@ -159,4 +221,4 @@ export class MutracerAdapter implements RendererAdapter {
   }
 }
 
-export const createMutracer = (bounces?: number): MutracerAdapter => new MutracerAdapter(bounces);
+export const createMutracer = (bounces?: number, settings?: MutracerSettings): MutracerAdapter => new MutracerAdapter(bounces, settings);

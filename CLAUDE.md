@@ -129,3 +129,9 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   for the 1080p NVlabs pair serial, 8 s on worker_threads. Use `flipHdrParallel` (Node) and never in a frame loop; the viewer computes it on demand (H).
 - `pnpm typecheck` can fail on another agent's half-written files (seen: `packages/raytracer/src/trace/index.ts` importing a
   missing `./batch.ts`); check `git status` before chasing it.
+- Blue noise (P0.17): a vec2 made of two independent scalar void-and-cluster channels is only weakly blue for a 2D
+  integrand (a threshold of a combination keeps ~34% of white's low-frequency error); use the jointly optimised `gf`
+  textures. A 2D texture animated by the golden-ratio shift is a strong baseline that our `st` did not beat.
+- Never decode the 16-bit blue-noise PNGs through a canvas or `createImageBitmap` (8-bit); use `decodeBlueNoisePng`.
+  Their `.f32` twins are git-ignored; `pnpm bluenoise:generate` rebuilds them (~30 s).
+- Subagents cannot `Write` report-style `.md` files (harness hook): hand the text to the lead to place.

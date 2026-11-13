@@ -45,11 +45,11 @@ View: `pnpm --filter @pathtracer/bench viewer`, open `?report=/results/reports/<
 | | three-gpu-pathtracer | mutracer |
 |---|---|---|
 | denoiser / upscaler | none attached | none attached |
-| tone mapping, exposure | linear accumulation target read back (not the canvas); `renderToCanvas = false` | `readPixels('hdr')`: original linear samples |
+| tone mapping, exposure | linear accumulation target read back (not the canvas); `renderToCanvas = false` | `readPixels('hdr')`: original linear samples, **times the returned alpha** (it is straight colour; P0.26) |
 | preview / low-res / fade | `dynamicLowRes = false`, `renderDelay = 0`, `fadeDuration = 0`, `minSamples = 0`, `adaptiveDynamicRes = false` | fixed-size `Render`, `converge()` (no preview Render, no RenderLoop) |
 | adaptive budgets | `adaptiveFrameBudget = false` (frame budget fixed at 250000 path steps) | no `targetBatchTimeMs`, no `adaptiveSampling`, `samplesPerBatch` 8 |
 | firefly filters | `filterGlossyFactor = 0`, `clampDirect = clampIndirect = 0` (default clampIndirect is 10) | `clamping = 0` |
-| other shading tricks | | `bevel = false` (default true: rounds facet edges) |
+| other shading tricks | | `bevel = false` (library default true; no effect on our glTF materials, which have no `bevelSize`: Cornell is bit-identical with it on) |
 | temporal | none exists | none exists |
 | **cannot be turned off** | alpha-weighted blending (forced opaque with clear alpha 1); periodic internal sample-count tally (a 20-byte readback every 250 ms during `renderSample`); multiple-scattering compensation on rough metals/dielectrics | 4 RIS direct-light candidates per vertex; multiple-scattering compensation; 16-pixel render alignment (our sizes are multiples of 16) |
 
@@ -64,3 +64,46 @@ replays that count and waits for `queue.onSubmittedWorkDone()`; the result is re
 spp. mutracer: the awaited `converge({samples})`, wall clock, readback afterwards; every snapshot is an independent converge.
 Both: wall clock only (no GPU timestamps; `trackTimestamp` would put a readback into the loop). First-call compile is reported
 as `compile_ms`, not in `wall_ms`. Frame budget 250000 vs 4e6 on Cornell changed wall time by < 10%: GPU-bound, not JS-bound.
+
+## P0.26: why mutracer stopped converging on Cornell (adapter bug, fixed)
+
+**Cause.** `Render.readPixels('hdr')` returns straight (unassociated) colour: RGB is the mean over the samples that hit
+something, alpha is the hit fraction (accumulation `outColor[idx] += liAndAlpha` in
+`lib/renderer/wgsl/rayTrace.compute.js` ~l.1100, alpha measured through the adapter; docs/api.md "Pixel outputs"). The Cornell box is open toward the camera,
+so the 1-px silhouette against the empty (black) background is partly covered; the adapter dropped alpha, so those pixels
+read as fully lit surface. The references (and tgpt) average the black misses in. This is not an adapter-vs-library
+bias in shading: it is a pure edge-coverage error.
+
+**Evidence** (Cornell 512x512, Mitsuba RGB 4096 spp reference, `p0-26-mutracer-cornell` report, viewer
+`?report=/results/reports/p0-26-mutracer-cornell/report.json`):
+- Spatial pattern: 32 px block means of mutracer / Mitsuba are within 0.0 to 0.6% everywhere except the outer ring (+2.5 to
+  +6%). Profiles show the silhouette pixels full where Mitsuba and pbrt (which agree with each other and with the analytic
+  edge, 8.82 px from the top) have partial coverage: top row 8 reads 0.0370 vs 0.0063 (coverage 17%). Features at
+  depth 1.36 m (back-wall corners) are within 0.1 px, only the z = 0 front edges are "bigger", so it is not a camera/fov error.
+- Probe: alpha of that pixel is 0.169 (analytic 0.18). Interior pixels have alpha 1.
+- 91% of the 4096 spp relMSE sits in the outer 12 px: relMSE 5.7e-4 all pixels, 5.2e-5 with a 12 px crop. The interior
+  was already converging (1.5e-4 at 1024 to 5.2e-5 at 4096).
+- Fix (`premultiply`, default on; `mt_premul=0` reproduces the old read): relMSE vs Mitsuba 5.2e-4 / 1.4e-4 / 4.8e-5 at
+  256 / 1024 / 4096 spp (before: 1.1e-3 / 6.8e-4 / 5.7e-4), about 1/spp again down to the reference's own noise. Mean
+  ratio 0.9996 (was 1.0008).
+  Quad-light (relMSE 1.4e-6, unchanged) and scenes with a visible environment (alpha 1 everywhere, bit-identical)
+  are not affected.
+
+**A/B through page args** (`mt_*`, Cornell, premultiplied, 1024 spp, relMSE vs Mitsuba; default 1.38e-4):
+
+| Hypothesis | Setting | Result |
+|---|---|---|
+| bevel / rounded edges | `mt_bevel=1` | bit-identical to default (our materials have no `bevelSize`); default config has it off |
+| 4 RIS candidates | `mt_candidates=1` (settable: `Render.directLightCandidates`, 1..16; V13 said "no switch", wrong) | 1.46e-4, same mean: not a bias, slightly noisier |
+| sampler | `mt_sampler=random` | 2.6e-4 (Owen-scrambled Sobol is the better default), same mean |
+| spectral/dispersion | `mt_dispersion=1` | bit-identical (only dispersive materials use it; mutracer is RGB, "not spectral rendering" per docs/technical/continuous-spectrum.md) |
+| bounce mapping V10 / 50-event cap | `bounces=16` and `8` (default 31, capped at 50 events) | 16: identical to 5 digits; 8: mean -0.17% (cap not reached at 31) |
+| light units/area, two-sided emitter, normals, ray epsilon, MS compensation | no A/B needed | mean within -0.06/-0.03/-0.02% of Mitsuba RGB per channel; Mitsuba RGB itself is +0.7% above pbrt/Mitsuba spectral on Cornell (V12-style RGB-vs-spectral, blue +2%), mutracer is RGB too, so it tracks Mitsuba RGB |
+
+Tier 0 isolation: `quad-light` (1024 spp) relMSE 1.1e-6 vs Mitsuba, relBias -2e-4: direct lighting, light units and area
+exact. `furnace-diffuse` reads 0.50063 (+0.13% on albedo 0.5, convex, bounces 1 to 3) and nothing we tried moves it
+(RIS 1: 0.50065, random: 0.50068, dispersion 1: 0.50063, env map 64 wide 0.50058, 512 wide 0.50047): left as a small mutracer
+property (V22), not related to the Cornell plateau.
+
+The P0.9 baseline table (BASELINE-P0.md) predates the fix: its mutracer Cornell error rows and the "plateau" mark are stale
+and need the P0.25 quiet-machine rerun.

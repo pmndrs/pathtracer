@@ -5,6 +5,10 @@
 > The maintainer ruled (2026-11-13) that timings from a loaded machine are not trusted. The error-vs-spp data,
 > image means and the reference noise floors stand; every ms, s and min below is to be replaced by the quiet-machine
 > rerun (TASKS P0.25, with the load check P0.30).
+>
+> **Also stale: the mutracer Cornell error rows and its "plateau" mark.** They came from an adapter bug (straight
+> alpha read back without premultiplying; fixed in P0.26). With the fix mutracer's Cornell relMSE is 1.4e-4 at 1024 spp,
+> not 6.8e-4. The rerun regenerates these rows.
 
 First baseline table (P0.9, the P0 exit gate). Question answered: **how long does each web path tracer need to reach a
 given error against the Mitsuba reference?** Numbers are paired within this machine only; do not compare with other

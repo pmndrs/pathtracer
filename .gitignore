@@ -17,3 +17,6 @@ bench/assets/downloads/
 
 # Generated report manifests (re-run bench/adapters/matrix.ts)
 bench/results/reports/
+
+# Raw float32 blue noise (rebuilt by pnpm bluenoise:generate); the 16-bit PNGs + manifest are committed
+packages/raytracer/assets/bluenoise/*.f32

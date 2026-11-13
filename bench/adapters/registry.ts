@@ -15,6 +15,8 @@ export interface AdapterOptions {
   emitters?: 'rect' | 'mesh';
   /** maxBounces override for the renderer (calibration). */
   bounces?: number;
+  /** mutracer experiment switches (page args `mt_candidates`, `mt_sampler`, `mt_bevel`, `mt_dispersion`, `mt_offset`). */
+  mutracer?: import('./mutracer/index.ts').MutracerSettings;
 }
 
 export async function createAdapter(id: string, options: AdapterOptions = {}): Promise<RendererAdapter> {
@@ -24,7 +26,7 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
     case 'tgpt-megakernel':
       return (await import('./tgpt-megakernel/index.ts')).createTgptMegakernel(options);
     case 'mutracer':
-      return (await import('./mutracer/index.ts')).createMutracer(options.bounces);
+      return (await import('./mutracer/index.ts')).createMutracer(options.bounces, options.mutracer);
     default:
       throw new Error(`unknown renderer "${id}" (have: ${ADAPTER_IDS.join(', ')})`);
   }

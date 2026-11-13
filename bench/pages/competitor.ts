@@ -4,7 +4,7 @@
  *   node bench/runner/run.ts --page competitor --args renderer=mutracer scene=cornell spp=256 [snapshots=16,64]
  *
  * Args: renderer=<tgpt-wavefront|tgpt-megakernel|mutracer>  scene=<any bench scene name>  spp=N  snapshots=a,b,c
- *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  force=1 (render even if the scene is not exact for this renderer)
+ *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
  * `skipped=1` and upload nothing.
@@ -48,7 +48,16 @@ try {
   const scene = getScene(sceneName);
   const emitters = args['emitters'] === 'mesh' ? 'mesh' : 'rect';
   const bounces = args['bounces'] ? numberArg(args, 'bounces', 0) : undefined;
-  const adapter = await createAdapter(rendererId, { frameBudget, bounces, emitters });
+  const mutracer = {
+    ...(args['mt_candidates'] ? { candidates: numberArg(args, 'mt_candidates', 4) } : {}),
+    ...(args['mt_sampler'] ? { sampler: args['mt_sampler'] as 'sobol' | 'zsobol' | 'random' } : {}),
+    ...(args['mt_bevel'] ? { bevel: args['mt_bevel'] === '1' } : {}),
+    ...(args['mt_dispersion'] ? { dispersion: (numberArg(args, 'mt_dispersion', 3) === 1 ? 1 : 3) as 1 | 3 } : {}),
+    ...(args['mt_premul'] ? { premultiply: args['mt_premul'] === '1' } : {}),
+    ...(args['mt_envwidth'] ? { envWidth: numberArg(args, 'mt_envwidth', 4) } : {}),
+    ...(args['mt_offset'] ? { offset: numberArg(args, 'mt_offset', 0) } : {}),
+  };
+  const adapter = await createAdapter(rendererId, { frameBudget, bounces, emitters, mutracer });
   const reason = unsupportedReason(adapter.features, scene);
   const config = { ...adapter.info.config, spp, snapshots, scene: sceneName };
 
