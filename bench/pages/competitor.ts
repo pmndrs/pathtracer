@@ -3,7 +3,7 @@
  *
  *   node bench/runner/run.ts --page competitor --args renderer=mutracer scene=cornell spp=256 [snapshots=16,64]
  *
- * Args: renderer=<tgpt-wavefront|tgpt-megakernel|mutracer>  scene=<tier0 name>  spp=N  snapshots=a,b,c
+ * Args: renderer=<tgpt-wavefront|tgpt-megakernel|mutracer>  scene=<any bench scene name>  spp=N  snapshots=a,b,c
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  force=1 (render even if the scene is not exact for this renderer)
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
@@ -12,7 +12,7 @@
 import { drainDevice, getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { createAdapter, unsupportedReason } from '../adapters/registry.ts';
-import { getTier0Scene } from '../scenes/tier0/index.ts';
+import { getScene } from '../scenes/index.ts';
 
 let adapterSummary: AdapterSummary | null = null;
 let deviceErrors: string[] = [];
@@ -45,7 +45,7 @@ try {
   snapshots.sort((a, b) => a - b);
   const frameBudget = args['budget'] ? numberArg(args, 'budget', 250000) : undefined;
 
-  const scene = getTier0Scene(sceneName);
+  const scene = getScene(sceneName);
   const emitters = args['emitters'] === 'mesh' ? 'mesh' : 'rect';
   const bounces = args['bounces'] ? numberArg(args, 'bounces', 0) : undefined;
   const adapter = await createAdapter(rendererId, { frameBudget, bounces, emitters });

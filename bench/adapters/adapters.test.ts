@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ReportManifest } from '../viewer/src/report.ts';
+import { getScene } from '../scenes/index.ts';
 import { getTier0Scene } from '../scenes/tier0/index.ts';
 import { mergeManifests } from './matrix.ts';
 import { ADAPTER_IDS, unsupportedReason } from './registry.ts';
 
-const exact = { materials: ['diffuse', 'dielectric', 'black'] as const, emissiveMeshes: true, directionalLight: false, environment: ['uniform', 'hdri'] as const, rawOutput: true };
+const exact = { materials: ['diffuse', 'dielectric', 'black'] as const, emissiveMeshes: true, directionalLight: true, environment: ['uniform', 'hdri'] as const, rawOutput: true };
 
 describe('unsupportedReason', () => {
   it('lists the conductors a renderer cannot do exactly and passes the rest', () => {
@@ -12,6 +13,11 @@ describe('unsupportedReason', () => {
     expect(unsupportedReason(exact, getTier0Scene('cornell'))).toBeNull();
     expect(unsupportedReason(exact, getTier0Scene('furnace-conductor'))).toMatch(/conductor/);
     expect(unsupportedReason(exact, getTier0Scene('env-sphere'))).toMatch(/copper/);
+  });
+
+  it('accepts the Tier 2 Sponza scene (sun + uniform sky, one diffuse) and skips it where directional lights are missing', () => {
+    expect(unsupportedReason(exact, getScene('sponza-white'))).toBeNull();
+    expect(unsupportedReason({ ...exact, directionalLight: false }, getScene('sponza-white'))).toMatch(/directional/);
   });
 
   it('skips environments and emitters the renderer does not list', () => {

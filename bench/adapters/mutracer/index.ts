@@ -57,7 +57,7 @@ export class MutracerAdapter implements RendererAdapter {
     // maxDepth 1000 furnace, but the material itself is a smooth dielectric (kept; the cap is reported as a divergence).
     materials: ['diffuse', 'dielectric', 'black'],
     emissiveMeshes: true,
-    directionalLight: false,
+    directionalLight: true,
     environment: ['uniform', 'hdri'],
     rawOutput: true,
     notes:

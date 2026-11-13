@@ -2,7 +2,7 @@
 
 _Last updated 2026-11-13._
 
-**Phase:** P0 (foundations), most of the way there. What's left is the first baseline table and the Windows branch.
+**Phase:** P0 (foundations), most of the way there. The first baseline table (time to equal error, web competitors on Cornell and Sponza) is done; what's left is the Windows branch.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -27,9 +27,8 @@ _Last updated 2026-11-13._
   - Native wide-BVH traversal is 6.3× ahead of our current BVH, not 3.5×.
 
 **Next**
-- Get the web competitors loading Sponza, then produce the first "time to equal error" table (the P0 exit gate).
+- Quiet-machine rerun of the baseline with ABBA across renderers (the first one ran while other jobs loaded the Mac); see `bench/results/BASELINE-P0.md`.
 - Push the `windows-testing` branch with a handoff doc.
-- **Wide-BVH experiment** in the bvh repo: approved to start now. The session is ready and waits for the bvh folder
-  to be trusted in the app.
+- **Wide-BVH experiment** in the bvh repo: running now on its own branch in the bvh repo.
 
 **Waiting on the maintainer:** Sponza reference samples (keep 4096, or 2048 for pbrt). See TASKS.md.

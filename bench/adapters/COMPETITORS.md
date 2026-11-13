@@ -19,7 +19,7 @@ both libraries ship their WebGPU renderer in the package. Nothing under `researc
 
 ## How scenes get in
 
-`node bench/adapters/export-scenes.ts` writes `bench/assets/generated/web/<scene>.glb` (+ `.json` with a hash of the
+`node bench/adapters/export-scenes.ts [scene ...]` (default: every scene in `bench/scenes/index.ts`, Tier 0 and Tier 2; `file` meshes need `node bench/assets/fetch.ts` first) writes `bench/assets/generated/web/<scene>.glb` (+ `.json` with a hash of the
 SceneDesc and the exporter's approximation list) through `bench/exporters/gltf.ts`; `matrix.ts` does it first. The
 exporter runs on Node only (`Buffer`, filesystem for `file` meshes), so the page fetches the files; a changed scene
 fails loudly as stale (hash of `JSON.stringify(scene)`); an edited *exporter* is not detected, re-run the export.
@@ -31,6 +31,9 @@ turn to three's mapping, exact for 512 wide).
 
 ```
 node bench/adapters/matrix.ts --spp 256 --snapshots 16,64 --name tier0-256    # all adapters x Tier 0 -> bench/results/reports/tier0-256/report.json
+node bench/adapters/matrix.ts --scenes sponza-white --spp 256 --snapshots 16,64 --name sponza-256         # Tier 2 (also: --scenes all)
+node bench/adapters/matrix.ts --scenes cornell --spp 1024 --snapshots 4,16,64,256 --repeat 3 --name p0-baseline   # --repeat N: runner repeats per cell; --append adds cells to an existing report
+node bench/adapters/baseline.ts --report p0-baseline [--csv]                   # error-vs-time, fits, time to relMSE targets (P0.9; see bench/results/BASELINE-P0.md)
 node bench/runner/run.ts --page competitor --args renderer=mutracer scene=cornell spp=256 snapshots=16,64
 ```
 Page args: `renderer`, `scene`, `spp`, `snapshots`, `budget` (tgpt path steps per call, default 250000), `emitters=rect|mesh`

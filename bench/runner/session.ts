@@ -231,9 +231,15 @@ export class BrowserSession {
     }
 
     private async readReport(token: string): Promise<BenchReport | null> {
-        const report = await this.cdp.evaluate<BenchReport | null>(
-            `window.${REPORT_PROPERTY} ?? null`,
-        );
+        let report: BenchReport | null;
+        try {
+            report = await this.cdp.evaluate<BenchReport | null>(`window.${REPORT_PROPERTY} ?? null`);
+        } catch (error) {
+            // A page that runs one long synchronous loop (a competitor's timed render, minutes with no await) cannot answer
+            // DevTools; that is a busy page, not a failed one. The overall deadline and the crash flag still end the run.
+            if (error instanceof Error && /Runtime\.evaluate timed out/.test(error.message)) return null;
+            throw error;
+        }
         return report && report.token === token ? report : null;
     }
 

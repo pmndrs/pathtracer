@@ -1,7 +1,7 @@
 /**
  * Node side of the web adapters: writes each scene's glTF (through bench/exporters/gltf.ts) where the browser can fetch it.
  *
- *   node bench/adapters/export-scenes.ts [scene ...]      (default: every Tier 0 scene)
+ *   node bench/adapters/export-scenes.ts [scene ...]      (default: every bench scene, Tier 0 and Tier 2; `file` meshes need `node bench/assets/fetch.ts`)
  *
  * Output: bench/assets/generated/web/<scene>.glb and <scene>.json ({ sceneHash, approximations }). Git-ignored.
  * Also makes sure the procedural environment PFM exists.
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { toGltf } from '../exporters/gltf.ts';
 import { ASSETS_DIR, generateAssets } from '../scenes/tier0/generate-assets.ts';
 import { ENV_FILE } from '../scenes/tier0/env-sky.ts';
-import { tier0Scenes } from '../scenes/tier0/index.ts';
+import { allScenes } from '../scenes/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 
 export const WEB_DIR = join(ASSETS_DIR, 'generated', 'web');
@@ -31,12 +31,12 @@ export function exportScene(scene: SceneDesc): string {
 
 export function exportScenes(names: readonly string[] = []): string[] {
   if (!existsSync(join(ASSETS_DIR, ENV_FILE))) generateAssets();
-  const scenes = names.length > 0 ? names.map((n) => tier0Scenes.find((s) => s.name === n) ?? failUnknown(n)) : tier0Scenes;
+  const scenes = names.length > 0 ? names.map((n) => allScenes.find((s) => s.name === n) ?? failUnknown(n)) : allScenes;
   return scenes.map(exportScene);
 }
 
 function failUnknown(name: string): never {
-  throw new Error(`unknown tier 0 scene "${name}" (have: ${tier0Scenes.map((s) => s.name).join(', ')})`);
+  throw new Error(`unknown scene "${name}" (have: ${allScenes.map((s) => s.name).join(', ')})`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -44,7 +44,7 @@ export class TgptAdapter implements RendererAdapter {
     // Conductors are not here: glTF carries F0 only, so grazing-angle Fresnel differs from eta/k (DIVERGES V7).
     materials: ['diffuse', 'dielectric', 'black'],
     emissiveMeshes: true,
-    directionalLight: false,
+    directionalLight: true,
     environment: ['uniform', 'hdri'],
     rawOutput: true,
     notes:

@@ -16,7 +16,7 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.6 | Tier 0 scenes, exporters (pbrt/Mitsuba/glTF), native refs | agent:scenes | ✅ | 6 scenes, 4096 spp refs; furnace exact in both; pbrt-vs-Mitsuba relMSE 2e-8…6.4e-4 (`bench/references/agreement.md`) |
 | P0.7 | Competitor adapters: mutracer, three-gpu-pathtracer (WebGPU, both schedulers) behind `RendererAdapter` | agent:competitors | ✅ | `bench/adapters/` + `COMPETITORS.md`; npm-pinned; Tier 0 at 256 spp: Cornell relMSE 5e-4…1.1e-3, mutracer 6.3 ms/spp vs tgpt wavefront 13 / megakernel 64 |
 | P0.8 | Literature verification pass | agent:verify | ✅ | `research/VERIFY.md`; OIDN 3 timeline, STBN licence, CWBVH 6.3× gap, ReSTIR GI ~8 ms |
-| P0.9 | First baseline table: time-to-equal-error, competitors vs reference on Cornell + Sponza (M5) | — | ⬜ | P0 exit gate; needs P0.7 + P0.13 |
+| P0.9 | First baseline table: time-to-equal-error, competitors vs reference on Cornell + Sponza (M5) | agent:baseline | ✅ | `bench/results/BASELINE-P0.md`: relMSE 1e-2 vs Mitsuba reached in Cornell 133 ms (mutracer) / 242 ms (tgpt-wavefront) / 1.1 s (megakernel), Sponza 1.2 min / 1.1 min / 2.7 min; 1e-3 on Sponza not measurable (floor 4.1e-3); fits k 0.9-1.13; machine heavily loaded by other agents (spread up to 1.75x) |
 | P0.10 | `windows-testing` branch + `docs/WINDOWS-HANDOFF.md` | lead | ⬜ | near end of P0 |
 | P0.11 | Runner emits the viewer's `report.json` manifest (schema in `bench/viewer/src/report.ts`) | agent:competitors | ✅ | `bench/runner/report.ts`; `matrix.ts --name X` → `bench/results/reports/X/report.json` |
 | P0.12 | Dedupe PFM IO: `bench/scenes/pfm.ts` → reuse `bench/metrics/pfm.ts` | agent:sponza | ✅ | `bench/scenes/pfm.ts` deleted |
@@ -26,18 +26,24 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.16 | `THIRD_PARTY.md` (FLIP lineage, bvh runner port, any ported code) | — | ⬜ | |
 | P0.17 | Blue-noise texture generator of our own (void-and-cluster; FAST generator, EA BSD-3) since STBN assets are non-commercial | — | ⬜ | needed by P4, cheap to start |
 | P0.18 | Resource-table and subgroup-matrix compile probes on the caps page (Windows/Chrome Canary) | — | ⬜ | names are guesses until tested |
-| P0.19 | Web adapters load `file` meshes (Sponza) through the glb exporter output; runner/matrix iterate `allScenes` | — | ⬜ | needed for P0.9 |
+| P0.19 | Web adapters load `file` meshes (Sponza) through the glb exporter output; runner/matrix iterate `allScenes` | agent:baseline | ✅ | all three render sponza-white; image mean within -0.2% of Mitsuba and +0.0% of pbrt, no per-renderer fix needed (V19); `directionalLight` now true in the adapters; `matrix.ts` gained `--scenes all`, `--repeat`, `--append`, `runs.json` |
 | P0.20 | mutracer: exact conductor eta/k via F0/F82 instead of F0 only | — | ⬜ | glTF export carries F0 only (V7) |
 | P0.21 | three-gpu-pathtracer GPU timestamps without a readback in the loop | — | ⬜ | wall clock only today |
 | P0.22 | Move glTF export from Node pre-export into the page or runner (exporter edits are not detected as stale) | — | ⬜ | |
 | P0.23 | Investigate tgpt megakernel's 2% blue-channel noise at facet edges | — | ⬜ | competitor quirk, low priority |
 | P0.24 | `sponza-white-ao` variant (diffuse, no lights, ambient-occlusion-like) | — | ⬜ | skipped in P0.13 |
+| P0.25 | Rerun the P0.9 baseline on a quiet machine with ABBA across renderers (`matrix.ts` over the runner's `--ab renderer=A,B`), and quote paired ratios | — | ⬜ | the first table ran at load average 97-779 from other agents' GPU jobs (caveat 1 in BASELINE-P0.md) |
+| P0.26 | mutracer on Cornell plateaus at relMSE ~6.8e-4 vs Mitsuba (mean +0.07%, 40 px block means up to 3.6% off): find the bias (bevel off, RIS candidates, sun/NEE, spectral-vs-RGB) | — | ⬜ | tgpt images are 0.4% max, so it is mutracer-specific |
+| P0.27 | Sponza tgpt-megakernel at 1024 spp (capped at 512 for the 30 min budget) and a longer reference or several reference seeds so 1e-3 becomes measurable | — | ⬜ | reference floor 4.1e-3 (pbrt vs Mitsuba) blocks every target under ~8e-3 on Sponza |
+| P0.28 | Competitor adapters: yield to the event loop without a GPU sync inside tgpt's timed loop (runner now tolerates a busy page, V17) | — | ⬜ | minutes-long synchronous loops made `Runtime.evaluate` time out |
+| P0.29 | Report an unbiased error estimate that subtracts the reference's own noise (V18), or use two independent reference seeds | — | ⬜ | Sponza "time to 1e-2" currently waits for test noise ~8e-3 |
+| P0.30 | Check the shared-machine load before timing and refuse or flag (runner: load average, number of GPU-process Chrome instances) | — | ⬜ | all P0.9 spreads were load-driven |
 
 ## Parallel tracks
 
 | ID | Task | Where | Status |
 |---|---|---|---|
-| X1 | Wide BVH: BVH4 / CWBVH8 node formats + WGSL traversal + GPU collapse pass; gate ≥1.3× on 3060L and M5 | ~/Developer/bvh, branch `wide-bvh` | 🟨 maintainer said start now (2026-11-13); session waits on the repo being trusted in the app |
+| X1 | Wide BVH: BVH4 / CWBVH8 node formats + WGSL traversal + GPU collapse pass; gate ≥1.3× on 3060L and M5 | ~/Developer/bvh, branch `wide-bvh` | 🟨 running (session `wide-bvh`, started 2026-11-13) |
 
 ## Open questions for the maintainer
 

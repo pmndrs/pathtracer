@@ -98,3 +98,17 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - three-gpu-pathtracer: `useMegakernel(true)` resets settings (set them after); rect lights are invisible to camera rays
   unless `visibleToCameraRays`; `clampIndirect` defaults to 10; alpha blending drops escaped samples unless the clear
   alpha is 1.
+- This Mac is shared: other agents' headless Chrome and vitest jobs do not take the GPU lock. During P0.9 the load average
+  was 97-779 with 20-39 GPU processes and repeats of one cell moved by up to 1.75x. Check `sysctl vm.loadavg` and
+  `ps -eo command | grep -c type=gpu-process` before timing, quote min..max, never a single run.
+- relMSE against a 4096 spp reference has a floor (Sponza: Mitsuba noise alone about 2e-3, pbrt-vs-Mitsuba 4.1e-3, Cornell
+  4.4e-4). Targets under 2x the floor are not measurable; `bench/adapters/baseline.ts` marks them. A curve that stops
+  following 1/spp (mutracer on Cornell) is a bias floor: do not extrapolate it.
+- A page that runs one long synchronous loop (tgpt's timed replay, minutes on Sponza) cannot answer DevTools: `Runtime.evaluate`
+  timed out after 30 s and failed the run. The runner now treats that as busy (V17); a new adapter should still await
+  something between chunks.
+- tgpt and mutracer use a deterministic Sobol sequence: repeats share one noise realisation, so error has no run-to-run spread,
+  only time does. tgpt time to the first snapshot is about 2x per-spp price (fixed per-call cost), so fitted k is slightly above 1.
+- `nohup sh -c "a; b" &` chains: killing the `sh` leaves the running child; wait for its pid (`kill -0`) and queue a new chain.
+  macOS has no `timeout`; bound loops with a counter.
+
