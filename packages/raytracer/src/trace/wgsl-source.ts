@@ -122,20 +122,32 @@ fn rtClosestCone(ray: RtRay, mask: u32, cone: RtCone) -> RtHit {
 `;
 
 export interface SurfaceWgslOptions {
-  group: number;
-  firstBinding: number;
   vertexStride: number;
   normalOffset: number;
   uvOffset: number;
   positionOffset: number;
+  /** vec4u units before the first instance record: the scene header (`SCENE_HEADER_VEC4S`). Default `SURFACE_TABLE.HEADER_VEC4S`. */
+  headerVec4s?: number;
 }
 
 /**
- * Lazy surface decode. Reads three bindings: table (`array<vec4u>`), indices (`array<u32>`), vertices (`array<f32>`),
- * laid out by surface-table.ts. `want` is a SurfaceMask (`RT_SURF_*`); anything not requested is neither loaded nor
- * computed. Geometric normal, front face and material come free from the hit.
+ * Lazy surface decode, laid out by surface-table.ts and read out of the scene copy's `rtSceneTable` / `rtSceneData` (declared by
+ * `rtSceneBindingsWgsl`, so no bindings here). `want` is a SurfaceMask
+ * (`RT_SURF_*`); anything not requested is neither loaded nor computed. Geometric normal, front face and material come free
+ * from the hit.
  */
 export function rtSurfaceWgsl(o: SurfaceWgslOptions): string {
+  const bindings = /* wgsl */ `
+fn rtSTable(i: u32) -> vec4u {
+    return rtSceneTable[i];
+}
+fn rtSIndex(i: u32) -> u32 {
+    return rtSceneData[i];
+}
+fn rtSVertex(base: u32, i: u32) -> f32 {
+    return bitcast<f32>(rtSceneData[base + i]);
+}
+`;
   return /* wgsl */ `
 // ---- rtSurface: lazy decode from a hit -------------------------------------------------------------------------
 
@@ -153,7 +165,7 @@ const RT_SV_NORMAL: u32 = ${o.normalOffset}u;
 const RT_SV_UV: u32 = ${o.uvOffset}u;
 const RT_SV_POSITION: u32 = ${o.positionOffset}u;
 const RT_INSTANCE_VEC4S: u32 = ${SURFACE_TABLE.INSTANCE_VEC4S}u;
-const RT_TABLE_HEADER_VEC4S: u32 = ${SURFACE_TABLE.HEADER_VEC4S}u;
+const RT_TABLE_HEADER_VEC4S: u32 = ${o.headerVec4s ?? SURFACE_TABLE.HEADER_VEC4S}u;
 
 struct RtSurface {
     position: vec3f,       // world space
@@ -163,17 +175,13 @@ struct RtSurface {
     uv: vec2f,             // zero without data
     material: u32,
 }
-
-@group(${o.group}) @binding(${o.firstBinding}) var<storage, read> rtSurfaceTable: array<vec4u>;
-@group(${o.group}) @binding(${o.firstBinding + 1}) var<storage, read> rtSurfaceIndices: array<u32>;
-@group(${o.group}) @binding(${o.firstBinding + 2}) var<storage, read> rtSurfaceVertices: array<f32>;
-
+${bindings}
 fn rtTableRow(index: u32) -> vec4f {
-    return bitcast<vec4f>(rtSurfaceTable[index]);
+    return bitcast<vec4f>(rtSTable(index));
 }
 
-fn rtVertex3(base: u32) -> vec3f {
-    return vec3f(rtSurfaceVertices[base], rtSurfaceVertices[base + 1u], rtSurfaceVertices[base + 2u]);
+fn rtVertex3(vbase: u32, base: u32) -> vec3f {
+    return vec3f(rtSVertex(vbase, base), rtSVertex(vbase, base + 1u), rtSVertex(vbase, base + 2u));
 }
 
 fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
@@ -198,25 +206,26 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
     if (!needVertices) {
         return s;
     }
-    let header = rtSurfaceTable[0];
+    let header = rtSTable(0u);
     if (hit.instance >= header.x) {
         return s;
     }
+    let vbase = header.w;
     let record = RT_TABLE_HEADER_VEC4S + hit.instance * RT_INSTANCE_VEC4S;
-    let meshIndex = rtSurfaceTable[record + ${SURFACE_TABLE.INSTANCE_META}u].x;
-    let mesh = rtSurfaceTable[header.y + meshIndex];   // (indexOffset, vertexOffset, flags, triangleCount)
+    let meshIndex = rtSTable(record + ${SURFACE_TABLE.INSTANCE_META}u).x;
+    let mesh = rtSTable(header.y + meshIndex);   // (indexOffset, vertexOffset, flags, triangleCount)
 
     let first = mesh.x + hit.triangle * 3u;
-    let v0 = (rtSurfaceIndices[first] + mesh.y) * RT_SV_STRIDE;
-    let v1 = (rtSurfaceIndices[first + 1u] + mesh.y) * RT_SV_STRIDE;
-    let v2 = (rtSurfaceIndices[first + 2u] + mesh.y) * RT_SV_STRIDE;
+    let v0 = (rtSIndex(first) + mesh.y) * RT_SV_STRIDE;
+    let v1 = (rtSIndex(first + 1u) + mesh.y) * RT_SV_STRIDE;
+    let v2 = (rtSIndex(first + 2u) + mesh.y) * RT_SV_STRIDE;
     let w1 = hit.bary.x;
     let w2 = hit.bary.y;
     let w0 = 1.0 - w1 - w2;
 
 #if RT_SURFACE_POSITIONS
     if ((want & RT_SURF_POSITION) != 0u) {
-        let p = rtVertex3(v0 + RT_SV_POSITION) * w0 + rtVertex3(v1 + RT_SV_POSITION) * w1 + rtVertex3(v2 + RT_SV_POSITION) * w2;
+        let p = rtVertex3(vbase, v0 + RT_SV_POSITION) * w0 + rtVertex3(vbase, v1 + RT_SV_POSITION) * w1 + rtVertex3(vbase, v2 + RT_SV_POSITION) * w2;
         let r0 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W}u);
         let r1 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 1}u);
         let r2 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 2}u);
@@ -225,15 +234,15 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
 #endif
 #if RT_SURFACE_UVS
     if ((want & RT_SURF_UV) != 0u && (mesh.z & RT_MESH_HAS_UVS) != 0u) {
-        let a = vec2f(rtSurfaceVertices[v0 + RT_SV_UV], rtSurfaceVertices[v0 + RT_SV_UV + 1u]);
-        let b = vec2f(rtSurfaceVertices[v1 + RT_SV_UV], rtSurfaceVertices[v1 + RT_SV_UV + 1u]);
-        let c = vec2f(rtSurfaceVertices[v2 + RT_SV_UV], rtSurfaceVertices[v2 + RT_SV_UV + 1u]);
+        let a = vec2f(rtSVertex(vbase, v0 + RT_SV_UV), rtSVertex(vbase, v0 + RT_SV_UV + 1u));
+        let b = vec2f(rtSVertex(vbase, v1 + RT_SV_UV), rtSVertex(vbase, v1 + RT_SV_UV + 1u));
+        let c = vec2f(rtSVertex(vbase, v2 + RT_SV_UV), rtSVertex(vbase, v2 + RT_SV_UV + 1u));
         s.uv = a * w0 + b * w1 + c * w2;
     }
 #endif
 #if RT_SURFACE_NORMALS
     if ((want & RT_SURF_SHADING_NORMAL) != 0u && (mesh.z & RT_MESH_HAS_NORMALS) != 0u) {
-        let n = rtVertex3(v0 + RT_SV_NORMAL) * w0 + rtVertex3(v1 + RT_SV_NORMAL) * w1 + rtVertex3(v2 + RT_SV_NORMAL) * w2;
+        let n = rtVertex3(vbase, v0 + RT_SV_NORMAL) * w0 + rtVertex3(vbase, v1 + RT_SV_NORMAL) * w1 + rtVertex3(vbase, v2 + RT_SV_NORMAL) * w2;
         let m0 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_NORMAL}u).xyz;
         let m1 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_NORMAL + 1}u).xyz;
         let m2 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_NORMAL + 2}u).xyz;

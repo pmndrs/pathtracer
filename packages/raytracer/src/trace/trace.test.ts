@@ -152,12 +152,12 @@ describe('generated WGSL', () => {
       for (const uvs of [false, true])
         for (const positions of [false, true])
           for (const triangleLeaves of ['records', 'indexed'] as const) {
-            const surface = { slot: { group: 2, firstBinding: 0 }, layout: { normals, uvs, positions } };
-            const code = rtModuleWgsl(allFeatures, { triangleLeaves, surface });
+            const scene = { slot: { group: 2, firstBinding: 0 }, layout: { normals, uvs, positions }, materials: false, lights: false };
+            const code = rtModuleWgsl(allFeatures, { triangleLeaves, scene });
             expect(code.length).toBeLessThan(KERNEL_BYTE_LIMIT);
             for (const fn of ['rtVisible', 'rtVisibleSegment', 'rtClosest', 'rtClosestCone', 'rtSurface', 'rtSegment', 'rtConePropagate']) expect(code).toContain(`fn ${fn}(`);
             expect(code).not.toMatch(/^\s*#(if|elif|else|endif)\b/m);
-            expect(bindingsOf(code, 2)).toEqual([0, 1, 2]);
+            expect(bindingsOf(code, 2)).toEqual([0, 1]);
           }
     const plain = rtModuleWgsl(noFeatures);
     expect(plain).not.toContain('fn rtSurface(');
@@ -167,8 +167,8 @@ describe('generated WGSL', () => {
 
   it('declares nothing outside the rt prefix beyond what the bvh walk declares', () => {
     const walk = declaredNames(traceModuleWgsl({}));
-    const surface = { slot: { group: 2, firstBinding: 0 }, layout: { normals: true, uvs: true, positions: true } };
-    const ours = new Set([...declaredNames(rtModuleWgsl(noFeatures, { surface })), ...declaredNames(rtBatchKernelWgsl(noFeatures, { mode: 'closest', cones: true, indirect: true, rayLayout: 'soa' })), ...declaredNames(rtBatchArgsKernelWgsl(noFeatures))]);
+    const scene = { slot: { group: 2, firstBinding: 0 }, layout: { normals: true, uvs: true, positions: true } };
+    const ours = new Set([...declaredNames(rtModuleWgsl(noFeatures, { scene })), ...declaredNames(rtBatchKernelWgsl(noFeatures, { mode: 'closest', cones: true, indirect: true, rayLayout: 'soa' })), ...declaredNames(rtBatchArgsKernelWgsl(noFeatures))]);
     const strays = [...ours].filter((name) => !walk.has(name) && !/^(rt|Rt|RT_)/.test(name));
     expect(strays).toEqual([]);
     expect(ours.has('rtVisible')).toBe(true);
@@ -219,9 +219,9 @@ describe('struct layouts against the TypeScript constants', () => {
     expect(() => resolveBatchOptions({ mode: 'visible', cones: true })).toThrow(RangeError);
   });
 
-  it('binding budget: walk 3 (4 indexed), surface 3', () => {
+  it('binding budget: walk 3 (4 indexed), scene copy 2', () => {
     expect(rtModuleStorageBuffers()).toBe(3);
-    expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', surface: { slot: { group: 1, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: false } } })).toBe(7);
+    expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', scene: { slot: { group: 1, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: false } } })).toBe(6);
   });
 });
 

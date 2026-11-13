@@ -4,4 +4,6 @@ export * from './contract/frame.ts';
 export * from './caps/index.ts';
 export * from './noise/bluenoise.ts';
 export * from './sampling/owen-sobol.ts';
+export * from './sampling/owen-sobol-wgsl.ts';
 export * from './trace/index.ts';
+export * from './scene/index.ts';

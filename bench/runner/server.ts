@@ -8,14 +8,28 @@
  * through CDP `Runtime.evaluate`: a 30 MB Float32Array as JSON is slow and blows the message limit.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createServer, type ViteDevServer } from 'vite';
+import { createServer, searchForWorkspaceRoot, type ViteDevServer } from 'vite';
 import { UPLOAD_PATH, type UploadRecord } from './contract.ts';
 import { bytesToFloats, countNonFinite, encodePfm, expectedFloats } from './pfm.ts';
 
 export const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
+/**
+ * The checkout `@pmndrs/bvh` is linked from (`link:` in bench/package.json), or null for an installed copy. Vite serves it
+ * through `/@fs/`, which is only allowed inside `server.fs.allow`; without it the bvh build workers (loaded by URL
+ * from bvh's `dist/`) fail to load. For an npm install the package sits in node_modules (already inside the workspace
+ * root) and would also need `optimizeDeps.exclude: ['@pmndrs/bvh']` so the worker URL is not rewritten by pre-bundling.
+ */
+function linkedBvhRoot(): string | null {
+  try {
+    return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'bvh'));
+  } catch {
+    return null;
+  }
+}
+
 export const RESULTS_DIR = resolve(REPOSITORY_ROOT, 'bench', 'results');
 export const INCOMING_DIR = resolve(RESULTS_DIR, 'incoming');
 
@@ -97,6 +111,7 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
       strictPort: false,
       // The runner reloads pages itself; hot reload and file watching would only add noise (and watch research/).
       hmr: false,
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : [])] },
       watch: null,
     },
     plugins: [

@@ -26,6 +26,7 @@ the time of this check, not necessarily the commit each file was ported from.
 | `bench/runner/clock-note.ts` (+ test) | `~/Developer/webgpu-ddgi/tools/gpu/clock-note.ts`, via `~/Developer/bvh/tests/gpu/clock-note.ts` | MIT | ddgi `9dddefe`, bvh `498a6c1` | `PT_` env names, live sampler, our CSV row builder |
 | `bench/runner/contract.ts` | shape follows `~/Developer/bvh/tests/gpu/contract.ts` | MIT | bvh `498a6c1` | reduced to what the bench needs |
 | `bench/runner/page-client.ts` | shape follows `~/Developer/bvh/tests/gpu/client.ts` | MIT | bvh `498a6c1` | |
+| `packages/raytracer/src/scene/scene-copy.ts`, `constants.ts`, `gpu.ts` | layout ideas from `~/Developer/webgpu-ddgi/packages/ddgi-core/src/platform/scene/` (table + header + fixed records, none sentinel); `ContentHasher` adapted from its `scene-fingerprint.ts` | MIT | ddgi working tree 2026-11-14 | V29, V30; records and light table are new |
 | `bench/runner/gpu-lock.ts` (+ test) | same protocol as `~/Developer/Denoiser/tools/gpu-lock.sh` (a shell script, reimplemented in TypeScript) | MIT | Denoiser `7014384` | takes over locks of dead owners (V5) |
 | `bench/metrics/flip.ts` | `~/Developer/Denoiser/examples/realtime-denoiser/src/flip.ts` (our own implementation), written after NVIDIA's FLIP reference | MIT (ours), reference BSD-3, see 1.2 | Denoiser `7014384` | LDR-FLIP only; reference is `github.com/NVlabs/flip` |
 
@@ -48,7 +49,24 @@ mirrors the `@pmndrs/bvh` GPU layout v2 (`~/Developer/bvh/src/trace/layout.ts`).
 - Licence text: [licenses/NVlabs-FLIP-BSD-3-Clause.txt](licenses/NVlabs-FLIP-BSD-3-Clause.txt), verbatim from the pinned commit.
 - Not used: the reference's PyTorch/C++/CUDA code. The clone and the pip venv live in `.cache/flip-validation/` (git-ignored) and are only used to produce validation outputs.
 
-### 1.3 Clean-room status
+### 1.3 pbrt-v4, Apache-2.0
+
+| Our file | Source | Licence | Notes |
+|---|---|---|---|
+| `packages/pathtracer/src/bsdf/bsdf.ts`, `bsdf-wgsl.ts` | pbrt-v4 <https://github.com/mmp/pbrt-v4>, commit `b0bdf461`: `src/pbrt/bxdfs.h`, `bxdfs.cpp`, `util/scattering.h` | Apache-2.0, Copyright (c) 1998-2020 Matt Pharr, Wenzel Jakob, Greg Humphreys | Diffuse, conductor and dielectric BxDFs, Trowbridge-Reitz, FrDielectric, FrComplex, Refract, ported to TS and WGSL and restructured (DIVERGES V28). Licence text: [licenses/pbrt-v4-Apache-2.0.txt](licenses/pbrt-v4-Apache-2.0.txt) |
+
+Also from pbrt-v4, re-implemented in WGSL (not copied): the integrator structure (`PathIntegrator::Li` / `SampleLd`:
+emission before the depth check, `etaScale`, the RR formula), `SampleUniformTriangle`, the power heuristic
+(`packages/pathtracer/src/integrator/`, `packages/raytracer/src/scene/light-sample.ts`).
+
+Papers (formulas only, our code): Wächter and Binder, "A Fast and Robust Method for Avoiding Self-Intersection" (Ray
+Tracing Gems ch. 6; written from the paper's description, no book text or code, D16); Burley, "Practical Hash-based
+Owen Scrambling", JCGT 2020; Jarzynski and Olano, "Hash Functions for GPU Rendering", JCGT 2020 (PCG debug sampler); Heitz, "Sampling the GGX Distribution of Visible Normals", JCGT 2018 (standard VNDF,
+as pbrt-v4 implements it); Dupuy and Benyoub, "Sampling Visible GGX Normals with Spherical Caps", HPG 2023
+(`vndf: 'cap'`); Duff et al., "Building an Orthonormal Basis, Revisited", JCGT 2017 (`ptFrameFromNormal`).
+Mitsuba 3 code was not read for the BSDFs.
+
+### 1.4 Clean-room status
 
 - NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC, NRD): nothing ported. NRD code never opened.
 - mutracer: nothing ported (see section 2).

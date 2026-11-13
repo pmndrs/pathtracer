@@ -16,8 +16,13 @@ export interface LoadSample {
   load1: number;
   /** Where load1 came from. */
   loadSource: 'loadavg' | 'cpu-delta' | 'unavailable';
-  /** Chrome GPU processes (`--type=gpu-process`) that are not descendants of this process; null when `ps` failed. */
+  /** Chrome-family browser GPU processes (`isBrowserGpuProcess`) that are not descendants of this process; null when `ps` failed. */
   gpuProcs: number | null;
+  /**
+   * Desktop apps (Electron/CEF: Spotify, Discord, the Claude app...) with a GPU helper running. They don't make a run
+   * `loaded` (the maintainer can't close them all), but the note lists them so the timing reads as best effort.
+   */
+  backgroundApps?: string[];
 }
 
 export interface LoadThresholds {
@@ -81,7 +86,42 @@ export function countForeignGpuProcesses(processes: readonly ProcessInfo[], ownP
       }
     }
   }
-  return processes.filter((p) => p.command.includes('--type=gpu-process') && !own.has(p.pid)).length;
+  return processes.filter((p) => isBrowserGpuProcess(p.command) && !own.has(p.pid)).length;
+}
+
+/**
+ * Pure: a real GPU helper process, not a shell or script whose command line merely contains `--type=gpu-process` (an
+ * agent's `zsh -c "... grep type=gpu-process"` showed up as one).
+ */
+export function isGpuHelper(command: string): boolean {
+  if (!command.includes('--type=gpu-process')) return false;
+  return !/^\s*(\S*[\\/])?(zsh|bash|sh|fish|dash|node|python3?|powershell|pwsh|cmd|grep|ps)(\.exe)?(\s|$)/i.test(command);
+}
+
+/** Pure: the app behind a non-browser GPU helper (`Spotify` from `/Applications/Spotify.app/...`, `Foo` from `Foo.exe`). */
+export function gpuHelperAppName(command: string): string {
+  const executable = command.split(' --')[0] as string;
+  const bundle = /([^/]+)\.app\//.exec(executable);
+  if (bundle) return bundle[1] as string;
+  const base = executable.split(/[\\/]/).pop() ?? executable;
+  return base.replace(/\.exe$/i, '');
+}
+
+/** Pure: sorted, distinct names of the desktop apps (not browsers, not ours) that run a GPU helper. */
+export function listBackgroundGpuApps(processes: readonly ProcessInfo[]): string[] {
+  const names = processes.filter((p) => isGpuHelper(p.command) && !isBrowserGpuProcess(p.command)).map((p) => gpuHelperAppName(p.command));
+  return [...new Set(names)].sort();
+}
+
+/**
+ * Pure: a GPU process of a Chrome-family browser (Chrome, Chrome Canary, Chromium, Edge), the kind other agents' bench
+ * jobs launch. Electron and CEF desktop apps (Spotify, Discord, Notion, Creative Cloud, the Claude app) also run a
+ * `--type=gpu-process` helper, but an idle app costs nothing: counting them marked every run on a quiet Mac `loaded`.
+ */
+export function isBrowserGpuProcess(command: string): boolean {
+  if (!isGpuHelper(command)) return false;
+  const executable = command.split(' --')[0] as string;
+  return /Google Chrome|Chromium|Microsoft Edge|(^|[\\/])(chrome|msedge)(\.exe)?$/i.test(executable);
 }
 
 export interface CpuTimes {
@@ -100,7 +140,8 @@ export function cpuBusyFraction(before: CpuTimes, after: CpuTimes): number {
 export function formatLoadNote(sample: LoadSample, loaded: boolean): string {
   const load = sample.loadSource === 'unavailable' ? 'load n/a' : `load ${sample.load1.toFixed(2)}${sample.loadSource === 'cpu-delta' ? ' (cpu)' : ''}`;
   const gpu = sample.gpuProcs === null ? 'gpu-procs n/a' : `gpu-procs ${sample.gpuProcs}`;
-  return `${load}, ${gpu}${loaded ? '; loaded' : ''}`;
+  const apps = sample.backgroundApps && sample.backgroundApps.length > 0 ? `; best effort (background apps: ${sample.backgroundApps.join(', ')})` : '';
+  return `${load}, ${gpu}${loaded ? '; loaded' : ''}${apps}`;
 }
 
 export interface LoadOutcome {
@@ -174,6 +215,7 @@ export async function sampleLoad(ownPid: number = process.pid): Promise<LoadSamp
     loadSource = 'loadavg';
   }
   let gpuProcs: number | null = null;
+  let backgroundApps: string[] | undefined;
   try {
     const text =
       process.platform === 'win32'
@@ -184,9 +226,11 @@ export async function sampleLoad(ownPid: number = process.pid): Promise<LoadSamp
             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--type=gpu-process*' } | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }",
           ])
         : await run('ps', ['-axo', 'pid=,ppid=,command=']);
-    gpuProcs = countForeignGpuProcesses(parseProcessList(text), ownPid);
+    const processes = parseProcessList(text);
+    gpuProcs = countForeignGpuProcesses(processes, ownPid);
+    backgroundApps = listBackgroundGpuApps(processes);
   } catch {
     gpuProcs = null;
   }
-  return { load1, loadSource, gpuProcs };
+  return { load1, loadSource, gpuProcs, ...(backgroundApps ? { backgroundApps } : {}) };
 }

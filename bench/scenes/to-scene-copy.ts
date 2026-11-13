@@ -1,0 +1,122 @@
+/**
+ * Bench `SceneDesc` -> the inputs of the trace core's scene copy (D4), so every bench scene can be traced, shaded and lit
+ * by `@pmndrs/raytracer` and compared with pbrt-v4 / Mitsuba.
+ *
+ * Mapping (OpenPBR subset, see packages/raytracer/src/scene/material.ts):
+ *  - `diffuse`: baseColor = reflectance, `specularWeight` 0 (a pure Lambertian: no dielectric specular lobe);
+ *  - `conductor`: physical conductor (`conductorEtaK`, eta + k), metalness 1, roughness as given;
+ *  - `dielectric`: transmissionWeight 1, specularWeight 1, ior, roughness, no base layer (baseWeight 0) and no absorption
+ *    (`transmissionDepth` 0);
+ *  - `black`: baseWeight 0 and specularWeight 0: scatters nothing.
+ * A mesh's `emission` is not a material property in the bench schema, so each distinct (material, emission, twoSided) triple
+ * becomes its own scene-copy material; `materialNames` says which is which.
+ *
+ * One mesh per `MeshDesc`, one instance per mesh (object-space triangles + the mesh's transform), instance material = the
+ * triple's index, instance mask 0x02 for emitters and 0x01 otherwise (the trace-scenes convention). `file` geometry must be
+ * resolved by the caller (`resolveFile`); the bench's async glb loaders live elsewhere.
+ */
+import type { SceneCopyInput, SceneCopyInstance, SceneCopyMesh, RtMaterialInput, SceneCopyOptions } from '@pmndrs/raytracer';
+import { buildSceneCopy, type SceneCopy } from '@pmndrs/raytracer';
+import { compose, tessellate, type TriangleMesh } from './geometry.ts';
+import type { EnvironmentDesc, GeometryDesc, MaterialDesc, MeshDesc, Rgb, SceneDesc } from './schema.ts';
+
+/** Instance masks (same values as bench/pages/trace-scenes.ts): rays with `MASK_NO_EMITTERS` skip emitters. */
+export const INSTANCE_MASK_EMITTER = 0x02;
+export const INSTANCE_MASK_PLAIN = 0x01;
+
+export interface DescToSceneCopyOptions {
+  /** Loads `file` geometry (glb/gltf/ply/obj) as object-space triangles. Without it, a `file` mesh throws. */
+  resolveFile?: (geometry: Extract<GeometryDesc, { type: 'file' }>, mesh: MeshDesc) => TriangleMesh;
+  /** Constant radiance used as the environment entry for an `hdri` environment (the map itself is not copied yet). Default: black. */
+  hdriRadiance?: Rgb;
+  /** Passed to `buildSceneCopy`. */
+  copy?: SceneCopyOptions;
+}
+
+export interface DescSceneCopyInput extends SceneCopyInput {
+  meshes: SceneCopyMesh[];
+  instances: SceneCopyInstance[];
+  materials: RtMaterialInput[];
+  /** One name per material: `<bench material>` or `<bench material>+emission(r,g,b)`. */
+  materialNames: string[];
+  /** `MeshDesc.name` per mesh, in order. */
+  meshNames: string[];
+}
+
+/** The scene-copy material of one bench material (no emission). Exported so tests can check the mapping. */
+export function materialFromDesc(desc: MaterialDesc): RtMaterialInput {
+  switch (desc.type) {
+    case 'diffuse':
+      return { baseColor: [...desc.reflectance], baseWeight: 1, metalness: 0, specularWeight: 0, specularRoughness: 1 };
+    case 'conductor':
+      return { conductorEtaK: true, conductorEta: [...desc.eta], conductorK: [...desc.k], metalness: 1, baseWeight: 1, specularRoughness: desc.roughness, specularWeight: 1 };
+    case 'dielectric':
+      return { baseWeight: 0, baseColor: [0, 0, 0], transmissionWeight: 1, transmissionColor: [1, 1, 1], transmissionDepth: 0, specularWeight: 1, ior: desc.ior, specularRoughness: desc.roughness };
+    case 'black':
+      return { baseColor: [0, 0, 0], baseWeight: 0, specularWeight: 0 };
+  }
+}
+
+function environmentFromDesc(env: EnvironmentDesc | undefined, options: DescToSceneCopyOptions): SceneCopyInput['environment'] {
+  if (!env) return null;
+  if (env.type === 'uniform') return { radiance: [...env.radiance] };
+  // hdri: reserve a map slot, constant radiance only until the map copy exists.
+  return { radiance: [...(options.hdriRadiance ?? [0, 0, 0])], scale: env.scale, rotationY: (env.rotationYDeg * Math.PI) / 180, mapSlot: 0 };
+}
+
+export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyOptions = {}): DescSceneCopyInput {
+  const meshes: SceneCopyMesh[] = [];
+  const instances: SceneCopyInstance[] = [];
+  const materials: RtMaterialInput[] = [];
+  const materialNames: string[] = [];
+  const meshNames: string[] = [];
+  const known = new Map<string, number>();
+
+  const materialIndex = (mesh: MeshDesc): number => {
+    const base = scene.materials[mesh.material];
+    if (!base) throw new RangeError(`scene '${scene.name}': mesh '${mesh.name}' uses unknown material '${mesh.material}'`);
+    const emission = mesh.emission;
+    const key = emission ? `${mesh.material}+emission(${emission.join(',')})${mesh.twoSided ? '+twoSided' : ''}` : mesh.material;
+    let index = known.get(key);
+    if (index === undefined) {
+      index = materials.length;
+      known.set(key, index);
+      materials.push(emission ? { ...materialFromDesc(base), emissionColor: [...emission], emissionTwoSided: !!mesh.twoSided } : materialFromDesc(base));
+      materialNames.push(key);
+    }
+    return index;
+  };
+
+  scene.meshes.forEach((desc, i) => {
+    const geometry = desc.geometry;
+    const local =
+      geometry.type === 'file'
+        ? options.resolveFile
+          ? options.resolveFile(geometry, desc)
+          : (() => {
+              throw new Error(`scene '${scene.name}': mesh '${desc.name}' is file geometry '${geometry.path}'; pass resolveFile`);
+            })()
+        : tessellate(geometry);
+    meshes.push({ positions: local.positions, indices: local.indices, normals: local.normals });
+    meshNames.push(desc.name);
+    instances.push({
+      meshIndex: i,
+      instanceIndex: i,
+      objectToWorld: desc.transform ? [...desc.transform] : compose(),
+      material: materialIndex(desc),
+      mask: desc.emission ? INSTANCE_MASK_EMITTER : INSTANCE_MASK_PLAIN,
+    });
+  });
+
+  const directional = (scene.lights ?? []).filter((light) => light.type === 'directional');
+  if (directional.length > 1) throw new RangeError(`scene '${scene.name}': ${directional.length} directional lights; the scene copy holds one sun`);
+  const sun = directional[0] ? { direction: [...directional[0].direction] as [number, number, number], irradiance: [...directional[0].irradiance] as [number, number, number], angularRadius: directional[0].angularRadius ?? 0 } : null;
+
+  return { meshes, instances, materials, materialNames, meshNames, sun, environment: environmentFromDesc(scene.environment, options), options: options.copy };
+}
+
+/** `sceneDescToCopyInput` + `buildSceneCopy`. */
+export function buildSceneCopyFromDesc(scene: SceneDesc, options: DescToSceneCopyOptions = {}): { copy: SceneCopy; input: DescSceneCopyInput } {
+  const input = sceneDescToCopyInput(scene, options);
+  return { copy: buildSceneCopy(input), input };
+}

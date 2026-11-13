@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseRunnerArgs } from './args.ts';
 import type { RunRecord } from './contract.ts';
-import { countForeignGpuProcesses, cpuBusyFraction, formatLoadNote, judgeLoad, parseProcessList, waitForQuiet, type LoadSample } from './load-check.ts';
+import { countForeignGpuProcesses, isBrowserGpuProcess, listBackgroundGpuApps, cpuBusyFraction, formatLoadNote, judgeLoad, parseProcessList, waitForQuiet, type LoadSample } from './load-check.ts';
 import { buildRows } from './plan.ts';
 
 const t = { maxLoad: 4, maxGpuProcs: 2 };
@@ -143,5 +143,35 @@ describe('load options', () => {
   it('rejects junk', () => {
     expect(() => parseRunnerArgs(['--max-load', 'abc'])).toThrow();
     expect(() => parseRunnerArgs(['--load-wait', '-1'])).toThrow();
+  });
+
+  it('counts browser GPU processes only, not Electron/CEF desktop apps', () => {
+    expect(isBrowserGpuProcess('/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/157/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process')).toBe(true);
+    expect(isBrowserGpuProcess('/Applications/Google Chrome Canary.app/x/Google Chrome Canary Helper (GPU) --type=gpu-process')).toBe(true);
+    expect(isBrowserGpuProcess('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe --type=gpu-process')).toBe(true);
+    expect(isBrowserGpuProcess('chrome.exe --type=gpu-process')).toBe(true);
+    expect(isBrowserGpuProcess('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe --type=gpu-process')).toBe(true);
+    expect(isBrowserGpuProcess('/Applications/Spotify.app/Contents/Frameworks/Spotify Helper.app/Contents/MacOS/Spotify Helper --type=gpu-process --gpu-recent-crash-count=0')).toBe(false);
+    expect(isBrowserGpuProcess('/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process')).toBe(false);
+    expect(isBrowserGpuProcess('/Applications/Utilities/Adobe Creative Cloud/ACC/Creative Cloud.app/Contents/MacOS/../Frameworks/Creative Cloud UI Helper (GPU).app/Contents/MacOS/Creative Cloud UI Helper (GPU) --type=gpu-process --no-sandbox')).toBe(false);
+    expect(isBrowserGpuProcess('/Applications/Google Chrome.app/x/Google Chrome Helper (Renderer) --type=renderer')).toBe(false);
+  });
+
+  it('lists background desktop apps with a GPU helper and notes them as best effort', () => {
+    const procs = parseProcessList([
+      '10 1 /Applications/Spotify.app/Contents/Frameworks/Spotify Helper.app/Contents/MacOS/Spotify Helper --type=gpu-process',
+      '11 1 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process',
+      '12 1 /Applications/Utilities/Adobe Creative Cloud/ACC/Creative Cloud.app/Contents/MacOS/../Frameworks/Creative Cloud UI Helper (GPU).app/Contents/MacOS/Creative Cloud UI Helper (GPU) --type=gpu-process',
+      '13 1 /Applications/Spotify.app/Contents/Frameworks/Spotify Helper.app/Contents/MacOS/Spotify Helper --type=gpu-process',
+      '14 1 /Applications/Google Chrome.app/x/Google Chrome Helper (GPU) --type=gpu-process',
+      '16 1 /bin/zsh -c source x && ps -eo command | grep -c type=gpu-process --type=gpu-process',
+      '17 1 node -e "x" --type=gpu-process',
+      '15 1 C:\\Users\\x\\AppData\\Local\\Discord\\app-1\\Discord.exe --type=gpu-process',
+    ].join('\n'));
+    expect(listBackgroundGpuApps(procs)).toEqual(['Claude', 'Creative Cloud', 'Discord', 'Spotify']);
+    expect(formatLoadNote({ load1: 3, loadSource: 'loadavg', gpuProcs: 0, backgroundApps: ['Claude', 'Spotify'] }, false)).toBe(
+      'load 3.00, gpu-procs 0; best effort (background apps: Claude, Spotify)',
+    );
+    expect(formatLoadNote({ load1: 3, loadSource: 'loadavg', gpuProcs: 0, backgroundApps: [] }, false)).toBe('load 3.00, gpu-procs 0');
   });
 });

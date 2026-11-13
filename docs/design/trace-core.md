@@ -86,32 +86,145 @@ Results on the M5 Pro (Chrome 157, 2026-11-13; the machine was loaded, which doe
 **pass**. 589,784 rays over four scenes and four scene builds (quantized + records + merged, f32 + indexed,
 `SceneTrees` GPU trees, `SceneTrees` refined trees): 0 mismatches, 0 watertight slips, 0 escapes from the closed box;
 every batch variant and the inline kernel bit-identical to the base batch; `rtSurface` position within 2.3e-7 of the
-scene size. Counted: 14,122 ties, 9,228 grazing, 3,563 tPosition. By ray set: primary 8 ties in 98k rays; incoherent
-129 ties and 56 tPosition in 131k; edges (aimed at edges on purpose) 11,241 ties and 5,333 grazing in 131k; inside
-2,712 ties in 33k; shadow 3,127 tPosition in 131k (segments that start 1e-4 × scene size off a surface and graze
-it). The page takes ~4 s; the largest generated kernel is 49.8 KB (the inline module with `rtSurface` plus the
+scene size. Counted (rerun 2026-11-14 with bvh build workers on, bvh's `sharedEdgeRays` and strict primary rays):
+15,414 ties, 9,228 grazing, 3,444 tPosition, and 8 `primary_tie`. By ray set: primary 8 primary ties in 98k rays
+(Sponza's duplicate triangles, same 3 vertices: both hit, tree order picks one); incoherent 129 ties and 56
+tPosition in 131k; edges (aimed at edges on purpose) 12,517 ties, 5,333 grazing and 368 tPosition in 131k; inside
+2,736 ties in 33k; shadow 32 ties and 3,008 tPosition in 131k (segments that start 1e-4 × scene size off a surface
+and graze it). **Primary rays are strict**: any other instance/triangle difference or a hit-vs-miss fails. The page takes ~4 s; the largest generated kernel is 49.8 KB (the inline module with `rtSurface` plus the
 page's kernel), just under the 50 KB cap.
 
 ## Open choices (D11: both are built; A/B on a quiet machine decides)
 
-Each is a setting already; `trace-timing` takes it as a page argument so the runner can alternate them
-(`--ab workgroupSize=64,128`).
+Every choice below is already a setting, and the shipped default is the suggestion. Nothing needs deciding before
+P1.6 (the quiet-machine A/B, M5 Pro + RTX 3060); the maintainer's call is whether the suggestion and the test plan
+are right. `trace-timing` takes each setting as a page argument so the runner alternates them ABBA
+(`--ab workgroupSize=64,128`). The only timings so far were taken on a loaded machine (P1.2, provisional): sponza-white,
+1M rays, wg 64 / AoS / full: L1 primary 116, L1 bounce 78, L0 shadow 83, L0 AO 234 Mrays/s. No A/B numbers yet.
 
-1. **Workgroup size 64 vs 128** (32 and 256 also built). Suggest 64 (bvh's batch default).
-   Pro 64: more workgroups in flight to hide divergence, matches bvh. Pro 128: fewer workgroups, maybe better on
-   NVIDIA. A/B: `trace-timing --ab workgroupSize=64,128` on sponza-white, M5 and RTX 3060, paired ratios.
-2. **AoS vs SoA rays.** Suggest AoS (the contract layout, bvh-compatible, one 32 B load).
-   Pro SoA: wavefront queues compact origin and direction separately; lanes load 16 B each. Con SoA: two buffers and
-   bindings. A/B: `--ab rayLayout=aos,soa`.
-3. **Full (40 B) vs compact (24 B) hit records.** Suggest full by default, compact for consumers that call
-   `rtSurface` anyway. A/B: `--ab hitRecord=full,compact` (write bandwidth).
-4. **Position in `rtSurface`: from the ray vs from barycentrics.** Default ray (no vertex reads; error grows with
-   t); `positions: true` gives an on-surface point for +12 B/vertex. A/B: self-intersection rate of continuation rays
-   in P2 (count hits with t < 1e-4 at the origin's own triangle) and decode cost.
-5. **Indirect args: our one-thread kernel vs producer-written args.** Suggest keep the args kernel (the producer only
-   has to write a count). Pro producer-written: one dispatch fewer. A/B: dispatch overhead in an empty-queue frame.
-6. **Ray mask per batch vs per ray.** v0 has one mask per batch (a uniform). Per-ray masks need a 4 B field the
-   32 B ray has no room for (or SoA's spare lane). Decide when a consumer mixes masks inside one queue.
+### 1. Workgroup size: 64 or 128 (32 and 256 also built)
+
+**What it is.** How many rays one GPU workgroup traces together in the batch kernel. Each thread walks its own ray,
+so this only changes scheduling, never results (the page checks every size gives bit-identical hits).
+
+**Suggestion: 64.** bvh's batch kernel uses 64, and it is the safe middle across vendors.
+
+| | 64 | 128 |
+|---|---|---|
+| Pros | More, smaller workgroups: the GPU can swap in another when one stalls on memory; a workgroup finishes when its slowest ray does, and smaller groups waste less on one long ray | Fewer workgroups to launch; on NVIDIA (32-wide warps) it can raise occupancy if registers allow |
+| Cons | More launch overhead on very large batches | Divergent rays (bounces) keep a bigger group waiting on its slowest ray |
+
+- **Speed:** expected within ±10% either way; the winner may differ between Apple and NVIDIA. **Quality:** none.
+- **Setting:** yes (`workgroupSize`). If Apple and NVIDIA disagree we pick per adapter from the caps tier.
+- **Settle it:** `trace-timing --ab workgroupSize=64,128` on sponza-white, primary and bounce rays, M5 and 3060, paired
+  ratios. Under 3% difference: keep 64.
+
+### 2. Ray layout: AoS or SoA
+
+**What it is.** How a ray buffer is laid out. AoS (array of structs): each ray is one 32 B record (origin, tMin,
+direction, tMax), the contract layout that bvh also uses. SoA (struct of arrays): two buffers, one of origins + tMin
+and one of directions + tMax, 16 B each.
+
+**Suggestion: AoS.** It is the contract and bvh layout, needs one buffer, and one 32 B load per ray is already well
+aligned.
+
+| | AoS | SoA |
+|---|---|---|
+| Pros | One buffer and binding; same layout as bvh and the `Ray` contract; simplest for consumers | Wavefront code that rewrites only origins (or only directions) touches half the memory; neighbouring threads read neighbouring 16 B values |
+| Cons | Rewriting one half still moves the whole 32 B record | Two buffers and two bindings; consumers must convert; one more layout to keep tested |
+
+- **Speed:** for the trace itself, likely equal (each ray is read once, then the walk dominates). SoA could win in P2
+  wavefront queues when a stage writes only half the ray. **Quality:** none (bit-identical hits).
+- **Setting:** yes (`rayLayout`).
+- **Settle it:** `--ab rayLayout=aos,soa` now for the trace cost; repeat in P2 with the real queue stages, where the
+  difference would show.
+
+### 3. Hit record: full (40 B) or compact (24 B)
+
+**What it is.** What the batch writes per ray. Full: t, instance, triangle, front face, barycentrics, material id
+and geometric normal. Compact drops material and normal (the consumer looks them up later with `rtSurface`).
+
+**Suggestion: full by default; compact for consumers that call `rtSurface` anyway.**
+
+| | Full 40 B | Compact 24 B |
+|---|---|---|
+| Pros | Shading can start without another lookup; simplest to use | 40% less write bandwidth, and the reading stage loads less too |
+| Cons | More memory traffic per ray | Normal and material cost a lookup later (vertex/triangle reads) |
+
+- **Speed:** compact helps when the trace is bandwidth-bound (coherent primary rays at high resolution); probably no
+  difference on incoherent bounces, where the walk dominates. **Quality:** none.
+- **Setting:** yes (`hitRecord`).
+- **Settle it:** `--ab hitRecord=full,compact` for trace cost; the real answer needs the end-to-end cost (trace plus
+  the later lookup), so repeat once L2 shading exists (P1.3).
+
+### 4. Hit position in `rtSurface`: from the ray or from the triangle
+
+**What it is.** Where the world position of a hit comes from. From the ray: `origin + t·direction` (no extra memory
+reads, but f32 error grows with distance, so the point can land slightly in front of or behind the surface). From
+the triangle: interpolate its three vertices with the barycentrics (exactly on the surface, but needs the vertex
+positions: +12 B per vertex in the surface data, plus three reads per lookup).
+
+**Suggestion: from the ray by default, triangle opt-in (`positions: true`).** Measured error so far is small (within
+2.3e-7 of scene size), and every new ray already starts with an offset.
+
+| | From the ray | From the triangle |
+|---|---|---|
+| Pros | Free; no extra scene memory | On the surface, so the offset for the next ray can be smaller and more reliable |
+| Cons | Error grows with t; at grazing angles a continuation ray can re-hit its own triangle ("shadow acne", light leaks) | +12 B/vertex of memory and three reads per lookup |
+
+- **Speed:** triangle costs a few % of decode time (unmeasured). **Quality:** this is the one choice that can change
+  images: self-intersection shows as dark speckles or leaks on large or distant surfaces.
+- **Setting:** yes (`positions`).
+- **Settle it (P1.8):** count continuation rays that hit their own triangle at t < 1e-4 on Sponza and a far-away
+  large plane, both modes, and show the two renders side by side in the bench viewer. Switch the default if the ray
+  mode shows visible artefacts.
+
+### 5. Indirect dispatch arguments: our kernel or the producer's
+
+**What it is.** In a wavefront renderer, the number of rays in a queue is only known on the GPU. Something must turn
+that count into dispatch arguments. Today a tiny one-thread kernel (`rtBatchArgs`) does it: the producer only writes
+a count. The alternative: the producer writes the dispatch arguments itself.
+
+**Suggestion: keep our args kernel.** Producers stay simple, and the grid maths (2D grid past 65,535 workgroups)
+stays in one place.
+
+| | Our args kernel | Producer writes the args |
+|---|---|---|
+| Pros | Producer writes one number; no grid maths in other packages; capacity clamp in one place | One dispatch fewer per batch |
+| Cons | One extra tiny dispatch per batch | Every producer must get the 2D grid and the clamp right |
+
+- **Speed:** one tiny dispatch costs microseconds; only matters with many small batches per frame. **Quality:** none.
+- **Setting:** could become one (accept a ready args buffer); not built yet.
+- **Settle it:** time an empty-queue frame with and without the args dispatch. (bvh will not add an indirect batch
+  kernel, pmndrs/bvh#1 item 5, so ours stays.)
+
+### 6. Ray mask: one per batch or one per ray
+
+**What it is.** Masks pick which instances a ray can hit (for example: shadow rays that ignore emitters). v0 has one
+mask for the whole batch. Per-ray masks would need a 4 B field, and the 32 B ray has no room (SoA has a spare lane).
+
+**Suggestion: one per batch until a consumer needs to mix masks in one queue (P1.9).** No current consumer does.
+
+| | Per batch (v0) | Per ray |
+|---|---|---|
+| Pros | Free (a uniform); the ray stays 32 B | Mixed ray kinds in one queue |
+| Cons | Mixed masks need separate batches | Ray grows to 48 B in AoS (extra bandwidth on every ray), or SoA only |
+
+- **Speed:** per ray costs bandwidth on every ray, even when unused. **Quality:** none.
+- **Setting:** would be a queue ABI version (v1), not a runtime switch.
+- **Settle it:** decide when a consumer needs it; then A/B 32 B + per-batch against 48 B per-ray on the same queue.
+
+### 7. `rtVisible` returns true for visible (bvh returns true for blocked)
+
+**What it is.** bvh's any-hit trace answers "is something in the way?" (true = blocked). Our `rtVisible` answers
+"can the ray get through?" (true = visible), as the spec's L0 reads (DIVERGES V25).
+
+**Suggestion: keep true = visible.** The name says what it returns, and shading code multiplies by visibility.
+
+- **Pros:** reads naturally (`if (rtVisible(...)) { add light }`). **Cons:** the opposite of bvh; anyone moving
+  between the two can trip.
+- **Speed/quality:** none (one negation). **Setting:** no; an API name, decided once.
+- **Settle it:** naming only. If it confuses, rename to `rtUnoccluded` rather than flip the polarity.
 
 ## Not in this slice
 

@@ -29,7 +29,7 @@ const format = sceneFormatOf(sceneTrees.traceBuffers); // nodeFormat, triangleLe
 const code = rtModuleWgsl(caps, {
   ...format,
   traceSlot: { group: 0, firstBinding: 0 },          // bvh walk: 3 bindings (4 for indexed leaves)
-  surface: { slot: { group: 2, firstBinding: 0 }, layout: table.layout }, // optional rtSurface: 3 bindings
+  scene: { slot: { group: 2, firstBinding: 0 }, layout: copy.layout },    // optional: rtSurface, materials, lights (2 bindings, see Scene copy)
 }) + myKernel;
 const sceneLayout = device.createBindGroupLayout({ entries: withBindings(rtWalkEntries(format)) });
 const sceneGroup = device.createBindGroup({ layout: sceneLayout, entries: rtSceneBindGroupEntries(sceneTrees.traceBuffers) });
@@ -52,8 +52,7 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface      // lazy decode
 
 `rtSurface` returns world position, geometric normal, front face, interpolated shading normal (flipped to the
 geometric side) and UV, and the material id (an index into your own table). Only what `want` asks for is loaded.
-Its data comes from `buildSurfaceTable(meshes, instances, options)` + `uploadSurfaceTable(device, table)`, a small
-stand-in until the scene copy (D4) lands.
+Its data lives in the scene copy (below); `scene: { ..., materials: false, lights: false }` gives `rtSurface` alone.
 
 **Batch** (queue ABI v0): a GPU ray buffer and a count in, one result per ray out.
 
@@ -77,7 +76,22 @@ Everything goes into the caller's encoder; uniforms and bind groups are cached p
 does no CPU writes and no readback. CPU helpers: `packRays`, `packRaysSoa`, `aosToSoa`, `packCones`, `readHits`,
 `readVisibility`, `dispatchGrid`.
 
+### Scene copy (P1.4, D4): materials, lights, surface data
+
+```ts
+import { buildSceneCopy, uploadSceneCopy, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtModuleWgsl } from '@pmndrs/raytracer';
+
+const copy = buildSceneCopy({ meshes, instances, materials, sun, environment });   // meshes/instances as for bvh's buildTraceScene
+const buffers = uploadSceneCopy(device, copy);                                     // 2 storage buffers: table, data
+const code = rtModuleWgsl(caps, { ...format, scene: { slot: { group: 2, firstBinding: 0 }, layout: copy.layout } });
+```
+
+Adds `rtMaterial(id) -> RtMaterial` (128 B OpenPBR-subset records, `material.ts`), `rtSampleLight(u)`, `rtLight(i)`, `rtSun()`,
+`rtEnvironment()`, `rtLightIndexOfHit(instance, triangle)`, `rtLightPmfOfHit(...)` (light table with an alias table over power,
+`lights.ts`) and `rtSurface` over the copy's data.
+Bench scenes: `bench/scenes/to-scene-copy.ts`. Layout and WGSL: `scene/constants.ts`, `scene/scene-wgsl.ts`.
+
 ### Budgets
 
-Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), `rtSurface` 3, batch IO 2-6. Generated
+Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), scene copy 2 (surface, materials and lights together), batch IO 2-6. Generated
 kernels stay under 50 KB (largest today ~45 KB, unit-tested for every setting combination).

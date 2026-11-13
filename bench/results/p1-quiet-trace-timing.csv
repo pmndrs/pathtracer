@@ -1,0 +1,289 @@
+date,commit,device,browser,scene,renderer,config_hash,metric,value,valid,run,note
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_ms,8.824086,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_ms,9.56125,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_ms,9.349846,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_ms,9.349846,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_mrays_per_s,118.83111746644356,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_mrays_per_s,109.66934239769904,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_mrays_per_s,112.14901293561412,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_mrays_per_s,112.14901293561412,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_rays,1048576,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_rays,1048576,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_rays,1048576,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_primary_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_ms,12.272167,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_ms,12.225421,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_ms,12.378369,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_ms,12.272167,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_mrays_per_s,85.4434265765777,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_mrays_per_s,85.77013421460087,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_mrays_per_s,84.71035238972112,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_mrays_per_s,85.4434265765777,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_rays,1048576,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_rays,1048576,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_rays,1048576,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l1_bounce_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_ms,11.535588,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_ms,11.438761,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_ms,11.789197,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_ms,11.535588,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_mrays_per_s,90.89887745644174,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_mrays_per_s,91.66831967203441,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_mrays_per_s,88.94346239188302,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_mrays_per_s,90.89887745644174,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_rays,1048572,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_rays,1048572,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_rays,1048572,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_shadow_rays,1048572,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_ms,9.167398,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_ms,10.621352,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_ms,9.489671,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_ms,9.489671,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_mrays_per_s,114.3809835680746,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_mrays_per_s,98.72340169123478,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_mrays_per_s,110.49655989127548,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_mrays_per_s,110.49655989127548,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_rays,1048576,1,1,"variant A; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_rays,1048576,1,2,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_rays,1048576,1,3,"variant A; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,865324fa,l0_ao_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_ms,9.899646,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_ms,9.916338,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_ms,9.278492,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_ms,9.899646,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_mrays_per_s,105.92055513904234,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_mrays_per_s,105.74226090316809,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_mrays_per_s,113.0114678117953,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_mrays_per_s,105.92055513904234,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_rays,1048576,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_rays,1048576,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_rays,1048576,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_primary_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_ms,12.916128,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_ms,12.204191,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_ms,12.138444,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_ms,12.204191,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_mrays_per_s,81.18346303164539,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_mrays_per_s,85.91933705396778,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_mrays_per_s,86.38471290059913,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_mrays_per_s,85.91933705396778,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_rays,1048576,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_rays,1048576,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_rays,1048576,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l1_bounce_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_ms,11.381639,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_ms,11.484474,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_ms,11.541806,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_ms,11.484474,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_mrays_per_s,92.12838326711996,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_mrays_per_s,91.30344149849613,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_mrays_per_s,90.84990685166602,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_mrays_per_s,91.30344149849613,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_rays,1048572,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_rays,1048572,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_rays,1048572,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_shadow_rays,1048572,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_ms,10.025846,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_ms,9.973418,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_ms,10.108037,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_ms,10.025846,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_mrays_per_s,104.5872837065321,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_mrays_per_s,105.1370753737585,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_mrays_per_s,103.73685810607935,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_mrays_per_s,104.5872837065321,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_rays,1048576,1,1,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_rays,1048576,1,2,"variant B; timing valid (pmset); load 3.70, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_rays,1048576,1,3,"variant B; timing valid (pmset); load 3.56, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,d5c6695a,l0_ao_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_ms,9.25956,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_ms,9.256935,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_ms,9.676826,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_ms,9.25956,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_mrays_per_s,113.24252988262941,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_mrays_per_s,113.27464220068521,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_mrays_per_s,108.35949721530591,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_mrays_per_s,113.24252988262941,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_rays,1048576,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_rays,1048576,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_rays,1048576,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_primary_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_ms,12.327706,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_ms,13.590337,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_ms,12.41091,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_ms,12.41091,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_mrays_per_s,85.05848533376769,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_mrays_per_s,77.15599694106187,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_mrays_per_s,84.48824461703454,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_mrays_per_s,84.48824461703454,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_rays,1048576,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_rays,1048576,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_rays,1048576,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l1_bounce_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_ms,11.688244,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_ms,12.371702,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_ms,11.761575,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_ms,11.761575,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_mrays_per_s,89.71167953030414,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_mrays_per_s,84.75567872553023,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_mrays_per_s,89.15234566799087,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_mrays_per_s,89.15234566799087,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_rays,1048572,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_rays,1048572,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_rays,1048572,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_shadow_rays,1048572,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_ms,10.398323,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_ms,4.466186,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_ms,10.00164,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_ms,10.00164,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_mrays_per_s,100.8408759758665,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_mrays_per_s,234.7810861437477,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_mrays_per_s,104.84040617338756,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_mrays_per_s,104.84040617338756,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_rays,1048576,1,1,"variant A; timing valid (pmset); load 3.82, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_rays,1048576,1,2,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_rays,1048576,1,3,"variant A; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,8049a068,l0_ao_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_ms,9.05124,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_ms,10.129589,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_ms,9.269517,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_ms,9.269517,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_mrays_per_s,115.84887816475974,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_mrays_per_s,103.51614463331138,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_mrays_per_s,113.12088860724889,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_mrays_per_s,113.12088860724889,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_rays,1048576,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_rays,1048576,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_rays,1048576,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_primary_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_ms,12.779345,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_ms,12.427867,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_ms,13.059328,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_ms,12.779345,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_mrays_per_s,82.0524056592885,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_mrays_per_s,84.3729660125909,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_mrays_per_s,80.29325858114599,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_mrays_per_s,82.0524056592885,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_rays,1048576,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_rays,1048576,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_rays,1048576,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l1_bounce_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_ms,11.809487,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_ms,11.159694,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_ms,11.979185,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_ms,11.809487,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_mrays_per_s,88.79064772246247,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_mrays_per_s,93.96064085628154,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_mrays_per_s,87.5328329932295,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_mrays_per_s,88.79064772246247,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_rays,1048572,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_rays,1048572,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_rays,1048572,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_shadow_rays,1048572,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_ms,4.667757,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_ms,4.862246,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_ms,4.5106,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_ms,4.667757,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_mrays_per_s,224.64237105744795,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_mrays_per_s,215.65671502429126,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_mrays_per_s,232.4692945506141,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_mrays_per_s,224.64237105744795,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_rays,1048576,1,1,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_rays,1048576,1,2,"variant B; timing valid (pmset); load 5.43, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_rays,1048576,1,3,"variant B; timing valid (pmset); load 5.48, gpu-procs 1"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,87215e04,l0_ao_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_ms,9.319806,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_ms,10.066386,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_ms,9.492003,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_ms,9.492003,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_mrays_per_s,112.5104964631238,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_mrays_per_s,104.1660830411232,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_mrays_per_s,110.46941304169415,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_mrays_per_s,110.46941304169415,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_rays,1048576,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_rays,1048576,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_rays,1048576,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_primary_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_ms,12.216629,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_ms,12.200673,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_ms,12.108261,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_ms,12.200673,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_mrays_per_s,85.83186081856132,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_mrays_per_s,85.9441114436884,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_mrays_per_s,86.60004933821628,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_mrays_per_s,85.9441114436884,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_rays,1048576,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_rays,1048576,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_rays,1048576,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l1_bounce_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_ms,11.24573,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_ms,11.42951,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_ms,11.807821,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_ms,11.42951,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_mrays_per_s,93.24179043957128,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_mrays_per_s,91.74251564590257,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_mrays_per_s,88.80317545464145,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_mrays_per_s,91.74251564590257,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_rays,1048572,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_rays,1048572,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_rays,1048572,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_shadow_rays,1048572,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_ms,7.790816,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_ms,7.521124,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_ms,9.671201,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_ms,7.790816,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_mrays_per_s,134.59129313283742,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_mrays_per_s,139.41745941165175,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_mrays_per_s,108.42252167026618,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_mrays_per_s,134.59129313283742,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_rays,1048576,1,1,"variant A; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_rays,1048576,1,2,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_rays,1048576,1,3,"variant A; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,abf1f8af,l0_ao_rays,1048576,1,median,variant A; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_ms,10.02943,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_ms,9.775611,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_ms,10.044136,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_ms,10.02943,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_mrays_per_s,104.54990961600011,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_mrays_per_s,107.26449732911836,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_mrays_per_s,104.39683413287115,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_mrays_per_s,104.54990961600011,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_rays,1048576,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_rays,1048576,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_rays,1048576,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_primary_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_ms,12.612813,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_ms,13.166613,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_ms,12.949585,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_ms,12.949585,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_mrays_per_s,83.13577629351994,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_mrays_per_s,79.63900814886865,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_mrays_per_s,80.97371460166482,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_mrays_per_s,80.97371460166482,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_rays,1048576,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_rays,1048576,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_rays,1048576,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l1_bounce_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_ms,11.328683,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_ms,11.505922,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_ms,11.284311,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_ms,11.328683,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_mrays_per_s,92.55903797467013,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_mrays_per_s,91.13324425456734,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_mrays_per_s,92.92299724812617,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_mrays_per_s,92.55903797467013,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_rays,1048572,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_rays,1048572,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_rays,1048572,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_shadow_rays,1048572,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_ms,9.905812,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_ms,9.158274,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_ms,6.802668,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_ms,9.158274,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_mrays_per_s,105.85462352808634,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_mrays_per_s,114.49493649130828,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_mrays_per_s,154.1418749231919,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_mrays_per_s,114.49493649130828,1,median,variant B; median of 3; timing valid (pmset)
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_rays,1048576,1,1,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_rays,1048576,1,2,"variant B; timing valid (pmset); load 4.49, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_rays,1048576,1,3,"variant B; timing valid (pmset); load 4.69, gpu-procs 2"
+2026-11-13,6ecd315-dirty,Apple M5 Pro,Chrome/157.0.8103.52 headless,sponza-white,rt-batch,2eb48ac3,l0_ao_rays,1048576,1,median,variant B; median of 3; timing valid (pmset)

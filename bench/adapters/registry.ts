@@ -7,6 +7,8 @@ import type { SceneDesc } from '../scenes/schema.ts';
 
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
+/** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
+export const OWN_ADAPTER_IDS = ['pt-megakernel'] as const;
 
 export interface AdapterOptions {
   /** three-gpu-pathtracer frame budget (path steps per renderSample call). */
@@ -17,6 +19,8 @@ export interface AdapterOptions {
   bounces?: number;
   /** mutracer experiment switches (page args `mt_candidates`, `mt_sampler`, `mt_bevel`, `mt_dispersion`, `mt_offset`). */
   mutracer?: import('./mutracer/index.ts').MutracerSettings;
+  /** pt-megakernel settings (page args `pt_*`). */
+  pt?: import('./pt-megakernel/index.ts').PtAdapterSettings;
 }
 
 export async function createAdapter(id: string, options: AdapterOptions = {}): Promise<RendererAdapter> {
@@ -27,8 +31,10 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
       return (await import('./tgpt-megakernel/index.ts')).createTgptMegakernel(options);
     case 'mutracer':
       return (await import('./mutracer/index.ts')).createMutracer(options.bounces, options.mutracer);
+    case 'pt-megakernel':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel(options.pt);
     default:
-      throw new Error(`unknown renderer "${id}" (have: ${ADAPTER_IDS.join(', ')})`);
+      throw new Error(`unknown renderer "${id}" (have: ${[...ADAPTER_IDS, ...OWN_ADAPTER_IDS].join(', ')})`);
   }
 }
 
@@ -40,6 +46,7 @@ export function unsupportedReason(features: FeatureSupport, scene: SceneDesc): s
   }
   if (scene.meshes.some((mesh) => mesh.emission) && !features.emissiveMeshes) reasons.push('emissive meshes unsupported');
   if ((scene.lights?.length ?? 0) > 0 && !features.directionalLight) reasons.push('directional lights unsupported');
+  if (features.fileGeometry === false && scene.meshes.some((mesh) => mesh.geometry.type === 'file')) reasons.push('file geometry (external mesh) is not loaded by this renderer yet');
   const env = scene.environment;
   if (env && !features.environment.includes(env.type)) reasons.push(`${env.type} environment unsupported`);
   return reasons.length > 0 ? reasons.join('; ') : null;

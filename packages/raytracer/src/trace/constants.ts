@@ -60,8 +60,6 @@ export const STORAGE_BUFFER_BUDGET = {
   /** bvh walk: nodes, triangles, top level (+1 positions for indexed leaves). */
   walk: 3,
   walkIndexed: 4,
-  /** rtSurface: table, indices, vertex attributes. */
-  surface: 3,
   /** Batch kernel group 1: rays (+1 SoA), results (+1 counts when indirect, +2 cones). */
   batchMin: 2,
 } as const;

@@ -26,6 +26,8 @@ export interface FeatureSupport {
   emissiveMeshes: boolean;
   directionalLight: boolean;
   environment: ReadonlyArray<'uniform' | 'hdri'>;
+  /** Can load `file` mesh geometry (Sponza). Absent = true. */
+  fileGeometry?: boolean;
   /** Can the renderer be told to disable its denoiser / tonemapper / own jitter? Required for raw comparisons. */
   rawOutput: boolean;
   notes?: string;

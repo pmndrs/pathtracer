@@ -2,7 +2,7 @@
  * The data `rtSurface` needs beyond what bvh's hit carries: per-instance transforms, and per-mesh indices and vertex
  * attributes (shading normals, UVs, optionally positions), packed into three storage buffers.
  *
- * This is a deliberately small stand-in for the material/light scene copy (D4, later): only what lazy surface decode
+ * This is the surface section of the scene copy (D4; `scene/scene-copy.ts` embeds it): only what lazy surface decode
  * needs, keyed by the instance index bvh reports. Everything here runs in Node, so packing is unit-tested without a GPU.
  *
  * Buffers (bindings in order):
@@ -61,6 +61,8 @@ export interface SurfaceTable {
   vertices: Float32Array;
   /** Instance slots in the table (largest instance index + 1). */
   instanceSlots: number;
+  /** vec4u units before the first instance record: 1 for this stand-in's table, 4 for the scene copy's (`SCENE_HEADER_VEC4S`). Default 1. */
+  headerVec4s?: number;
   meshCount: number;
   byteLength: number;
 }
@@ -259,7 +261,7 @@ export function readSurfaceFromTable(table: SurfaceTable, hit: SurfaceHitInput, 
     return out;
   }
   const words = table.table;
-  const record = (SURFACE_TABLE.HEADER_VEC4S + hit.instance * SURFACE_TABLE.INSTANCE_VEC4S) * 4;
+  const record = ((table.headerVec4s ?? SURFACE_TABLE.HEADER_VEC4S) + hit.instance * SURFACE_TABLE.INSTANCE_VEC4S) * 4;
   const f = (index: number) => floatFrom(words[index] as number);
   const meshIndex = words[record + SURFACE_TABLE.INSTANCE_META * 4] as number;
   const meshRecord = ((words[1] as number) + meshIndex) * 4;

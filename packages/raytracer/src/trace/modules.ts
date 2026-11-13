@@ -13,6 +13,8 @@ import type { Defines } from '../caps/wgsl.ts';
 import { DEFAULT_BATCH_WORKGROUP_SIZE, STORAGE_BUFFER_BUDGET, type BatchWorkgroupSize } from './constants.ts';
 import { surfaceVertexOffsets, type SurfaceLayout } from './surface-table.ts';
 import { RT_CORE_WGSL, rtBatchArgsWgsl, rtBatchWgsl, rtSurfaceWgsl } from './wgsl-source.ts';
+import { SCENE_COPY_STORAGE_BUFFERS, SCENE_HEADER_VEC4S } from '../scene/constants.ts';
+import { rtSceneWgsl } from '../scene/scene-wgsl.ts';
 
 export type { AnyHitOrder, BindingSlot, ModuleBindingEntry };
 
@@ -38,8 +40,17 @@ export function sceneFormatOf(buffers: SceneFormat): Required<SceneFormat> {
 export interface RtModuleOptions extends SceneFormat {
   /** Where bvh's walk bindings land. Default group 0, binding 0. */
   traceSlot?: BindingSlot;
-  /** Include `rtSurface`. Its three bindings land at `slot`; `layout` is `SurfaceTable.layout`. Default: no surface. */
-  surface?: { slot: BindingSlot; layout: SurfaceLayout } | false;
+  /**
+   * Include the scene copy (D4): `rtSurface` (unless `surface: false`), `rtMaterial` and the light functions, over the scene
+   * copy's two bindings at `slot` (`rtSceneEntries`). `layout` is `SceneCopy.layout`. Default: no scene, no `rtSurface`.
+   */
+  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean } | false;
+  /**
+   * Remove `//` and block comments from the generated text (line breaks stay, so compiler line numbers still match). The bvh
+   * walk is 40 KB of mostly comments; with the scene copy the module would pass the ~50 KB kernel cap without this.
+   * Default: true.
+   */
+  stripComments?: boolean;
   /** Instance masks against ray masks (bvh's `rayMasks`). Default true. */
   rayMasks?: boolean;
   /** bvh's `bvhTrianglePasses`; default every triangle blocks, `null` to declare it yourself. */
@@ -69,11 +80,21 @@ function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string 
   });
 }
 
+/** Removes `//` line comments and block comments, keeping every line break (WGSL has no string literals, so no `//` is ever text). */
+export function stripWgslComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, '')).replace(/[ \t]*\/\/[^\n]*/g, '');
+}
+
+function surfaceLayoutOf(options: RtModuleOptions): SurfaceLayout | null {
+  if (options.scene && (options.scene.surface ?? true)) return options.scene.layout;
+  return null;
+}
+
 function coreDefines(options: RtModuleOptions): Defines {
-  const layout = options.surface ? options.surface.layout : null;
+  const layout = surfaceLayoutOf(options);
   return {
     RT_RAY_MASKS: options.rayMasks ?? true,
-    RT_SURFACE: !!options.surface,
+    RT_SURFACE: !!layout,
     RT_SURFACE_NORMALS: !!layout?.normals,
     RT_SURFACE_UVS: !!layout?.uvs,
     RT_SURFACE_POSITIONS: !!layout?.positions,
@@ -82,27 +103,27 @@ function coreDefines(options: RtModuleOptions): Defines {
 
 function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): string {
   let source = `${bvhWalk(options)}\n${RT_CORE_WGSL}`;
-  if (options.surface) {
-    const offsets = surfaceVertexOffsets(options.surface.layout);
-    source += rtSurfaceWgsl({
-      group: options.surface.slot.group,
-      firstBinding: options.surface.slot.firstBinding,
-      vertexStride: Math.max(offsets.stride, 1),
-      normalOffset: offsets.normal,
-      uvOffset: offsets.uv,
-      positionOffset: offsets.position,
-    });
+  const layout = surfaceLayoutOf(options);
+  if (options.scene) {
+    const { slot } = options.scene;
+    source += rtSceneWgsl({ group: slot.group, firstBinding: slot.firstBinding, materials: options.scene.materials, lights: options.scene.lights });
+  }
+  if (layout) {
+    const offsets = surfaceVertexOffsets(layout);
+    const base = { vertexStride: Math.max(offsets.stride, 1), normalOffset: offsets.normal, uvOffset: offsets.uv, positionOffset: offsets.position };
+    source += rtSurfaceWgsl({ ...base, headerVec4s: SCENE_HEADER_VEC4S });
   }
   return source;
 }
 
 /**
  * The inline module: paste it into your own compute shader and call `rtVisible`, `rtClosest`, `rtClosestCone` and (with
- * `surface`) `rtSurface`. Bindings: bvh's walk at `traceSlot` (3, or 4 for indexed leaves), then the surface's 3.
+ * `scene`) `rtSurface`, the materials and the lights. Bindings: bvh's walk at `traceSlot` (3, or 4 for indexed leaves), then the scene copy's 2.
  */
 export function rtModuleWgsl(caps: Caps, options: RtModuleOptions = {}): string {
   const traceSlot = options.traceSlot ?? { group: 0, firstBinding: 0 };
-  return buildWgsl(inlineSource({ ...options, traceSlot }), caps, coreDefines(options));
+  const source = inlineSource({ ...options, traceSlot });
+  return buildWgsl((options.stripComments ?? true) ? stripWgslComments(source) : source, caps, coreDefines(options));
 }
 
 /** Bind group layout entries (without binding numbers) for the walk, as bvh's `traceModuleEntries`. */
@@ -110,16 +131,16 @@ export function rtWalkEntries(options: SceneFormat = {}): readonly ModuleBinding
   return traceModuleEntries({ triangleLeaves: sceneFormatOf(options).triangleLeaves });
 }
 
-/** The three `rtSurface` bindings, in order: table, indices, vertices. */
-export function rtSurfaceEntries(): readonly ModuleBindingEntry[] {
+/** The scene copy's two bindings, in order: table, data. */
+export function rtSceneEntries(): readonly ModuleBindingEntry[] {
   const entry: ModuleBindingEntry = { visibility: 0x4 /* GPUShaderStage.COMPUTE */, buffer: { type: 'read-only-storage' } };
-  return [entry, entry, entry];
+  return [entry, entry];
 }
 
 /** Storage buffers the module adds to a kernel (spec section 3 binding budget). */
 export function rtModuleStorageBuffers(options: RtModuleOptions = {}): number {
   const walk = sceneFormatOf(options).triangleLeaves === 'indexed' ? STORAGE_BUFFER_BUDGET.walkIndexed : STORAGE_BUFFER_BUDGET.walk;
-  return walk + (options.surface ? STORAGE_BUFFER_BUDGET.surface : 0);
+  return walk + (options.scene ? SCENE_COPY_STORAGE_BUFFERS : 0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -177,7 +198,7 @@ export function resolveBatchOptions(options: BatchKernelOptions): ResolvedBatchO
 /** The batch kernel (entry point `rtBatch`): scene in group 0 at binding 0, batch IO in group 1. */
 export function rtBatchKernelWgsl(caps: Caps, options: BatchKernelOptions): string {
   const resolved = resolveBatchOptions(options);
-  const moduleOptions = { ...options, traceSlot: { group: 0, firstBinding: 0 }, rayMasks: resolved.rayMasks, surface: false as const };
+  const moduleOptions = { ...options, traceSlot: { group: 0, firstBinding: 0 }, rayMasks: resolved.rayMasks };
   const source = `${inlineSource(moduleOptions)}\n${rtBatchWgsl({ workgroupSize: resolved.workgroupSize, maxWorkgroupsPerDimension: resolved.maxWorkgroupsPerDimension })}`;
   return buildWgsl(source, caps, {
     ...coreDefines(moduleOptions),

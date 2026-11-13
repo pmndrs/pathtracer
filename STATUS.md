@@ -1,8 +1,8 @@
 # Status
 
-_Last updated 2026-11-13._
+_Last updated 2026-11-14._
 
-**Phase:** P0 (foundations), most of the way there. The first baseline table ran, but its timings were taken under heavy machine load and don't count. What's left: a quiet-machine rerun of that table, and the Windows branch.
+**Phase:** P0 is done except its timing gate (a quiet-machine rerun of the competitor table, queued in the quiet pass). P1 (trace core) is mostly built. P2 (our own path tracer) has started and already matches pbrt-v4 and Mitsuba on the small test scenes.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -28,14 +28,22 @@ _Last updated 2026-11-13._
   - NVIDIA's blue-noise textures can't be used (non-commercial licence), so we generate our own.
   - Native wide-BVH traversal is 6.3× ahead of our current BVH, not 3.5×.
 
-- **Trace core started (P1).** `@pmndrs/raytracer` can now trace rays on the GPU: a visibility test, a closest-hit
-  trace and a surface lookup, both callable from WGSL and as a batch over a ray buffer. All 590k test rays agree with
-  the bvh repo's CPU version (the few differences are float-precision ties at edges, counted and explained). Speed not
-  measured yet: the machine was loaded.
+- **Trace core (P1).** `@pmndrs/raytracer` traces rays on the GPU: a visibility test, a closest-hit trace and a surface
+  lookup, from WGSL or as a batch over a ray buffer. All 590k test rays agree with bvh's CPU version (the remaining
+  differences are explained float ties; primary rays must match exactly). It now carries the scene's materials and
+  lights on the GPU (the "scene copy"), with power-based light picking. Still to do in P1: one-bounce shading for the
+  sibling repos, and moving reflections onto it.
+- **Our path tracer (P2).** `@pmndrs/pathtracer` renders the test scenes and converges to the references: the furnace
+  tests hit their exact values, the single-light scene matches its closed form, and Cornell sits within the references'
+  own disagreement. Materials so far: diffuse, metal and glass (smooth and rough), ported from pbrt-v4. Not yet: the HDR
+  sky scene and Sponza. Speed is not measured properly yet (best effort: Cornell 512² about 14 ms per sample on the M5).
+- **Quiet pass.** Timing that decides defaults or passes a gate is batched into one run the maintainer starts from a CLI
+  session with every app closed (docs/QUIET-PASS.md).
 
 **Next**
-- Quiet-machine rerun of the baseline with ABBA across renderers (the first one ran while other jobs loaded the Mac); see `bench/results/BASELINE-P0.md`.
+- P2: Sponza and the HDR sky scene in our path tracer; the light-picking A/B; one-bounce shading (P1.3) for the
+  siblings.
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
-- **Wide-BVH experiment** in the bvh repo: running now on its own branch in the bvh repo.
+- Wide BVH in the bvh repo: built and correct on its own branch; waiting for quiet-pass timings.
 
-**Waiting on the maintainer:** nothing right now.
+**Waiting on the maintainer:** the quiet pass (docs/QUIET-PASS.md) when convenient; nothing blocks building meanwhile.
