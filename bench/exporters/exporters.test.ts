@@ -6,6 +6,7 @@ import { equalAreaSquareToSphere, equirectToOctahedral, sampleEquirect } from '.
 import { shorterAxisFovDeg, xFovDeg } from './common.ts';
 import { generateSkyImage, ENV_WIDTH, ENV_HEIGHT, SUN_DIR, skyRadiance } from '../scenes/tier0/env-sky.ts';
 import { tier0Scenes, getTier0Scene } from '../scenes/tier0/index.ts';
+import { loadGltfTriangles } from '../scenes/gltf-loader.ts';
 
 const assetsDir = join(fileURLToPath(import.meta.url), '..', '..', 'assets');
 const opts = { assetsDir, spp: 16 };
@@ -31,10 +32,11 @@ describe('pbrt exporter', () => {
     expect(r.files.some((f) => f.path.endsWith('.ply'))).toBe(true);
   });
 
-  it('keeps stock RR (and reports it) when rrStartDepth is given', () => {
-    const rr = toPbrt({ ...scene, integrator: { maxDepth: 5, rrStartDepth: 3 } }, opts);
-    expect(text(rr.files.find((f) => f.path === 'scene.pbrt')!)).not.toContain('"bool rr" false');
-    expect(rr.approximations.join()).toMatch(/Russian roulette/);
+  it('maps rrStartDepth to the patched rrdepth = rrStartDepth - 1 (RR first fires at vertex rrStartDepth)', () => {
+    const rr = toPbrt({ ...scene, integrator: { maxDepth: 5, rrStartDepth: 4 } }, opts);
+    const t = text(rr.files.find((f) => f.path === 'scene.pbrt')!);
+    expect(t).not.toContain('"bool rr" false');
+    expect(t).toContain('"integer maxdepth" 5 "integer rrdepth" 3');
   });
 });
 
@@ -119,5 +121,36 @@ describe('octahedral env resampling', () => {
     const rotated = sampleEquirect(img, [SUN_DIR[0] * Math.cos(0.5) + SUN_DIR[2] * Math.sin(0.5), SUN_DIR[1], -SUN_DIR[0] * Math.sin(0.5) + SUN_DIR[2] * Math.cos(0.5)], (0.5 * 180) / Math.PI, 1);
     const plain = sampleEquirect(img, SUN_DIR, 0, 1);
     expect(rotated[0]).toBeCloseTo(plain[0], 3);
+  });
+});
+
+describe('file geometry (glb) end to end', () => {
+  // Round trip: the glTF exporter's GLB of a tier-0 scene is loaded back by the Node loader and must give the same
+  // triangles (flat-shaded, un-welded) that the pbrt/Mitsuba exporters write as PLY for a `file` mesh.
+  it('glb exported by toGltf loads back with the same triangle count and area; file meshes export to PLY/GLB', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { surfaceArea, meshToWorld } = await import('../scenes/geometry.ts');
+    const { worldMeshes } = await import('./common.ts');
+    const src = getTier0Scene('cornell');
+    const glb = toGltf(src, opts).files[0]!.data as Buffer;
+    const dir = mkdtempSync(join(tmpdir(), 'glb-'));
+    try {
+      writeFileSync(join(dir, 'scene.glb'), glb);
+      const loaded = loadGltfTriangles(join(dir, 'scene.glb'));
+      const expectTris = src.meshes.reduce((a, m) => a + meshToWorld(m).indices.length / 3, 0);
+      expect(loaded.stats.triangles).toBe(expectTris);
+      expect(surfaceArea(loaded.mesh)).toBeCloseTo(src.meshes.reduce((a, m) => a + surfaceArea(meshToWorld(m)), 0), 3);
+      const scene = {
+        ...src, name: 'file-test', meshes: [{ name: 'all', geometry: { type: 'file' as const, path: 'scene.glb', format: 'glb' as const }, material: Object.keys(src.materials)[0]! }],
+      };
+      const w = worldMeshes(scene, dir);
+      expect(w[0]!.mesh.indices.length / 3).toBe(expectTris);
+      for (const t of [toPbrt, toMitsuba, toGltf]) expect(t(scene, { assetsDir: dir, spp: 1 }).files.length).toBeGreaterThan(0);
+      // sha256 pin is enforced
+      expect(() => loadGltfTriangles(join(dir, 'scene.glb'), { sha256: '00' })).toThrow(/sha256 mismatch/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

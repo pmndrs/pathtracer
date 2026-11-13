@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@pmndrs/raytracer": "workspace:*",
-    "@pmndrs/pathtracer": "workspace:*"
+    "@pmndrs/pathtracer": "workspace:*",
+    "@pmndrs/raytracer": "workspace:*"
   },
   "scripts": {
     "bench": "node runner/run.ts",
@@ -13,6 +13,16 @@
     "viewer:samples": "node viewer/make-samples.ts",
     "references": "node references/render.ts",
     "references:compare": "node references/compare.ts",
-    "assets:generate": "node scenes/tier0/generate-assets.ts"
+    "assets:generate": "node scenes/tier0/generate-assets.ts",
+    "assets:fetch": "node assets/fetch.ts",
+    "adapters:export": "node adapters/export-scenes.ts",
+    "competitors": "node adapters/matrix.ts"
+  },
+  "devDependencies": {
+    "@meimu/mutracer": "0.3.1",
+    "@types/three": "0.187.0",
+    "three": "0.187.0",
+    "three-gpu-pathtracer": "0.0.28",
+    "three-mesh-bvh": "0.9.18"
   }
 }

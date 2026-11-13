@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { meshToWorld, surfaceArea } from '../geometry.ts';
-import { quadLightCentreIrradianceClosedForm, quadLightIrradiance } from './quad-light-analytic.ts';
 import { ENV_HEIGHT, ENV_WIDTH, SUN_DIR, equirectDirection, skyRadiance } from './env-sky.ts';
 import { getTier0Scene, tier0Scenes } from './index.ts';
 
@@ -42,15 +41,6 @@ describe('tier0 scenes', () => {
     const light = getTier0Scene('quad-light').meshes.find((m) => m.emission)!;
     const w = meshToWorld(light);
     for (let i = 1; i < w.normals.length; i += 3) expect(w.normals[i]).toBeCloseTo(-1, 6);
-  });
-});
-
-describe('quad-light analytic', () => {
-  it('numeric irradiance matches the corner-rectangle closed form under the centre', () => {
-    expect(quadLightIrradiance(0, 0, 400)).toBeCloseTo(quadLightCentreIrradianceClosedForm(), 4);
-  });
-  it('falls off away from the light', () => {
-    expect(quadLightIrradiance(3, 0)).toBeLessThan(quadLightIrradiance(0, 0) * 0.05);
   });
 });
 

@@ -57,7 +57,11 @@ export interface FilmDesc {
 export interface IntegratorDesc {
   /** Maximum path length counted in scattering events (pbrt `maxdepth` semantics: 1 = direct lighting only). */
   maxDepth: number;
-  /** Russian roulette start depth; omit to disable RR (reference default: disabled for Tier 0). */
+  /**
+   * Russian roulette starts at this path vertex (1 = first surface hit; RR may terminate the path after scattering at
+   * vertex `rrStartDepth` and later ones). Omit to disable RR (reference default: disabled for Tier 0). pbrt-v4:
+   * `rrdepth = rrStartDepth - 1` (patched); Mitsuba: `rr_depth = rrStartDepth`.
+   */
   rrStartDepth?: number;
 }
 

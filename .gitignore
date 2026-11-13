@@ -11,3 +11,9 @@ bench/results/incoming/
 bench/references/**/*.pfm
 .claude/
 bench/assets/generated/
+
+# Downloaded third-party assets (Sponza etc.): bench/assets/fetch.ts + MANIFEST.json
+bench/assets/downloads/
+
+# Generated report manifests (re-run bench/adapters/matrix.ts)
+bench/results/reports/

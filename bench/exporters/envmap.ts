@@ -1,18 +1,19 @@
-import { readPfm } from '../scenes/pfm.ts';
-import type { PfmImage } from '../scenes/pfm.ts';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { readPFM } from '../metrics/pfm.ts';
+import type { Image } from '../src/adapter.ts';
 
 /** Load an `hdri` environment image (PFM only for now). */
-export function loadEnvImage(assetsDir: string, path: string): PfmImage {
+export function loadEnvImage(assetsDir: string, path: string): Image {
   if (!path.toLowerCase().endsWith('.pfm')) throw new Error(`hdri '${path}': only PFM is supported by the exporters`);
-  return readPfm(resolve(assetsDir, path));
+  return readPFM(readFileSync(resolve(assetsDir, path)));
 }
 
 /**
  * Bilinear lookup of an equirect image along world direction d. Convention (schema `hdri`): row 0 = +Y, u = 0 at −Z
  * increasing toward +X. `rotationYDeg` rotates the environment about +Y (counter-clockwise seen from above).
  */
-export function sampleEquirect(img: PfmImage, d: readonly [number, number, number], rotationYDeg: number, scale: number): [number, number, number] {
+export function sampleEquirect(img: Image, d: readonly [number, number, number], rotationYDeg: number, scale: number): [number, number, number] {
   const a = (-rotationYDeg * Math.PI) / 180;
   const c = Math.cos(a), s = Math.sin(a);
   // rotationY(a) applied to d: x' = c·x + s·z, z' = −s·x + c·z
@@ -59,7 +60,7 @@ export function equalAreaSquareToSphere(px: number, py: number): [number, number
  * coordinates (the pbrt light gets an identity transform, so pbrt's "z up" light space is simply our world axes).
  * Pixel (i, j) holds the radiance along EqualAreaSquareToSphere((i+.5)/N, (j+.5)/N); row 0 = top of the image file.
  */
-export function equirectToOctahedral(img: PfmImage, rotationYDeg: number, scale: number, size: number): PfmImage {
+export function equirectToOctahedral(img: Image, rotationYDeg: number, scale: number, size: number): Image {
   const data = new Float32Array(size * size * 3);
   for (let j = 0; j < size; j++) {
     for (let i = 0; i < size; i++) {

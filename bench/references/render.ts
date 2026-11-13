@@ -2,7 +2,7 @@
  * Render cached ground-truth references with native CPU renderers.
  *
  *   node bench/references/render.ts [--scenes a,b] [--renderers pbrt,mitsuba,mitsuba-spectral] [--spp N]
- *                                   [--spp-spectral N] [--force] [--detach]
+ *                                   [--spp-spectral N] [--spp-<renderer> N] [--force] [--detach]
  *
  * For each scene and renderer: export the scene (bench/exporters), run the tool, and write
  *   bench/references/<scene>/<renderer-id>-<spp>spp.pfm   (linear float32 RGB; git-ignored)
@@ -21,7 +21,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toMitsuba, toPbrt, writeExport } from '../exporters/index.ts';
 import type { ExportResult } from '../exporters/index.ts';
-import { tier0Scenes } from '../scenes/tier0/index.ts';
+import { allScenes, tier0Scenes } from '../scenes/index.ts';
 import { generateAssets } from '../scenes/tier0/generate-assets.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 
@@ -148,17 +148,18 @@ function main(): void {
     if (!existsSync(p)) throw new Error(`${what} not found at ${p}; see bench/references/README.md for the native setup`);
   }
   generateAssets();
-  const sceneNames = typeof args['scenes'] === 'string' ? args['scenes'].split(',') : tier0Scenes.map((s) => s.name);
+  const sceneNames = typeof args['scenes'] === 'string' ? args['scenes'].split(',') : tier0Scenes.map((s) => s.name); // tier 2 is opt-in (hours of CPU)
   const rendererKeys = typeof args['renderers'] === 'string' ? args['renderers'].split(',') : ['pbrt', 'mitsuba'];
   const sppOverride = typeof args['spp'] === 'string' ? Number(args['spp']) : undefined;
   const sppSpectral = typeof args['spp-spectral'] === 'string' ? Number(args['spp-spectral']) : undefined;
   for (const name of sceneNames) {
-    const scene = tier0Scenes.find((s) => s.name === name);
+    const scene = allScenes.find((s) => s.name === name);
     if (!scene) throw new Error(`unknown scene '${name}'`);
     for (const key of rendererKeys) {
       const spec = RENDERERS[key];
       if (!spec) throw new Error(`unknown renderer '${key}' (have ${Object.keys(RENDERERS).join(', ')})`);
-      const spp = (key === 'mitsuba-spectral' ? sppSpectral : undefined) ?? sppOverride ?? spec.defaultSpp;
+      const perRenderer = typeof args[`spp-${key}`] === 'string' ? Number(args[`spp-${key}`]) : undefined;
+      const spp = perRenderer ?? (key === 'mitsuba-spectral' ? sppSpectral : undefined) ?? sppOverride ?? spec.defaultSpp;
       renderOne(scene, spec, spp, args['force'] === true);
     }
   }

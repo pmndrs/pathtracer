@@ -21,7 +21,7 @@ function pad4(buf: Buffer, fill: number): Buffer {
   return rem === 0 ? buf : Buffer.concat([buf, Buffer.alloc(4 - rem, fill)]);
 }
 
-export const toGltf: Exporter = (scene: SceneDesc) => {
+export const toGltf: Exporter = (scene: SceneDesc, opts) => {
   const approx = new Set<string>();
   const used = new Set<string>();
   const materials: GltfMaterial[] = [];
@@ -95,7 +95,7 @@ export const toGltf: Exporter = (scene: SceneDesc) => {
     return bufferViews.length - 1;
   };
 
-  for (const w of worldMeshes(scene)) {
+  for (const w of worldMeshes(scene, opts?.assetsDir)) {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
     const pos = w.mesh.positions;

@@ -20,6 +20,7 @@ import { buildRows, deviceLabel, makeRunId, planRuns, utcDate } from './plan.ts'
 import { type AdapterSummary, type BenchReport, type RunRecord, type RunSummary } from './contract.ts';
 import { acquireGpuLock } from './gpu-lock.ts';
 import { gitCommit } from './measured-commit.ts';
+import { buildReportManifest, fileSystemIo, slotFor } from './report.ts';
 import { BrowserSession, WebGpuUnavailableError, WrongAdapterError } from './session.ts';
 import { INCOMING_DIR, REPOSITORY_ROOT, RESULTS_DIR, startBenchServer, type BenchServer } from './server.ts';
 import { DEFAULT_PAGE_TIMEOUT_MS } from './contract.ts';
@@ -124,7 +125,7 @@ async function main(): Promise<number> {
     console.log(`page: ${options.page}   runs: ${plan.map((run) => run.variant).join(' ')}   clock sampler: ${sampler.kind}`);
 
     for (const [index, planned] of plan.entries()) {
-      const slot = `${index + 1}-${planned.variant === '-' ? 'run' : planned.variant}`;
+      const slot = slotFor(index + 1, planned.variant);
       server.setSlot(slot);
       const result = await session.runPage(options.page, {
         timeoutMs: options.timeoutMs ?? DEFAULT_PAGE_TIMEOUT_MS,
@@ -172,6 +173,7 @@ async function main(): Promise<number> {
     for (const upload of server.uploads) {
       console.log(`image: ${upload.pfm}  ${upload.width}x${upload.height}x${upload.channels}${upload.nonFinite > 0 ? `  WARNING ${upload.nonFinite} non-finite floats` : ''}`);
     }
+    writeRunReport(runId, options.page, summary);
   } catch (error) {
     // Ctrl-C closed Chrome under our feet; the shutdown handler is already exiting the process.
     if (shutdownSignal.aborted) return EXIT_CODE_INTERRUPTED;
@@ -198,6 +200,24 @@ async function main(): Promise<number> {
   }
   console.log(`\n${summary.ok ? 'OK' : 'FAILED'}  page=${options.page}  gpu=${options.gpu ?? 'default'}  total ${(summary.totalMs / 1000).toFixed(1)} s  results: ${join(INCOMING_DIR, runId)}`);
   return summary.ok ? 0 : 1;
+}
+
+/** The viewer's run-report manifest (see report.ts); a failure here never fails the run. */
+function writeRunReport(runId: string, page: string, summary: RunSummary): void {
+  try {
+    const manifestDir = join('bench', 'results', 'incoming', runId);
+    const manifest = buildReportManifest(
+      { runId, page, runs: summary.runs, uploads: summary.uploads, manifestDir, referencesDir: join('bench', 'references') },
+      fileSystemIo(REPOSITORY_ROOT, join('bench', 'references')),
+    );
+    if (!manifest) return;
+    mkdirSync(join(INCOMING_DIR, runId), { recursive: true });
+    const file = join(INCOMING_DIR, runId, 'report.json');
+    writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+    console.log(`report: ${file}  (viewer: pnpm --filter @pathtracer/bench viewer, then ?report=/results/incoming/${runId}/report.json)`);
+  } catch (error) {
+    console.log(`report: not written (${error instanceof Error ? error.message : String(error)})`);
+  }
 }
 
 function printRun(record: RunRecord, report: BenchReport | null, messages: Array<{ origin: string; level: string; text: string }>): void {

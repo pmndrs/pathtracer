@@ -13,13 +13,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { REFERENCES_DIR } from './render.ts';
-import { tier0Scenes } from '../scenes/tier0/index.ts';
+import { allScenes } from '../scenes/index.ts';
 import { readPFM } from '../metrics/pfm.ts';
 import { compareImages } from '../metrics/metrics.ts';
-import { checkMean, checkUniform } from '../metrics/analytic.ts';
+import { checkMaskedImage, checkMean, checkUniform, quadLightAnalyticImage } from '../metrics/analytic.ts';
 import type { Image } from '../src/adapter.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
-import { quadLightAnalyticImage } from '../scenes/tier0/quad-light-analytic.ts';
 
 interface Found { id: string; spp: number; pfm: string; seconds?: number }
 
@@ -76,27 +75,19 @@ function quadLightReport(scene: SceneDesc, found: Found[], out: string[]): void 
   const exp = quadLightAnalyticImage(scene);
   for (const f of found) {
     const img = load(f);
-    let n = 0, sumRel = 0, maxRel = 0, sumT = 0, sumE = 0;
-    for (let i = 0; i < scene.film.width * scene.film.height; i++) {
-      const e = exp[i * 3]!;
-      if (Number.isNaN(e)) continue;
-      const v = img.data[i * img.channels + 1]!;
-      n++; sumT += v; sumE += e;
-      const rel = (v - e) / e;
-      sumRel += rel; maxRel = Math.max(maxRel, Math.abs(rel));
-    }
-    out.push(`| ${scene.name} | ${f.id} | ${f.spp} | analytic radiance image (${n} plane px) | mean ${fmt(sumT / n, 5)} vs ${fmt(sumE / n, 5)} | mean rel dev ${fmt(sumRel / n, 3)} | max pixel rel dev ${fmt(maxRel, 3)} | ${Math.abs(sumRel / n) < 0.005 ? 'PASS' : 'FAIL'} |`);
+    const r = checkMaskedImage(img, exp, 0.005);
+    out.push(`| ${scene.name} | ${f.id} | ${f.spp} | analytic radiance image (${r.n} plane px) | mean ${fmt(r.meanTest, 5)} vs ${fmt(r.meanExpected, 5)} | mean rel dev ${fmt(r.meanRelDev, 3)} | max pixel rel dev ${fmt(r.maxRelDev, 3)} | ${r.ok ? 'PASS' : 'FAIL'} |`);
   }
 }
 
 export function main(argv: string[]): void {
   const scenesArg = argv.indexOf('--scenes');
-  const names = scenesArg >= 0 ? argv[scenesArg + 1]!.split(',') : tier0Scenes.map((s) => s.name);
+  const names = scenesArg >= 0 ? argv[scenesArg + 1]!.split(',') : allScenes.map((s) => s.name);
   const lines: string[] = [];
   const rows: AgreementRow[] = [];
   const furnace: string[] = [];
   for (const name of names) {
-    const scene = tier0Scenes.find((s) => s.name === name)!;
+    const scene = allScenes.find((s) => s.name === name)!;
     const found = findReferences(name);
     if (found.length === 0) { console.log(`no references for ${name}`); continue; }
     furnaceReport(scene, found, furnace);

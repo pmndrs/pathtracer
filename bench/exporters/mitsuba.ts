@@ -4,15 +4,17 @@
  * Camera: right-handed `lookat`, `fov_axis` set explicitly to y so `yFovDeg` is used verbatim. Box filter radius 0.5.
  * maxDepth: Mitsuba's `path` integrator counts a camera ray that hits an emitter as depth 1, so direct lighting needs
  * max_depth 2: max_depth = maxDepth + 1 (verified with the quad-light scene, see bench/references/README.md).
- * Russian roulette: Mitsuba's `rr_depth` is the first depth at which RR may kill paths; with no `rrStartDepth` we set
- * it far above max_depth so RR never fires; otherwise rr_depth = rrStartDepth + 1 (same offset).
+ * Russian roulette: with no `rrStartDepth` we set `rr_depth` far above max_depth so RR never fires. Otherwise
+ * rr_depth = rrStartDepth: RR first fires at path vertex number rr_depth (1 = first surface hit; rr_depth must be > 0),
+ * verified by variance with rr_depth 1/2/3 against pbrt's `rrdepth` 0/1/2 (pbrt rrdepth = Mitsuba rr_depth - 1). The
+ * earlier "+ 1" here was unverified and made RR start one vertex late (only noise differed: RR is unbiased).
  * Mitsuba BSDFs are one-sided, so diffuse/conductor are wrapped in `twosided` to match pbrt (two-sided BSDFs).
  * Area emitters are one-sided (front = +normal); `twoSided` emission is emulated with a second, flipped copy.
  */
 import type { MaterialDesc } from '../scenes/schema.ts';
 import { encodePly, flipMesh } from './ply.ts';
 import { loadEnvImage } from './envmap.ts';
-import { encodePfm } from '../scenes/pfm.ts';
+import { writePFM } from '../metrics/pfm.ts';
 import { num, roughnessToAlpha, worldMeshes } from './common.ts';
 import type { Exporter, ExportedFile } from './types.ts';
 
@@ -57,7 +59,7 @@ export const toMitsuba: Exporter = (scene, opts) => {
   const c = scene.camera;
   const noRr = scene.integrator.rrStartDepth === undefined;
   const maxDepth = scene.integrator.maxDepth + 1;
-  const rrDepth = noRr ? 1_000_000 : scene.integrator.rrStartDepth! + 1;
+  const rrDepth = noRr ? 1_000_000 : Math.max(1, scene.integrator.rrStartDepth!);
   const x: string[] = [];
   x.push(`<scene version="3.0.0">`);
   x.push(`  <!-- ${scene.name}: ${scene.purpose.replace(/--/g, '-')} -->`);
@@ -80,7 +82,7 @@ export const toMitsuba: Exporter = (scene, opts) => {
     x.push(`  <emitter type="constant">${rgb('radiance', env.radiance)}</emitter>`);
   } else if (env?.type === 'hdri') {
     const img = loadEnvImage(opts.assetsDir, env.path);
-    files.push({ path: 'env.pfm', data: encodePfm(img) });
+    files.push({ path: 'env.pfm', data: Buffer.from(writePFM(img)) });
     x.push(`  <emitter type="envmap">`);
     x.push(`    <string name="filename" value="env.pfm"/>`);
     x.push(`    <float name="scale" value="${num(env.scale)}"/>`);
@@ -92,7 +94,7 @@ export const toMitsuba: Exporter = (scene, opts) => {
     approximations.push('mitsuba: directional light angularRadius is ignored (delta direction).');
   }
 
-  for (const w of worldMeshes(scene)) {
+  for (const w of worldMeshes(scene, opts.assetsDir)) {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
     files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh) });

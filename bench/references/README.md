@@ -1,6 +1,6 @@
 # Native reference renders (pbrt-v4, Mitsuba 3)
 
-Ground truth for the bench. Scenes come from `bench/scenes/tier0`, are exported by `bench/exporters`, rendered on the
+Ground truth for the bench. Scenes come from `bench/scenes` (tier 0 analytic scenes, tier 2 `sponza-white`), are exported by `bench/exporters`, rendered on the
 CPU, and cached here as `<scene>/<renderer-id>-<spp>spp.pfm` (git-ignored) plus a committed JSON sidecar
 (version, command, spp, seconds, settings, exporter approximations, host). `agreement.md/json` hold the pbrt-vs-Mitsuba
 numbers.
@@ -9,7 +9,7 @@ numbers.
 
 ```
 git clone --recursive https://github.com/mmp/pbrt-v4 .cache/native/pbrt-v4
-git -C .cache/native/pbrt-v4 apply ../../../bench/references/pbrt-no-rr.patch   # lets "bool rr false" disable RR
+git -C .cache/native/pbrt-v4 apply ../../../bench/references/pbrt-no-rr.patch   # adds "bool rr" and "integer rrdepth" to the path integrator
 cmake -S .cache/native/pbrt-v4 -B .cache/native/pbrt-v4/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPBRT_NO_GPU=ON
 ninja -C .cache/native/pbrt-v4/build
 python3 -m venv .cache/native/mitsuba-venv && .cache/native/mitsuba-venv/bin/pip install mitsuba numpy
@@ -19,6 +19,8 @@ python3 -m venv .cache/native/mitsuba-venv && .cache/native/mitsuba-venv/bin/pip
 
 ```
 pnpm --filter @pathtracer/bench references -- --detach                      # all Tier 0 scenes, pbrt + Mitsuba llvm_ad_rgb, 4096 spp
+pnpm --filter @pathtracer/bench assets:fetch                                # once: Sponza (bench/assets/MANIFEST.json, sha256-verified)
+pnpm --filter @pathtracer/bench references -- --scenes sponza-white --renderers pbrt,mitsuba --spp-pbrt 1024 --spp-mitsuba 4096 --detach   # Tier 2, ~70 min
 pnpm --filter @pathtracer/bench references -- --scenes cornell --renderers pbrt,mitsuba-spectral --spp 512 --force
 pnpm --filter @pathtracer/bench references:compare -- --write               # furnace/analytic checks + agreement table
 ```
@@ -37,8 +39,16 @@ Renderer keys: `pbrt` (pbrt-v4-cpu), `mitsuba` (llvm_ad_rgb), `mitsuba-scalar` (
 - **Depth.** pbrt `maxdepth` = number of scattering events with next-event estimation (1 = direct lighting only);
   Mitsuba `max_depth` counts the camera-ray emitter hit as depth 1, so Mitsuba `max_depth = maxDepth + 1`
   (verified: quad-light direct lighting agrees to 1e-4 only with that offset).
-- **Russian roulette.** Stock pbrt-v4 `path` always applies RR for depth > 1 and has no parameter to disable it; the
-  patch adds `"bool rr" false`. Mitsuba `rr_depth` is set to 1e6 (never fires).
+- **Russian roulette.** Stock pbrt-v4 `path` always applies RR for depth > 1 and has no parameter to disable or move it;
+  the patch adds `"bool rr" false` and `"integer rrdepth" N` (RR when `depth > N`, stock = 1). Without `rrStartDepth`
+  Mitsuba `rr_depth` is 1e6 (never fires). With `rrStartDepth = D` (sponza-white: 4) RR first fires at path vertex D
+  (1 = first surface hit): pbrt `rrdepth = D - 1`, Mitsuba `rr_depth = D` (must be > 0). Verified by variance of a
+  1-bounce furnace (pbrt rrdepth 0 raises the spread 5x, rrdepth 1 and 2 do not; Mitsuba rr_depth 1 does, 2 does not).
+  The survival probabilities differ (pbrt q = 1 - max(beta)); RR is unbiased either way, only noise differs.
+- **spp.** pbrt `zsobol` rounds spp up to a power of two, Mitsuba `multijitter` to a square count (32 -> 35 with a
+  warning): use 1024 / 4096 (both exact) for references.
+- **Meshes.** `file` meshes (Sponza) are loaded by `bench/scenes/gltf-loader.ts`, un-welded with flat geometric normals,
+  and written as the same binary PLY to pbrt and Mitsuba; no shading-normal differences are possible.
 - **Two-sidedness.** pbrt materials are two-sided, Mitsuba BSDFs are one-sided: Mitsuba diffuse/conductor are wrapped
   in `twosided`. Emitters are one-sided in both unless `twoSided` (Mitsuba: second flipped copy).
 - **Pixel filter.** `box` radius 0.5 in both.
@@ -63,6 +73,14 @@ cornell (512x512) 1077 s / 533 s. Mitsuba scalar_spectral cross-checks: 1024 spp
 - Furnaces: diffuse reads 0.50000 (expected 0.5) and dielectric 0.9999 (expected 1) in both renderers; quad-light matches
   the closed-form irradiance image to 1e-4 in both.
 - Mitsuba (RGB) vs pbrt relMSE: furnaces 2e-8 .. 3e-5, quad-light 1.8e-6, cornell 4.4e-4, env-sphere 6.4e-4.
+
+**sponza-white** (Tier 2, 1280x720, 262,266 triangles, maxDepth 8, RR from vertex 4, sun + uniform sky, image mean 0.246):
+pbrt-v4 4096 spp 3431 s (57 min) / Mitsuba llvm_ad_rgb 4096 spp 1456 s (24 min), rendered one after the other. Agreement at
+equal spp: relMSE 4.1e-3 (eps 1e-2), SMAPE 0.041, mean bias Mitsuba/pbrt +0.22%. The relMSE is pure noise: Mitsuba 4096 vs
+pbrt 1024 / 2048 / 4096 spp gave 1.03e-2 / 6.2e-3 / 4.1e-3, i.e. 8.4/spp (pbrt) + 2.0e-3 (Mitsuba 4096), so the
+systematic part is ~0 apart from the small mean bias (the spectral-vs-RGB effect seen on Cornell). Intermediate pbrt
+runs took 1284 s (1024 spp) and 1415 s (2048 spp), faster per sample than the 4096 run: wall times on this Mac vary
+with whatever else runs (other agents), so quote them as indicative.
 
 Explained systematic differences:
 

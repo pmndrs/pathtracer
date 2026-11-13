@@ -1,5 +1,6 @@
 import type { CameraDesc, FilmDesc, MeshDesc, SceneDesc } from '../scenes/schema.ts';
-import { meshToWorld } from '../scenes/geometry.ts';
+import { meshToWorld, transformMesh } from '../scenes/geometry.ts';
+import { ASSETS_DIR, loadFileGeometry } from '../scenes/file-geometry.ts';
 import type { TriangleMesh } from '../scenes/geometry.ts';
 import { roughnessToAlpha } from '../../packages/raytracer/src/contract/conventions.ts';
 
@@ -28,12 +29,15 @@ export interface WorldMesh {
   mesh: TriangleMesh;
 }
 
-/** Tessellate every mesh in world space, the single source of triangles for all exporters. */
-export function worldMeshes(scene: SceneDesc): WorldMesh[] {
+/**
+ * Tessellate every mesh in world space, the single source of triangles for all exporters. `file` geometry is loaded
+ * from `assetsDir` (default bench/assets) by the Node glTF loader; analytic shapes by scenes/geometry.ts.
+ */
+export function worldMeshes(scene: SceneDesc, assetsDir: string = ASSETS_DIR): WorldMesh[] {
   return scene.meshes.map((desc, i) => ({
     desc,
     stem: `${String(i).padStart(2, '0')}-${desc.name.replace(/[^A-Za-z0-9_-]+/g, '_')}`,
-    mesh: meshToWorld(desc),
+    mesh: desc.geometry.type === 'file' ? transformMesh(loadFileGeometry(desc.geometry, assetsDir).mesh, desc.transform) : meshToWorld(desc),
   }));
 }
 

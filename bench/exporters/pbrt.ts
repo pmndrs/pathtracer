@@ -6,13 +6,14 @@
  * `fov` in pbrt is the field of view of the SHORTER image axis. Pixel filter is a box with radius 0.5.
  * Roughness: material roughness is perceptual, alpha = roughness²; we write alpha with `remaproughness false`.
  * Area lights are one-sided unless `twoSided`. Russian roulette is disabled by the patched `bool rr false`
- * (bench/references/pbrt-no-rr.patch; stock pbrt-v4 cannot disable RR) when `rrStartDepth` is absent; if it is
- * present, stock RR (starts at depth > 1, cannot be moved) is used and the divergence is reported.
+ * (bench/references/pbrt-no-rr.patch; stock pbrt-v4 cannot disable RR) when `rrStartDepth` is absent. Otherwise the
+ * patch's `"integer rrdepth"` is set to rrStartDepth - 1: pbrt applies RR when `depth > rrdepth`, so RR first fires at
+ * path vertex number rrStartDepth (1 = first surface hit); verified by variance with rrdepth 0/1/2 (stock = 1).
  */
 import type { MaterialDesc } from '../scenes/schema.ts';
 import { encodePly } from './ply.ts';
 import { equirectToOctahedral, loadEnvImage } from './envmap.ts';
-import { encodePfm } from '../scenes/pfm.ts';
+import { writePFM } from '../metrics/pfm.ts';
 import { num, roughnessToAlpha, shorterAxisFovDeg, vec, worldMeshes } from './common.ts';
 import type { Exporter, ExportedFile } from './types.ts';
 
@@ -46,8 +47,8 @@ export const toPbrt: Exporter = (scene, opts) => {
   lines.push(`PixelFilter "box" "float xradius" 0.5 "float yradius" 0.5`);
   lines.push(`Sampler "zsobol" "integer pixelsamples" ${opts.spp}`);
   const rr = scene.integrator.rrStartDepth === undefined;
-  lines.push(`Integrator "path" "integer maxdepth" ${scene.integrator.maxDepth}${rr ? ' "bool rr" false' : ''}`);
-  if (!rr) approximations.push(`pbrt: Russian roulette cannot be started at depth ${scene.integrator.rrStartDepth}; stock RR (depth > 1, q = 1 - max(beta)) is used.`);
+  const rrArgs = rr ? ' "bool rr" false' : ` "integer rrdepth" ${Math.max(0, scene.integrator.rrStartDepth! - 1)}`;
+  lines.push(`Integrator "path" "integer maxdepth" ${scene.integrator.maxDepth}${rrArgs}`);
   lines.push(`WorldBegin`);
 
   const env = scene.environment;
@@ -56,7 +57,7 @@ export const toPbrt: Exporter = (scene, opts) => {
   } else if (env?.type === 'hdri') {
     const equirect = loadEnvImage(opts.assetsDir, env.path);
     const octa = equirectToOctahedral(equirect, env.rotationYDeg, env.scale, OCTA_SIZE);
-    files.push({ path: 'env-octahedral.pfm', data: encodePfm(octa) });
+    files.push({ path: 'env-octahedral.pfm', data: Buffer.from(writePFM(octa)) });
     lines.push(`LightSource "infinite" "string filename" "env-octahedral.pfm"`);
     approximations.push(`pbrt: equirect env resampled to a ${OCTA_SIZE}x${OCTA_SIZE} equal-area octahedral image (pbrt-v4 only accepts that layout); scale and rotationYDeg baked in; pbrt looks up nearest-pixel while Mitsuba interpolates bilinearly.`);
   }
@@ -66,7 +67,7 @@ export const toPbrt: Exporter = (scene, opts) => {
     approximations.push('pbrt: directional light angularRadius is ignored (pbrt distant lights are delta lights); `L` is used as irradiance.');
   }
 
-  for (const w of worldMeshes(scene)) {
+  for (const w of worldMeshes(scene, opts.assetsDir)) {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
     files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh) });

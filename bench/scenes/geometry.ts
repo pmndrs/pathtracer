@@ -243,7 +243,7 @@ function sub3(a: Vec3, b: Vec3): [number, number, number] {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
-/** Tessellate any schema geometry (except `file`, which exporters/loaders handle) in local space. */
+/** Tessellate any schema geometry (except `file`: Node-side loading is in file-geometry.ts) in local space. */
 export function tessellate(geometry: GeometryDesc, opts: TessellateOptions = {}): TriangleMesh {
   switch (geometry.type) {
     case 'quad':
@@ -287,8 +287,11 @@ export function computeVertexNormals(positions: Float32Array, indices: Uint32Arr
  * Exporters write exactly this (pbrt/Mitsuba/glTF get identity object transforms; no per-renderer transform maths).
  */
 export function meshToWorld(mesh: MeshDesc, opts: TessellateOptions = {}): TriangleMesh {
-  const local = tessellate(mesh.geometry, opts);
-  const m = mesh.transform;
+  return transformMesh(tessellate(mesh.geometry, opts), mesh.transform);
+}
+
+/** Apply a column-major object-to-world matrix to a mesh (normals by the inverse transpose; winding flips on mirror). */
+export function transformMesh(local: TriangleMesh, m: Mat4 | undefined): TriangleMesh {
   if (!m) return local;
   const n = local.positions.length / 3;
   const positions = new Float32Array(n * 3);

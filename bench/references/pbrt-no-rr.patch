@@ -1,31 +1,34 @@
 diff --git a/src/pbrt/cpu/integrators.cpp b/src/pbrt/cpu/integrators.cpp
-index a8c541f..23bd476 100644
+index a8c541f..3141ace 100644
 --- a/src/pbrt/cpu/integrators.cpp
 +++ b/src/pbrt/cpu/integrators.cpp
-@@ -616,6 +616,9 @@ STAT_PERCENT("Integrator/Zero-radiance paths", zeroRadiancePaths, totalPaths);
+@@ -616,6 +616,11 @@ STAT_PERCENT("Integrator/Zero-radiance paths", zeroRadiancePaths, totalPaths);
  STAT_PERCENT("Integrator/Regularized BSDFs", regularizedBSDFs, totalBSDFs);
  STAT_INT_DISTRIBUTION("Integrator/Path length", pathLength);
  
-+// pathtracer-bench patch: "bool rr" false disables Russian roulette in PathIntegrator.
++// pathtracer-bench patch: "bool rr" false disables Russian roulette in PathIntegrator; "integer rrdepth" (default 1,
++// the stock value) sets the depth after which RR may terminate paths (RR applies when depth > rrdepth).
 +static bool gPathDisableRR = false;
++static int gPathRRDepth = 1;
 +
  // PathIntegrator Method Definitions
  PathIntegrator::PathIntegrator(int maxDepth, Camera camera, Sampler sampler,
                                 Primitive aggregate, std::vector<Light> lights,
-@@ -749,7 +752,7 @@ SampledSpectrum PathIntegrator::Li(RayDifferential ray, SampledWavelengths &lamb
+@@ -749,7 +754,7 @@ SampledSpectrum PathIntegrator::Li(RayDifferential ray, SampledWavelengths &lamb
  
          // Possibly terminate the path with Russian roulette
          SampledSpectrum rrBeta = beta * etaScale;
 -        if (rrBeta.MaxComponentValue() < 1 && depth > 1) {
-+        if (!gPathDisableRR && rrBeta.MaxComponentValue() < 1 && depth > 1) {
++        if (!gPathDisableRR && rrBeta.MaxComponentValue() < 1 && depth > gPathRRDepth) {
              Float q = std::max<Float>(0, 1 - rrBeta.MaxComponentValue());
              if (sampler.Get1D() < q)
                  break;
-@@ -812,6 +815,7 @@ std::string PathIntegrator::ToString() const {
+@@ -812,6 +817,8 @@ std::string PathIntegrator::ToString() const {
  std::unique_ptr<PathIntegrator> PathIntegrator::Create(
      const ParameterDictionary &parameters, Camera camera, Sampler sampler,
      Primitive aggregate, std::vector<Light> lights, const FileLoc *loc) {
 +    gPathDisableRR = !parameters.GetOneBool("rr", true);
++    gPathRRDepth = parameters.GetOneInt("rrdepth", 1);
      int maxDepth = parameters.GetOneInt("maxdepth", 5);
      std::string lightStrategy = parameters.GetOneString("lightsampler", "bvh");
      bool regularize = parameters.GetOneBool("regularize", false);

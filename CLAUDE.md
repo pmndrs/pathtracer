@@ -89,3 +89,12 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Bindless (`chromium-experimental-sampling-resource-table`) is textures-only and not on macOS yet.
 - bvh's per-triangle material id is 16 bits (max 65534). Treat it as an index into our own table.
 - bvh changes are only visible to consumers after `pnpm build` in ~/Developer/bvh (consumers read `dist/`).
+- Mitsuba `rr_depth` = pbrt `rrdepth` + 1 (verified by a one-bounce furnace variance test); Mitsuba rejects `rr_depth` 0.
+- Pick spp as 1024/4096: Mitsuba multijitter rounds to a square, pbrt zsobol to a power of two.
+- Khronos Sponza ships glTF + `.bin` only (no glb). End walls at x = −11.4 / +10.4: a camera at x = −12.5 is outside
+  and renders black. Fetch with `node bench/assets/fetch.ts` (pinned commit + sha256 in `bench/assets/MANIFEST.json`).
+- Competitors: the glTF exporter is Node-only, so pre-export with `node bench/adapters/export-scenes.ts`
+  (→ `bench/assets/generated/web/`); an edited exporter is not detected as stale, re-run it.
+- three-gpu-pathtracer: `useMegakernel(true)` resets settings (set them after); rect lights are invisible to camera rays
+  unless `visibleToCameraRays`; `clampIndirect` defaults to 10; alpha blending drops escaped samples unless the clear
+  alpha is 1.
