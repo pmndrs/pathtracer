@@ -2,7 +2,7 @@
 
 _Last updated 2026-11-13._
 
-**Phase:** P0 (foundations), most of the way there. The first baseline table (time to equal error, web competitors on Cornell and Sponza) is done; what's left is the Windows branch.
+**Phase:** P0 (foundations), most of the way there. The first baseline table ran, but its timings were taken under heavy machine load and don't count. What's left: a quiet-machine rerun of that table, and the Windows branch.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -17,7 +17,8 @@ _Last updated 2026-11-13._
   - The two renderers agree to within their noise: relMSE 2e-8 to 6.4e-4 on Tier 0, 4.1e-3 on Sponza.
 - **Competitors in the bench.** three-gpu-pathtracer (both its schedulers) and mutracer run with their denoisers off.
   - All three pass the diffuse, glass and single-light checks.
-  - mutracer is the fastest: 6.3 ms per sample on the Cornell box, vs 13 ms for three-gpu-pathtracer.
+  - Speed numbers so far were measured on a heavily loaded Mac and are not trusted yet.
+  - mutracer's Cornell image stops converging at a small error, which points to a bias (being looked into).
   - Both libraries add an energy-compensation trick to rough metals that can't be switched off, so that one test is
     reported separately.
 - **Capability detection.** This Mac is "tier 2": subgroups, f16 and timestamps, but no bindless.
@@ -31,4 +32,4 @@ _Last updated 2026-11-13._
 - Push the `windows-testing` branch with a handoff doc.
 - **Wide-BVH experiment** in the bvh repo: running now on its own branch in the bvh repo.
 
-**Waiting on the maintainer:** Sponza reference samples (keep 4096, or 2048 for pbrt). See TASKS.md.
+**Waiting on the maintainer:** nothing right now.

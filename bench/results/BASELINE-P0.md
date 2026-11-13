@@ -1,5 +1,11 @@
 # P0 baseline: time to equal error (web competitors, Apple M5 Pro)
 
+> **PROVISIONAL — do not quote the timings.** These runs were taken while the Mac was under heavy load from other
+> jobs (load average 97–779, 20–39 GPU Chrome processes outside the GPU lock; one cell moved 1.75× between passes).
+> The maintainer ruled (2026-11-13) that timings from a loaded machine are not trusted. The error-vs-spp data,
+> image means and the reference noise floors stand; every ms, s and min below is to be replaced by the quiet-machine
+> rerun (TASKS P0.25, with the load check P0.30).
+
 First baseline table (P0.9, the P0 exit gate). Question answered: **how long does each web path tracer need to reach a
 given error against the Mitsuba reference?** Numbers are paired within this machine only; do not compare with other
 machines or with the Windows runs.

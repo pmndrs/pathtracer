@@ -16,7 +16,7 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.6 | Tier 0 scenes, exporters (pbrt/Mitsuba/glTF), native refs | agent:scenes | ✅ | 6 scenes, 4096 spp refs; furnace exact in both; pbrt-vs-Mitsuba relMSE 2e-8…6.4e-4 (`bench/references/agreement.md`) |
 | P0.7 | Competitor adapters: mutracer, three-gpu-pathtracer (WebGPU, both schedulers) behind `RendererAdapter` | agent:competitors | ✅ | `bench/adapters/` + `COMPETITORS.md`; npm-pinned; Tier 0 at 256 spp: Cornell relMSE 5e-4…1.1e-3, mutracer 6.3 ms/spp vs tgpt wavefront 13 / megakernel 64 |
 | P0.8 | Literature verification pass | agent:verify | ✅ | `research/VERIFY.md`; OIDN 3 timeline, STBN licence, CWBVH 6.3× gap, ReSTIR GI ~8 ms |
-| P0.9 | First baseline table: time-to-equal-error, competitors vs reference on Cornell + Sponza (M5) | agent:baseline | ✅ | `bench/results/BASELINE-P0.md`: relMSE 1e-2 vs Mitsuba reached in Cornell 133 ms (mutracer) / 242 ms (tgpt-wavefront) / 1.1 s (megakernel), Sponza 1.2 min / 1.1 min / 2.7 min; 1e-3 on Sponza not measurable (floor 4.1e-3); fits k 0.9-1.13; machine heavily loaded by other agents (spread up to 1.75x) |
+| P0.9 | First baseline table: time-to-equal-error, competitors vs reference on Cornell + Sponza (M5) | agent:baseline | 🟨 | **Timings provisional (maintainer, 2026-11-13): taken under high load, not trusted.** Correctness/error-vs-spp parts stand. `bench/results/BASELINE-P0.md`: relMSE 1e-2 vs Mitsuba reached in Cornell 133 ms (mutracer) / 242 ms (tgpt-wavefront) / 1.1 s (megakernel), Sponza 1.2 min / 1.1 min / 2.7 min; 1e-3 on Sponza not measurable (floor 4.1e-3); fits k 0.9-1.13; machine heavily loaded by other agents (spread up to 1.75x) |
 | P0.10 | `windows-testing` branch + `docs/WINDOWS-HANDOFF.md` | lead | ⬜ | near end of P0 |
 | P0.11 | Runner emits the viewer's `report.json` manifest (schema in `bench/viewer/src/report.ts`) | agent:competitors | ✅ | `bench/runner/report.ts`; `matrix.ts --name X` → `bench/results/reports/X/report.json` |
 | P0.12 | Dedupe PFM IO: `bench/scenes/pfm.ts` → reuse `bench/metrics/pfm.ts` | agent:sponza | ✅ | `bench/scenes/pfm.ts` deleted |
@@ -32,7 +32,7 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.22 | Move glTF export from Node pre-export into the page or runner (exporter edits are not detected as stale) | — | ⬜ | |
 | P0.23 | Investigate tgpt megakernel's 2% blue-channel noise at facet edges | — | ⬜ | competitor quirk, low priority |
 | P0.24 | `sponza-white-ao` variant (diffuse, no lights, ambient-occlusion-like) | — | ⬜ | skipped in P0.13 |
-| P0.25 | Rerun the P0.9 baseline on a quiet machine with ABBA across renderers (`matrix.ts` over the runner's `--ab renderer=A,B`), and quote paired ratios | — | ⬜ | the first table ran at load average 97-779 from other agents' GPU jobs (caveat 1 in BASELINE-P0.md) |
+| P0.25 | Rerun the P0.9 baseline on a quiet machine with ABBA across renderers (`matrix.ts` over the runner's `--ab renderer=A,B`), and quote paired ratios | — | ⬜ | **P0 exit gate now depends on this.** the first table ran at load average 97-779 from other agents' GPU jobs (caveat 1 in BASELINE-P0.md) |
 | P0.26 | mutracer on Cornell plateaus at relMSE ~6.8e-4 vs Mitsuba (mean +0.07%, 40 px block means up to 3.6% off): find the bias (bevel off, RIS candidates, sun/NEE, spectral-vs-RGB) | — | ⬜ | tgpt images are 0.4% max, so it is mutracer-specific |
 | P0.27 | Sponza tgpt-megakernel at 1024 spp (capped at 512 for the 30 min budget) and a longer reference or several reference seeds so 1e-3 becomes measurable | — | ⬜ | reference floor 4.1e-3 (pbrt vs Mitsuba) blocks every target under ~8e-3 on Sponza |
 | P0.28 | Competitor adapters: yield to the event loop without a GPU sync inside tgpt's timed loop (runner now tolerates a busy page, V17) | — | ⬜ | minutes-long synchronous loops made `Runtime.evaluate` time out |
@@ -47,7 +47,4 @@ suggestion, pros/cons and the A/B that would settle it.
 
 ## Open questions for the maintainer
 
-- **Sponza reference spp: keep 4096 for both, or drop pbrt to 2048?** Suggestion: keep 4096.
-  - Pro (4096): equal noise in both references; pbrt-vs-Mitsuba relMSE 4.1e-3 (2048 gives 6.2e-3); a one-off cost, files are cached.
-  - Con: pbrt takes 57 min on the M5 Pro (Mitsuba 24 min); 2048 halves that.
-  - Settles it: the P0.9 table. If competitor error at their equal-time budget is ≫ 6e-3, 2048 is enough.
+- ~~Sponza reference spp~~: settled by P0.9: keep 4096 for both (at 2048 the pbrt-vs-Mitsuba floor rises to 6.2e-3 and even 1e-2 becomes unmeasurable on Sponza).

@@ -25,6 +25,8 @@ simplification.
 - **A/B by default.** Every experiment must produce two outputs the bench viewer can compare side by side (linear HDR
   images + timings), not a prose claim.
 - **Questions for the maintainer:** give a suggestion plus pros and cons, and the A/B that would settle it.
+- **No timings from a loaded machine.** Check load (`sysctl vm.loadavg`, GPU Chrome processes) before any timed
+  run; numbers taken under high load are not reported as results, only as provisional with the load recorded.
 - **Correctness before timing.** CPU oracle or analytic expectation first; timing numbers name the device, browser and
   run conditions, and are compared as paired ratios on one machine, never across machines.
 - **No readback inside timed regions.** No `mapAsync` in a frame loop.
