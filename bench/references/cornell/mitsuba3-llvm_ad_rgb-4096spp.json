@@ -1,0 +1,33 @@
+{
+  "scene": "cornell",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 532.9,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-Ab36so/scene.xml bench/references/cornell/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 32,
+    "rrStartDepth": null,
+    "film": {
+      "width": 512,
+      "height": 512,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 33,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 532.5677440166473,
+    "spectral": false
+  },
+  "approximations": [],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-13T05:12:14.279Z"
+}

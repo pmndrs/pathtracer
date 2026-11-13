@@ -1,0 +1,33 @@
+{
+  "scene": "env-sphere",
+  "renderer": "pbrt-v4-cpu",
+  "version": "pbrt-v4 b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f (+bench no-RR patch)",
+  "spp": 4096,
+  "seconds": 265.57,
+  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/env-sphere/pbrt-v4-cpu-4096spp.pfm .cache/native/work-W9Bd0P/scene.pbrt",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 384,
+      "height": 256,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "rr": false,
+    "sampler": "zsobol",
+    "filter": "box 0.5",
+    "sensor": "cie1931 iso100 (passthrough)",
+    "spectral": true
+  },
+  "approximations": [
+    "pbrt: equirect env resampled to a 512x512 equal-area octahedral image (pbrt-v4 only accepts that layout); scale and rotationYDeg baked in; pbrt looks up nearest-pixel while Mitsuba interpolates bilinearly."
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-13T04:41:39.797Z"
+}

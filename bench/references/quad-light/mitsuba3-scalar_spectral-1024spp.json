@@ -1,0 +1,33 @@
+{
+  "scene": "quad-light",
+  "renderer": "mitsuba3-scalar_spectral",
+  "version": "mitsuba 3.9.1",
+  "spp": 1024,
+  "seconds": 8.46,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-0audtt/scene.xml bench/references/quad-light/mitsuba3-scalar_spectral-1024spp.pfm scalar_spectral 1024",
+  "settings": {
+    "maxDepth": 1,
+    "rrStartDepth": null,
+    "film": {
+      "width": 256,
+      "height": 256,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "scalar_spectral",
+    "rr": false,
+    "max_depth": 2,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 8.30528998374939,
+    "spectral": true
+  },
+  "approximations": [],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-13T04:45:03.700Z"
+}

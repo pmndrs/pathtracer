@@ -5,5 +5,14 @@
   "dependencies": {
     "@pmndrs/raytracer": "workspace:*",
     "@pmndrs/pathtracer": "workspace:*"
+  },
+  "scripts": {
+    "bench": "node runner/run.ts",
+    "viewer": "vite viewer",
+    "compare": "node metrics/compare.ts",
+    "viewer:samples": "node viewer/make-samples.ts",
+    "references": "node references/render.ts",
+    "references:compare": "node references/compare.ts",
+    "assets:generate": "node scenes/tier0/generate-assets.ts"
   }
 }

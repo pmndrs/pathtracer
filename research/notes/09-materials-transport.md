@@ -53,7 +53,7 @@ not clone code. Items marked (unverified) are from memory and need a check befor
 | LTC sheen (Zeltner et al.) | https://tizianzeltner.com/projects/Zeltner2022Practical/ | 2022 | SIGGRAPH | not saved (download failed) | Multi-scatter sheen via LTC; OpenPBR fuzz layer in practice uses Charlie/LTC variants |
 | Hero wavelength (Wilkie et al.) | https://cgg.mff.cuni.cz/~wilkie/Website/EGSR_14_files/WNDWH14.pdf | 2014 | EGSR | not saved (download failed) | Low-variance spectral MC with 4 wavelengths |
 | Spectral uplifting (Jakob, Hanika) | https://rgl.epfl.ch/publications/Jakob2019Spectral | 2019 | EGSR | papers/transport/jakob2019-spectral-uplifting.pdf | 3-coeff sigmoid-polynomial RGB->spectrum, 3D LUT (64^3 x 3 x 3 floats) |
-| Spectral primary decomposition (Mallett, Yuksel) | https://graphics.geometrian.com/research/spectral-primary-decomposition.html (unverified URL) | 2019 | EGSR | link | 3 basis spectra, linear blend, cheaper than sigmoid LUT, no LUT lookup per eval |
+| Spectral primary decomposition (Mallett, Yuksel) | https://graphics.geometrian.com/research/spectral-primary-decomposition.html (URL not re-checked) | 2019 | EGSR | link | 3 basis spectra, linear blend, cheaper than sigmoid LUT, no LUT lookup per eval |
 | Null-scattering path integral (Miller et al.) | https://cs.dartmouth.edu/~wjarosz/publications/miller19null.pdf | 2019 | SIGGRAPH Asia | papers/transport/miller2019-null-scattering.pdf | Unified framework for delta/ratio/spectral tracking + MIS |
 | Monte Carlo volumetric light transport STAR (Novak et al.) | https://cs.dartmouth.edu/~wjarosz/publications/novak18monte.pdf | 2018 | EG STAR | papers/transport/novak2018-monte-carlo-volumetric-star.pdf | Survey: delta/ratio/residual tracking, majorants |
 | Spectral & decomposition tracking (Kutz) | https://dl.acm.org/doi/10.1145/3072959.3073665 | 2017 | SIGGRAPH | link (paywalled?) | Chromatic media without bias via spectral MIS |
@@ -71,7 +71,7 @@ not clone code. Items marked (unverified) are from memory and need a check befor
 
 ### 3.1 Material model choice and layout
 
-**OpenPBR Surface (1.0 June 2024; 1.1 ~2025, unverified exact changes).** Slab-based: base (diffuse w/ roughness + metal/dielectric
+**OpenPBR Surface (1.0 2024-06-04; 1.1 2024-06-28; 1.1.1 2026-04-17; 1.1.2 2026-11-05 [V CHANGELOG.md; see 2024-26 update below]).** Slab-based: base (diffuse w/ roughness + metal/dielectric
 mix), specular (dielectric GGX with F0 from IOR, anisotropy), transmission (+ subsurface/volume), coat (with darkening and
 roughening of base below), fuzz (sheen), thin-film (on specular), emission, geometry (thin-walled, opacity, normal, tangent). The spec
 defines the layering semantically as "vertically layered slabs" and the reference MaterialX implementation uses albedo-scaling
@@ -196,7 +196,7 @@ atlas set). Keep to <=128 B so a hit-time fetch is two cache lines max. Texture-
   The practical GPU recommendation: Jakob-Hanika with coefficients stored in the albedo textures at bake (GPU compute pass), Mallett-Yuksel as fallback if the LUT is too much.
 - **Costs vs RGB in a GPU tracer:** BVH traversal, hit fetch, texture fetch: identical. Shading math: 4 wavelengths vs 3 channels (~+33% ALU on spectral
   eval), plus spectral uplift (above), plus film conversion (XYZ accumulate 4 samples via CMF LUT = 4 taps of 1D LUT, trivial). Noise: colored noise at low spp (each pixel sample sees only 4 wavelengths);
-  the denoiser must handle it. Expect ~10-30% end-to-end slower than RGB at equal spp in typical scenes (**estimate, unverified; benchmark**).
+  the denoiser must handle it. Expect ~10-30% end-to-end slower than RGB at equal spp in typical scenes (**estimate; Peters 2025 measured 2-36% (RTX 5070 Ti, 4 wavelengths, 1 spp, locked clocks: Cornell 19-36%, Bistro 2-7%; <= 0.3 ms absolute) [V, see 2024-26 update]; still benchmark on WebGPU**).
 - **Which effects require spectral:** dispersion (glTF `KHR_materials_dispersion`, OpenPBR abbe), exact thin-film iridescence on arbitrary thickness/IOR (RGB fit is
   approximate), fluorescence, accurate metamerism/illuminant matching (D65 vs A lights on same albedo), spectral sky models, true "Planck blackbody" lights, spectral volume coefficients (e.g. atmosphere, water).
   RGB gives indistinguishable results otherwise to within a few percent on typical materials; this is the justification for deferring.
@@ -280,11 +280,59 @@ atlas set). Keep to <=128 B so a hit-time fetch is two cache lines max. Texture-
 - Measuring wavefront-sort vs uber on real discrete GPUs.
 
 ## 7. Open questions
-- Exact deltas OpenPBR 1.0 -> 1.1 (I believe 1.1 clarified coat/fuzz energy handling and added thin-film refinements; verify before spec freeze). Also whether a reference WGSL/GLSL implementation exists within MaterialX main (check MaterialX `libraries/pbrlib/genglsl`).
+- ~~Exact deltas OpenPBR 1.0 -> 1.1~~ resolved 2026-11-13, see the 2024-26 update below (1.1 = 2024-06-28: thin-film IOR default, Zeltner sheen, fuzz can darken; 1.1.1 = 2026-04-17; 1.1.2 = 2026-11-05). Also whether a reference WGSL/GLSL implementation exists within MaterialX main (check MaterialX `libraries/pbrlib/genglsl`).
 - Mallett-Yuksel URL and numbers unverified; confirm and decide between it and JH.
 - Which bounded-VNDF variant to ship for anisotropic + transmission; need to read the Eto paper's anisotropic section.
 - Can WGSL specialize via `override` on per-pipeline basis cheaply enough on D3D12 for ~16 variants? (profile).
 - Does bindless in Chrome allow non-uniform texture index in compute without `nonuniform` hazards on all backends? (cross-ref bindless note.)
 - Reservoir pdf for MIS with ReSTIR DI: pick unbiased-reference vs biased-realtime split.
-- Failed downloads to retry: Wilkie 2014 hero wavelength, Belcour layering/thin-film, Zeltner LTC sheen, Prague 2021, Wachter-Binder, Kaplanyan path regularization (URLs may have moved).
-- 2024-2026 literature sweep still to do (e.g. neural BRDF sampling, new many-light methods, OpenPBR viewer in WebGPU, Khronos dispersion/diffuse_transmission status, three.js MaterialX node support).
+- ~~Failed downloads~~: all now saved under `papers/transport/` and `papers/gpu-arch/` (2026-11-13, see research/VERIFY.md §5).
+- 2024-2026 sweep: short pass done below; neural BRDF sampling, new many-light methods and three.js MaterialX node support were not swept.
+
+## 8. 2024-26 update (added 2026-11-13, P0.8 verification pass)
+
+Short web sweep, not exhaustive. Tags: [V] read at the source this session; [S] search snippet only.
+
+**OpenPBR.**
+- Version history [V, `CHANGELOG.md` in AcademySoftwareFoundation/OpenPBR, Apache-2.0]: **1.0 on 2024-06-04; 1.1 on 2024-06-28**
+  (thin-film IOR default changed so the film is visible by default, `subsurface_radius_scale` vec3 -> color3, Zeltner sheen
+  enabled in the reference implementation, fuzz may darken as well as lighten, emission formula clarified);
+  **1.1.1 on 2026-04-17** (MaterialX metal edge-tint and `geometry_thin_walled` bug fixes, codegen hints, a statement that
+  implementers may use approximations, emission_color may exceed 1, thin-film section expanded); **1.1.2 on 2026-11-05**
+  (MaterialX thin-walled `subsurface_color` applied twice fixed, coat transmittance notation and layering formulas
+  corrected to use *squared* coat transmittance, default unit of `transmission_depth` / `subsurface_radius` = cm). No
+  1.2 or 2.0 exists. The earlier "1.1 ~2025" in this note was wrong. **Action: implement 1.1.2, not 1.0; the squared coat
+  transmittance fix changes coat darkening numbers.**
+- Companion paper: Portsmouth, Kutz, Hill, "OpenPBR: Novel Features and Implementation Details", arXiv 2512.23696
+  (v2 2026-01-14; SIGGRAPH 2025 course) [V abstract]: slab layering, statistical mixing, specular/transmission decoupling,
+  subsurface parameterization, coat darkening, thin-film physics, planned hazy specular and retroreflection. PDF saved.
+- **EON** (Portsmouth, Kutz, Hill, JCGT 14(1) 2025, arXiv 2410.18026) [V title/abstract]: energy-preserving Oren-Nayar,
+  analytic compensation, CLTC importance sampling, chosen as the rough diffuse model in OpenPBR. This is the diffuse lobe to
+  port (paper is open; code in the paper is GLSL, check its licence before copying; port from the equations). PDF saved.
+- Adoption signal: NVIDIA Omniverse Kit 110 (Mar 2026) added OpenPBR as a template but its RTX real-time 2.0 mode does not yet
+  support sheen or thin film [S]. glTF: `KHR_materials_diffuse_transmission` was "ready for testing", not ratified, in a
+  registry mirror; `KHR_materials_sss` "in development"; nothing found for a glTF OpenPBR extension [S, mirror may be stale].
+
+**VNDF sampling and energy compensation.** No 2025-26 paper changed the picture [S: searches returned only 2018-2024 work].
+The current set is Heitz 2018 (VNDF), Dupuy-Benyoub 2023 (spherical caps), Eto-Tokuyoshi 2023 / Tokuyoshi-Eto ACM TOG 2024
+(bounded VNDF, fewer rejected samples; the TOG journal version supersedes the SIGGRAPH Asia 2023 note we saved), Tokuyoshi
+2021 (backfacing shading normals). Energy compensation: Turquin 2019, Fast-MSX (SIGGRAPH Asia 2023, closed-form second
+bounce) and Sforza-Pellacini (analytic directional-albedo fit, no LUT, Computers & Graphics 2023) are the LUT-free options
+worth prototyping next to our Kulla-Conty/Turquin default [S, not read]. Layered/thin-film: Belcour 2018 and Belcour-Barla 2017
+(PDFs now saved) plus Weier-Belcour JCGT 2020 (anisotropic interfaces, saved).
+
+**Spectral on GPU.**
+- Christoph Peters, "Spectral rendering" parts 1-3 (momentsingraphics.de, Nov 2025) [V parts 1-2]: real-time path tracer with
+  4 wavelengths per path from one random number (hero-wavelength-inspired, precomputed 1D importance table); reflectance
+  uplifting by "Fourier sRGB": a 256^3 LUT baked into BC1-compressible textures, three Lagrange multipliers, arctan
+  squashing; storing multipliers directly needs 12-16x more memory. **Measured cost vs RGB on an RTX 5070 Ti, 1080p,
+  1 path per pixel, locked clocks: Cornell box 0.26 -> 0.31 ms (+19%, path length 2) and 0.83 -> 1.13 ms (+36%, length 8);
+  Bistro 2.71 -> 2.89 ms (+7%) and 14.3 -> 14.6 ms (+2%); absolute overhead <= 0.3 ms.** Single illuminant spectrum per
+  scene only; multi-illuminant is open; denoising not included. This replaces our unverified "10-30%" guess: expect low
+  single digits for heavy scenes, up to ~35% for trivial ones.
+- Yu, Guarnera, Guarnera, "Spectral Rendering Without a Spectral Renderer: Learned Spectral Codes for RGB Pipelines",
+  arXiv 2602.18741, ACM TOG 45(6), SIGGRAPH Asia 2026 [V abstract]: pack a learned spectral latent into RGB triplets, two RGB
+  passes approximate spectral rendering, neural upsamplers for RGB inputs. No GPU timings in the abstract. Interesting for a
+  denoiser-compatible spectral mode; needs the full paper.
+- Hero wavelength (Wilkie 2014) and the 2021 fitted sky (Prague) PDFs are now saved. No WebGPU-specific spectral work was
+  found. A Rust/Vulkan "Spectra" Blender add-on with ReSTIR caustics exists (alpha, performance claims unverified).

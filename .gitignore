@@ -10,3 +10,4 @@ dist/
 bench/results/incoming/
 bench/references/**/*.pfm
 .claude/
+bench/assets/generated/

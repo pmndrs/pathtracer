@@ -17,19 +17,19 @@ not go into a spec without a check.
   shading cost, not with trace cost.
 - **WebGPU wavefront is viable because the per-dispatch cost is small and indirect dispatch exists.** Measured Chrome
   per-dispatch cost with no sync: 33 us (RTX 5090/Linux), 59 us (RTX 2000 laptop/D3D12), 67 us (Intel iGPU/D3D12)
-  [V, arXiv 2604.02344]. ~40 dispatches per iteration (8 stages x 5 bounces) = 1.3-2.7 ms of CPU/driver floor, which
+  [V, arXiv 2604.02344 v1, **withdrawn by its author and superseded by arXiv:2608.08730**; the successor repeats the 24-36 us (Vulkan) and 32-71 us (Metal) ranges, Safari/M2 31.7 us and Firefox ~1 ms in the v1 table, but its per-browser table could not be read, so treat the Chrome rows as [V-v1]; see VERIFY.md]. ~40 dispatches per iteration (8 stages x 5 bounces) = 1.3-2.7 ms of CPU/driver floor, which
   is fine for a 10+ ms path-tracing iteration and ruinous for a 0.2 ms GI probe update. This is the quantitative
   reason for the two-kernel split. It also means: record all bounces in one command buffer, never read back.
 - **Our traversal is the Aila-Laine BVH2 baseline. The biggest known software win is CWBVH (8-wide, 80 B/node,
   octant-ordered, compressed stack): 1.9-2.1x over Aila-Laine on incoherent rays** (Titan X Pascal/Maxwell, CUDA)
-  [V, Ylitie 2017; geomean 2.24x bounce 1, 2.51x bounce 4 on the Maxwell table]. But it is *only* a win when
+  [V, Ylitie 2017, re-checked against the PDF 2026-11-13: geomean vs Aila 2012 = 2.24x bounce 1, 2.51x bounce 4 on Maxwell (Table 5), 1.33x primary; Pascal (Table 4) 2.36x / 2.70x; abstract 1.9-2.1x holds]. But it is *only* a win when
   memory-bound and incoherent; on primary rays it is 1.3x. Our own quantized-BVH2 variant is 0.93-0.97x of f32 on the
   M5 [V, bvh docs], which matches the theory: compression without width removes bytes, not node fetch latency. **Prototype
   BVH4 (tinybvh `BVH4_GPU`) and CWBVH8 against the current BVH2 as the first traversal experiment.** tinybvh already
   builds both from the binary tree.
 - **Target numbers.** Today: 104 Mrays/s closest-hit incoherent on Sponza, RTX 3060 Laptop, Chrome, BVH2 [V, bvh
-  README]. Native CUDA CWBVH on a Pascal Titan X (similar raw class) does 360 Mrays/s on the first diffuse bounce of
-  CrySponza [V]. That 3.5x gap is the headroom; a realistic web target is 1.5-2x of today (150-200 Mrays/s) with wide
+  README]. Native CUDA CWBVH on a Pascal Titan X (similar raw class) does **658 Mrays/s** on the first diffuse bounce of
+  CrySponza [V Ylitie Table 4; the earlier "360" is the *Maxwell* Titan X, Table 5, 361 Mrays/s, and was mislabelled Pascal]. The gap to our 104 is 3.5x against Maxwell and 6.3x against Pascal (baseline Aila-Laine on the same Pascal card does 276); different GPU class and scene, so a hypothesis only; a realistic web target is 1.5-2x of today (150-200 Mrays/s) with wide
   BVH + traversal tuning. Per-class table in section 6.
 - **Ray sorting: cheap binning yes, global sorting no.** Meister et al. get 1.5-1.7x *trace-only* speedup on secondary
   rays, but on an RTX 2080 Ti the sort overhead (1.4-3.7 ms on Bistro) ate it: "does not pay off overall" with
@@ -367,7 +367,7 @@ accepts "hit already known" paths (instance, tri, bary) as the stage-1 output.
 | Implicit-gradient texture sample in non-uniform flow | forces FXC unroll [V skill] | Use `textureSampleLevel`/`textureLoad`; trace kernels do not need derivatives. |
 
 Published WebGPU-vs-native ray rates: **none found** for like-for-like. Best evidence: our 104 Mrays/s on 3060L WebGPU
-vs. native CUDA CWBVH at ~360 Mrays/s on a Pascal Titan X (not same GPU, not same year); the OpenPBR WebGPU paper gives
+vs. native CUDA CWBVH at ~658 Mrays/s (Pascal Titan X, CrySponza bounce 1; 361 on Maxwell) (not same GPU, not same year); the OpenPBR WebGPU paper gives
 only path-trace times (100 spp 512x512 1.07M tris: 1058.7 ms RTX 3080, 2319 ms M1 Max, "not optimized") [V]. So a
 3080 does ~94 spp/s at 512x512; the M1 Max ~43 spp/s => the M1 Max is ~0.46x a 3080 in the same WebGPU code.
 
@@ -428,12 +428,12 @@ Design rules (priority order, matching BRIEF):
 
 Metric: **closest-hit, incoherent (random-direction / first diffuse bounce), Sponza-class scene (0.26M-5.7M tris),
 large batch >= 1M rays, WebGPU in Chrome, steady state.** Shadow/any-hit rays are typically 1.1-2x faster; primary
-rays 2-5x faster [V Ylitie tables; V bvh any-hit 1.02x of closest on Sponza so use 1.0-1.5x].
+rays 2-5x faster [V Ylitie tables (primary/bounce-1 ratio on Pascal CWBVH 1163/658 on CrySponza = 1.8x); V bvh any-hit 1.02x of closest on Sponza so use 1.0-1.5x].
 
 | GPU class | Anchor (verified) | Baseline now | Target Tier B (BVH2 tuned) | Target Tier A (wide + wavefront) | Basis |
 | --- | --- | --- | --- | --- | --- |
 | Desktop high (RTX 4080/4090/5080, RX 7900) | none measured on our stack | est. 350-600 [E: 3-6x of 3060L by TFLOPS/bandwidth] | 400-700 | 600-1,000 | tinybvh 5 Grays/s (primary, RTX 5080 laptop) bounds the coherent case [V]; scale of CWBVH 2x [V] |
-| Desktop mid / laptop dGPU (RTX 3060L, RX 6600, Arc A7xx) | **104 Mrays/s Sponza, 3060L** [V] | 104 | 120-150 | 150-220 | Ylitie Titan X Pascal bounce-1 360 Mrays/s native CWBVH [V] -> web at 40-60% of native |
+| Desktop mid / laptop dGPU (RTX 3060L, RX 6600, Arc A7xx) | **104 Mrays/s Sponza, 3060L** [V] | 104 | 120-150 | 150-220 | Ylitie Titan X Pascal bounce-1 360 Mrays/s native CWBVH [V] -> web at 40-60% of native (**correction: Pascal CrySponza bounce-1 CWBVH is 658 Mrays/s [V]; 360 is Maxwell; the 40-60%-of-native rule is untested**) |
 | Apple M Pro/Max/M5 | M5 pathtracer ~120 Mrays/s wall (indicative) [V]; M1 Max = 0.46x RTX 3080 in a WebGPU PT [V] | 80-120 | 100-150 | 130-220 | no published software-RT Metal Mrays/s found |
 | Apple M base / A-series | none | est. 30-60 [E] | 40-70 | 60-100 | scaled from M Pro by GPU core ratio [E] |
 | Intel iGPU, Xe-LPG / Iris Xe | UHD: **12.8 Mrays/s** [V] | UHD 12.8; Xe-LPG est. 30-50 [E] | 15 UHD / 40-60 Xe | 20 UHD / 60-90 Xe | UHD is correctness-only per bvh rules |

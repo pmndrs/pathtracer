@@ -1,0 +1,33 @@
+{
+  "scene": "furnace-conductor",
+  "renderer": "mitsuba3-scalar_spectral",
+  "version": "mitsuba 3.9.1",
+  "spp": 1024,
+  "seconds": 20.33,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-XJthrK/scene.xml bench/references/furnace-conductor/mitsuba3-scalar_spectral-1024spp.pfm scalar_spectral 1024",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 256,
+      "height": 256,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "scalar_spectral",
+    "rr": false,
+    "max_depth": 17,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 19.995527029037476,
+    "spectral": true
+  },
+  "approximations": [],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-13T05:15:16.113Z"
+}

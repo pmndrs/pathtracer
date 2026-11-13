@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A/B viewer</title>
+  <link rel="stylesheet" href="./src/style.css">
+</head>
+<body data-screen="start">
+  <header id="bar">
+    <button id="back" hidden title="Back to the run report">&larr; report</button>
+    <div id="slots">
+      <button class="slot" data-slot="0"><b>A</b><span class="nm">drop / pick</span><i class="x" title="clear">&times;</i></button>
+      <button class="slot" data-slot="1"><b>B</b><span class="nm">drop / pick</span><i class="x" title="clear">&times;</i></button>
+      <button class="slot" data-slot="2"><b>R</b><span class="nm">reference (optional)</span><i class="x" title="clear">&times;</i></button>
+    </div>
+    <div class="seg" id="seg-content" title="View (keys 1-5)">
+      <button data-v="image">Image</button><button data-v="absdiff">Abs diff</button><button data-v="relerr">Rel err</button><button data-v="flip">FLIP</button><button data-v="bias">Bias</button>
+    </div>
+    <div class="seg" id="seg-layout" title="Layout (keys S, F or space, D)">
+      <button data-v="swipe">Swipe</button><button data-v="flip">Flip</button><button data-v="side">Side</button>
+    </div>
+    <label class="ev" title="Exposure in stops. [ and ] step by 0.5, double-click to reset">EV <input id="ev" type="range" min="-10" max="10" step="0.25" value="0"><output id="ev-out">0</output></label>
+    <select id="tm" title="Tonemap (key T)"><option>clamp</option><option>reinhard</option><option selected>aces</option><option>agx</option></select>
+    <button id="help-btn" title="Keyboard shortcuts">?</button>
+  </header>
+  <main id="stage">
+    <canvas id="gl"></canvas>
+    <div id="labL" class="lab"></div><div id="labR" class="lab right"></div>
+    <div id="legend" hidden><div class="bar"></div><div class="ticks"></div></div>
+    <div id="inspector" hidden></div>
+    <div id="metrics" hidden></div>
+    <div id="start">
+      <h1>A/B viewer</h1>
+      <p>Drop two or three <code>.pfm</code> files here (A, B, optional reference R), or use the slots above.<br>
+         Deep link: <code>?a=/results/x.pfm&amp;b=/results/y.pfm&amp;r=/references/ref.pfm</code> or <code>?report=/results/&lt;run&gt;/report.json</code>.</p>
+      <div id="files"></div>
+    </div>
+    <div id="report" hidden></div>
+    <div id="toast" hidden></div>
+    <div id="dropzones" hidden><div data-slot="0">A</div><div data-slot="1">B</div><div data-slot="2">R</div></div>
+    <div id="help" hidden>
+      <h3>Keyboard</h3>
+      <dl>
+        <dt>1 2 3 4 5</dt><dd>image, abs diff, relative error, FLIP map, bias</dd>
+        <dt>S / F / D</dt><dd>swipe, flip, side-by-side</dd>
+        <dt>A / B / R, space</dt><dd>flip layout: show A, B, reference; space toggles A/B</dd>
+        <dt>[ ]  \</dt><dd>exposure -/+ 0.5 EV, reset</dd>
+        <dt>M</dt><dd>show / hide the metrics table</dd>
+        <dt>T</dt><dd>cycle tonemap</dd>
+        <dt>0 / Z</dt><dd>fit / toggle fit and 1:1 pixels</dd>
+        <dt>wheel, drag, double-click</dt><dd>zoom at cursor, pan, fit</dd>
+        <dt>?</dt><dd>this panel</dd>
+      </dl>
+    </div>
+  </main>
+  <input id="file" type="file" accept=".pfm" multiple hidden>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

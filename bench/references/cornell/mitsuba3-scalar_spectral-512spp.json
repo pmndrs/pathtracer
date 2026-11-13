@@ -1,0 +1,33 @@
+{
+  "scene": "cornell",
+  "renderer": "mitsuba3-scalar_spectral",
+  "version": "mitsuba 3.9.1",
+  "spp": 512,
+  "seconds": 115.67,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-1qQrq7/scene.xml bench/references/cornell/mitsuba3-scalar_spectral-512spp.pfm scalar_spectral 512",
+  "settings": {
+    "maxDepth": 32,
+    "rrStartDepth": null,
+    "film": {
+      "width": 512,
+      "height": 512,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "scalar_spectral",
+    "rr": false,
+    "max_depth": 33,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 115.22911477088928,
+    "spectral": true
+  },
+  "approximations": [],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-13T05:14:10.143Z"
+}

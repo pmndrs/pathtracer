@@ -63,7 +63,25 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 
 ## Traps (add to this list)
 
-- Chrome quantizes `timestamp-query` to ~100 µs unless developer features are enabled. Calibrate per session.
+- Chrome quantizes `timestamp-query` to ~100 µs unless developer features are enabled
+  (`--enable-webgpu-developer-features`; the runner sets it). On Chrome 157 / Apple it measured 1 ns steps even
+  without the flag. Run `--page timer-calibration` once per session anyway. In-page `performance.now()` is 100 µs.
+- Without developer features Chrome hides `adapter.info.description`; on Mac `description`/`device` are empty anyway.
+- Node 22 type stripping: `.ts` imports need explicit extensions, and constructor parameter properties
+  (`constructor(private x)`) are rejected. `enum` and `namespace` too.
+- WGSL uniformity: `subgroupBallot` etc. inside non-uniform control flow fails to compile. Keep subgroup ops in
+  uniform flow.
+- Prepending `enable` lines shifts WGSL error line numbers; `wgslEnableLines` reports the count.
+- pbrt-v4: `path` integrator can't disable RR (we patch it, V4); fov applies to the shorter image axis; only square
+  equal-area octahedral env maps; `remaproughness false` + alpha. White L=1 reads exactly 1.0 with default film
+  settings: don't set sensor, iso or white balance.
+- Mitsuba 3: `max_depth` = our `maxDepth + 1`; BSDFs are one-sided (wrap in `twosided`); spectral variants break
+  `rgb` k=1000, export grey eta/k as constant `spectrum`; stdout ends with an ANSI escape.
+- Smooth dielectric furnace needs maxDepth ≈1000 (100 loses 0.1%).
+- Reference renders are git-ignored (22 MB); re-render with `pnpm --filter @pathtracer/bench references`
+  (Cornell 512² takes ~18 min pbrt / ~9 min Mitsuba at 4096 spp on M5 Pro).
+- JS FLIP at 4K takes ~10 s (metrics ~2.6 s); the viewer runs them in a worker.
+- Non-finite pixels are excluded from every metric and counted; the viewer shows them magenta.
 - Metal fma contraction broke watertight triangle tests in bvh (fixed there as `bvhEdgeFunction`). Any new
   triangle/box test must pass the bvh watertight oracle on Apple.
 - WGSL has no single-dispatch "last workgroup" handoff guarantee (downsampler learned this). Use separate dispatches.
