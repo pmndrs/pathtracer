@@ -149,3 +149,11 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - bvh's build workers fail to load when a bench page imports bvh through Vite's `/@fs/` (`a BVH worker failed: it could
   not be loaded`), and `'auto'` cannot fall back for merged groups (their input was already moved). In bench pages use
   `createMeshBvhBuilder({ worker: 'never' })` and `SceneTrees.create(device, { workers: { worker: 'never' } })`.
+- Cloud sessions reach GitHub (raw.githubusercontent.com included) but not arXiv, research.nvidia.com or author pages
+  (proxy 403). Paper numbers have to be checked against `research/papers/` on the Mac.
+- `subgroup-matrix` (gpuweb proposal) has no element-wise ops besides scalar add/sub/mul: activations such as ReLU need a
+  store to workgroup memory and a reload. Operands and control flow must be subgroup-uniform, and workgroup x size must
+  be a multiple of the max subgroup size. WGSL has no float atomics, so batched gradient sums need partials plus a
+  reduction dispatch (docs/design/nrc.md §2).
+- tiny-cuda-nn is BSD-3 (portable with attribution); the NRC SDK and RTXGI are RTX SDK licence (no code); instant-ngp is
+  non-commercial (ideas only).

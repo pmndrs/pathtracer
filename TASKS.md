@@ -61,7 +61,29 @@ suggestion, pros/cons and the A/B that would settle it.
 | X1 | Wide BVH: BVH4 / CWBVH8 node formats + WGSL traversal + GPU collapse pass; gate ≥1.3× on 3060L and M5 | ~/Developer/bvh, branch `claude/wide-bvh-684631` (not merged) | 🟨 both formats built, all correctness gates pass on M5; Sponza nodes 185→74.5 (BVH4)→40.5 MiB (CWBVH). Provisional (loaded) M5 closest-hit: BVH4 merged 1.28–1.32×, CWBVH ≈1.0×, both slower on instanced incoherent (0.57–0.86×). Needs quiet M5 rerun + 3060 runs (bvh `docs/internals/WINDOWS-RUNBOOK.md` §2d); GPU collapse and single-loop instanced walk are follow-ups |
 | X2 | Requests from P1.1 to bvh `main`: (1) an f32-faithful CPU walk so trace-core can require bit-exact hits; (2) build workers fail to load via Vite `/@fs/`, and `'auto'` can't fall back for merged groups; (3) export the shared-edge ray generator from `oracle-fixtures`; (4) document that `whenBuilt()` needs `update()` calls; (5) optional indirect count-in-buffer `TraceBatchKernel` | ~/Developer/bvh | ⬜ not started (needs the maintainer's go) |
 
+## N — Neural radiance cache (research track)
+
+Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Backends A/B'd: WGSL f32 / f16 / subgroup-matrix, ORT-Web, WebNN.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| N0.1 | Check the NRC paper's numbers (net shape, encodings, records/frame, steps, loss, spread threshold, ms on 3090) against `research/papers/gi/nrc-*.pdf`; fix the [M] items in nrc.md §1 | — | ⬜ | arXiv is not reachable from cloud sessions; do it on the Mac |
+| N0.2 | `detectCaps` reads `adapter.info.subgroupMatrixConfigs` (componentType, resultComponentType, M, N, K, subgroup sizes); caps page prints them and compiles a one-tile `subgroupMatrixMultiplyAccumulate` probe | — | ⬜ | folds in P0.18's subgroup-matrix half; M5 Pro first |
+| N0.3 | Which backend reaches matrix hardware: Dawn Vulkan vs D3D12 on Windows/RTX 3060L (flag needed?), Metal `simdgroup_matrix` vs M5 neural accelerators | — | ⬜ | Windows part becomes a W-task |
+| N1 | MLP engine: WGSL generator for forward / backward / Adam (f32, f16), f32 master weights, partial-gradient reduction pass; TS f64 oracle with finite-difference gradient check; `mlp-fit` page (learn an HDR image, write PFM per arm) | — | ⬜ | code location is an open question (nrc.md §8) |
+| N2 | `mlp-timing` microbench: ms/1M inferences, ms per 16k training step, every arm, widths 64 × {2,4,5} hidden, batch 2^14–2^21, ABBA, load-checked | — | ⬜ | M5 Pro + RTX 3060L; can end the track early |
+| N3 | `wgsl-sgm` arm: subgroup-matrix forward then backward, tile shape from the adapter config, ReLU via workgroup memory | — | ⬜ | gate: matches `wgsl-f16` within f16 tolerance |
+| N4 | Encodings: frequency + one-blob vs multiresolution hash grid, A/B on `mlp-fit` | — | ⬜ | both stay settings |
+| N5 | ORT-Web and WebNN arms: inference + training-step-as-graph (fwd + bwd + Adam exported as one ONNX / WebNN graph, weights in and out) | — | ⬜ | comparison rows in N2 only |
+| N6 | `nrc` demo page: diffuse wavefront PT on sponza-white over trace core, spread termination, sparse training paths with self-training tail, indirect train + infer, at full and ratio-2 resolution | — | ⬜ | equal-time relMSE/FLIP vs Mitsuba, bias, still-camera stability |
+| N7 | Non-neural hash cache (SHaRC-like, `@pmndrs/gi`) as the equal-time competitor to N6 | — | ⬜ | needs gi on the trace core (P4) or a bench-local copy |
+| N8 | `bench/results/NRC.md`: per-vendor "what subgroup-matrix buys" table + viewer report | — | ⬜ | public use needs the maintainer (D8) |
+
 ## Open questions for the maintainer
+
+- **NRC: where does the MLP engine live?** Suggestion: private workspace package `packages/mlp` (WGSL prefix `nn*`),
+  demo as bench pages until N6; a production cache follows D3 into `@pmndrs/gi`. Details, pros/cons and the deciding
+  test in [docs/design/nrc.md](docs/design/nrc.md) §8 (also: gpuweb evidence, Windows Vulkan flag).
 
 - **Capsaicin: a third reference renderer, or a cross-check only?** Suggestion: cross-check and native timing baseline on
   the RTX 3060, for opaque scenes only. Keep pbrt + Mitsuba as the references (D15).
