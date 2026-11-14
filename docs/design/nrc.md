@@ -161,8 +161,8 @@ learned, read on the Mac before N1 (N0.4):
 - its ORT trap: wrong results on WebGPU Conv with more than 3 input channels (microsoft/onnxruntime#29651). An MLP
   uses MatMul/Gemm rather than Conv, but check our ORT arm against the oracle first.
 
-Since the Denoiser is MIT and ours, its WGSL helpers can be ported directly (attribution in THIRD_PARTY.md is not
-needed within pmndrs, but name the source file in a comment). If both end up sharing an MLP/conv engine, that is the
+Since the Denoiser is MIT and ours, its WGSL helpers can be ported directly, with the usual attribution in
+THIRD_PARTY.md and the source file named in a comment. If both end up sharing an MLP/conv engine, that is the
 "second consumer" in §8.
 
 ## 4. Correctness first
