@@ -266,3 +266,14 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   script that downloads, hashes and writes the manifest entry (the committed manifest is the only record of the hashes).
 - GitHub's contents API (`api.github.com/repos/.../contents/<path>?ref=<commit>`) lists a model directory at the pinned commit without cloning;
   `raw.githubusercontent.com/<repo>/<commit>/...` serves the files. Only `IridescenceDielectricSpheres`/`IridescenceMetallicSpheres` lack a `glTF-Binary/`.
+- Layered BSDF (P2.21): pbrt's `LayeredBxDF::f` and `Sample_f` do not agree (the exit-MIS weights mix an inside-direction and an
+  outside-direction density, +3.5% at roughness 0.3, +7% at 0.5 for a white base), and its `PDF` integrates to 1.5-2.7, not 1: test `f`
+  against the sampler with `exitMis: 'none'` and never assert pdf <= 1 for the stochastic one. OpenPBR-style albedo scaling is ~33%
+  brighter than the walk for a base of 0.8 (no internal reflection): a white-furnace test cannot see it, compare a base < 1.
+- A white-furnace test of a stochastic layered BSDF needs `thickness: 0` (pbrt's default 0.01 attenuates by exp(-0.01/cos) per crossing),
+  a deep walk (maxDepth 200) and a smooth or roughness <= 0.1 interface (a rough interface loses single-scatter energy at every crossing:
+  0.94 at 0.3). Eval of a smooth coat is only the walk: add the delta reflection `F(mu)`.
+- `thickness` 0 in a layered walk breaks the interface alternation (`z == thickness` always): clamp to a tiny positive value (pbrt does).
+- WGSL const-array LUTs cost text: print `Number(v.toFixed(4))` and drop the leading `0` (`String(Float32)` prints 17 digits and tripled
+  the table). `var<private>` for a table indexed at run time.
+- macOS `sed -i` needs `-i ''`; a failed `sed -i` in a chain is easy to miss. Use python or the Edit tool for source edits.

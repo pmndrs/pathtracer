@@ -256,13 +256,13 @@ export function ptFrameFromNormal(n: PtVec3): { t: PtVec3; b: PtVec3; n: PtVec3 
 // ---------------------------------------------------------------------------------------------------------------
 // Eval and pdf. Generalised half vector for dielectrics as in pbrt.
 
-interface HalfVector {
+export interface HalfVector {
   wm: PtVec3;
   reflect: boolean;
   etap: number;
 }
 
-function dielectricHalf(wo: PtVec3, wi: PtVec3, eta: number): HalfVector | null {
+export function dielectricHalf(wo: PtVec3, wi: PtVec3, eta: number): HalfVector | null {
   const cosO = wo[2];
   const cosI = wi[2];
   const refl = cosI * cosO > 0;
