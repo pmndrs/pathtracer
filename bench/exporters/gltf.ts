@@ -5,6 +5,7 @@
  */
 import type { MaterialDesc, SceneDesc } from '../scenes/schema.ts';
 import { conductorF0, worldMeshes } from './common.ts';
+import { openPbrToGltfMaterial } from './gltf-openpbr.ts';
 import type { Exporter } from './types.ts';
 import { lookAtCameraToWorld } from '../scenes/geometry.ts';
 
@@ -12,6 +13,8 @@ interface GltfMaterial {
   name: string;
   pbrMetallicRoughness: { baseColorFactor: number[]; metallicFactor: number; roughnessFactor: number };
   emissiveFactor?: number[];
+  alphaMode?: 'MASK' | 'BLEND';
+  alphaCutoff?: number;
   doubleSided?: boolean;
   extensions?: Record<string, unknown>;
 }
@@ -54,8 +57,17 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
       case 'black':
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         break;
-      case 'openpbr':
-        throw new Error('gltf: openpbr materials are not exported yet (P2.20)');
+      case 'openpbr': {
+        const { material, notes } = openPbrToGltfMaterial(m);
+        g.pbrMetallicRoughness = material.pbrMetallicRoughness;
+        if (material.emissiveFactor) g.emissiveFactor = material.emissiveFactor;
+        if (material.alphaMode) g.alphaMode = material.alphaMode;
+        if (material.alphaCutoff !== undefined) g.alphaCutoff = material.alphaCutoff;
+        Object.assign(ext, material.extensions ?? {});
+        approx.add('openpbr: written as core metallic-roughness + the KHR_materials_* extensions the material uses (inverse of gltfMaterialToOpenPbr, bench/exporters/gltf-openpbr.ts); the consumer decides which extensions it honours.');
+        for (const n of notes) approx.add(`openpbr: ${n}`);
+        break;
+      }
       case 'conductor': {
         g.pbrMetallicRoughness.baseColorFactor = [conductorF0(m.eta[0], m.k[0]), conductorF0(m.eta[1], m.k[1]), conductorF0(m.eta[2], m.k[2]), 1];
         g.pbrMetallicRoughness.metallicFactor = 1;

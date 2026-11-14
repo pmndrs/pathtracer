@@ -29,6 +29,7 @@
  */
 
 import {
+  PT_BSDF_CONDUCTOR,
   PT_BSDF_DIFFUSE,
   PT_FLAG_DELTA,
   PT_FLAG_REFLECTION,
@@ -36,6 +37,7 @@ import {
   dielectricHalf,
   ptBsdfEval,
   ptBsdfSample,
+  ptFrComplex,
   ptFrDielectric,
   ptGgxD,
   ptGgxG,
@@ -77,6 +79,12 @@ export interface PtLayeredParams {
   thickness: number;
   /** Cosine-weighted average Fresnel reflectance of the interface seen from inside (`ptInternalReflectance(ior)`); `albedoBase: 'internal'` only. */
   internalReflectance: number;
+  /**
+   * P2.23: a GGX conductor as the bottom layer instead of the Lambert base (pbrt `coatedconductor`). `eta`/`k` are already relative to the
+   * coat medium (pbrt divides the conductor's by the interface eta; `ptLayeredCoatedConductor` does), `alpha` is the conductor's isotropic
+   * GGX alpha. `baseColor` is then unused.
+   */
+  baseConductor?: { eta: PtVec3; k: PtVec3; alpha: number };
 }
 
 export interface PtLayeredOptions extends PtBsdfOptions {
@@ -102,6 +110,11 @@ export interface PtLayeredOptions extends PtBsdfOptions {
    * next-event estimate (weight 1): `f` and the sampler agree. DIVERGES V58.
    */
   exitMis?: 'pbrt' | 'none';
+  /**
+   * WGSL only (the CPU twin always has it): compile the conductor bottom layer (`baseConductor`, P2.23 coat over a metal) into the kernel.
+   * Default false: a scene without coated metals keeps the kernel text and size.
+   */
+  conductorBase?: boolean;
   /** Stochastic: 32-bit seed mixed into the hash that drives every walk (the caller varies it per pixel/frame). */
   seed?: number;
 }
@@ -117,6 +130,26 @@ export function ptLayered(baseColor: PtVec3, ior: number, roughness: number, ext
     specularColor: extra.specularColor ?? [1, 1, 1],
     thickness: extra.thickness ?? 0.01,
     internalReflectance: ptInternalReflectance(ior),
+  };
+}
+
+/**
+ * P2.23: coat over a conductor (OpenPBR `coat_weight` over `base_metalness` 1; pbrt `coatedconductor`). `eta`/`k` are the conductor's complex
+ * IOR in air; like pbrt they are divided by the coat IOR (the conductor sits under the coat, not under air). `baseRoughness` and
+ * `coatRoughness` are perceptual (alpha = roughness^2). The specular weight/colour scale is 1 (OpenPBR's applies to the dielectric base only).
+ */
+export function ptLayeredCoatedConductor(eta: PtVec3, k: PtVec3, baseRoughness: number, coatIor: number, coatRoughness: number, extra: Partial<Pick<PtLayeredParams, 'thickness'>> = {}): PtLayeredParams {
+  const d = (v: PtVec3): PtVec3 => [v[0] / coatIor, v[1] / coatIor, v[2] / coatIor];
+  const a = coatRoughness * coatRoughness;
+  return {
+    baseColor: ZERO3,
+    ior: coatIor,
+    alpha: [a, a],
+    specularWeight: 1,
+    specularColor: [1, 1, 1],
+    thickness: extra.thickness ?? 0.01,
+    internalReflectance: 0,
+    baseConductor: { eta: d(eta), k: d(k), alpha: baseRoughness * baseRoughness },
   };
 }
 
@@ -151,7 +184,14 @@ function specScale(p: PtLayeredParams): PtVec3 {
 }
 
 function baseParams(p: PtLayeredParams): PtBsdfParams {
+  const c = p.baseConductor;
+  if (c) return { kind: PT_BSDF_CONDUCTOR, reflectance: ZERO3, eta: c.eta, k: c.k, alpha: [c.alpha, c.alpha], ior: 1 };
   return { kind: PT_BSDF_DIFFUSE, reflectance: p.baseColor, eta: ZERO3, k: ZERO3, alpha: [0, 0], ior: 1 };
+}
+
+/** True when the bottom layer is a delta lobe (a smooth conductor; the Lambert base never is). */
+export function ptLayeredSmoothBase(p: PtLayeredParams): boolean {
+  return !!p.baseConductor && ptIsSmooth([p.baseConductor.alpha, p.baseConductor.alpha]);
 }
 
 /** True when the dielectric interface is a delta lobe (smooth or eta = 1): the specular reflection is sampled, never evaluated. */
@@ -330,6 +370,7 @@ function stochasticF(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayeredO
   const thickness = Math.max(p.thickness, PT_LAYER_MIN_THICKNESS);
   const base = baseParams(p);
   const topSpec = topIsSpecular(top);
+  const baseSpec = ptLayeredSmoothBase(p);
   const pbrtMis = (o.exitMis ?? 'pbrt') === 'pbrt';
   const exitZ = thickness; // reflection: the walk leaves through the top interface
   let f: PtVec3 = scale3(topEval(top, wo, wi, radiance, PT_LAYER_ALL).f, nSamples);
@@ -357,22 +398,24 @@ function stochasticF(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayeredO
         beta = mul3(beta, scale3(bs.f, Math.abs(bs.wi[2]) / bs.pdf));
         w = bs.wi;
       } else {
-        // at the base: next-event estimate through the presampled wis direction
-        const nwi = neg(wis.wi);
-        const fb = ptBsdfEval(base, neg(w), nwi);
-        let wt = 1;
-        if (!topSpec) wt = pbrtMis ? powerHeuristic(wis.pdf, fb.pdf) : 1;
-        f = [0, 1, 2].map((c) => (f[c] as number) + (beta[c] as number) * (fb.f[c] as number) * Math.abs(wis.wi[2]) * wt * tr(thickness, wis.wi) * ((wis.f[c] as number) / wis.pdf)) as unknown as PtVec3;
+        // at the base: next-event estimate through the presampled wis direction (a delta base has none: pbrt skips it)
+        if (!baseSpec) {
+          const nwi = neg(wis.wi);
+          const fb = ptBsdfEval(base, neg(w), nwi);
+          let wt = 1;
+          if (!topSpec) wt = pbrtMis ? powerHeuristic(wis.pdf, fb.pdf) : 1;
+          f = [0, 1, 2].map((c) => (f[c] as number) + (beta[c] as number) * (fb.f[c] as number) * Math.abs(wis.wi[2]) * wt * tr(thickness, wis.wi) * ((wis.f[c] as number) / wis.pdf)) as unknown as PtVec3;
+        }
         const bs = ptBsdfSample(base, neg(w), [rng.next(), rng.next(), rng.next()]);
         if (bs.flags === 0 || isBlack(bs.f) || bs.pdf === 0 || bs.wi[2] === 0) break;
         beta = mul3(beta, scale3(bs.f, Math.abs(bs.wi[2]) / bs.pdf));
         w = bs.wi;
-        if (!topSpec && pbrtMis) {
-          // next-event estimate along the base's own sample, through the top interface
+        if (!topSpec && (pbrtMis || baseSpec)) {
+          // next-event estimate along the base's own sample, through the top interface (the only strategy for a delta base)
           const fe = topEval(top, neg(w), wi, radiance, PT_LAYER_ALL).f;
           if (!isBlack(fe)) {
             const exitPdf = topEval(top, neg(w), wi, radiance, PT_LAYER_TRANSMISSION).pdf;
-            const wt2 = powerHeuristic(bs.pdf, exitPdf);
+            const wt2 = baseSpec ? 1 : powerHeuristic(bs.pdf, exitPdf);
             const k = tr(thickness, bs.wi) * wt2;
             f = [0, 1, 2].map((c) => (f[c] as number) + (beta[c] as number) * k * (fe[c] as number)) as unknown as PtVec3;
           }
@@ -456,6 +499,7 @@ function stochasticPdf(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayere
   // The opaque base transmits nothing, so the transmission (TT) term of pbrt's estimate is always 0: only TRT remains.
   if (same) {
     const topSpec = topIsSpecular(top);
+    const baseSpec = ptLayeredSmoothBase(p);
     for (let s = 0; s < nSamples; s++) {
       const wos = topSample(top, wo, rng.next(), rng.next(), rng.next(), radiance, PT_LAYER_TRANSMISSION, vndf);
       const wis = topSample(top, wi, rng.next(), rng.next(), rng.next(), !radiance, PT_LAYER_TRANSMISSION, vndf);
@@ -465,10 +509,12 @@ function stochasticPdf(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayere
       } else {
         const rs = ptBsdfSample(base, neg(wos.wi), [rng.next(), rng.next(), rng.next()]);
         if (ok(rs)) {
-          const rPdf = ptBsdfEval(base, neg(wos.wi), neg(wis.wi)).pdf;
-          pdfSum += powerHeuristic(wis.pdf, rPdf) * rPdf;
+          if (!baseSpec) {
+            const rPdf = ptBsdfEval(base, neg(wos.wi), neg(wis.wi)).pdf;
+            pdfSum += powerHeuristic(wis.pdf, rPdf) * rPdf;
+          }
           const tPdf = topEval(top, neg(rs.wi), wi, radiance, PT_LAYER_ALL).pdf;
-          pdfSum += powerHeuristic(rs.pdf, tPdf) * tPdf;
+          pdfSum += (baseSpec ? 1 : powerHeuristic(rs.pdf, tPdf)) * tPdf;
         }
       }
     }
@@ -515,7 +561,84 @@ function albedoMix(p: PtLayeredParams, mu: number, internal: boolean): Mix {
   return { keep, pS: eS + eB > 0 ? eS / (eS + eB) : 0 };
 }
 
+/**
+ * Coat over a conductor, albedo scaling (OpenPBR: `f = f_coat + (1 - E_coat(mu_o)) f_base`, base = the conductor with eta, k relative to the coat
+ * medium). Directional albedo of the bottom lobe for the lobe choice: its Fresnel reflectance at mu (the GGX loss is ignored; it is a
+ * probability, not a weight). `albedoBase: 'internal'` takes the spec's reciprocal alternative, `(1 - E(mu_o))(1 - E(mu_i))` (the exit transmission of the light leaving the metal). No refraction into the coat, no internal reflection, no roughening of the conductor by the coat (the spec's
+ * r'_B is not applied; pbrt has none); DIVERGES V73.
+ */
+/** Cosine of the angle inside the coat for the outside cosine `d` (Snell; the spec's mu_c). */
+function insideCos(ior: number, d: number): number {
+  return Math.sqrt(Math.max(0, 1 - (1 - d * d) / (ior * ior)));
+}
+
+/** The conductor's Fresnel at the angle INSIDE the coat (its eta and k are relative to the coat, so the outside angle would be wrong), per channel. */
+function condFresnel(p: PtLayeredParams, d: number): PtVec3 {
+  const c = p.baseConductor as NonNullable<PtLayeredParams['baseConductor']>;
+  const t = insideCos(p.ior, d);
+  return [ptFrComplex(t, c.eta[0], c.k[0]), ptFrComplex(t, c.eta[1], c.k[1]), ptFrComplex(t, c.eta[2], c.k[2])];
+}
+
+/** `ptBsdfEval`'s conductor uses F(|wo.wm|) with the outside angle; the albedo layering swaps it for the inside one: ratio per channel. */
+function condFresnelRatio(p: PtLayeredParams, d: number): PtVec3 {
+  const c = p.baseConductor as NonNullable<PtLayeredParams['baseConductor']>;
+  const now = condFresnel(p, d);
+  const was: PtVec3 = [ptFrComplex(d, c.eta[0], c.k[0]), ptFrComplex(d, c.eta[1], c.k[1]), ptFrComplex(d, c.eta[2], c.k[2])];
+  return [was[0] > 0 ? now[0] / was[0] : 1, was[1] > 0 ? now[1] / was[1] : 1, was[2] > 0 ? now[2] / was[2] : 1];
+}
+
+function condMix(p: PtLayeredParams, mu: number): Mix {
+  const keep = albedoKeep(p, mu);
+  const eS = avg([1 - keep[0], 1 - keep[1], 1 - keep[2]]);
+  const F = condFresnel(p, mu);
+  const eB = avg(mul3(F, keep));
+  return { keep, pS: eS + eB > 0 ? eS / (eS + eB) : 0 };
+}
+
+function condEval(p: PtLayeredParams, wo: PtVec3, wi: PtVec3, o: PtLayeredOptions): PtBsdfEval {
+  if (wo[2] === 0 || wi[2] <= 0) return { f: ZERO3, pdf: 0 };
+  const mix = condMix(p, wo[2]);
+  const m = ptBsdfEval(baseParams(p), wo, wi, o);
+  const spec = topEval(topOf(p), wo, wi, (o.transport ?? 'radiance') === 'radiance', PT_LAYER_REFLECTION);
+  let fm = mul3(m.f, mix.keep);
+  if (m.pdf > 0) {
+    const wx = wo[0] + wi[0];
+    const wy = wo[1] + wi[1];
+    const wz = wo[2] + wi[2];
+    fm = mul3(fm, condFresnelRatio(p, Math.abs((wo[0] * wx + wo[1] * wy + wo[2] * wz) / Math.hypot(wx, wy, wz))));
+    if (o.albedoBase === 'internal') fm = mul3(fm, albedoKeep(p, wi[2]));
+  }
+  return { f: [fm[0] + spec.f[0], fm[1] + spec.f[1], fm[2] + spec.f[2]], pdf: mix.pS * spec.pdf + (1 - mix.pS) * m.pdf };
+}
+
+function condSample(p: PtLayeredParams, wo: PtVec3, u: PtVec3, o: PtLayeredOptions): PtBsdfSample {
+  const mix = condMix(p, wo[2]);
+  const top = topOf(p);
+  if (u[0] < mix.pS) {
+    if (topIsSpecular(top)) {
+      const F = ptFrDielectric(wo[2], p.ior);
+      return { wi: [-wo[0], -wo[1], wo[2]], f: [F / wo[2], F / wo[2], F / wo[2]], pdf: mix.pS, flags: PT_FLAG_REFLECTION | PT_FLAG_DELTA, etap: 1 };
+    }
+    const s = topSample(top, wo, 0, u[1], u[2], (o.transport ?? 'radiance') === 'radiance', PT_LAYER_REFLECTION, o.vndf ?? 'standard');
+    if (s.flags === 0) return FAIL;
+    const e = condEval(p, wo, s.wi, o);
+    return e.pdf === 0 ? FAIL : { wi: s.wi, f: e.f, pdf: e.pdf, flags: PT_FLAG_REFLECTION, etap: 1 };
+  }
+  const bp = baseParams(p);
+  const d = ptBsdfSample(bp, wo, [0, u[1], u[2]], o);
+  if (d.flags === 0) return FAIL;
+  if (d.flags & PT_FLAG_DELTA) {
+    const f = mul3(mul3(d.f, mix.keep), condFresnelRatio(p, wo[2]));
+    return { wi: d.wi, f: o.albedoBase === 'internal' ? mul3(f, albedoKeep(p, d.wi[2])) : f, pdf: 1 - mix.pS, flags: d.flags, etap: 1 };
+  }
+  const e = condEval(p, wo, d.wi, o);
+  return e.pdf === 0 || isBlack(e.f) ? FAIL : { wi: d.wi, f: e.f, pdf: e.pdf, flags: PT_FLAG_REFLECTION, etap: 1 };
+}
+
 function albedoEval(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayeredOptions): PtBsdfEval {
+  if (p.baseConductor) {
+    return wo0[2] < 0 ? condEval(p, neg(wo0), neg(wi0), o) : condEval(p, wo0, wi0, o);
+  }
   let wo = wo0;
   let wi = wi0;
   if (wo[2] < 0) {
@@ -540,6 +663,10 @@ function albedoSample(p: PtLayeredParams, wo0: PtVec3, u: PtVec3, o: PtLayeredOp
     flip = true;
   }
   if (wo[2] === 0) return FAIL;
+  if (p.baseConductor) {
+    const s = condSample(p, wo, u, o);
+    return flip && s.flags !== 0 ? { ...s, wi: neg(s.wi) } : s;
+  }
   const mix = albedoMix(p, wo[2], o.albedoBase === 'internal');
   const top = topOf(p);
   const fix = (s: PtBsdfSample): PtBsdfSample => (flip && s.flags !== 0 ? { ...s, wi: neg(s.wi) } : s);

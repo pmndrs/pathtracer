@@ -1,0 +1,35 @@
+{
+  "scene": "MetalRoughSpheresNoTextures-grey-metal",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 19.98,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-uwRDtG/scene.xml bench/references/MetalRoughSpheresNoTextures-grey-metal/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 8,
+    "rrStartDepth": null,
+    "film": {
+      "width": 768,
+      "height": 192,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 9,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 19.78713083267212,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere)."
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T11:23:34.917Z"
+}

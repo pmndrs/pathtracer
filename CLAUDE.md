@@ -324,3 +324,23 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   Mitsuba (roughplastic vs coateddiffuse). Agreement between the renderers on class C spheres (specular 0.25) is not evidence: both use the same F0 hack.
   pbrt writes negative channels, count them (`negChannels`).
 - Region verdicts on a grid scene are contaminated by neighbours: spheres reflect and refract each other, so a class C (coverage) sphere skews the class A regions next to it (IORTestGrid: whole-image relMSE 1.6e-2, class A spheres off by up to 3%). Gate on a variant with the approximated materials dropped (`IORTestGrid-notex-A`: 2.7e-4, within the 3.1e-4 floor).
+- Competitor glb (P2.31): `export-scenes.ts` now writes `openpbr` materials as core + `KHR_materials_*` (`bench/exporters/gltf-openpbr.ts`, the inverse of
+  `gltfMaterialToOpenPbr`), no longer black placeholders; re-run it, a stale `.json` hash only covers the SceneDesc, not the exporter. tgpt and mutracer
+  skip `openpbr` scenes unless `--force` (`force=1`): the coverage runs need it. `<scene>--no-<tag>` names (`tier1/ablations.ts`) resolve through `getScene`
+  and `export-scenes.ts`, so ablation variants run through every adapter without being registered.
+- Coverage matrix (P2.31) noise: tgpt and mutracer are deterministic (Sobol), so full and stripped renders share one noise realisation; unchanged regions
+  cancel exactly in relMSE(full, stripped). The matrix therefore estimates each renderer's noise as relMSE(full N spp, own N/2 snapshot) (equals the
+  variance of the N spp image for independent halves) and needs ablation >= 10x that. Small features in a big image are diluted (whole-image relMSE has
+  no material mask): pick scenes where the feature covers much of the image. `bench/adapters/tier1-matrix.ts` imports no page code (tests import it).
+- Coat over a metal (P2.23): `coatedconductor` divides the conductor's eta and k by the interface eta, so the base is evaluated INSIDE the coat.
+  Layered albedo scaling must therefore take the metal Fresnel at the refracted angle (`mu_c`), not the outside one (the outside angle read +13..28%
+  bright). The albedo path overestimates the walk by 7-11% on a rough coated metal; the walk matches pbrt within ~4% (R) / 1% (G, B).
+- The conductor-base WGSL (`conductorBase`) is emitted only when the material table has a coated metal (`features.coatedMetal`, key present only
+  when true so `ptMaterialFeatures` of other tables keeps its shape). `bench/size-snapshot.ts` now includes openpbr layered variants (plain, internal,
+  stochastic, each with and without coated metals): run it before and after touching `layered*.ts` / `adapter.ts` and cmp.
+- OpenPBR 1.1.2 layering (checked against the spec text): `f_coat + (1 - E_coat(w_o)) f_sub`; the plastic +33% over pbrt is the spec's behaviour (it adds
+  `coat_darkening` to compensate). `specular_weight` is an IOR modulation there (F90 stays 1); we scale F at both ends (V74).
+- A glTF-name `replace` on a Tier 1 sidecar (`dropMaterials` / `replace`) is how a metal-base variant of a Khronos scene is made
+  (`ClearCoatTest-notex-metal`); `node bench/references/render.ts --scenes <n> --renderers pbrt --spp 4096` renders its pbrt reference in ~8 min on a loaded Mac
+  (`--renderers mitsuba --coverage` for the Disney clearcoat stand-in).
+

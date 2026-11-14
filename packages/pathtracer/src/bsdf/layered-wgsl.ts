@@ -33,6 +33,7 @@ export function ptLayeredWgsl(options: PtLayeredOptions = {}): string {
   const pbrtMis = (options.exitMis ?? 'pbrt') === 'pbrt';
   const internal = options.albedoBase === 'internal';
   const n = PT_LAYERED_LUT_N;
+  const cond = options.conductorBase === true;
   return /* wgsl */ `
 const PT_FLAG_PROPORTIONAL: u32 = 8u;
 const PT_LAYER_REFLECTION: u32 = 1u;
@@ -51,7 +52,11 @@ struct PtLayeredParams {
   specularWeight: f32,
   specularColor: vec3f,
   thickness: f32,
-  internalReflectance: f32,
+  internalReflectance: f32,${cond ? `
+  cEta: vec3f,
+  cK: vec3f,
+  cAlpha: f32,
+  isCond: bool,` : ''}
 }
 struct PtTop { ior: f32, alpha: vec2f, s: vec3f }
 
@@ -59,7 +64,16 @@ fn ptAvg(v: vec3f) -> f32 { return (v.x + v.y + v.z) / 3.0; }
 fn ptIsBlack(v: vec3f) -> bool { return v.x == 0.0 && v.y == 0.0 && v.z == 0.0; }
 fn ptLayerTop(p: PtLayeredParams) -> PtTop { return PtTop(p.ior, p.alpha, p.specularColor * p.specularWeight); }
 fn ptLayerBase(p: PtLayeredParams) -> PtBsdfParams {
-  var b: PtBsdfParams;
+  var b: PtBsdfParams;${cond ? `
+  if (p.isCond) {
+    b.kind = PT_BSDF_CONDUCTOR;
+    b.ior = 1.0;
+    b.alpha = vec2f(p.cAlpha);
+    b.reflectance = vec3f(0.0);
+    b.eta = p.cEta;
+    b.k = p.cK;
+    return b;
+  }` : ''}
   b.kind = PT_BSDF_DIFFUSE;
   b.ior = 1.0;
   b.alpha = vec2f(0.0);
@@ -74,16 +88,17 @@ fn ptLayerR(t: PtTop, F: f32) -> vec3f {
   if (F >= 1.0) { return vec3f(1.0); }
   return min(t.s * F, vec3f(1.0));
 }
-fn ptLayerOk(s: PtBsdfSample) -> bool {
+${cond ? `fn ptLayerSmoothBase(p: PtLayeredParams) -> bool { return p.isCond && ptIsSmooth(vec2f(p.cAlpha)); }
+` : ''}fn ptLayerOk(s: PtBsdfSample) -> bool {
   return s.flags != 0u && !ptIsBlack(s.f) && s.pdf > 0.0 && s.wi.z != 0.0;
 }
 fn ptLayerFail() -> PtBsdfSample { return PtBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, 0u, 1.0); }
 
-${stochastic ? stochasticWgsl() : albedoWgsl(n)}
+${stochastic ? stochasticWgsl(cond) : albedoWgsl(n, cond)}
 `;
 }
 
-function stochasticWgsl(): string {
+function stochasticWgsl(cond: boolean): string {
   return /* wgsl */ `
 // The dielectric interface with restricted sampling (pbrt DielectricBxDF + BxDFReflTransFlags), chromatic Fresnel scale.
 fn ptTopSample(t: PtTop, wo: vec3f, uc: f32, u0: f32, u1: f32, radiance: bool, flags: u32) -> PtBsdfSample {
@@ -209,7 +224,8 @@ fn ptLayeredF(p: PtLayeredParams, wo0: vec3f, wi0: vec3f, seed: u32) -> vec3f {
   let top = ptLayerTop(p);
   let base = ptLayerBase(p);
   let thickness = max(p.thickness, PT_LAYER_MIN_THICKNESS);
-  let topSpec = ptTopIsSpecular(top);
+  let topSpec = ptTopIsSpecular(top);${cond ? `
+  let baseSpec = ptLayerSmoothBase(p);` : ''}
   let exitZ = thickness;
   var f = f32(PT_LAYER_NSAMPLES) * ptTopEval(top, wo, wi, PT_TRANSPORT_RADIANCE, PT_LAYER_ALL).f;
   var rs = ptHashSeed(seed, wo, wi);
@@ -245,23 +261,30 @@ fn ptLayeredF(p: PtLayeredParams, wo0: vec3f, wi0: vec3f, seed: u32) -> vec3f {
         beta = beta * (bs.f * (abs(bs.wi.z) / bs.pdf));
         w = bs.wi;
       } else {
-        let nwi = -wis.wi;
+${cond ? `        if (!baseSpec) {
+          let nwi = -wis.wi;
+          let fb = ptBsdfEval(base, -w, nwi);
+          var wt = 1.0;
+          if (!topSpec && PT_LAYER_MIS_PBRT) { wt = ptPowerHeuristic(wis.pdf, fb.pdf); }
+          f = f + beta * fb.f * abs(wis.wi.z) * wt * ptLayerTr(thickness, wis.wi) * (wis.f / wis.pdf);
+        }
+` : `        let nwi = -wis.wi;
         let fb = ptBsdfEval(base, -w, nwi);
         var wt = 1.0;
         if (!topSpec && PT_LAYER_MIS_PBRT) { wt = ptPowerHeuristic(wis.pdf, fb.pdf); }
         f = f + beta * fb.f * abs(wis.wi.z) * wt * ptLayerTr(thickness, wis.wi) * (wis.f / wis.pdf);
-        let d0 = ptRngNext(&rs);
+`}        let d0 = ptRngNext(&rs);
         let d1 = ptRngNext(&rs);
         let d2 = ptRngNext(&rs);
         let bs = ptBsdfSample(base, -w, vec3f(d0, d1, d2));
         if (bs.flags == 0u || ptIsBlack(bs.f) || bs.pdf == 0.0 || bs.wi.z == 0.0) { break; }
         beta = beta * (bs.f * (abs(bs.wi.z) / bs.pdf));
         w = bs.wi;
-        if (!topSpec && PT_LAYER_MIS_PBRT) {
+        if (${cond ? '!topSpec && (PT_LAYER_MIS_PBRT || baseSpec)' : '!topSpec && PT_LAYER_MIS_PBRT'}) {
           let fe = ptTopEval(top, -w, wi, PT_TRANSPORT_RADIANCE, PT_LAYER_ALL).f;
           if (!ptIsBlack(fe)) {
             let exitPdf = ptTopEval(top, -w, wi, PT_TRANSPORT_RADIANCE, PT_LAYER_TRANSMISSION).pdf;
-            let wt2 = ptPowerHeuristic(bs.pdf, exitPdf);
+            let wt2 = ${cond ? 'select(ptPowerHeuristic(bs.pdf, exitPdf), 1.0, baseSpec)' : 'ptPowerHeuristic(bs.pdf, exitPdf)'};
             f = f + beta * (ptLayerTr(thickness, bs.wi) * wt2) * fe;
           }
         }
@@ -342,7 +365,8 @@ fn ptLayeredPdf(p: PtLayeredParams, wo0: vec3f, wi0: vec3f, seed: u32) -> f32 {
   var pdfSum = 0.0;
   if (same) {
     pdfSum = pdfSum + f32(PT_LAYER_NSAMPLES) * ptTopEval(top, wo, wi, PT_TRANSPORT_RADIANCE, PT_LAYER_REFLECTION).pdf;
-    let topSpec = ptTopIsSpecular(top);
+    let topSpec = ptTopIsSpecular(top);${cond ? `
+    let baseSpec = ptLayerSmoothBase(p);` : ''}
     for (var s = 0u; s < PT_LAYER_NSAMPLES; s++) {
       let a0 = ptRngNext(&rs);
       let a1 = ptRngNext(&rs);
@@ -361,11 +385,17 @@ fn ptLayeredPdf(p: PtLayeredParams, wo0: vec3f, wi0: vec3f, seed: u32) -> f32 {
         let c2 = ptRngNext(&rs);
         let rsm = ptBsdfSample(base, -wos.wi, vec3f(c0, c1, c2));
         if (ptLayerOk(rsm)) {
-          let rPdf = ptBsdfEval(base, -wos.wi, -wis.wi).pdf;
+${cond ? `          if (!baseSpec) {
+            let rPdf = ptBsdfEval(base, -wos.wi, -wis.wi).pdf;
+            pdfSum = pdfSum + ptPowerHeuristic(wis.pdf, rPdf) * rPdf;
+          }
+          let tPdf = ptTopEval(top, -rsm.wi, wi, PT_TRANSPORT_RADIANCE, PT_LAYER_ALL).pdf;
+          pdfSum = pdfSum + select(ptPowerHeuristic(rsm.pdf, tPdf), 1.0, baseSpec) * tPdf;
+` : `          let rPdf = ptBsdfEval(base, -wos.wi, -wis.wi).pdf;
           pdfSum = pdfSum + ptPowerHeuristic(wis.pdf, rPdf) * rPdf;
           let tPdf = ptTopEval(top, -rsm.wi, wi, PT_TRANSPORT_RADIANCE, PT_LAYER_ALL).pdf;
           pdfSum = pdfSum + ptPowerHeuristic(rsm.pdf, tPdf) * tPdf;
-        }
+`}        }
       }
     }
   }
@@ -378,9 +408,9 @@ fn ptLayeredEval(p: PtLayeredParams, wo: vec3f, wi: vec3f, seed: u32) -> PtBsdfE
 `;
 }
 
-function albedoWgsl(n: number): string {
+function albedoWgsl(n: number, cond: boolean): string {
   const lut = ptLayeredLut();
-  return /* wgsl */ `
+  const text = /* wgsl */ `
 // The interface's reflection lobe only (what the albedo layering needs; the walk's restricted-sampling pair is not emitted).
 // Same maths as ptTopEval / ptTopSample with flags = REFLECTION (layered.ts).
 fn ptTopReflEval(t: PtTop, wo: vec3f, wi: vec3f) -> PtBsdfEval {
@@ -498,6 +528,88 @@ fn ptLayeredSample(p: PtLayeredParams, wo0: vec3f, u: vec3f, seed: u32) -> PtBsd
   }
   if (flip) { s.wi = -s.wi; }
   if (s.flags == 0u || s.pdf == 0.0 || s.wi.z == 0.0 || ptIsBlack(s.f)) { return fail; }
+  return s;
+}
+`;
+  return cond ? condAlbedoWgsl(text) : text;
+}
+
+/**
+ * Coat over a conductor, albedo layering (layered.ts condEval/condSample): the Lambert-base functions are renamed `...D` and wrapped by
+ * dispatchers on `p.isCond`.
+ */
+function condAlbedoWgsl(text: string): string {
+  const renamed = text.replace(/ptLayeredEval\(/g, 'ptLayeredEvalD(').replace(/ptLayeredPdf\(/g, 'ptLayeredPdfD(').replace(/ptLayeredSample\(/g, 'ptLayeredSampleD(');
+  return /* wgsl */ `${renamed}
+fn ptInsideCos(ior: f32, d: f32) -> f32 { return sqrt(max(0.0, 1.0 - (1.0 - d * d) / (ior * ior))); }
+fn ptCondFresnelRatio(p: PtLayeredParams, d: f32) -> vec3f {
+  let now = ptFrComplex(ptInsideCos(p.ior, d), p.cEta, p.cK);
+  let was = ptFrComplex(d, p.cEta, p.cK);
+  return select(vec3f(1.0), now / was, was > vec3f(0.0));
+}
+fn ptCondMix(p: PtLayeredParams, mu: f32) -> PtLayerMix {
+  let keep = ptLayerKeep(p, mu);
+  let eS = ptAvg(vec3f(1.0) - keep);
+  let F = ptFrComplex(ptInsideCos(p.ior, mu), p.cEta, p.cK);
+  let eB = ptAvg(F * keep);
+  var pS = 0.0;
+  if (eS + eB > 0.0) { pS = eS / (eS + eB); }
+  return PtLayerMix(keep, pS);
+}
+fn ptCondEval(p: PtLayeredParams, wo: vec3f, wi: vec3f) -> PtBsdfEval {
+  if (wo.z == 0.0 || wi.z <= 0.0) { return PtBsdfEval(vec3f(0.0), 0.0); }
+  let lm = ptCondMix(p, wo.z);
+  let m = ptBsdfEval(ptLayerBase(p), wo, wi);
+  let spec = ptTopReflEval(ptLayerTop(p), wo, wi);
+  var fm = m.f * lm.keep;
+  if (m.pdf > 0.0) {
+    let wm = normalize(wo + wi);
+    fm = fm * ptCondFresnelRatio(p, abs(dot(wo, wm)));
+    if (PT_LAYER_BASE_INTERNAL) { fm = fm * ptLayerKeep(p, wi.z); }
+  }
+  return PtBsdfEval(fm + spec.f, lm.pS * spec.pdf + (1.0 - lm.pS) * m.pdf);
+}
+fn ptCondSample(p: PtLayeredParams, wo: vec3f, u: vec3f) -> PtBsdfSample {
+  let fail = ptLayerFail();
+  let lm = ptCondMix(p, wo.z);
+  let top = ptLayerTop(p);
+  if (u.x < lm.pS) {
+    if (ptTopIsSpecular(top)) {
+      let F = ptFrDielectric(wo.z, p.ior);
+      return PtBsdfSample(vec3f(-wo.x, -wo.y, wo.z), vec3f(F / wo.z), lm.pS, PT_FLAG_REFLECTION | PT_FLAG_DELTA, 1.0);
+    }
+    let t = ptTopReflSample(top, wo, u.y, u.z);
+    if (t.flags == 0u) { return fail; }
+    let e = ptCondEval(p, wo, t.wi);
+    if (e.pdf == 0.0) { return fail; }
+    return PtBsdfSample(t.wi, e.f, e.pdf, PT_FLAG_REFLECTION, 1.0);
+  }
+  let d = ptBsdfSample(ptLayerBase(p), wo, vec3f(0.0, u.y, u.z));
+  if (d.flags == 0u) { return fail; }
+  if ((d.flags & PT_FLAG_DELTA) != 0u) {
+    var fd = d.f * lm.keep * ptCondFresnelRatio(p, wo.z);
+    if (PT_LAYER_BASE_INTERNAL) { fd = fd * ptLayerKeep(p, d.wi.z); }
+    return PtBsdfSample(d.wi, fd, 1.0 - lm.pS, d.flags, 1.0);
+  }
+  let e = ptCondEval(p, wo, d.wi);
+  if (e.pdf == 0.0 || ptIsBlack(e.f)) { return fail; }
+  return PtBsdfSample(d.wi, e.f, e.pdf, PT_FLAG_REFLECTION, 1.0);
+}
+fn ptLayeredEval(p: PtLayeredParams, wo0: vec3f, wi0: vec3f, seed: u32) -> PtBsdfEval {
+  if (!p.isCond) { return ptLayeredEvalD(p, wo0, wi0, seed); }
+  if (wo0.z < 0.0) { return ptCondEval(p, -wo0, -wi0); }
+  return ptCondEval(p, wo0, wi0);
+}
+fn ptLayeredPdf(p: PtLayeredParams, wo: vec3f, wi: vec3f, seed: u32) -> f32 { return ptLayeredEval(p, wo, wi, seed).pdf; }
+fn ptLayeredSample(p: PtLayeredParams, wo0: vec3f, u: vec3f, seed: u32) -> PtBsdfSample {
+  if (!p.isCond) { return ptLayeredSampleD(p, wo0, u, seed); }
+  var wo = wo0;
+  var flip = false;
+  if (wo.z < 0.0) { wo = -wo; flip = true; }
+  if (wo.z == 0.0) { return ptLayerFail(); }
+  var s = ptCondSample(p, wo, u);
+  if (flip && s.flags != 0u) { s.wi = -s.wi; }
+  if (s.flags == 0u || s.pdf == 0.0 || s.wi.z == 0.0 || ptIsBlack(s.f)) { return ptLayerFail(); }
   return s;
 }
 `;

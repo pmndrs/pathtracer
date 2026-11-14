@@ -28,6 +28,10 @@
  *     base. A coat replaces the interface with (`coatIor`, `coatRoughness`, scale 1) and drops the base's own specular lobe, which is
  *     what the pbrt exporter writes (`coateddiffuse` with the coat as interface; DIVERGES V69). `coatWeight` is thresholded at 0.5.
  *  4. otherwise Lambert / black as above.
+ *
+ *  P2.23 (`features.coatedMetal`): a metal with `coatWeight > 0.5` and `coatIor != 1` becomes `PT_BSDF_LAYERED` with a conductor bottom layer
+ *  (pbrt `coatedconductor`): interface (`coatIor`, `coatRoughness`), conductor eta and k divided by `coatIor`, alpha `specularRoughness^2`.
+ *  Packing: `ior`/`alpha` = interface, `reflectance` = conductor eta', `eta` = conductor k', `k` = (thickness, conductor alpha, 1 = conductor).
  */
 import type { RtMaterial } from '@pmndrs/raytracer';
 import { PT_BSDF_BLACK, PT_BSDF_CONDUCTOR, PT_BSDF_DIELECTRIC, PT_BSDF_DIFFUSE, PT_BSDF_LAYERED, PT_BSDF_THIN, type PtBsdfParams, type PtVec3 } from './bsdf.ts';
@@ -121,6 +125,8 @@ export interface PtMaterialFeatures {
   layered: boolean;
   /** Some thick transmissive material has `transmissionDepth > 0`: Beer's law along the path inside the mesh. */
   medium: boolean;
+  /** P2.23: some metal has a coat (`coatWeight > 0.5`, `coatIor != 1`): the layered BSDF gets its conductor bottom layer (implies `layered`). Optional so older literals still type. */
+  coatedMetal?: boolean;
 }
 
 export interface PtMaterialOptions {
@@ -140,9 +146,13 @@ export const PT_NO_FEATURES: PtMaterialFeatures = { mix: false, thin: false, lay
  * costs kernel size). Mirrors the branches of `ptBsdfFromMaterial` with options.
  */
 export function ptMaterialFeatures(materials: readonly RtMaterial[]): PtMaterialFeatures {
-  const f = { mix: false, thin: false, layered: false, medium: false };
+  const f: PtMaterialFeatures = { mix: false, thin: false, layered: false, medium: false };
   for (const m of materials) {
     if (m.metalness > 0 && m.metalness < 1) f.mix = true;
+    if (m.metalness > 0 && m.coatWeight > 0.5 && m.coatIor !== 1) {
+      f.coatedMetal = true; // the key exists only when true: scenes without coated metals keep their feature object
+      f.layered = true;
+    }
     const dielectricEnd = m.metalness < 1;
     if (!dielectricEnd) continue;
     if (m.transmissionWeight > 0.5) {
@@ -179,6 +189,9 @@ export function ptMediumAfterTransmission(m: RtMaterial, woZ: number): PtVec3 {
 
 /** TS twin of the WGSL `ptLayeredOf`: the layered parameters packed in a `PT_BSDF_LAYERED` `PtBsdfParams`. */
 export function ptLayeredFromBsdf(p: PtBsdfParams): PtLayeredParams {
+  if (p.k[2] > 0.5) {
+    return { baseColor: [0, 0, 0], ior: p.ior, alpha: p.alpha, specularWeight: 1, specularColor: [1, 1, 1], thickness: p.k[0], internalReflectance: 0, baseConductor: { eta: p.reflectance, k: p.eta, alpha: p.k[1] } };
+  }
   return { baseColor: p.reflectance, ior: p.ior, alpha: p.alpha, specularWeight: 1, specularColor: p.eta, thickness: p.k[0], internalReflectance: p.k[1] };
 }
 
@@ -199,6 +212,16 @@ export function ptBsdfFromOpenPbr(m: RtMaterial, options: PtMaterialOptions, u: 
     } else {
       p.eta = [1, 1, 1];
       p.k = [0, 1, 2].map((i) => conductorKFromReflectance((m.baseColor[i] as number) * m.baseWeight)) as unknown as PtVec3;
+    }
+    if (f.coatedMetal && m.coatWeight > 0.5 && m.coatIor !== 1) {
+      const ci = m.coatIor;
+      const cr = m.coatRoughness * m.coatRoughness;
+      p.kind = PT_BSDF_LAYERED;
+      p.reflectance = [p.eta[0] / ci, p.eta[1] / ci, p.eta[2] / ci];
+      p.eta = [p.k[0] / ci, p.k[1] / ci, p.k[2] / ci];
+      p.ior = ci;
+      p.k = [options.layerThickness ?? PT_DEFAULT_LAYER_THICKNESS, a, 1];
+      p.alpha = [cr, cr];
     }
     return p;
   }
@@ -280,7 +303,16 @@ fn ptBsdfFromMaterial(m: RtMaterial, u: f32) -> PtBsdfParams {
             p.eta = vec3f(1.0);
             p.k = ptConductorKFromReflectance(m.baseColor * m.baseWeight);
         }
-        return p;
+${f.coatedMetal ? `        if (m.coatWeight > 0.5 && m.coatIor != 1.0) {
+            let cr = m.coatRoughness * m.coatRoughness;
+            p.kind = PT_BSDF_LAYERED;
+            p.reflectance = p.eta / m.coatIor;
+            p.eta = p.k / m.coatIor;
+            p.ior = m.coatIor;
+            p.k = vec3f(${num(thickness)}, a, 1.0);
+            p.alpha = vec2f(cr);
+        }
+` : ''}        return p;
     }
     if (m.transmissionWeight > 0.5) {
 ${f.thin ? `        if (m.thinWalled) {
@@ -321,13 +353,18 @@ ${f.layered ? `    let coat = m.coatWeight > 0.5;
  * by `ptBsdfEval/Sample`. The stochastic walk needs a seed: the integrator sets the private `ptLayerSeed` once per vertex (a hash of pixel,
  * sample and vertex); the walk mixes the directions in itself. `PtBsdfParams` is reused for the layered parameters (see `PT_BSDF_LAYERED`).
  */
-export function ptLayeredDispatchWgsl(): string {
+export function ptLayeredDispatchWgsl(coatedMetal = false): string {
   return /* wgsl */ `
 const PT_BSDF_LAYERED: u32 = 5u;
 var<private> ptLayerSeed: u32;
-fn ptLayeredOf(p: PtBsdfParams) -> PtLayeredParams {
+${coatedMetal ? `fn ptLayeredOf(p: PtBsdfParams) -> PtLayeredParams {
+    if (p.k.z > 0.5) {
+        return PtLayeredParams(vec3f(0.0), p.ior, p.alpha, 1.0, vec3f(1.0), p.k.x, 0.0, p.reflectance, p.eta, p.k.y, true);
+    }
+    return PtLayeredParams(p.reflectance, p.ior, p.alpha, 1.0, p.eta, p.k.x, p.k.y, vec3f(0.0), vec3f(0.0), 0.0, false);
+}` : `fn ptLayeredOf(p: PtBsdfParams) -> PtLayeredParams {
     return PtLayeredParams(p.reflectance, p.ior, p.alpha, 1.0, p.eta, p.k.x, p.k.y);
-}
+}`}
 fn ptEval(p: PtBsdfParams, wo: vec3f, wi: vec3f) -> PtBsdfEval {
     if (p.kind == PT_BSDF_LAYERED) {
         return ptLayeredEval(ptLayeredOf(p), wo, wi, ptLayerSeed);

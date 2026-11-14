@@ -43,6 +43,11 @@ export function goldenMaterials(g: GoldenFile): GltfDescMaterial[] {
 const SKY: EnvironmentDesc = { type: 'hdri', path: ENV_FILE, scale: 1, rotationYDeg: 180 };
 /** The factor-only stand-in for every textured backdrop. */
 const GREY: MaterialDesc = { type: 'diffuse', reflectance: [0.5, 0.5, 0.5] };
+/** Metal-base variants of the ClearCoatTest "Simple" spheres (P2.23): a rough gold-ish metal bare, and under the same clear coat (coat roughness 0.03, ior 1.5). */
+const GOLD: MaterialDesc = { type: 'openpbr', baseColor: [0.9, 0.6, 0.25], baseMetalness: 1, specularRoughness: 0.35 };
+const GOLD_COATED: MaterialDesc = { type: 'openpbr', baseColor: [0.9, 0.6, 0.25], baseMetalness: 1, specularRoughness: 0.35, coatWeight: 1, coatRoughness: 0.03, coatIor: 1.5 };
+
+const greyBase = (c: unknown): boolean => Array.isArray(c) && Math.abs((c[0] as number) - (c[2] as number)) < 1e-3;
 
 export interface Tier1GltfScene { golden: GoldenFile; model: GltfModelRef; sidecar: GltfSidecar; scene: SceneDesc }
 
@@ -95,6 +100,18 @@ const sidecars = {
     integrator: { maxDepth: 8 },
     environment: SKY,
   }),
+  // The class A gate layer of MetalRoughSpheresNoTextures: the seven grey pure-metal spheres (metalness 1, roughness 0..1; row y = 6, z = 0) alone, so no class B
+  // dielectric row or saturated gold sphere sits in the image (P2.31 coverage matrix: the whole-scene image is dominated by the 84 class B rows).
+  greyMetal: make(metalRough as GoldenFile, {
+    name: 'MetalRoughSpheresNoTextures-grey-metal',
+    purpose: 'MetalRoughSpheresNoTextures reduced to its seven grey pure-metal spheres (metalness 1, roughness 0..1) under the sky: reference class A, no class B row in the image. Tier 1 core metallic-roughness (P2.31).',
+    scale: 1000,
+    camera: { type: 'perspective', position: [3, 6, 8], target: [3, 6, 0], up: [0, 1, 0], yFovDeg: 16 },
+    film: { width: 768, height: 192, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    environment: SKY,
+    dropMaterials: (metalRough as GoldenFile).materials.filter((m) => !(m.openpbr['baseMetalness'] === 1 && greyBase(m.openpbr['baseColor']))).map((m) => m.i),
+  }),
   // 4 x 5 spheres (IOR 1.0..2.42 x specular 0.25 / 1 x black base T0 / white base T1) in front of a backdrop at z = -0.04.
   ior: make(ior as GoldenFile, {
     name: 'IORTestGrid-notex',
@@ -117,6 +134,17 @@ const sidecars = {
     dropMaterials: ['Text', 'Text Backdrop', 'IOR1.0_Black_R0_M0_T0_S0.25', 'IOR1.33_Black_R0_M0_T0_S0.25', 'IOR1.5_Black_R0_M0_T0_S0.25', 'IOR1.76_Black_R0_M0_T0_S0.25', 'IOR2.42_Black_R0_M0_T0_S0.25', 'IOR2.42_White_R0_M0_T1_S0.25', 'IOR1.76_White_R0_M0_T1_S0.25', 'IOR1.5_White_R0_M0_T1_S0.25', 'IOR1.33_White_R0_M0_T1_S0.25', 'IOR1.0_White_R0_M0_T1_S0.25'],
     replace: { Backdrop: GREY },
   }),
+  // Only the five black specularFactor 0.25 spheres (class C: coverage, no reference) in front of the backdrop: the specular < 1 feature fills the image (P2.31).
+  iorC: make(ior as GoldenFile, {
+    name: 'IORTestGrid-notex-C',
+    purpose: 'IORTestGrid-notex reduced to its five black opaque specularFactor 0.25 spheres (IOR 1.0-2.42): reference class C (coverage only), the feature is all there is to see. Tier 1 specular factor < 1 (P2.31).',
+    camera: { type: 'perspective', position: [0, 0, 1.4], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 640, height: 768, filter: 'box' },
+    integrator: { maxDepth: 16 },
+    environment: SKY,
+    dropMaterials: (ior as GoldenFile).materials.filter((m) => !/^IOR[\d.]+_Black_R0_M0_T0_S0\.25$/.test(m.name ?? '') && m.name !== 'Backdrop').map((m) => m.i),
+    replace: { Backdrop: GREY },
+  }),
   // The factor-only "Simple" row (base, coated, coat only); every other row uses clearcoat/roughness/normal textures. No backdrop in the file: spheres against the sky.
   clearcoat: make(clearcoat as GoldenFile, {
     name: 'ClearCoatTest-notex',
@@ -126,6 +154,17 @@ const sidecars = {
     integrator: { maxDepth: 8 },
     environment: SKY,
     dropMaterials: ['Partial_Base', 'Partial_Coated', 'Partial_Coating', 'RoughVariations_Base', 'RoughVariations_Coated', 'RoughVariations_Coating', 'BaseNorm_Base', 'BaseNorm_Coated', 'BaseNorm_Coating', 'CoatNorm_Base', 'CoatNorm_Coated', 'CoatNorm_Coating', 'SharedNorm_Base', 'SharedNorm_Coated', 'SharedNorm_Coating', 'LabelMaterial'],
+  }),
+  // The Simple row with the red dielectric base replaced by a rough gold-ish metal: base layer, coated (coat over a metal: pbrt coatedconductor), coat only.
+  clearcoatMetal: make(clearcoat as GoldenFile, {
+    name: 'ClearCoatTest-notex-metal',
+    purpose: 'ClearCoatTest-notex with the Simple row\'s base replaced by a rough gold-ish metal (roughness 0.35): bare metal, the same metal under a clear coat (coat roughness 0.03, ior 1.5; pbrt coatedconductor, Mitsuba has no equivalent), coat only. Tier 1 clearcoat over a metal base (P2.23).',
+    camera: { type: 'perspective', position: [0, 5.25, 5.2], target: [0, 5.25, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 1024, height: 384, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    environment: SKY,
+    dropMaterials: ['Partial_Base', 'Partial_Coated', 'Partial_Coating', 'RoughVariations_Base', 'RoughVariations_Coated', 'RoughVariations_Coating', 'BaseNorm_Base', 'BaseNorm_Coated', 'BaseNorm_Coating', 'CoatNorm_Base', 'CoatNorm_Coated', 'CoatNorm_Coating', 'SharedNorm_Base', 'SharedNorm_Coated', 'SharedNorm_Coating', 'LabelMaterial'],
+    replace: { Simple_Base: GOLD, Simple_Coated: GOLD_COATED },
   }),
   // 4 x 4 spheres sheenColor 0..1 x sheenRoughness 0..1 in front of a backdrop at z = -0.04.
   sheen: make(sheen as GoldenFile, {

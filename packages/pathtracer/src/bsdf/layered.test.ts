@@ -3,10 +3,11 @@ import { PT_FLAG_DELTA, PT_FLAG_REFLECTION, ptBsdfEval, type PtVec3 } from './bs
 import { ptBsdfWgsl } from './bsdf-wgsl.ts';
 import { dirFromAngles, rng } from './bsdf.testutil.ts';
 import { PT_LAYERED_LUT_N, ptDielectricAlbedoExact, ptDielectricF0, ptLayeredAlbedo, ptLayeredLut } from './layered-lut.ts';
-import { PT_FLAG_PROPORTIONAL, ptInternalReflectance, ptLayered, ptLayeredEval, ptLayeredPdf, ptLayeredSample, ptPcg, type PtLayeredOptions } from './layered.ts';
+import { PT_FLAG_PROPORTIONAL, ptInternalReflectance, ptLayered, ptLayeredCoatedConductor, ptLayeredEval, ptLayeredPdf, ptLayeredSample, ptPcg, type PtLayeredOptions } from './layered.ts';
 import { ptLayeredWgsl } from './layered-wgsl.ts';
 import { evalAlbedo, layeredQuadrature, meanF, sampleAlbedo } from './layered.testutil.ts';
 import { ptDielectric } from './materials.ts';
+import { ptFrComplex, ptFrDielectric as ptFrDielectricRef } from './bsdf.ts';
 
 const WHITE: PtVec3 = [1, 1, 1];
 const ALBEDO: PtLayeredOptions = { layering: 'albedo' };
@@ -389,5 +390,170 @@ describe('WGSL fragments', () => {
     // ptBsdfWgsl is a precondition: every name the fragment uses from it is declared there
     const base = ptBsdfWgsl();
     for (const n of ['ptFrDielectric', 'ptRefract', 'ptGgxSampleWm', 'ptGgxD', 'ptGgxG', 'ptGgxVisiblePdf', 'ptDielectricHalf', 'ptRoughAlpha', 'ptReflect', 'PT_TRANSPORT_RADIANCE']) expect(base).toContain(n);
+  });
+});
+
+// P2.23: clear coat over a conductor (pbrt coatedconductor).
+describe('coat over a conductor', () => {
+  // A white conductor: eta 1, k huge -> F = 1 at every angle (no absorption in the base), so only the coat's own loss remains.
+  const WHITE_K: PtVec3 = [1e4, 1e4, 1e4];
+  const ONE: PtVec3 = [1, 1, 1];
+  const wo = (deg: number): PtVec3 => dirFromAngles(deg, 0);
+  const COND_STOCH: PtLayeredOptions = { layering: 'stochastic', maxDepth: 200, exitMis: 'none' };
+
+  it('furnace, smooth coat over a smooth white conductor (stochastic, thickness 0): the sampler conserves energy exactly', () => {
+    const p = ptLayeredCoatedConductor(ONE, WHITE_K, 0, 1.5, 0, { thickness: 0 });
+    for (const th of [0, 40, 70]) {
+      const e = sampleAlbedo(p, wo(th), 20000, 3, COND_STOCH);
+      expect(e.mean[0]).toBeGreaterThan(0.995);
+      expect(e.mean[0]).toBeLessThan(1.005);
+    }
+  });
+
+  it('furnace, smooth coat over a rough white conductor: the loss is the conductor single-scatter loss only (< 10% at roughness 0.4)', () => {
+    const p = ptLayeredCoatedConductor(ONE, WHITE_K, 0.4, 1.5, 0, { thickness: 0 });
+    const e = sampleAlbedo(p, wo(30), 40000, 5, COND_STOCH);
+    expect(e.mean[0]).toBeGreaterThan(0.9);
+    expect(e.mean[0]).toBeLessThan(1.005);
+  });
+
+  it('furnace, rough coat (0.1) over a smooth white conductor: conserves to 1%', () => {
+    const p = ptLayeredCoatedConductor(ONE, WHITE_K, 0, 1.5, 0.1, { thickness: 0 });
+    const e = sampleAlbedo(p, wo(30), 40000, 7, COND_STOCH);
+    expect(e.mean[0]).toBeGreaterThan(0.985);
+    expect(e.mean[0]).toBeLessThan(1.01);
+  });
+
+  it('eval and sampler estimate the same albedo (rough coat over rough conductor, exitMis none): within 4 sigma and 2%', () => {
+    const p = ptLayeredCoatedConductor([0.2, 0.9, 1.1], [3.9, 2.4, 2.2], 0.4, 1.5, 0.15, { thickness: 0 });
+    const a = sampleAlbedo(p, wo(35), 60000, 11, COND_STOCH);
+    const b = evalAlbedo(p, wo(35), 60000, 13, COND_STOCH);
+    for (let c = 0; c < 3; c++) {
+      expect(Math.abs((a.mean[c] as number) - (b.mean[c] as number))).toBeLessThan(4 * Math.hypot(a.se[c] as number, b.se[c] as number) + 0.02 * (a.mean[c] as number));
+    }
+  });
+
+  it('limit: coat ior 1 is the bare metal (albedo layering exactly, stochastic within noise)', () => {
+    const eta: PtVec3 = [0.2, 0.9, 1.1];
+    const k: PtVec3 = [3.9, 2.4, 2.2];
+    const bare = { kind: 1, reflectance: [0, 0, 0] as PtVec3, eta, k, alpha: [0.16, 0.16] as [number, number], ior: 1 };
+    const p = ptLayeredCoatedConductor(eta, k, 0.4, 1, 0.1, { thickness: 0 });
+    const wi = dirFromAngles(30, 140);
+    const m = ptBsdfEval(bare, wo(40), wi);
+    const e = ptLayeredEval(p, wo(40), wi, ALBEDO);
+    for (let c = 0; c < 3; c++) expect(e.f[c]).toBeCloseTo(m.f[c] as number, 10);
+    expect(e.pdf).toBeCloseTo(m.pdf, 10);
+    const q = ptLayeredEval(p, wo(40), wi, { ...COND_STOCH, nSamples: 4 });
+    const mean = meanF(p, wo(40), wi, 400, COND_STOCH).mean;
+    expect(q.f[0]).toBeGreaterThanOrEqual(0);
+    for (let c = 0; c < 3; c++) expect(Math.abs((mean[c] as number) - (m.f[c] as number))).toBeLessThan(0.02 * (m.f[c] as number) + 1e-6);
+  });
+
+  it('limit: a black-body coat (conductor absent, k = 0, eta = coat ior) leaves only the coat reflection in the albedo layering', () => {
+    // eta = coat ior relative to the coat => conductor eta' = 1, k' = 0: no reflection at all.
+    const p = ptLayeredCoatedConductor([1.5, 1.5, 1.5], [0, 0, 0], 0.3, 1.5, 0.3, { thickness: 0 });
+    const q = layeredQuadrature(p, wo(30), ALBEDO, 200, 180);
+    const black = layeredQuadrature(ptLayered([0, 0, 0], 1.5, 0.3), wo(30), ALBEDO, 200, 180);
+    for (let c = 0; c < 3; c++) expect(q.albedo[c]).toBeCloseTo(black.albedo[c] as number, 6);
+  });
+
+  it('albedo layering: a white conductor under a smooth coat reflects 1 (F(mu) + (1 - F(mu)) 1), the pdf integrates to 1 with a rough base', () => {
+    const p = ptLayeredCoatedConductor(ONE, WHITE_K, 0.3, 1.5, 0.3, { thickness: 0 });
+    const q = layeredQuadrature(p, wo(30), ALBEDO, 300, 240);
+    // the rough conductor loses a little to its own single scattering; the table error is 0.02
+    expect(q.albedo[0]).toBeGreaterThan(0.9);
+    expect(q.albedo[0]).toBeLessThan(1.02);
+    expect(q.pdf).toBeGreaterThan(0.85);
+    expect(q.pdf).toBeLessThan(1.02);
+  });
+
+  it('albedo layering: sample f and pdf equal eval at the sampled direction (rough/rough); a smooth/smooth stack gives two delta lobes', () => {
+    const p = ptLayeredCoatedConductor([0.2, 0.9, 1.1], [3.9, 2.4, 2.2], 0.4, 1.5, 0.2);
+    const r = rng(21);
+    for (let i = 0; i < 200; i++) {
+      const s = ptLayeredSample(p, wo(35), [r(), r(), r()], ALBEDO);
+      if (s.flags === 0) continue;
+      const e = ptLayeredEval(p, wo(35), s.wi, ALBEDO);
+      expect(s.f[1]).toBeCloseTo(e.f[1] as number, 6);
+      expect(s.pdf).toBeCloseTo(e.pdf, 6);
+    }
+    const sm = ptLayeredCoatedConductor([0.2, 0.9, 1.1], [3.9, 2.4, 2.2], 0, 1.5, 0);
+    let delta = 0;
+    for (let i = 0; i < 100; i++) {
+      const s = ptLayeredSample(sm, wo(35), [r(), r(), r()], ALBEDO);
+      if (s.flags & PT_FLAG_DELTA) delta++;
+    }
+    expect(delta).toBe(100);
+  });
+
+  it('albedo layering evaluates the conductor Fresnel at the angle inside the coat (spec mu_c), eta and k relative to the coat', () => {
+    const eta: PtVec3 = [0.2, 0.9, 1.1];
+    const k: PtVec3 = [3.9, 2.4, 2.2];
+    const p = ptLayeredCoatedConductor(eta, k, 0, 1.5, 0);
+    const o = wo(50);
+    const s = ptLayeredSample(p, o, [0.999, 0.5, 0.5], ALBEDO); // u0 above pS: the delta metal lobe
+    expect(s.flags & PT_FLAG_DELTA).toBeTruthy();
+    const c = o[2];
+    const ct = Math.sqrt(1 - (1 - c * c) / 2.25);
+    for (let ch = 0; ch < 3; ch++) {
+      const want = ((1 - ptFrDielectricRef(c, 1.5)) * ptFrComplex(ct, (eta[ch] as number) / 1.5, (k[ch] as number) / 1.5)) / c;
+      expect(s.f[ch]).toBeCloseTo(want, 9);
+    }
+  });
+
+  it('stochastic reciprocity in expectation (rough/rough, exitMis none): E[f(wo, wi)] = E[f(wi, wo)] within 4 sigma', () => {
+    const p = ptLayeredCoatedConductor([0.2, 0.9, 1.1], [3.9, 2.4, 2.2], 0.45, 1.5, 0.3);
+    const a = wo(30);
+    const b = dirFromAngles(55, 120);
+    const f1 = meanF(p, a, b, 4000, { ...COND_STOCH, nSamples: 4 });
+    const f2 = meanF(p, b, a, 4000, { ...COND_STOCH, nSamples: 4 });
+    for (let c = 0; c < 3; c++) expect(Math.abs((f1.mean[c] as number) - (f2.mean[c] as number))).toBeLessThan(4 * Math.hypot(f1.se[c] as number, f2.se[c] as number));
+  });
+
+  it('two-sided: from below the stack looks the same with the directions negated', () => {
+    const p = ptLayeredCoatedConductor([0.2, 0.9, 1.1], [3.9, 2.4, 2.2], 0.4, 1.5, 0.2);
+    const a = ptLayeredEval(p, wo(35), dirFromAngles(20, 70), ALBEDO);
+    const b = ptLayeredEval(p, [-wo(35)[0], -wo(35)[1], -wo(35)[2]], [-dirFromAngles(20, 70)[0], -dirFromAngles(20, 70)[1], -dirFromAngles(20, 70)[2]], ALBEDO);
+    expect(b.f[0]).toBeCloseTo(a.f[0] as number, 10);
+  });
+
+  it('WGSL: the conductor code is emitted only on request; without it the fragment text is unchanged', () => {
+    for (const layering of ['albedo', 'stochastic'] as const) {
+      const plain = ptLayeredWgsl({ layering });
+      const cond = ptLayeredWgsl({ layering, conductorBase: true });
+      expect(plain).not.toContain('isCond');
+      expect(cond).toContain('isCond');
+      expect(cond.length).toBeGreaterThan(plain.length);
+    }
+  });
+
+  it('PT_FLAG_REFLECTION flags the rough albedo samples', () => {
+    const p = ptLayeredCoatedConductor(ONE, WHITE_K, 0.4, 1.5, 0.3);
+    const s = ptLayeredSample(p, wo(30), [0.9, 0.3, 0.6], ALBEDO);
+    expect(s.flags & PT_FLAG_REFLECTION).toBeTruthy();
+  });
+});
+
+// OpenPBR 1.1.2, "Layering": f_layer = f_coat + (1 - E_coat(w_o)) f_sub (verified against the spec text, DIVERGES V57; the spec's own
+// alternative for a Lambertian base is the reciprocal (1 - E(w_i))(1 - E(w_o)) form, our albedoBase 'internal' adds the internal reflection on top).
+describe('OpenPBR albedo scaling formula (spec 1.1.2)', () => {
+  it('smooth interface: the base is exactly (1 - F(w_o)) base / pi, the specular part is the delta lobe (no eval)', () => {
+    const p = ptLayered([0.6, 0.3, 0.2], 1.5, 0);
+    for (const th of [0, 30, 60, 80]) {
+      const wo = dirFromAngles(th, 0);
+      const e = ptLayeredEval(p, wo, dirFromAngles(40, 120), ALBEDO);
+      const F = ptFrDielectricRef(wo[2], 1.5);
+      for (let c = 0; c < 3; c++) expect(e.f[c]).toBeCloseTo(((p.baseColor[c] as number) * (1 - F)) / Math.PI, 12);
+    }
+  });
+
+  it('rough interface: f = f_coat + (1 - E_coat) f_sub with E_coat the table albedo at w_o', () => {
+    const p = ptLayered([0.6, 0.3, 0.2], 1.5, 0.3);
+    const wo = dirFromAngles(50, 0);
+    const wi = dirFromAngles(35, 100);
+    const e = ptLayeredEval(p, wo, wi, ALBEDO);
+    const coat = ptLayeredEval(ptLayered([0, 0, 0], 1.5, 0.3), wo, wi, ALBEDO).f;
+    const E = ptLayeredAlbedo(ptDielectricF0(1.5), wo[2], 0.3);
+    for (let c = 0; c < 3; c++) expect(e.f[c]).toBeCloseTo((coat[c] as number) + ((p.baseColor[c] as number) * (1 - E)) / Math.PI, 12);
   });
 });

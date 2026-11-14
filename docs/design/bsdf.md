@@ -91,6 +91,27 @@ Table accuracy: E vs the exact-Fresnel albedo, max |dE| 0.019 at ior 1.5 (the ta
 Schlick's: Schlick was 0.035 off), 0.030-0.044 over ior 1.33-2.4; below ior ~1.3 it overestimates E at grazing (0.17 at ior 1.1, mu 0.05),
 which loses energy, never adds it. A 3D table (ior axis) would fix that for 4x the numbers.
 
+### Coat over a conductor (P2.23)
+
+`ptLayeredCoatedConductor(eta, k, baseRoughness, coatIor, coatRoughness)` = pbrt `coatedconductor`: the same layered BSDF with a GGX conductor
+as the bottom layer (`PtLayeredParams.baseConductor { eta, k, alpha }`, eta and k already divided by the coat IOR as pbrt does). In the megakernel
+the adapter produces it for a metal with `coatWeight > 0.5` and `coatIor != 1` (`features.coatedMetal`, packing in `adapter.ts`); the WGSL
+(`ptLayeredWgsl({ conductorBase: true })`) exists only then.
+
+- `stochastic`: pbrt's walk, bottom = conductor. A smooth (delta) bottom has no next-event estimate through `wis`; the exit estimate along the
+  bottom's own sample takes weight 1 (also with `exitMis: 'none'`); the TRT pdf term loses the `rPdf` part. Furnace: a white conductor (eta 1, k 1e4)
+  under a smooth coat reads 1.000 at 0, 40 and 70 degrees (the walk conserves; the conductor's Fresnel is 1); rough 0.4 base 0.917 (the conductor's
+  single-scatter loss, compounded by the walk's bounces); eval and sampler agree within 2%.
+- `albedo` (cheap): `f = f_coat + (1 - E_coat(mu_o)) f_metal`, the OpenPBR layering applied to a metal. The metal's Fresnel is evaluated at the angle
+  inside the coat (spec `mu_c`), its eta and k relative to the coat medium (outside angle: +13..28% on the test sphere). `albedoBase: 'internal'`
+  also scales by `1 - E(mu_i)` (the spec's reciprocal alternative). Lobe choice by `E_coat` against the metal's Fresnel at mu_o. Delta lobes (smooth
+  coat, smooth metal) are sampled only.
+- Quality, vs pbrt `coatedconductor` on a gold-ish rough metal (0.35) under a smooth coat, directional albedo (coat reflection included):
+  albedo overestimates the walk by 1-10% (0-30 degrees) and up to 22% in the dark channel at 60 degrees; at 80 degrees it is within 1% to 8%. Rendered
+  coated sphere (ClearCoatTest-notex-metal, 1024 spp ours): stochastic +4.1 / -0.3 / +1.3% (R, G, B) of pbrt, albedo internal +6.6 / +7.6 / +10.8%,
+  albedo +13 / +13 / +16%. Use `stochastic` for coated metals in reference mode, `albedo + internal` in the cheap mode.
+- Cost: kernel +2.5 KB albedo / +0.8 KB stochastic with a coated metal; none without (byte-identical kernels).
+
 ### White furnace (white base, ior 1.5, thickness 0; albedo openpbr / albedo internal / stochastic sampler, depth 200)
 
 | roughness | wo 0 deg | 60 deg | 80 deg |

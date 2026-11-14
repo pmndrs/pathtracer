@@ -8,6 +8,8 @@
  *     (mean of f pi over cosine-distributed wi), GPU against CPU, tolerance 5 combined standard errors + 2%. Two module
  *     variants (maxDepth 100 / exitMis none, and maxDepth 10 / nSamples 2 / exitMis pbrt). A white base with thickness 0 must read
  *     near 1 on the GPU by itself.
+ *  2b. coat over a conductor (P2.23, `conductorBase: true`): the same two comparisons (albedo per case, stochastic per-case means) for
+ *      `ptLayeredCoatedConductor` stacks (smooth/rough coat over smooth/rough metals, complex IOR relative to the coat).
  *  3. timing, BEST EFFORT (not a quiet-pass number; the load average is recorded by the runner): ns per `ptLayeredEval` for albedo
  *     and stochastic against the plain rough-dielectric `ptBsdfEval`, p10 of interleaved repeats, no readback inside the timed
  *     region (the fence is `onSubmittedWorkDone`).
@@ -20,10 +22,11 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { ptBsdfEval, ptBsdfSample, type PtVec3 } from '../../packages/pathtracer/src/bsdf/bsdf.ts';
 import { ptBsdfWgsl } from '../../packages/pathtracer/src/bsdf/bsdf-wgsl.ts';
 import { ptDielectric } from '../../packages/pathtracer/src/bsdf/materials.ts';
-import { ptInternalReflectance, ptLayeredEval, ptLayeredSample, type PtLayeredOptions, type PtLayeredParams } from '../../packages/pathtracer/src/bsdf/layered.ts';
+import { ptInternalReflectance, ptLayeredCoatedConductor, ptLayeredEval, ptLayeredSample, type PtLayeredOptions, type PtLayeredParams } from '../../packages/pathtracer/src/bsdf/layered.ts';
 import { ptLayeredWgsl } from '../../packages/pathtracer/src/bsdf/layered-wgsl.ts';
 
 const f32 = Math.fround;
+const COND_STRIDE = 24; // conductor-base cases: the 16 above + cEta(3), cK(3), cAlpha, pad
 const PARAM_STRIDE = 16; // ior, alpha(2), sw, base(3), sc(3), thickness, Ri, wo(3) = 15 (+1 pad)
 
 function rng(seed: number): () => number {
@@ -52,22 +55,43 @@ fn loadParams(b: u32) -> PtLayeredParams {
 fn loadWo(b: u32) -> vec3f { return vec3f(inp[b + 12u], inp[b + 13u], inp[b + 14u]); }
 `;
 
+const COND_PARAMS = `
+fn loadParams(b: u32) -> PtLayeredParams {
+  var p: PtLayeredParams;
+  p.ior = inp[b];
+  p.alpha = vec2f(inp[b + 1u], inp[b + 2u]);
+  p.specularWeight = 1.0;
+  p.baseColor = vec3f(0.0);
+  p.specularColor = vec3f(1.0);
+  p.thickness = inp[b + 10u];
+  p.internalReflectance = 0.0;
+  p.cEta = vec3f(inp[b + 16u], inp[b + 17u], inp[b + 18u]);
+  p.cK = vec3f(inp[b + 19u], inp[b + 20u], inp[b + 21u]);
+  p.cAlpha = inp[b + 22u];
+  p.isCond = true;
+  return p;
+}
+fn loadWo(b: u32) -> vec3f { return vec3f(inp[b + 12u], inp[b + 13u], inp[b + 14u]); }
+`;
+
 /** Per-case eval and sample, compare against the CPU. Input: params(16) wi(3) u(3) pad(2) = 24 floats. */
-function deterministicShader(options: PtLayeredOptions): string {
+function deterministicShader(options: PtLayeredOptions, cond = false): string {
+  const S = cond ? 32 : 24; // floats per case
+  const W = cond ? 24 : 16; // offset of wi, then u
   return `${ptBsdfWgsl(options)}
-${ptLayeredWgsl(options)}
+${ptLayeredWgsl(cond ? { ...options, conductorBase: true } : options)}
 @group(0) @binding(0) var<storage, read> inp: array<f32>;
 @group(0) @binding(1) var<storage, read_write> outp: array<f32>;
-${WGSL_PARAMS}
+${cond ? COND_PARAMS : WGSL_PARAMS}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
-  if (i >= arrayLength(&inp) / 24u) { return; }
-  let b = i * 24u;
+  if (i >= arrayLength(&inp) / ${S}u) { return; }
+  let b = i * ${S}u;
   let p = loadParams(b);
   let wo = loadWo(b);
-  let wi = vec3f(inp[b + 16u], inp[b + 17u], inp[b + 18u]);
-  let u = vec3f(inp[b + 19u], inp[b + 20u], inp[b + 21u]);
+  let wi = vec3f(inp[b + ${W}u], inp[b + ${W + 1}u], inp[b + ${W + 2}u]);
+  let u = vec3f(inp[b + ${W + 3}u], inp[b + ${W + 4}u], inp[b + ${W + 5}u]);
   let e = ptLayeredEval(p, wo, wi, 1u);
   let s = ptLayeredSample(p, wo, u, 1u);
   let o = i * 16u;
@@ -80,19 +104,20 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 
 /** Per-case mean estimates over N shared uniforms. `us` holds N x 5 floats (sample u0 u1 u2, eval u0 u1). */
-function estimatorShader(options: PtLayeredOptions): string {
+function estimatorShader(options: PtLayeredOptions, cond = false): string {
+  const P = cond ? COND_STRIDE : PARAM_STRIDE;
   return `${ptBsdfWgsl(options)}
-${ptLayeredWgsl(options)}
+${ptLayeredWgsl(cond ? { ...options, conductorBase: true } : options)}
 @group(0) @binding(0) var<storage, read> inp: array<f32>;
 @group(0) @binding(1) var<storage, read_write> outp: array<f32>;
 @group(0) @binding(2) var<storage, read> us: array<f32>;
-${WGSL_PARAMS}
+${cond ? COND_PARAMS : WGSL_PARAMS}
 @compute @workgroup_size(32)
 fn main(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
-  if (i >= arrayLength(&inp) / ${PARAM_STRIDE}u) { return; }
-  let p = loadParams(i * ${PARAM_STRIDE}u);
-  let wo = loadWo(i * ${PARAM_STRIDE}u);
+  if (i >= arrayLength(&inp) / ${P}u) { return; }
+  let p = loadParams(i * ${P}u);
+  let wo = loadWo(i * ${P}u);
   let n = arrayLength(&us) / 5u;
   var sa = vec3f(0.0);
   var ea = vec3f(0.0);
@@ -390,6 +415,135 @@ try {
     if (name === 'stoch_deep') {
       metrics.stoch_gpu_furnace_smooth_max_dev = furnaceWorst;
       if (furnaceWorst > 0.03) problems.push(`GPU white-furnace (smooth, thickness 0): sample albedo off by ${furnaceWorst}`);
+    }
+  }
+
+  // ---- 2b. coat over a conductor (P2.23) ---------------------------------------------------------------------------------
+  const condStacks: { name: string; eta: PtVec3; k: PtVec3; rb: number; ior: number; rc: number; th: number }[] = [
+    { name: 'smooth_smooth', eta: [0.2, 0.9, 1.1], k: [3.9, 2.4, 2.2], rb: 0, ior: 1.5, rc: 0, th: 0 },
+    { name: 'smooth_rough', eta: [0.2, 0.9, 1.1], k: [3.9, 2.4, 2.2], rb: 0.45, ior: 1.5, rc: 0, th: 0 },
+    { name: 'rough_smooth', eta: [0.2, 0.9, 1.1], k: [3.9, 2.4, 2.2], rb: 0, ior: 1.5, rc: 0.3, th: 0.01 },
+    { name: 'rough_rough', eta: [1, 1, 1], k: [5, 5, 5], rb: 0.4, ior: 1.6, rc: 0.15, th: 0.01 },
+    { name: 'white_rough_rough', eta: [1, 1, 1], k: [1e4, 1e4, 1e4], rb: 0.3, ior: 1.5, rc: 0.1, th: 0 },
+  ];
+  const condParams = (c: (typeof condStacks)[number]): PtLayeredParams => {
+    const q = ptLayeredCoatedConductor(f3(c.eta), f3(c.k), c.rb, c.ior, c.rc, { thickness: c.th });
+    const bc = q.baseConductor as NonNullable<PtLayeredParams['baseConductor']>;
+    return { ...q, ior: f32(q.ior), alpha: [f32(q.alpha[0]), f32(q.alpha[1])], thickness: f32(q.thickness), baseConductor: { eta: f3(bc.eta), k: f3(bc.k), alpha: f32(bc.alpha) } };
+  };
+  const packCond = (q: PtLayeredParams, wo: PtVec3): number[] => {
+    const bc = q.baseConductor as NonNullable<PtLayeredParams['baseConductor']>;
+    return [...pack(q, wo).slice(0, 15), 0, ...bc.eta, ...bc.k, bc.alpha, 0];
+  };
+  for (const [tag, options] of [['albedo_conductor', { layering: 'albedo' }], ['albedo_conductor_internal', { layering: 'albedo', albedoBase: 'internal' }]] as [string, PtLayeredOptions][]) {
+    const rand = rng(7101);
+    const n = Math.min(count, 1500);
+    const cases: Case[] = [];
+    for (let i = 0; i < n; i++) {
+      const w0 = unit(rand);
+      cases.push({ p: condParams(condStacks[Math.floor(rand() * condStacks.length)] as (typeof condStacks)[number]), wo: rand() < 0.15 ? [w0[0], w0[1], f32(-w0[2])] : w0, wi: unit(rand), u: [f32(rand()), f32(rand()), f32(rand())] });
+    }
+    const inputC = new Float32Array(new ArrayBuffer(n * 32 * 4));
+    cases.forEach((c, i) => inputC.set([...packCond(c.p, c.wo), ...c.wi, ...c.u, 0, 0], i * 32));
+    const out = await runKernel(device, deterministicShader(options, true), tag, [inputC], n * 16, Math.ceil(n / 64));
+    let bad = 0;
+    let maxRel = 0;
+    let sMaxRel = 0;
+    let flagMismatch = 0;
+    cases.forEach((c, i) => {
+      const g = Array.from(out.subarray(i * 16, i * 16 + 16));
+      if (g.some((x) => !Number.isFinite(x))) {
+        bad++;
+        return;
+      }
+      const e = ptLayeredEval(c.p, c.wo, c.wi, options);
+      for (const [gv, cv] of [[g[0], e.f[0]], [g[1], e.f[1]], [g[2], e.f[2]], [g[3], e.pdf]] as [number, number][]) {
+        const r = relErr(gv, cv, 1e-3);
+        maxRel = Math.max(maxRel, r);
+        if (r > tol) {
+          bad++;
+          if (problems.length < 8) problems.push(`${tag} eval case ${i}: gpu ${gv} cpu ${cv}`);
+        }
+      }
+      const s = ptLayeredSample(c.p, c.wo, c.u, options);
+      if ((g[11] as number) !== s.flags) {
+        flagMismatch++;
+        return;
+      }
+      if (s.flags === 0) return;
+      for (const [gv, cv, dir] of [[g[4], s.wi[0], true], [g[5], s.wi[1], true], [g[6], s.wi[2], true], [g[7], s.f[0], false], [g[8], s.f[1], false], [g[9], s.f[2], false], [g[10], s.pdf, false]] as [number, number, boolean][]) {
+        const r = dir ? (Math.abs(gv - cv) / 1e-3) * tol : relErr(gv, cv, 1e-3);
+        sMaxRel = Math.max(sMaxRel, r);
+        if (r > tol) {
+          bad++;
+          if (problems.length < 8) problems.push(`${tag} sample case ${i}: gpu ${gv} cpu ${cv}`);
+        }
+      }
+    });
+    metrics[`${tag}_eval_max_rel`] = maxRel;
+    metrics[`${tag}_sample_max_rel`] = sMaxRel;
+    metrics[`${tag}_bad`] = bad;
+    metrics[`${tag}_flag_mismatch`] = flagMismatch;
+    if (bad > 0) problems.push(`${tag}: ${bad} values off by more than ${tol}`);
+    if (flagMismatch > n * 0.005) problems.push(`${tag}: ${flagMismatch} flag mismatches`);
+  }
+  {
+    const estC: { label: string; p: PtLayeredParams; wo: PtVec3 }[] = [];
+    for (const c of condStacks) {
+      for (const a of [0, 30, 60, 80]) {
+        const t = (a * Math.PI) / 180;
+        estC.push({ label: `${c.name}@${a}`, p: condParams(c), wo: [f32(Math.sin(t)), 0, f32(Math.cos(t))] });
+      }
+    }
+    const inputE = new Float32Array(new ArrayBuffer(estC.length * COND_STRIDE * 4));
+    estC.forEach((c, i) => inputE.set(packCond(c.p, c.wo), i * COND_STRIDE));
+    for (const [name, options] of [
+      ['stoch_cond_deep', { layering: 'stochastic', maxDepth: 100, nSamples: 1, exitMis: 'none' }],
+      ['stoch_cond_pbrt', { layering: 'stochastic', maxDepth: 10, nSamples: 2, exitMis: 'pbrt' }],
+    ] as [string, PtLayeredOptions][]) {
+      const out = await runKernel(device, estimatorShader(options, true), name, [inputE, us], estC.length * 8, Math.ceil(estC.length / 32));
+      let worst = 0;
+      let furnaceWorst = 0;
+      estC.forEach((c, i) => {
+        let sa = 0;
+        let ea = 0;
+        let sq1 = 0;
+        let sq2 = 0;
+        for (let k = 0; k < nSamples; k++) {
+          const seed = k + 1;
+          const s = ptLayeredSample(c.p, c.wo, [us[k * 5] as number, us[k * 5 + 1] as number, us[k * 5 + 2] as number], { ...options, seed });
+          if (s.flags !== 0) {
+            const v = ((s.f[0] as number) * Math.abs(s.wi[2])) / s.pdf;
+            sa += v;
+            sq1 += v * v;
+          }
+          const u0 = us[k * 5 + 3] as number;
+          const u1 = us[k * 5 + 4] as number;
+          const r = Math.sqrt(u0);
+          const ph = 2 * Math.PI * u1;
+          const e = ptLayeredEval(c.p, c.wo, [r * Math.cos(ph), r * Math.sin(ph), Math.sqrt(1 - u0)], { ...options, seed });
+          ea += (e.f[0] as number) * Math.PI;
+          sq2 += ((e.f[0] as number) * Math.PI) ** 2;
+        }
+        const cpuS = sa / nSamples;
+        const cpuE = ea / nSamples;
+        const gpuS = (out[i * 8] as number) / nSamples;
+        const gpuE = (out[i * 8 + 3] as number) / nSamples;
+        const seS = Math.sqrt(Math.max(0, sq1 / nSamples - cpuS * cpuS) / nSamples);
+        const seE = Math.sqrt(Math.max(0, sq2 / nSamples - cpuE * cpuE) / nSamples);
+        for (const [g, cpu, se, what] of [[gpuS, cpuS, seS, 'sample'], [gpuE, cpuE, seE, 'eval']] as [number, number, number, string][]) {
+          const dev = Math.abs(g - cpu);
+          const allow = 5 * Math.hypot(se, se) + 0.02 * Math.abs(cpu) + 1e-3;
+          worst = Math.max(worst, dev / allow);
+          if (!Number.isFinite(g) || dev > allow) problems.push(`${name} ${c.label} ${what}: gpu ${g.toFixed(4)} cpu ${cpu.toFixed(4)} (allow ${allow.toFixed(4)})`);
+        }
+        if (c.label.startsWith('white_rough_rough') && name === 'stoch_cond_deep') furnaceWorst = Math.max(furnaceWorst, 1 - gpuS);
+      });
+      metrics[`${name}_worst_dev_over_allow`] = worst;
+      if (name === 'stoch_cond_deep') {
+        metrics.stoch_cond_gpu_furnace_loss_max = furnaceWorst;
+        if (furnaceWorst > 0.1) problems.push(`GPU white-conductor furnace: sample albedo loses ${furnaceWorst}`);
+      }
     }
   }
 

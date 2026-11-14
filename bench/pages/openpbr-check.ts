@@ -66,7 +66,7 @@ const storage = (device: GPUDevice, data: ArrayBufferView<ArrayBuffer>, extra = 
 
 const rel = (a: number, b: number, abs: number): number => Math.abs(a - b) / (Math.max(Math.abs(a), Math.abs(b)) + abs);
 
-const OPTIONS: PtMaterialOptions = { features: { mix: true, thin: true, layered: true, medium: true }, layered: { layering: 'albedo', albedoBase: 'internal' }, layerThickness: 1e-6, transmissionTint: true };
+const OPTIONS: PtMaterialOptions = { features: { mix: true, thin: true, layered: true, medium: true, coatedMetal: true }, layered: { layering: 'albedo', albedoBase: 'internal' }, layerThickness: 1e-6, transmissionTint: true };
 
 const TABLE: RtMaterialInput[] = [
   { conductorEtaK: true, conductorEta: [0.2, 0.9, 1.1], conductorK: [3.9, 2.4, 2.1], metalness: 1, specularRoughness: 0.35 },
@@ -78,6 +78,9 @@ const TABLE: RtMaterialInput[] = [
   { transmissionWeight: 1, ior: 2.42, specularRoughness: 0 },
   { baseColor: [0.5, 0.02, 0.01], specularRoughness: 0.44, ior: 1.5, specularWeight: 0.25, specularColor: [1, 0.5, 0.8] },
   { baseColor: [0.5, 0.02, 0.01], specularRoughness: 0.44, coatWeight: 1, coatRoughness: 0.03, coatIor: 1.5 },
+  { metalness: 1, baseColor: [0.9, 0.6, 0.25], specularRoughness: 0.35, coatWeight: 1, coatRoughness: 0.03, coatIor: 1.5 },
+  { conductorEtaK: true, conductorEta: [0.2, 0.9, 1.1], conductorK: [3.9, 2.4, 2.1], metalness: 1, specularRoughness: 0.5, coatWeight: 1, coatRoughness: 0.2, coatIor: 1.7 },
+  { metalness: 0.5, baseColor: [0.8, 0.8, 0.8], specularRoughness: 0.3, coatWeight: 0.8, coatRoughness: 0.1, coatIor: 1.5 },
   { baseColor: [0.5, 0.5, 0.5], ior: 1, specularWeight: 1 },
   { baseColor: [0, 0, 0], ior: 1.76, specularRoughness: 0 },
   { baseColor: [0.4, 0.4, 0.4], specularWeight: 0 },
@@ -94,7 +97,7 @@ async function checkAdapter(device: GPUDevice, ptol: number): Promise<void> {
   const copy = buildSceneCopy(input);
   const buffers = uploadSceneCopy(device, copy, { label: 'openpbr-check' });
   const count = copy.materials.length;
-  const code = `${rtSceneWgsl({ group: 0, firstBinding: 0, sampling: true })}${ptBsdfWgsl({ thin: true })}${ptLayeredWgsl(OPTIONS.layered)}${ptLayeredDispatchWgsl()}${ptBsdfAdapterWgsl(OPTIONS)}
+  const code = `${rtSceneWgsl({ group: 0, firstBinding: 0, sampling: true })}${ptBsdfWgsl({ thin: true })}${ptLayeredWgsl({ ...OPTIONS.layered, conductorBase: true })}${ptLayeredDispatchWgsl(true)}${ptBsdfAdapterWgsl(OPTIONS)}
 @group(1) @binding(0) var<storage, read_write> out: array<f32>;
 @compute @workgroup_size(64)
 fn adapter(@builtin(global_invocation_id) id: vec3u) {

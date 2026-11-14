@@ -142,7 +142,8 @@ pbrt-v4, Mitsuba 3.
 Competitor cells come from ablation runs (stripped vs full), never from reading their source (that is a prior only).
 
 Data: `bench/results/reports/tier1/coverage.json` (`{status, relMSE_pbrt?, relMSE_mitsuba?, floor?, ablationRelMSE?,
-notes[], reportRef}` per row and renderer). Page: `bench/results/TIER1-COVERAGE.md` from `bench/adapters/tier1-matrix.ts`.
+notes[], reportRef}` per row and renderer; as built also `noise`, `ratio`, `relBias_*`, `fireflyPixels`, and `reportRef` is the viewer query
+`a=<full>&b=<stripped>&r=<reference>`). Page: `bench/results/TIER1-COVERAGE.md` from `bench/adapters/tier1-matrix.ts`.
 Viewer: a "Coverage" tab linking each cell to its side-by-side comparison.
 
 ## 4. Scene construction
