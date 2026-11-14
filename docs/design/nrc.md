@@ -1,11 +1,11 @@
 # Neural radiance cache on WebGPU (research track N)
 
-Status: **draft spec + plan, 2026-11-14.** Nothing here is decided. It turns the "NRC: Prototype at most, needs
+Status: **draft spec + plan, 2026-11-14** (revised the same day around VkNRC, §1b). Nothing here is decided. It turns the "NRC: Prototype at most, needs
 coop-matrix" line in [spec §7](../../spec/SPEC-draft.md) into a measurable track. The track has two products:
 
 1. **A small MLP engine in WGSL** (inference + online training) with backends we can A/B: plain f32, plain f16, and
    `subgroup-matrix`. ORT-Web and WebNN are measured as extra arms.
-2. **An NRC demo**: a diffuse path tracer on sponza-white that ends paths in the learned cache, compared against the
+2. **An NRC demo** following [VkNRC](https://github.com/AdamYuan/VkNRC) (a complete Vulkan NRC, §1b): a diffuse path tracer on sponza-white that ends paths in the learned cache, compared against the
    4096 spp references and against plain path tracing at equal time.
 
 The demo is also meant to be evidence: **does `subgroup-matrix` make a learned cache practical on the web, and on which
@@ -19,7 +19,7 @@ PDF before quoting, **[U]** unknown, needs a test.
 Sources we may use: the paper and talks (D10: NVIDIA papers are fine), and **tiny-cuda-nn** (NVlabs, **BSD-3-Clause
 [V 2026-11-14, LICENSE.txt]**: may be ported with attribution in THIRD_PARTY.md). Off limits: the NRC SDK and RTXGI code
 (NVIDIA RTX SDK licence, D10), including `research/sources/native/rtxgi`. instant-ngp is under a non-commercial NVIDIA
-licence: ideas only.
+licence: ideas only. VkNRC has no licence: read and compare only (§1b).
 
 How it works [M unless marked]:
 
@@ -44,6 +44,54 @@ How it works [M unless marked]:
 Read the PDF before quoting any of these numbers (N0.1). The research notes flagged the same gap
 ([07](../../research/notes/07-denoise-neural.md) "exact NRC cost numbers ... check PDF").
 
+## 1b. Reference implementation: VkNRC (the one we port the design of)
+
+[AdamYuan/VkNRC](https://github.com/AdamYuan/VkNRC), commit `a667859` (2024-09-10), cloned read-only at
+`research/sources/native/vknrc`. A complete NRC in Vulkan: hardware ray queries, a V-buffer for primaries, a
+Cook-Torrance path tracer, and a hand-written fully-fused MLP on `VK_NV_cooperative_matrix` (its README says the KHR
+extension was "too limited", and that its backward pass beats tiny-cuda-nn's). Its history shows the path we plan to
+take: an MLP test harness with a CPU (Eigen) oracle and a "learning an image" test came first, then forward,
+backward and Adam, then the integrator.
+
+**Licence: none.** No LICENSE file and no licence text anywhere in the tree [V 2026-11-14]. Under our rules that means
+**read, cite and compare only; no code is copied or translated** (same as mutracer). The design below is re-derived
+from the paper and tiny-cuda-nn (BSD-3); VkNRC is the worked example we check our understanding against. If we want
+more than that, the author has to add a licence (§8).
+
+What VkNRC does, all [V from its source]. These are its choices, not necessarily the paper's:
+
+| Part | VkNRC |
+|---|---|
+| Net | 64 inputs → 5 hidden × 64 → 3 outputs, ReLU, no bias, f16 weights and activations; 20,672 weights |
+| Input encoding (64 f16) | position normalised to the scene box [−1, 1] (done at load), then a triangle-wave frequency encoding with 12 octaves per axis (36); one-blob with 4 bins (quartic kernel) for the scattered direction (2, spherical), normal (2, spherical) and roughness (1, as `1 − e^−r`) (20); diffuse + specular reflectance (6); two constant ones (2) |
+| Output | radiance directly. The resolve is `pixel = bias + throughput × prediction`; it does **not** divide by reflectance as the paper does |
+| Kernel shape | 128 records per workgroup, 4 subgroups of 32 (full subgroups required, subgroup size 64 dropped), 16×16×16 f16 tiles; one layer's weights in shared memory at a time (8 KiB); activations 128 × 64 f16 = 16 KiB shared; backward needs 4 × 8 KiB = 32 KiB shared |
+| ReLU | applied element by element to the accumulator tiles (the NV extension allows per-element access) |
+| ReLU derivative | the forward activations are stored as a mask of 0 or NaN, the backward matmul accumulates onto it, then NaN → 0 |
+| Weight gradients | per subgroup dW tiles, summed across the workgroup's subgroups in shared memory, then `atomicAdd` on **f32** into a global gradient buffer |
+| Loss | relative L2 on luminance: gradient `2 (p − t) / (lum(p)² + 0.01)`, loss scale 1 |
+| Optimiser | Adam, lr 0.002, f32 master weights, gradient divided by the batch count, NaN/inf gradients zeroed; EMA weights optional for inference |
+| Training records | 4 batches of 16,384 per frame, trained in sequence; a training path is chosen per **subgroup** (probability 0.03) so control flow stays uniform; each record goes to a random batch |
+| Self-training | the inference pass runs before training and writes predictions into the training records' tails as well as into the screen |
+| Termination | area-spread heuristic, `c = 0.01`, `a0 = d² / (4π cos)`, up to 8 bounces |
+| Dispatch | GPU counts with atomics, a one-thread pass turns them into indirect dispatch arguments |
+
+### What changes on WebGPU
+
+| VkNRC relies on | WebGPU today | Our plan |
+|---|---|---|
+| Hardware ray queries | none | trace core (`rtClosest`, software BVH) |
+| `VK_NV_cooperative_matrix`, 16×16×16 f16 | `chromium-experimental-subgroup-matrix`; tile shape per adapter (Apple 8×8×8) | generate the kernel per `subgroupMatrixConfigs` entry; plain f16 fallback |
+| Per-element access to accumulator tiles (ReLU) | not in the proposal: load, store, multiply(-accumulate) and scalar add/sub/mul only | store the tile to workgroup memory, apply ReLU per lane, reload. This is the main extra cost; N3 measures it |
+| NaN as a ReLU-derivative mask | WGSL does not guarantee NaN/inf behaviour | an explicit 0/1 mask, multiplied in the same workgroup-memory pass |
+| f32 `atomicAdd` | no float atomics | A/B: per-workgroup partial gradients + reduction dispatch, vs fixed-point `atomicAdd` on i32 (the SHaRC trick) |
+| Subgroup size fixed at 32, full subgroups | `subgroup-size-control` / `@subgroup_size` (Chrome 151-152) | pin 32 where offered; otherwise derive tiles per subgroup from the adapter's size |
+| 32 KiB shared memory for backward | default 16 KiB | request the adapter maximum; if 16 KiB only, 64 records per workgroup |
+
+So the port is mostly mechanical except the element-wise steps. Whether subgroup-matrix wins depends on how much the
+workgroup-memory round trips per layer cost compared with the matmuls they surround. That is the number N3 exists
+to produce.
+
 ## 2. Why this is hard on WebGPU (and the budget it implies)
 
 **Arithmetic.** One forward pass of a 64-wide, 5-hidden-layer net is about 2 · 64 · 64 · 6 ≈ 50k FLOP. One query
@@ -64,7 +112,7 @@ This is the case for `subgroup-matrix`, and it is also why the demo should run a
 | Constraint | Consequence |
 |---|---|
 | Default `maxComputeWorkgroupStorageSize` is 16 KiB | A 64×64 f16 layer is 8 KiB; a 128-record × 64 f16 activation tile is 16 KiB. Request the adapter maximum (`detectCaps`), keep one layer's weights resident at a time, size the record tile to fit. |
-| WGSL has no float atomics | Weight gradients cannot be `atomicAdd`ed across workgroups. Each workgroup writes a partial gradient; a separate reduction dispatch sums them (no "last workgroup" handoff, CLAUDE.md trap), then an Adam dispatch. |
+| WGSL has no float atomics | Weight gradients cannot be `atomicAdd`ed in f32 across workgroups (VkNRC does). Either each workgroup writes a partial gradient and a separate reduction dispatch sums them (no "last workgroup" handoff, CLAUDE.md trap), or gradients are scaled to fixed point and `atomicAdd`ed as i32. Both are built and A/B'd. |
 | `subgroup-matrix` has no element-wise ops besides scalar add/sub/mul [V proposal] | ReLU and its derivative need a store to workgroup memory, a per-lane pass, and a reload between layers. That is the fully-fused pattern anyway, but it costs bandwidth the scalar path does not pay. |
 | `subgroup-matrix` ops need subgroup-uniform control flow and operands; workgroup x size must be a multiple of the max subgroup size [V proposal] | One subgroup owns whole tiles; record counts are padded to the tile size; no early-out per lane. |
 | Tile shapes are per device (`GPUAdapterInfo.subgroupMatrixConfigs`) [V proposal] | Metal: 8×8×8 (f16, f32). Vulkan on NVIDIA/AMD/Intel: typically 16×16×16 f16 [M]. D3D12 needs SM 6.10 linear algebra, not generally available [V note 06]. The kernel is generated per config. |
@@ -112,6 +160,10 @@ this track does not change that. It measures WebNN, it does not ship on it.
   tracing exists, and it is a good public demo on its own.
 - **Determinism.** Fixed seeds and a fixed record order for tests; float atomics never appear (§2), so a run is
   reproducible on one device.
+
+**Match VkNRC first.** Every arm starts with VkNRC's configuration (§1b): net, encoding, loss, Adam settings,
+4 × 16,384 records, 0.03 training probability, `c = 0.01`. Then we change one thing at a time, each change recorded in
+DIVERGES.md: reflectance factorisation as in the paper, hash-grid encoding, EMA weights, fewer records.
 
 ## 5. The NRC demo integrator
 
@@ -174,5 +226,14 @@ works on `wgsl-f16` at the upscaler's resolution, and the write-up says so.
   - Settles it: whether a second consumer (Denoiser, gi) wants the MLP engine after N2.
 - **Public evidence for gpuweb.** If N2/N3 show a clear win, the numbers fit gpuweb issue #4195 (subgroup matrix). That is
   outward-facing; nothing gets posted without your go (D8).
+- **VkNRC has no licence.** Suggestion: keep it read-only (as now) and, if a code-level port would save real time,
+  ask the author to add an MIT licence. That is outward-facing, so it needs your go.
+  - Pro (asking): their kernel layout and backward pass are tested; a port with attribution would be faster than a
+    re-derivation.
+  - Con: it may not come; our design must not wait for it. The paper + tiny-cuda-nn route is complete without it.
+- **Run VkNRC natively as a baseline?** It needs Vulkan, ray queries and the NV cooperative-matrix extension, so in
+  practice an NVIDIA GPU: the RTX 3060 laptop. Building it under `.cache/native/` and comparing its NRC time per frame
+  with ours on the same machine would give the "native vs web" ratio. Our rules say clones are never built; this would
+  be an explicit exception, like pbrt-v4 and Mitsuba. Suggestion: yes, as a W-task, timings only, nothing redistributed.
 - **Windows Vulkan backend.** If tensor cores are only reachable through Dawn's Vulkan backend behind a flag, is a
   flag-only result acceptable for the demo? Suggestion: yes, reported as such.

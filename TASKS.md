@@ -63,19 +63,22 @@ suggestion, pros/cons and the A/B that would settle it.
 
 ## N — Neural radiance cache (research track)
 
-Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Backends A/B'd: WGSL f32 / f16 / subgroup-matrix, ORT-Web, WebNN.
+Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Reference implementation: VkNRC (Vulkan, NV cooperative matrix;
+**no licence: read and compare only**, `research/sources/native/vknrc`). Backends A/B'd: WGSL f32 / f16 / subgroup-matrix,
+ORT-Web, WebNN.
 
 | ID | Task | Owner | Status | Notes |
 |---|---|---|---|---|
 | N0.1 | Check the NRC paper's numbers (net shape, encodings, records/frame, steps, loss, spread threshold, ms on 3090) against `research/papers/gi/nrc-*.pdf`; fix the [M] items in nrc.md §1 | — | ⬜ | arXiv is not reachable from cloud sessions; do it on the Mac |
 | N0.2 | `detectCaps` reads `adapter.info.subgroupMatrixConfigs` (componentType, resultComponentType, M, N, K, subgroup sizes); caps page prints them and compiles a one-tile `subgroupMatrixMultiplyAccumulate` probe | — | ⬜ | folds in P0.18's subgroup-matrix half; M5 Pro first |
 | N0.3 | Which backend reaches matrix hardware: Dawn Vulkan vs D3D12 on Windows/RTX 3060L (flag needed?), Metal `simdgroup_matrix` vs M5 neural accelerators | — | ⬜ | Windows part becomes a W-task |
-| N1 | MLP engine: WGSL generator for forward / backward / Adam (f32, f16), f32 master weights, partial-gradient reduction pass; TS f64 oracle with finite-difference gradient check; `mlp-fit` page (learn an HDR image, write PFM per arm) | — | ⬜ | code location is an open question (nrc.md §8) |
+| N1 | MLP engine: WGSL generator for forward / backward / Adam (f32, f16), f32 master weights, gradient sums A/B (partials + reduction pass vs fixed-point i32 atomics); TS f64 oracle with finite-difference gradient check; `mlp-fit` page (learn an HDR image, write PFM per arm) | — | ⬜ | start from VkNRC's config (nrc.md §1b): 64→5×64→3, ReLU, no bias, triangle-wave + one-blob encoding, rel-L2 luminance, Adam lr 0.002. Code location is an open question (nrc.md §8) |
 | N2 | `mlp-timing` microbench: ms/1M inferences, ms per 16k training step, every arm, widths 64 × {2,4,5} hidden, batch 2^14–2^21, ABBA, load-checked | — | ⬜ | M5 Pro + RTX 3060L; can end the track early |
-| N3 | `wgsl-sgm` arm: subgroup-matrix forward then backward, tile shape from the adapter config, ReLU via workgroup memory | — | ⬜ | gate: matches `wgsl-f16` within f16 tolerance |
+| N3 | `wgsl-sgm` arm: subgroup-matrix forward then backward, tile shape from the adapter config, ReLU and its 0/1 derivative mask via workgroup memory (no per-element tile access, no NaN trick as in VkNRC) | — | ⬜ | gate: matches `wgsl-f16` within f16 tolerance; report the cost of the round trips separately |
 | N4 | Encodings: frequency + one-blob vs multiresolution hash grid, A/B on `mlp-fit` | — | ⬜ | both stay settings |
 | N5 | ORT-Web and WebNN arms: inference + training-step-as-graph (fwd + bwd + Adam exported as one ONNX / WebNN graph, weights in and out) | — | ⬜ | comparison rows in N2 only |
-| N6 | `nrc` demo page: diffuse wavefront PT on sponza-white over trace core, spread termination, sparse training paths with self-training tail, indirect train + infer, at full and ratio-2 resolution | — | ⬜ | equal-time relMSE/FLIP vs Mitsuba, bias, still-camera stability |
+| N6 | `nrc` demo page: diffuse wavefront PT on sponza-white over trace core, spread termination, sparse training paths (per subgroup, as VkNRC) with self-training tail written by the inference pass, 4 × 16k indirect train steps, at full and ratio-2 resolution | — | ⬜ | VkNRC config first, then one change at a time (DIVERGES). Equal-time relMSE/FLIP vs Mitsuba, bias, still-camera stability |
+| N6.1 | VkNRC native on the RTX 3060L (Vulkan, NV coop matrix) as the native timing baseline, built under `.cache/native/` | maintainer (Windows) | ⬜ | needs the maintainer's OK (exception to "never build clones"); timings only, nothing redistributed |
 | N7 | Non-neural hash cache (SHaRC-like, `@pmndrs/gi`) as the equal-time competitor to N6 | — | ⬜ | needs gi on the trace core (P4) or a bench-local copy |
 | N8 | `bench/results/NRC.md`: per-vendor "what subgroup-matrix buys" table + viewer report | — | ⬜ | public use needs the maintainer (D8) |
 
@@ -83,7 +86,8 @@ Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Backends A/B'd: WGSL f3
 
 - **NRC: where does the MLP engine live?** Suggestion: private workspace package `packages/mlp` (WGSL prefix `nn*`),
   demo as bench pages until N6; a production cache follows D3 into `@pmndrs/gi`. Details, pros/cons and the deciding
-  test in [docs/design/nrc.md](docs/design/nrc.md) §8 (also: gpuweb evidence, Windows Vulkan flag).
+  test in [docs/design/nrc.md](docs/design/nrc.md) §8 (also: VkNRC licence request, building VkNRC natively (N6.1), gpuweb
+  evidence, Windows Vulkan flag).
 
 - **Capsaicin: a third reference renderer, or a cross-check only?** Suggestion: cross-check and native timing baseline on
   the RTX 3060, for opaque scenes only. Keep pbrt + Mitsuba as the references (D15).

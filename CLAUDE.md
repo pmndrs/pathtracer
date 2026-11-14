@@ -156,4 +156,6 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   be a multiple of the max subgroup size. WGSL has no float atomics, so batched gradient sums need partials plus a
   reduction dispatch (docs/design/nrc.md §2).
 - tiny-cuda-nn is BSD-3 (portable with attribution); the NRC SDK and RTXGI are RTX SDK licence (no code); instant-ngp is
-  non-commercial (ideas only).
+  non-commercial (ideas only). VkNRC (the NRC reference we follow) has no licence: read and compare only.
+- VkNRC's MLP leans on three things WGSL lacks: per-element access to matrix tiles (ReLU), NaN as a mask (ReLU
+  derivative) and f32 `atomicAdd` (weight gradients). Each needs a workgroup-memory pass or a reduction dispatch here.
