@@ -323,3 +323,4 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   (blue base 0.012) differs in blue by 12-25% between pbrt and Mitsuba (spectral uplift); the dielectric-over-diffuse class B rows read 3-4% lower in
   Mitsuba (roughplastic vs coateddiffuse). Agreement between the renderers on class C spheres (specular 0.25) is not evidence: both use the same F0 hack.
   pbrt writes negative channels, count them (`negChannels`).
+- Region verdicts on a grid scene are contaminated by neighbours: spheres reflect and refract each other, so a class C (coverage) sphere skews the class A regions next to it (IORTestGrid: whole-image relMSE 1.6e-2, class A spheres off by up to 3%). Gate on a variant with the approximated materials dropped (`IORTestGrid-notex-A`: 2.7e-4, within the 3.1e-4 floor).

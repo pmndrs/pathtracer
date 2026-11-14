@@ -16,4 +16,6 @@ Reading:
 - Inside the floor against both references: Thinwall, Emissive, MetalRough (vs pbrt; Mitsuba differs by its Smith G at high roughness), Sheen (coverage: fuzz ignored).
 - Attenuation: matches Mitsuba (2.0e-3, floor 5.0e-3); pbrt is off on thick saturated absorbers (V62).
 - ClearCoat: matches Mitsuba to 8.9e-5; pbrt reads the saturated red base differently (spectral).
-- IORTestGrid: 30x the floor. Class C spheres (specularFactor 0.25) differ -15% to +25% by design (OpenPBR specular_weight vs the exporters' F0-via-IOR approximation); class A spheres read -2.2% to +3.0%, under investigation (variant without class C spheres).
+- IORTestGrid: 30x the floor. Class C spheres (specularFactor 0.25) differ -15% to +25% by design (OpenPBR specular_weight vs the exporters' F0-via-IOR approximation); class A spheres read -2.2% to +3.0% only because the class C spheres leak in through reflection and refraction: the
+  variant `IORTestGrid-notex-A` (class C spheres dropped) reads relMSE 2.7e-4 / 2.1e-4 vs pbrt / Mitsuba against a floor of
+  3.07e-4, relBias +0.03% / -0.03%, every sphere within 0.12% of Mitsuba. Passes the tier1.md section 6 rule.

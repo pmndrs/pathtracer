@@ -112,7 +112,7 @@ describe('Tier 1 models through the glTF scene loader (needs node bench/assets/f
 });
 
 describe('Tier 1 wave 1 scenes', () => {
-  const names = ['AttenuationTest-notex', 'TransmissionThinwallTestGrid-notex', 'EmissiveStrengthTest-notex', 'MetalRoughSpheresNoTextures', 'IORTestGrid-notex', 'ClearCoatTest-notex', 'SheenTestGrid-notex'];
+  const names = ['AttenuationTest-notex', 'TransmissionThinwallTestGrid-notex', 'EmissiveStrengthTest-notex', 'MetalRoughSpheresNoTextures', 'IORTestGrid-notex', 'IORTestGrid-notex-A', 'ClearCoatTest-notex', 'SheenTestGrid-notex'];
   it('are registered by name', () => {
     expect(tier1GltfScenes.map((t) => t.scene.name)).toEqual(names);
     for (const n of names) expect(getScene(n).tier).toBe(1);

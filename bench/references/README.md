@@ -110,6 +110,7 @@ sidecar has no "coverage" flag: coverage renders are recognised by their `covera
 | EmissiveStrengthTest-notex (1120x400) | 548 / 285 | 0.2761 0.5311 0.8294 | 0.2763 0.5313 0.8293 | 1.8e-4 | +0.02% | 0.12% |
 | MetalRoughSpheresNoTextures (768x768) | 275 / 178 | 0.2910 0.2678 0.2390 | 0.2889 0.2656 0.2365 | 1.5e-3 | -0.85% | 11.8% |
 | IORTestGrid-notex (640x768, coverage) | 347 / 373 | 0.2962 0.3069 0.3622 | 0.2965 0.3072 0.3625 | 5.2e-4 | +0.09% | 0.77% |
+| IORTestGrid-notex-A (640x768, class A only: S0.25 spheres dropped) | 271 / 238 | 0.3368 0.3487 0.4104 | 0.3370 0.3489 0.4105 | 3.1e-4 | +0.0% | - |
 | ClearCoatTest-notex (1024x384) | 195 / 141 | 0.2984 0.2465 0.2918 | 0.2885 0.2484 0.2919 | 2.5e-3 | -0.95% | 17.0% |
 | SheenTestGrid-notex (768x768, coverage) | 423 / 280 | 0.2422 0.2495 0.3452 | 0.2414 0.2504 0.3421 | 6.0e-4 | -0.35% | 5.2% |
 
@@ -131,6 +132,7 @@ Per-region verdicts (masks = projected bounds of each glTF material group, shrun
   The 84 class B rows (dielectric over diffuse and metalness mixes): M/P -3.0% overall, worst single rows -12..-16%.
 - **ClearCoat (Simple row):** Coating (coat-only, class A) 0.02%; Base -2.7% (R -7%, G +2%); Coated -9.1% (R -15%, G +22%): class B layered models differ by colour.
 - **IOR:** 20 regions, M/P between -0.20% and +0.58%, relMSE 1.7e-6..1.7e-3 (black bases lowest). Specular 0.25 (class C) agrees as well as specular 1 because both exporters use the same IOR-based F0 scale.
+- **IOR-A variant** (`IORTestGrid-notex-A`, the ten S0.25 spheres dropped so no class C reflection reaches the class A spheres; `node bench/references/render.ts --scenes IORTestGrid-notex-A --renderers pbrt,mitsuba --spp 4096`): all ten class A spheres M/P within -0.27..+0.52%; our megakernel agrees to relMSE 2.7e-4 (pbrt) / 2.1e-4 (Mitsuba) against the 3.1e-4 floor, relBias +0.03% / -0.03%. This is the gating IOR reference; the full scene stays coverage for class C (specular 0.25).
 - **Sheen:** all 16 spheres M/P -3.6..-4.0% including sheenColor 0: the class B base dielectric, not sheen (neither renderer has it).
 - **Thinwall:** 10 regions within +-0.1% (relBias), IOR 1.0 thin sphere invisible (centre pixel -0.1% / -0.2% of the backdrop).
 - **Emissive:** G at the five cube centres (strength 1, 2, 4, 8, 16) 0.481 / 1.013 / 2.011 / 4.011 / 8.009 in pbrt, 0.483 / 1.013 / 2.012 / 4.014 / 8.016 in

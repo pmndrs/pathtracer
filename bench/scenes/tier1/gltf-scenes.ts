@@ -106,6 +106,17 @@ const sidecars = {
     dropMaterials: ['Text', 'Text Backdrop'],
     replace: { Backdrop: GREY },
   }),
+  // IORTestGrid-notex minus the ten specularFactor 0.25 spheres (class C), which the references approximate through IOR: the class A spheres no longer see them reflected or refracted (TASKS P2.32a).
+  iorA: make(ior as GoldenFile, {
+    name: 'IORTestGrid-notex-A',
+    purpose: 'IORTestGrid-notex with the ten specularFactor 0.25 (class C) spheres dropped: only the class A specular 1 spheres (black opaque and white transmissive, IOR 1.0-2.42) remain, so no class C reflection leaks into their regions. Tier 1 ior.',
+    camera: { type: 'perspective', position: [0, 0, 1.4], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 640, height: 768, filter: 'box' },
+    integrator: { maxDepth: 16 },
+    environment: SKY,
+    dropMaterials: ['Text', 'Text Backdrop', 'IOR1.0_Black_R0_M0_T0_S0.25', 'IOR1.33_Black_R0_M0_T0_S0.25', 'IOR1.5_Black_R0_M0_T0_S0.25', 'IOR1.76_Black_R0_M0_T0_S0.25', 'IOR2.42_Black_R0_M0_T0_S0.25', 'IOR2.42_White_R0_M0_T1_S0.25', 'IOR1.76_White_R0_M0_T1_S0.25', 'IOR1.5_White_R0_M0_T1_S0.25', 'IOR1.33_White_R0_M0_T1_S0.25', 'IOR1.0_White_R0_M0_T1_S0.25'],
+    replace: { Backdrop: GREY },
+  }),
   // The factor-only "Simple" row (base, coated, coat only); every other row uses clearcoat/roughness/normal textures. No backdrop in the file: spheres against the sky.
   clearcoat: make(clearcoat as GoldenFile, {
     name: 'ClearCoatTest-notex',
