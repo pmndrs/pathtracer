@@ -13,6 +13,7 @@ export function ptBsdfWgsl(options: PtBsdfOptions = {}): string {
   const cap = (options.vndf ?? 'standard') === 'cap';
   const radiance = (options.transport ?? 'radiance') === 'radiance';
   const thin = options.thin ?? false;
+  const aniso = options.aniso ?? false;
   return /* wgsl */ `
 const PT_PI: f32 = 3.14159265358979323846;
 const PT_BSDF_DIFFUSE: u32 = 0u;
@@ -63,7 +64,20 @@ fn ptFrameFromNormal(n: vec3f) -> PtFrame {
   let b = n.x * n.y * a;
   return PtFrame(vec3f(1.0 + s * n.x * n.x * a, s * b, -s * n.x), vec3f(b, s + n.y * n.y * a, -n.y), n);
 }
-fn ptToLocal(f: PtFrame, v: vec3f) -> vec3f { return vec3f(dot(v, f.t), dot(v, f.b), dot(v, f.n)); }
+${aniso ? `// P2.26: local +X along the tangent made orthogonal to n, turned by rotation radians toward the bitangent cross(n, t) * tangent.w (glTF anisotropyRotation).
+fn ptFrameFromTangent(n: vec3f, tangent: vec4f, rotation: f32) -> PtFrame {
+  let x = tangent.xyz - n * dot(n, tangent.xyz);
+  let l2 = dot(x, x);
+  if (!(l2 > 1e-12)) { return ptFrameFromNormal(n); }
+  let t0 = x * inverseSqrt(l2);
+  var t = t0;
+  if (rotation != 0.0) {
+    let bt = cross(n, t0) * select(1.0, -1.0, tangent.w < 0.0);
+    t = cos(rotation) * t0 + sin(rotation) * bt;
+  }
+  return PtFrame(t, cross(n, t), n);
+}
+` : ''}fn ptToLocal(f: PtFrame, v: vec3f) -> vec3f { return vec3f(dot(v, f.t), dot(v, f.b), dot(v, f.n)); }
 fn ptFromLocal(f: PtFrame, v: vec3f) -> vec3f { return f.t * v.x + f.b * v.y + f.n * v.z; }
 
 fn ptReflect(wo: vec3f, n: vec3f) -> vec3f { return -wo + 2.0 * dot(wo, n) * n; }

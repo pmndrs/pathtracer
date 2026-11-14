@@ -11,7 +11,7 @@
  */
 import { buildSceneCopy, rtSceneWgsl, uploadSceneCopy, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, type RtMaterialInput } from '@pmndrs/raytracer';
 import {
-  PT_BSDF_LAYERED, PT_BSDF_THIN, ptBsdfAdapterWgsl, ptBsdfFromMaterial, ptBsdfSample, ptBsdfWgsl, ptLayeredDispatchWgsl, ptLayeredEval, ptLayeredFromBsdf, ptLayeredSample, ptLayeredWgsl, ptMediumSigma,
+  PT_BSDF_LAYERED, PT_BSDF_THIN, ptBsdfAdapterWgsl, ptFrameFromTangent, ptBsdfFromMaterial, ptBsdfSample, ptBsdfWgsl, ptLayeredDispatchWgsl, ptLayeredEval, ptLayeredFromBsdf, ptLayeredSample, ptLayeredWgsl, ptMediumSigma,
   type PtMaterialOptions, type PtBsdfParams,
 } from '@pmndrs/pathtracer';
 import type { AdapterSummary } from '../runner/contract.ts';
@@ -66,7 +66,7 @@ const storage = (device: GPUDevice, data: ArrayBufferView<ArrayBuffer>, extra = 
 
 const rel = (a: number, b: number, abs: number): number => Math.abs(a - b) / (Math.max(Math.abs(a), Math.abs(b)) + abs);
 
-const OPTIONS: PtMaterialOptions = { features: { mix: true, thin: true, layered: true, medium: true, coatedMetal: true }, layered: { layering: 'albedo', albedoBase: 'internal' }, layerThickness: 1e-6, transmissionTint: true };
+const OPTIONS: PtMaterialOptions = { features: { mix: true, thin: true, layered: true, medium: true, coatedMetal: true, aniso: true }, layered: { layering: 'albedo', albedoBase: 'internal' }, layerThickness: 1e-6, transmissionTint: true };
 
 const TABLE: RtMaterialInput[] = [
   { conductorEtaK: true, conductorEta: [0.2, 0.9, 1.1], conductorK: [3.9, 2.4, 2.1], metalness: 1, specularRoughness: 0.35 },
@@ -87,6 +87,10 @@ const TABLE: RtMaterialInput[] = [
   { baseColor: [0, 0, 0], baseWeight: 0, specularWeight: 0 },
   { metalness: 0.5, baseColor: [0.3, 0.3, 0.3] },
   { baseColor: [0.9, 0.9, 0.9], ior: 2.2, specularRoughness: 0.7, specularWeight: 0.5 },
+  // P2.26 anisotropic metals (OpenPBR alpha pair), with and without eta/k, and a mix whose metal end is anisotropic
+  { conductorEtaK: true, conductorEta: [0.2, 0.9, 1.1], conductorK: [3.9, 2.4, 2.1], metalness: 1, specularRoughness: 0.35, specularAnisotropy: 0.6 },
+  { metalness: 1, baseColor: [1, 1, 1], specularRoughness: 0.84, specularAnisotropy: 1 },
+  { metalness: 0.5, baseColor: [0.8, 0.5, 0.2], specularRoughness: 0.2, specularAnisotropy: 0.3 },
 ];
 
 const U_VALUES = [0, 0.29, 0.5, 0.71, 0.999];
@@ -97,7 +101,7 @@ async function checkAdapter(device: GPUDevice, ptol: number): Promise<void> {
   const copy = buildSceneCopy(input);
   const buffers = uploadSceneCopy(device, copy, { label: 'openpbr-check' });
   const count = copy.materials.length;
-  const code = `${rtSceneWgsl({ group: 0, firstBinding: 0, sampling: true })}${ptBsdfWgsl({ thin: true })}${ptLayeredWgsl({ ...OPTIONS.layered, conductorBase: true })}${ptLayeredDispatchWgsl(true)}${ptBsdfAdapterWgsl(OPTIONS)}
+  const code = `${rtSceneWgsl({ group: 0, firstBinding: 0, sampling: true })}${ptBsdfWgsl({ thin: true, aniso: true })}${ptLayeredWgsl({ ...OPTIONS.layered, conductorBase: true })}${ptLayeredDispatchWgsl(true)}${ptBsdfAdapterWgsl(OPTIONS)}
 @group(1) @binding(0) var<storage, read_write> out: array<f32>;
 @compute @workgroup_size(64)
 fn adapter(@builtin(global_invocation_id) id: vec3u) {
@@ -153,6 +157,61 @@ fn adapter(@builtin(global_invocation_id) id: vec3u) {
   metrics.adapter_mismatch = bad;
   metrics.adapter_cases = total;
   metrics.adapter_kinds = kinds.size;
+}
+
+/** P2.26: `ptFrameFromTangent` (WGSL) against the TS twin on random normals, tangents (incl. degenerate) and rotations. */
+async function checkFrame(device: GPUDevice, count: number): Promise<void> {
+  const rand = rng(2626);
+  const n = Math.min(count, 2000);
+  const input = new Float32Array(n * 8);
+  const cases: { nrm: Vec3; tan: [number, number, number, number]; rot: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const nrm = unit([rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1]).map(Math.fround) as Vec3;
+    const tan: [number, number, number, number] = i % 50 === 7 ? [0, 0, 0, 1] : i % 50 === 9 ? [nrm[0], nrm[1], nrm[2], 1] : [rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1, rand() < 0.5 ? -1 : 1];
+    const rot = i % 3 === 0 ? 0 : (rand() * 2 - 1) * 2 * Math.PI;
+    cases.push({ nrm, tan: tan.map(Math.fround) as [number, number, number, number], rot: Math.fround(rot) });
+    input.set([nrm[0], nrm[1], nrm[2], 0, ...cases[i]!.tan.slice(0, 3), 0], i * 8);
+    input[i * 8 + 3] = cases[i]!.rot;
+    input[i * 8 + 7] = cases[i]!.tan[3];
+  }
+  const code = `${ptBsdfWgsl({ aniso: true })}
+@group(0) @binding(0) var<storage, read> inp: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= ${n}u) { return; }
+  let b = i * 8u;
+  let f = ptFrameFromTangent(vec3f(inp[b], inp[b + 1u], inp[b + 2u]), vec4f(inp[b + 4u], inp[b + 5u], inp[b + 6u], inp[b + 7u]), inp[b + 3u]);
+  let o = i * 9u;
+  out[o] = f.t.x; out[o + 1u] = f.t.y; out[o + 2u] = f.t.z;
+  out[o + 3u] = f.b.x; out[o + 4u] = f.b.y; out[o + 5u] = f.b.z;
+  out[o + 6u] = f.n.x; out[o + 7u] = f.n.y; out[o + 8u] = f.n.z;
+}`;
+  const module = await compile(device, code, 'aniso frame');
+  const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } });
+  const inBuf = storage(device, input);
+  const outBuf = storage(device, new Float32Array(n * 9), GPUBufferUsage.COPY_SRC);
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: inBuf } }, { binding: 1, resource: { buffer: outBuf } }] }));
+  pass.dispatchWorkgroups(Math.ceil(n / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const got = new Float32Array(await readBack(device, outBuf, n * 9 * 4));
+  let bad = 0;
+  cases.forEach((c, i) => {
+    const f = ptFrameFromTangent(c.nrm, c.tan, c.rot);
+    [...f.t, ...f.b, ...f.n].forEach((cv, k) => {
+      if (Math.abs((got[i * 9 + k] as number) - cv) > 2e-5) {
+        bad++;
+        note(`aniso frame case ${i} component ${k}: gpu ${got[i * 9 + k]} cpu ${cv}`);
+      }
+    });
+  });
+  metrics.aniso_frame_mismatch = bad;
+  metrics.aniso_frame_cases = n;
 }
 
 type Vec3 = [number, number, number];
@@ -297,6 +356,7 @@ try {
   const device = await adapter.requestDevice();
   deviceErrors = watchDevice(device);
   await checkAdapter(device, ptol);
+  await checkFrame(device, count);
   await checkLobes(device, count, ptol, tol);
   await checkLobes(device, count, ptol, tol, { layering: 'stochastic', maxDepth: 64, nSamples: 1, exitMis: 'pbrt' }, 'stochastic_');
   await drainDevice(device);

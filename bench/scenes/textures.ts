@@ -41,7 +41,8 @@ export function generateTexture(desc: TextureDesc): GeneratedTexture {
           const cx = Math.floor((x * desc.cells) / width);
           const cy = Math.floor((y * desc.cells) / height);
           const c = desc.marker && cx === 0 && cy === 0 ? desc.marker : (cx + cy) % 2 === 0 ? desc.a : desc.b;
-          put(x, y, c[0], c[1], c[2]);
+          const isMarker = !!desc.marker && cx === 0 && cy === 0;
+          put(x, y, c[0], c[1], c[2], isMarker ? 255 : (cx + cy) % 2 === 0 ? (desc.alphaA ?? 255) : (desc.alphaB ?? 255));
           break;
         }
         case 'solid':

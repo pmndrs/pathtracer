@@ -216,7 +216,7 @@ export function renderMarkdown(j: CoverageJson): string {
   L.push('| symbol | measured columns | pbrt / Mitsuba columns |');
   L.push('| --- | --- | --- |');
   L.push(`| ● | full render is at least ${j.thresholds.sensitivity}x the noise away from the stripped render, and (reference class A / B) agrees with the reference: excess relMSE over own noise within ${j.thresholds.agreeA} x (A) or ${j.thresholds.agreeB} x (B) of the floor relMSE(Mitsuba, pbrt) | exact: the exporter writes it without any approximation note |`);
-  L.push('| ◐ | distinguishable but off the reference | approximate (class B layering, tint, unverified tangent) or only a coverage fallback is written (class C approximation) |');
+  L.push('| ◐ | distinguishable but off the reference | approximate (class B layering, tint) or only a coverage fallback is written (class C approximation) |');
   L.push('| ○ | indistinguishable from stripped (or the renderer failed) | not expressible: the exporter drops the feature |');
   L.push('| – | no scene yet | |');
   L.push('');

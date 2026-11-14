@@ -14,8 +14,7 @@
  * with Spherical Caps", HPG 2023 (formulas from the paper, original code).
  *
  * Not here on purpose: multiple-scattering compensation (the references do not have it; a Turquin LUT is a later
- * option), anisotropic rotation (alphaX/alphaY are kept in the struct, the frame has no tangent rotation yet),
- * absorption (the interior medium is path state, P2.22). The thin-walled dielectric (`PT_BSDF_THIN`) is pbrt's
+ * option), absorption (the interior medium is path state, P2.22). The anisotropic frame is `ptFrameFromTangent` (P2.26). The thin-walled dielectric (`PT_BSDF_THIN`) is pbrt's
  * `ThinDielectricBxDF`.
  */
 
@@ -69,6 +68,11 @@ export interface PtBsdfOptions {
    * scene without thin-walled materials keeps the kernel text and size.
    */
   thin?: boolean;
+  /**
+   * WGSL only: compile `ptFrameFromTangent` (anisotropic conductors, P2.26) into the kernel. Default false: a scene without
+   * anisotropic metals keeps the kernel text and size.
+   */
+  aniso?: boolean;
 }
 
 export interface PtBsdfEval {
@@ -279,6 +283,30 @@ export function ptFrameFromNormal(n: PtVec3): { t: PtVec3; b: PtVec3; n: PtVec3 
   const a = -1 / (s + n[2]);
   const b = n[0] * n[1] * a;
   return { t: [1 + s * n[0] * n[0] * a, s * b, -s * n[0]], b: [b, s + n[1] * n[1] * a, -n[1]], n };
+}
+
+/**
+ * Shading frame for an anisotropic lobe (P2.26): local +X (the alpha_x axis) along the tangent made orthogonal to `n` (Gram-Schmidt),
+ * rotated by `rotation` radians about `n` counter-clockwise from the tangent toward the bitangent `cross(n, t) * tangent[3]`
+ * (glTF `anisotropyRotation`), local +Z = n. A tangent that is zero or parallel to `n` falls back to `ptFrameFromNormal`.
+ * `tangent[3]` is the glTF handedness (+1 / -1); it only decides which way a nonzero rotation turns.
+ */
+export function ptFrameFromTangent(n: PtVec3, tangent: readonly [number, number, number, number], rotation = 0): { t: PtVec3; b: PtVec3; n: PtVec3 } {
+  const d = tangent[0] * n[0] + tangent[1] * n[1] + tangent[2] * n[2];
+  const x: PtVec3 = [tangent[0] - n[0] * d, tangent[1] - n[1] * d, tangent[2] - n[2] * d];
+  const l2 = dot(x, x);
+  if (!(l2 > 1e-12)) return ptFrameFromNormal(n);
+  const inv = 1 / Math.sqrt(l2);
+  const t0: PtVec3 = [x[0] * inv, x[1] * inv, x[2] * inv];
+  let t = t0;
+  if (rotation !== 0) {
+    const c = Math.cos(rotation);
+    const s = Math.sin(rotation);
+    const w = tangent[3] < 0 ? -1 : 1;
+    const bt: PtVec3 = [(n[1] * t0[2] - n[2] * t0[1]) * w, (n[2] * t0[0] - n[0] * t0[2]) * w, (n[0] * t0[1] - n[1] * t0[0]) * w];
+    t = [c * t0[0] + s * bt[0], c * t0[1] + s * bt[1], c * t0[2] + s * bt[2]];
+  }
+  return { t, b: [n[1] * t[2] - n[2] * t[1], n[2] * t[0] - n[0] * t[2], n[0] * t[1] - n[1] * t[0]], n };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

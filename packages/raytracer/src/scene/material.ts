@@ -97,6 +97,7 @@ export interface RtMaterial {
   specularColor: Rgb3;
   ior: number;
   specularAnisotropy: number;
+  /** Turns, [0, 1): the anisotropy axis's rotation about the normal from the tangent toward the bitangent, times 2 pi (glTF `anisotropyRotation` is radians; `rotationTurns` in bench/scenes/to-scene-copy.ts converts). */
   anisotropyRotation: number;
   conductorEta: Rgb3;
   conductorK: Rgb3;

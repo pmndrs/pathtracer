@@ -19,6 +19,8 @@ import { writePFM } from '../metrics/pfm.ts';
 import { num, roughnessToAlpha, usedTextures, worldMeshes } from './common.ts';
 import { encodePng } from './png.ts';
 import { deriveOpenPbr, reflectanceToEtaK } from './openpbr.ts';
+import { channelLevels, srgbToLinear, TextureSet } from './textures.ts';
+import type { NativeTexture } from './textures.ts';
 import type { HomogeneousAbsorber, NativeCtx } from './openpbr.ts';
 import type { Exporter, ExportedFile } from './types.ts';
 import type { OpenPbrParams, Rgb } from '../scenes/schema.ts';
@@ -69,11 +71,18 @@ function bsdf(m: MaterialDesc, indent: string, textureFile: (name: string) => st
 }
 
 export interface MitsubaOpenPbr {
-  /** `<bsdf>` XML (already wrapped in `twosided` where the leaf is one-sided). */
+  /** `<bsdf>` XML (already wrapped in `twosided` where the leaf is one-sided; a `mask` BSDF around it for alpha_mode mask). */
   xml: string;
   medium?: HomogeneousAbsorber;
   emission?: Rgb;
+  /** Emission from an image (linear RGB PFM, radiance already scaled): `<texture type="bitmap" name="radiance">`. */
+  emissionFile?: string;
+  /** The material has a `mask` BSDF: the scene needs `volpath` so shadow rays pass through the cut-out part (`path` treats the whole shape as an occluder). */
+  masked?: boolean;
 }
+
+const bitmap = (name: string, file: string, wrap: string, raw: boolean, filter: 'bilinear' | 'nearest' = 'bilinear'): string =>
+  `<texture type="bitmap" name="${name}"><string name="filename" value="${file}"/><string name="filter_type" value="${filter}"/><string name="wrap_mode" value="${wrap}"/><boolean name="raw" value="${raw}"/></texture>`;
 
 /**
  * `openpbr` -> Mitsuba 3 BSDF XML (docs/design/tier1.md section 2):
@@ -98,22 +107,63 @@ export function mitsubaOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx
   const two = (inner: string): string => `<bsdf type="twosided">${inner}</bsdf>`;
   const ior = (n: number): string => `<float name="int_ior" value="${num(n)}"/><float name="ext_ior" value="1.0"/>`;
   const ggx = (a: number): string => `<string name="distribution" value="ggx"/><float name="alpha" value="${num(a)}"/>`;
-  const blend = (a: string, b: string, w: number): string => (w <= 0 ? a : w >= 1 ? b : `<bsdf type="blendbsdf"><float name="weight" value="${num(w)}"/>${a}${b}</bsdf>`);
+  // ----- textures (P2.24): bitmaps. Base colour: sRGB bitmap (`raw false`). Data (roughness alpha = (factor x G)^2, conductor k, metalness weight): float PFMs read `raw`
+  // (no mip maps, bilinear in the stored quantity). Mitsuba has no texture arithmetic, so quantities that are not the texel itself are baked.
+  const tx = d.tex;
+  const ts = ctx.textures;
+  const blend = (a: string, b: string, w: number | string): string => (typeof w === 'number' ? (w <= 0 ? a : w >= 1 ? b : `<bsdf type="blendbsdf"><float name="weight" value="${num(w)}"/>${a}${b}</bsdf>`) : `<bsdf type="blendbsdf">${w}${a}${b}</bsdf>`);
+  const baseXml = (name: string): string => (tx.base ? bitmap(name, ts!.image(tx.base), tx.base.wrap, false) : rgb(name, d.base));
+  const alphaXml = (a: number): string => (tx.mr ? bitmap('alpha', ts!.plane(tx.mr, `alpha-${num(m.specularRoughness)}`, (_r, g) => (m.specularRoughness * (g / 255)) ** 2), tx.mr.wrap, true) : `<float name="alpha" value="${num(a)}"/>`);
+  if (tx.base) note(`base colour texture '${tx.base.key}' (${tx.base.width}x${tx.base.height}, sRGB, wrap ${tx.base.wrap}): bitmap bilinear, level 0 only`);
+  if (tx.mr) note(`metallic-roughness texture: roughness alpha = (${m.specularRoughness} x G)^2 baked into a float PFM (bilinear in alpha, not in G: second-order difference), metalness ${m.baseMetalness} x B as the blendbsdf weight bitmap`);
 
   const metalLeaf = (): string => {
     if (m.specularColor.some((c) => c !== 1)) note('specular_color != 1 on a metal (F82 tint) is ignored: reflectance = base_color is the F0');
     const { eta, k } = reflectanceToEtaK(d.base);
+    if (tx.base) {
+      // conductor eta = 1 and k per texel from the reflectance (k = 2 sqrt(r) / sqrt(1 - r), r clamped to 0.9999): a float PFM, filtered bilinearly in k (not in r)
+      if (m.coatWeight > 0) need('a clear coat on a textured metal', 'the bare textured metal');
+      const kPfm = ts!.rgb(tx.base, 'k', (r, g, b) => reflectanceToEtaK([srgbToLinear(r), srgbToLinear(g), srgbToLinear(b)]).k as unknown as [number, number, number]);
+      note('textured conductor: eta 1 and k baked per texel from the base colour (PFM, raw), so bilinear filtering blends k rather than reflectance (differs from pbrt within one texel of an edge)');
+      return two(`<bsdf type="roughconductor"><string name="distribution" value="ggx"/>${alphaXml(d.alphaU)}${optical('eta', eta)}${bitmap('k', kPfm, tx.base.wrap, true)}</bsdf>`);
+    }
     if (m.coatWeight > 0) {
       need('a clear coat on a metal (pbrt coatedconductor)', "`principled` with clearcoat (Disney lobes, metallic 1)");
       return two(`<bsdf type="principled">${rgb('base_color', d.base)}<float name="metallic" value="1.0"/><float name="roughness" value="${num(m.specularRoughness)}"/><float name="clearcoat" value="${num(m.coatWeight)}"/><float name="clearcoat_gloss" value="${num(1 - m.coatRoughness)}"/></bsdf>`);
     }
+    if (tx.mr) return two(`<bsdf type="roughconductor"><string name="distribution" value="ggx"/>${alphaXml(d.alphaU)}${optical('eta', eta)}${optical('k', k)}</bsdf>`);
     if (d.alphaU === 0 && d.alphaV === 0) return two(`<bsdf type="conductor">${optical('eta', eta)}${optical('k', k)}</bsdf>`);
     const alpha = d.anisotropic ? `<float name="alpha_u" value="${num(d.alphaU)}"/><float name="alpha_v" value="${num(d.alphaV)}"/>` : `<float name="alpha" value="${num(d.alphaU)}"/>`;
     return two(`<bsdf type="roughconductor"><string name="distribution" value="ggx"/>${alpha}${optical('eta', eta)}${optical('k', k)}</bsdf>`);
   };
-  const plastic = (n: number, alpha: number): string =>
-    two(alpha === 0 ? `<bsdf type="plastic">${ior(n)}${rgb('diffuse_reflectance', d.base)}<boolean name="nonlinear" value="true"/></bsdf>` : `<bsdf type="roughplastic">${ggx(alpha)}${ior(n)}${rgb('diffuse_reflectance', d.base)}<boolean name="nonlinear" value="true"/></bsdf>`);
-  const diffuseLeaf = (): string => two(`<bsdf type="diffuse">${rgb('reflectance', d.base)}</bsdf>`);
+  const plasticLeaf = (n: number, alpha: number): string =>
+    alpha === 0 ? `<bsdf type="plastic">${ior(n)}${baseXml('diffuse_reflectance')}<boolean name="nonlinear" value="true"/></bsdf>` : `<bsdf type="roughplastic">${ggx(alpha)}${ior(n)}${baseXml('diffuse_reflectance')}<boolean name="nonlinear" value="true"/></bsdf>`;
+  /**
+   * `roughplastic` takes a float alpha, not a texture. A roughness texture with at most 8 distinct levels (MetalRoughSpheres: 7 columns) becomes a chain
+   * `blend(p_0, blend(p_1, ... p_k, w_{k-1}), w_0)` where `w_i` is the 0/255 indicator "nearest level > i" read bilinearly (exact inside a level, a mix across a
+   * boundary); more levels have no exact form (coverage: the plastic with the mean alpha).
+   */
+  const roughPlasticTextured = (n: number): string => {
+    const t = tx.mr!;
+    const levels = channelLevels(t, 1);
+    const alphaOf = (g: number): number => (m.specularRoughness * (g / 255)) ** 2;
+    if (levels.length > 8) {
+      need(`a roughness texture with ${levels.length} levels on a dielectric over diffuse (roughplastic takes a float alpha)`, 'roughplastic with the mean alpha');
+      let sum = 0;
+      for (let i = 0; i < t.width * t.height; i++) sum += alphaOf(t.data[i * 4 + 1]!);
+      return two(plasticLeaf(n, sum / (t.width * t.height)));
+    }
+    const nearest = (g: number): number => levels.reduce((best, v, i) => (Math.abs(v - g) < Math.abs(levels[best]! - g) ? i : best), 0);
+    note(`roughness texture on a dielectric over diffuse: ${levels.length} roughness levels (${levels.join(', ')}) as a blendbsdf chain of plastics (roughplastic takes a float alpha), levels weighted by 0/1 bitmaps`);
+    let chain = plasticLeaf(n, alphaOf(levels[levels.length - 1]!));
+    for (let i = levels.length - 2; i >= 0; i--) {
+      const w = bitmap('weight', ts!.indicator(t, `lvl${i}-of${levels.length}-${levels.join('_')}`, (_r, g) => nearest(g) > i), t.wrap, true);
+      chain = `<bsdf type="blendbsdf">${w}${plasticLeaf(n, alphaOf(levels[i]!))}${chain}</bsdf>`;
+    }
+    return two(chain);
+  };
+  const plastic = (n: number, alpha: number, roughnessTexture = false): string => (roughnessTexture && tx.mr ? roughPlasticTextured(n) : two(plasticLeaf(n, alpha)));
+  const diffuseLeaf = (): string => two(`<bsdf type="diffuse">${baseXml('reflectance')}</bsdf>`);
   const opaqueLeaf = (): string => {
     if (m.subsurfaceWeight > 0) {
       need('thin-walled diffuse transmission (subsurface_weight > 0)', 'the diffuse reflection only (no transmitted light)');
@@ -129,7 +179,7 @@ export function mitsubaOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx
     if (m.specularWeight <= 0 || d.ior === 1) return diffuseLeaf();
     if (d.anisotropic) note('anisotropic dielectric over diffuse: roughplastic has an isotropic alpha (u alpha used)');
     note('dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent');
-    return plastic(d.ior, d.alphaU);
+    return plastic(d.ior, d.alphaU, true);
   };
   const glassLeaf = (): string => {
     if (m.transmissionDispersionScale > 0) need('dispersion (transmission_dispersion_scale > 0)', `a constant IOR of ${d.ior} (no dispersion)`);
@@ -148,27 +198,50 @@ export function mitsubaOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx
     note(`transmission_weight ${m.transmissionWeight} < 1: linear blend of the opaque dielectric and the glass (OpenPBR layers them)`);
     return blend(opaqueLeaf(), g, m.transmissionWeight);
   };
-  const xml = d.metal >= 1 ? metalLeaf() : d.metal <= 0 ? dielectric() : blend(dielectric(), metalLeaf(), d.metal);
-  return { xml, medium: d.metal < 1 ? d.medium : undefined, emission: d.emission };
+  let xml: string;
+  if (tx.mr) xml = d.metal > 0 ? blend(dielectric(), metalLeaf(), bitmap('weight', ts!.plane(tx.mr, `metal-${num(m.baseMetalness)}`, (_r, _g, b) => m.baseMetalness * (b / 255)), tx.mr.wrap, true)) : dielectric();
+  else xml = d.metal >= 1 ? metalLeaf() : d.metal <= 0 ? dielectric() : blend(dielectric(), metalLeaf(), d.metal);
+  // alpha mask: `mask` BSDF over the shading BSDF. Its opacity is a bitmap that is 0 or 1: opacity x alpha >= cutoff on an f-times finer grid, read with `nearest`.
+  let masked = false;
+  if (d.mask) {
+    const { opacity, cutoff, texture } = d.mask;
+    let op: string | undefined;
+    if (texture) {
+      const { file, factor } = ts!.maskPng(texture, opacity, cutoff);
+      op = bitmap('opacity', file, texture.wrap, true, 'nearest');
+      note(`alpha mask: Mitsuba's mask BSDF is a stochastic opacity, so it reads a 0/255 bitmap of (opacity x alpha >= ${cutoff}) evaluated ${factor}x finer than the texture with the same bilinear interpolation (contour exact to ${(1 / (2 * factor)).toFixed(3)} texel); the shape needs volpath for shadow rays to pass through`);
+    } else op = `<float name="opacity" value="${opacity >= cutoff ? 1 : 0}"/>`;
+    xml = `<bsdf type="mask">${op}${xml}</bsdf>`;
+    masked = true;
+  }
+  // emissive texture: linear radiance PFM (texel decoded from sRGB x emission_color x emission_luminance), see `emissionFile`
+  let emissionFile: string | undefined;
+  if (tx.emissive && d.emission) {
+    const e = d.emission;
+    emissionFile = ts!.rgb(tx.emissive, `emis-${matName.replace(/[^A-Za-z0-9_-]+/g, '_')}`, (r, g, b) => [srgbToLinear(r) * e[0], srgbToLinear(g) * e[1], srgbToLinear(b) * e[2]]);
+    note(`emissive texture '${tx.emissive.key}': area emitter radiance is a raw float PFM of the decoded texels x ${e.join(' ')}`);
+  }
+  return { xml, medium: d.metal < 1 ? d.medium : undefined, ...(emissionFile ? {} : { emission: d.emission }), ...(emissionFile ? { emissionFile } : {}), ...(masked ? { masked } : {}) };
 }
 
 export const toMitsuba: Exporter = (scene, opts) => {
   const approximations: string[] = [];
   const files: ExportedFile[] = [];
   const c = scene.camera;
-  const ctx: NativeCtx = { renderer: 'mitsuba', coverage: opts.coverage === true, layered: { maxDepth: 0, nSamples: 0 }, notes: new Set() };
+  const ctx: NativeCtx = { renderer: 'mitsuba', coverage: opts.coverage === true, layered: { maxDepth: 0, nSamples: 0 }, notes: new Set(), textures: new TextureSet(scene) };
   const openpbr = new Map<string, MitsubaOpenPbr>();
   for (const w of scene.meshes) {
     const m = scene.materials[w.material];
     if (m?.type === 'openpbr' && !openpbr.has(w.material)) openpbr.set(w.material, mitsubaOpenPbr(w.material, m, ctx));
   }
-  const volumetric = [...openpbr.values()].some((o) => o.medium);
+  const volumetric = [...openpbr.values()].some((o) => o.medium || o.masked);
   const noRr = scene.integrator.rrStartDepth === undefined;
   const maxDepth = scene.integrator.maxDepth + 1;
   const rrDepth = noRr ? 1_000_000 : Math.max(1, scene.integrator.rrStartDepth!);
   const x: string[] = [];
   x.push(`<scene version="3.0.0">`);
   x.push(`  <!-- ${scene.name}: ${scene.purpose.replace(/--/g, '-')} -->`);
+  if ([...openpbr.values()].some((o) => o.masked)) approximations.push('mitsuba: alpha-masked shapes use the `volpath` integrator (its emitter sampling passes shadow rays through a mask BSDF per point; `path` would treat the cut-out part as an occluder).');
   if (volumetric) approximations.push('mitsuba: absorption-only interior media use the `volpath` integrator (same max_depth and rr_depth rules as `path`); homogeneous medium with sigma_t = -ln(T)/depth per RGB channel (written as scale = max sigma and rgb = sigma / max sigma, because an `rgb` medium value must lie in [0, 1]), albedo 0.');
   x.push(`  <integrator type="${volumetric ? 'volpath' : 'path'}">`);
   x.push(`    <integer name="max_depth" value="${maxDepth}"/>`);
@@ -213,16 +286,19 @@ export const toMitsuba: Exporter = (scene, opts) => {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
     files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh, { flipV: MITSUBA_FLIP_V }) });
-    const emitter = (rad: readonly number[]) => `    <emitter type="area">${rgb('radiance', rad)}</emitter>`;
+    if (m.type === 'openpbr' && (m.specularRoughnessAnisotropy ?? 0) > 0 && !w.mesh.uvs) approximations.push(`mitsuba: mesh '${w.desc.name}' is anisotropic but has no uvs: the GGX axis is Mitsuba's default uv frame, not a tangent the other renderers share (P2.26)`);
+    const emitter = (rad: readonly number[] | string) => `    <emitter type="area">${typeof rad === 'string' ? bitmap('radiance', rad, 'clamp', true) : rgb('radiance', rad)}</emitter>`;
     x.push(`  <shape type="ply">`);
     x.push(`    <string name="filename" value="${w.stem}.ply"/>`);
     const o = m.type === 'openpbr' ? openpbr.get(w.desc.material)! : undefined;
     let emission = w.desc.emission;
+    let emissionFile: string | undefined;
     let twoSided = w.desc.twoSided === true;
-    if (o?.emission) {
+    if (o?.emission || o?.emissionFile) {
       if (emission) throw new Error(`mesh '${w.desc.name}': both the mesh and its openpbr material emit; use one`);
-      emission = o.emission;
       twoSided = m.type === 'openpbr' && m.emissionTwoSided === true;
+      if (o.emissionFile) emissionFile = o.emissionFile;
+      else emission = o.emission;
     }
     const shapeBsdf = o ? `    ${o.xml}` : bsdf(m, '    ', textureFile);
     // `rgb` on a spectrum-typed medium parameter is read as a reflectance and must lie in [0, 1]: sigma_t = scale * rgb with rgb = sigma / max(sigma)
@@ -230,21 +306,22 @@ export const toMitsuba: Exporter = (scene, opts) => {
     const medium = o?.medium ? `    <medium name="interior" type="homogeneous">${rgb('sigma_t', o.medium.sigma.map((v) => Number((v / sMax).toPrecision(9))))}${rgb('albedo', [0, 0, 0])}<float name="scale" value="${sMax}"/></medium>` : undefined;
     x.push(shapeBsdf);
     if (medium) x.push(medium);
-    if (emission) x.push(emitter(emission));
+    if (emission || emissionFile) x.push(emitter((emission ?? emissionFile)!));
     x.push(`  </shape>`);
-    if (emission && twoSided) {
+    if ((emission || emissionFile) && twoSided) {
       files.push({ path: `${w.stem}-back.ply`, data: encodePly(flipMesh(w.mesh)) });
       x.push(`  <shape type="ply">`);
       x.push(`    <string name="filename" value="${w.stem}-back.ply"/>`);
       x.push(shapeBsdf);
       if (medium) x.push(medium);
-      x.push(emitter(emission));
+      x.push(emitter((emission ?? emissionFile)!));
       x.push(`  </shape>`);
       approximations.push(`mitsuba: two-sided emitter '${w.desc.name}' exported as two coincident one-sided emitters (front + flipped copy); light sampling sees 2x the emitter area.`);
     }
   }
   x.push(`</scene>`);
   approximations.push(...ctx.notes);
+  files.push(...ctx.textures!.files.values());
   files.push({ path: 'scene.xml', data: x.join('\n') + '\n' });
   return { sceneFile: 'scene.xml', files, approximations };
 };

@@ -111,6 +111,7 @@ sidecar has no "coverage" flag: coverage renders are recognised by their `covera
 | MetalRoughSpheresNoTextures (768x768) | 275 / 178 | 0.2910 0.2678 0.2390 | 0.2889 0.2656 0.2365 | 1.5e-3 | -0.85% | 11.8% |
 | IORTestGrid-notex (640x768, coverage) | 347 / 373 | 0.2962 0.3069 0.3622 | 0.2965 0.3072 0.3625 | 5.2e-4 | +0.09% | 0.77% |
 | IORTestGrid-notex-A (640x768, class A only: S0.25 spheres dropped) | 271 / 238 | 0.3368 0.3487 0.4104 | 0.3370 0.3489 0.4105 | 3.1e-4 | +0.0% | - |
+| AnisotropyStrengthTest-notex (768x768, class A: 49 white metals, P2.26; 4096 spp, load avg 14-20) | 259 / 173 | 0.4970 0.5109 0.5941 | 0.4942 0.5079 0.5902 | 1.31e-3 | -0.58% | 11.6% (16x16), 5.8% (32x32) |
 | ClearCoatTest-notex (1024x384) | 195 / 141 | 0.2984 0.2465 0.2918 | 0.2885 0.2484 0.2919 | 2.5e-3 | -0.95% | 17.0% |
 | SheenTestGrid-notex (768x768, coverage) | 423 / 280 | 0.2422 0.2495 0.3452 | 0.2414 0.2504 0.3421 | 6.0e-4 | -0.35% | 5.2% |
 
@@ -133,6 +134,14 @@ Per-region verdicts (masks = projected bounds of each glTF material group, shrun
 - **ClearCoat (Simple row):** Coating (coat-only, class A) 0.02%; Base -2.7% (R -7%, G +2%); Coated -9.1% (R -15%, G +22%): class B layered models differ by colour.
 - **IOR:** 20 regions, M/P between -0.20% and +0.58%, relMSE 1.7e-6..1.7e-3 (black bases lowest). Specular 0.25 (class C) agrees as well as specular 1 because both exporters use the same IOR-based F0 scale.
 - **IOR-A variant** (`IORTestGrid-notex-A`, the ten S0.25 spheres dropped so no class C reflection reaches the class A spheres; `node bench/references/render.ts --scenes IORTestGrid-notex-A --renderers pbrt,mitsuba --spp 4096`): all ten class A spheres M/P within -0.27..+0.52%; our megakernel agrees to relMSE 2.7e-4 (pbrt) / 2.1e-4 (Mitsuba) against the 3.1e-4 floor, relBias +0.03% / -0.03%. This is the gating IOR reference; the full scene stays coverage for class C (specular 0.25).
+- **AnisotropyStrengthTest-notex** (P2.26; `node bench/references/render.ts --scenes AnisotropyStrengthTest-notex --renderers pbrt,mitsuba --spp 4096`; the label plane dropped, no backdrop in the model so the 49 spheres hang in the sky; film 768x768;
+  ours: `node bench/adapters/matrix.ts --renderers pt-megakernel --scenes AnisotropyStrengthTest-notex --spp 4096 --extra pt_tint=0 [--extra pt_tangent=uv]`, 20 s). Grid: column x = -3..3 is the glTF roughness 0..1 (step 1/6), row y = 0..6 the anisotropy strength 0..1 (row 0 and the
+  roughness 1 column are isotropic); 36 of the 49 materials are anisotropic, all class A (white pure metal). **Floor** (Mitsuba vs pbrt, whole image) relMSE 1.31e-3, so the gate is 1.97e-3 (1.5x); per sphere median floor 4.8e-4, max 1.2e-3. The pbrt-vs-Mitsuba difference is
+  the large-alpha end (Smith G, as MetalRoughSpheres): luminance M/P -2.6 .. -2.8% in the roughness 1 column, -1.1 .. -2.0% along strength 1 (alpha_t = 1, alpha_b = 0), 0 .. -0.5% elsewhere, whole image -0.58%. 0 non-finite pixels, no negative pbrt channels.
+  **Ours vs pbrt** (tangent = glTF TANGENT, the default / dp/du per triangle, `pt_tangent=uv`): relBias +0.02% / +0.03%, relMSE 5.7e-4 / 2.7e-4 (both under the gate), 16x16 block means max 2.05% / 2.05% (rms 0.21% / 0.18%) against the references' own 11.6% (rms 1.76%); per sphere the
+  luminance is within 0.2% everywhere, relMSE median 2.3e-4 / 1.6e-4 (max 4.5e-3 / 7.5e-4). With the vertex TANGENT 12 of the 49 spheres (columns 0-2, rows 2-6, the most anisotropic smooth ones) are above 1.5x their own floor (7e-4 .. 4.5e-3 against 4e-4 .. 9e-4): the
+  flat-shaded sphere's triangles have a dp/du a few degrees off the smooth TANGENT (V75), which moves the stripe, not the mean; with per-triangle dp/du none is. Ours vs Mitsuba: relBias +0.63% (= Mitsuba's own -0.58% against pbrt), relMSE 1.5e-3 / 1.2e-3 (floor 1.31e-3). Class A gate against pbrt:
+  passes the section 6 rule with `pt_tangent=uv` and the whole-image numbers with the default; the bias against Mitsuba is Mitsuba's G.
 - **Sheen:** all 16 spheres M/P -3.6..-4.0% including sheenColor 0: the class B base dielectric, not sheen (neither renderer has it).
 - **Thinwall:** 10 regions within +-0.1% (relBias), IOR 1.0 thin sphere invisible (centre pixel -0.1% / -0.2% of the backdrop).
 - **Emissive:** G at the five cube centres (strength 1, 2, 4, 8, 16) 0.481 / 1.013 / 2.011 / 4.011 / 8.009 in pbrt, 0.483 / 1.013 / 2.012 / 4.014 / 8.016 in
@@ -183,3 +192,22 @@ Explained systematic differences:
    constant `spectrum`, which is exact everywhere.
 4. pbrt can write tiny negative pixel values on saturated colours (spectral -> sRGB gamut), e.g. -0.0017 on the Cornell red wall.
 5. Facet-trapped internal reflections: flat-shaded dielectric sphere needs maxDepth 1000 (0.1% energy lost at 100).
+
+## Tier 1 wave 2 (P2.24: textured, unmodified models; Nov 14, 4096 spp, one native render at a time)
+
+Results and verdicts: `bench/results/TIER1-WAVE2.md`. Scenes `IORTestGrid`, `IORTestGrid-A` (class C spheres dropped, the gate), `SheenTestGrid`, `AttenuationTest`, `MetalRoughSpheres` and the synthetic `tex-mask`.
+
+```
+node bench/references/render.ts --scenes IORTestGrid,SheenTestGrid --renderers pbrt,mitsuba --spp 4096 --coverage     # class C spheres / sheen: coverage
+node bench/references/render.ts --scenes AttenuationTest,IORTestGrid-A,tex-mask --renderers pbrt,mitsuba --spp 4096
+node bench/references/render.ts --scenes MetalRoughSpheres --renderers pbrt,mitsuba --spp-pbrt 4096 --spp-mitsuba 1024   # Mitsuba: 31 s at 64 spp (the 500k-triangle mesh and 8 bitmaps), 4096 would be ~33 min
+```
+
+- **Textures in `openpbr` materials** (`exporters/textures.ts`; the exporters wrote only `diffuse.reflectanceTexture` before): base colour, metallic-roughness and emissive slots, base colour alpha MASK. Files are `tex-<texture>[-role].png|pfm`
+  next to `scene.pbrt` / `scene.xml`; colour PNGs are written without alpha. A base colour texture needs `baseColor` [1,1,1]; normal maps throw (`coverage` drops them); `mirror` wrap throws (pbrt-v4 has none).
+- **pbrt:** float `imagemap` per data channel (channel 0 is what a float texture reads: grey PNG of G and of B, `encoding linear`), roughness alpha = G x G by a `scale` texture (pbrt's own remap is sqrt, so `remaproughness false`), metalness as the `mix` amount
+  texture, alpha MASK as a shape `"texture alpha"` = `scale(2, mix(0.5 - K cutoff, imagemap(A, scale K opacity), 0.5))`, K = 1000 (pbrt keeps a hit with probability alpha when 0 < alpha < 1). Emission from a texture: a linear PFM in `AreaLightSource "diffuse" "string filename"`.
+- **Mitsuba:** no texture arithmetic, so the baked quantities are PFMs read `raw`: conductor `k` from the base colour, alpha = (factor G)^2, metalness `blendbsdf` weight; a roughness texture over a dielectric becomes a `blendbsdf` chain of `roughplastic`s over at most 8 levels (`roughplastic`
+  takes a float alpha). `mask` BSDF with a thresholded opacity bitmap (`nearest`) and `volpath` (shadow rays pass through a `mask` there only). See DIVERGES V77-V79.
+- Checks: `bench/exporters/textures.test.ts` (files and numbers per texture kind), `tex-mask` (pbrt vs Mitsuba vs ours: +0.02% / +0.16%, shadows through the holes agree).
+

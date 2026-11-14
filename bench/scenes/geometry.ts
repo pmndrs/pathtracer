@@ -371,7 +371,18 @@ export function transformMesh(local: TriangleMesh, m: Mat4 | undefined): Triangl
       indices[t + 2] = tmp;
     }
   }
-  return { positions, normals, indices, ...(local.uvs ? { uvs: local.uvs } : {}) };
+  let tangents: Float32Array | undefined;
+  if (local.tangents) {
+    // A tangent is a direction (the upper 3x3 of the matrix, renormalised); a mirror flips the winding, so it flips the bitangent sign too.
+    const mirror = determinant3(m) < 0 ? -1 : 1;
+    tangents = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const x = local.tangents[i * 4]!, y = local.tangents[i * 4 + 1]!, z = local.tangents[i * 4 + 2]!;
+      const t = normalize3([m[0]! * x + m[4]! * y + m[8]! * z, m[1]! * x + m[5]! * y + m[9]! * z, m[2]! * x + m[6]! * y + m[10]! * z]);
+      tangents.set([t[0], t[1], t[2], local.tangents[i * 4 + 3]! * mirror], i * 4);
+    }
+  }
+  return { positions, normals, indices, ...(local.uvs ? { uvs: local.uvs } : {}), ...(tangents ? { tangents } : {}) };
 }
 
 /** Total surface area of a triangle mesh. */

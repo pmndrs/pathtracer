@@ -17,6 +17,7 @@ import { equirectToOctahedral, loadEnvImage } from './envmap.ts';
 import { writePFM } from '../metrics/pfm.ts';
 import { num, roughnessToAlpha, shorterAxisFovDeg, usedTextures, vec, worldMeshes } from './common.ts';
 import { encodePng } from './png.ts';
+import { srgbToLinear, TextureSet } from './textures.ts';
 import { cauchyFit, deriveOpenPbr, LAYERED_DEFAULTS, LAYERED_THICKNESS } from './openpbr.ts';
 import type { HomogeneousAbsorber, NativeCtx } from './openpbr.ts';
 import type { Exporter, ExportedFile } from './types.ts';
@@ -44,7 +45,7 @@ function material(m: MaterialDesc, textureName: (name: string) => string): strin
 }
 
 /** One pbrt material node: a leaf (`type` + parameters) or a `mix` of two named nodes (prob. `amount` of the second). */
-type Node = { type: string; params: string } | { type: 'mix'; a: string; b: string; amount: number };
+type Node = { type: string; params: string } | { type: 'mix'; a: string; b: string; amount: number | string };
 
 export interface PbrtOpenPbr {
   /** `MakeNamedMaterial` lines, dependencies first. */
@@ -53,7 +54,16 @@ export interface PbrtOpenPbr {
   use: string;
   medium?: HomogeneousAbsorber;
   emission?: Rgb;
+  /** `Texture` directives the named materials and the shape refer to (emit before `decls`). */
+  textures: string[];
+  /** Extra `Shape` parameters (the alpha cutout), with a leading space. */
+  shapeParams: string;
+  /** Emission from an image (linear RGB PFM, radiance already scaled): `AreaLightSource "diffuse" "string filename"` instead of `rgb L`. */
+  emissionFile?: string;
 }
+
+/** Alpha mask gain: pbrt's alpha is stochastic between 0 and 1, so the interpolated alpha is amplified until the transition is narrower than an 8-bit step. */
+const MASK_GAIN = 1000;
 
 const f = (name: string, v: number): string => `"float ${name}" ${num(v)}`;
 const rgbP = (name: string, v: readonly number[]): string => `"rgb ${name}" [ ${vec(v)} ]`;
@@ -82,10 +92,48 @@ export function pbrtOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx): 
     nodes.push([name, n]);
     return name;
   };
-  const mix = (a: string, b: string, amount: number): string => (amount <= 0 ? a : amount >= 1 ? b : add('mix', { type: 'mix', a, b, amount }));
+  const mix = (a: string, b: string, amount: number | string): string => (typeof amount === 'number' && amount <= 0 ? a : typeof amount === 'number' && amount >= 1 ? b : add('mix', { type: 'mix', a, b, amount }));
   const rough = (prefix: string, uAlpha: number, vAlpha: number): string =>
-    uAlpha === vAlpha ? `${f(`${prefix}roughness`, uAlpha)}` : `${f(`${prefix}uroughness`, uAlpha)} ${f(`${prefix}vroughness`, vAlpha)}`;
+    roughTex ? `"texture ${prefix}roughness" "${roughTex}"` : uAlpha === vAlpha ? `${f(`${prefix}roughness`, uAlpha)}` : `${f(`${prefix}uroughness`, uAlpha)} ${f(`${prefix}vroughness`, vAlpha)}`;
   const layer = `"integer maxdepth" ${ctx.layered.maxDepth} "integer nsamples" ${ctx.layered.nSamples}`;
+
+  // ----- textures (P2.24). Colour: spectrum imagemap decoded from sRGB. Data: one float imagemap per channel file (pbrt reads float textures from channel 0),
+  // linear. Roughness alpha = (factor x G)^2 is a `scale` texture of the G map with itself; the metalness `mix` amount is the B map x factor.
+  const tx = d.tex;
+  const textures: string[] = [];
+  const imagemap = (name: string, kind: 'spectrum' | 'float', file: string, wrap: string, encoding: string, scale?: number): void => {
+    textures.push(`Texture "${name}" "${kind}" "imagemap" "string filename" "${file}" "string filter" "bilinear" "string wrap" "${wrap}" "string encoding" "${encoding}"${scale !== undefined && scale !== 1 ? ` ${f('scale', scale)}` : ''}`);
+  };
+  const baseName = tx.base ? `${stem}.base` : undefined;
+  if (tx.base) imagemap(baseName!, 'spectrum', ctx.textures!.image(tx.base), tx.base.wrap, 'sRGB');
+  let roughTex: string | undefined, metalTex: string | undefined;
+  if (tx.mr) {
+    const file = (c: 1 | 2): string => ctx.textures!.channel(tx.mr!, c);
+    imagemap(`${stem}.g`, 'float', file(1), tx.mr.wrap, 'linear', m.specularRoughness);
+    textures.push(`Texture "${stem}.alpharough" "float" "scale" "texture tex" "${stem}.g" "texture scale" "${stem}.g"`);
+    roughTex = `${stem}.alpharough`;
+    if (d.metal > 0) {
+      imagemap(`${stem}.metal`, 'float', file(2), tx.mr.wrap, 'linear', m.baseMetalness);
+      metalTex = `${stem}.metal`;
+    }
+    note(`metallic-roughness texture: roughness alpha = (${m.specularRoughness} x G)^2 as a scale texture, metalness ${m.baseMetalness} x B as the mix amount (float imagemaps, 8-bit linear, bilinear, wrap ${tx.mr.wrap}; the mix picks a lobe stochastically, exact in expectation)`);
+  }
+  if (tx.base) note(`base colour texture '${tx.base.key}' (${tx.base.width}x${tx.base.height}, sRGB, wrap ${tx.base.wrap}): imagemap bilinear, which still selects a mip level from the scaled camera ray differentials`);
+  const reflectance = (): string => (baseName ? `"texture reflectance" "${baseName}"` : rgbP('reflectance', d.base));
+  let shapeParams = '';
+  if (d.mask) {
+    const { opacity, cutoff, texture } = d.mask;
+    if (!texture) {
+      if (opacity < cutoff) shapeParams = ` "float alpha" 0`;
+    } else {
+      // opaque iff opacity x a >= cutoff, a = the bilinearly filtered alpha: alpha' = 0.5 + K (opacity a - cutoff), K large; pbrt keeps a hit with probability alpha' (>= 1 always, <= 0 never)
+      imagemap(`${stem}.a`, 'float', ctx.textures!.channel(texture, 3), texture.wrap, 'linear', MASK_GAIN * opacity);
+      textures.push(`Texture "${stem}.amix" "float" "mix" "float tex1" ${num(0.5 - MASK_GAIN * cutoff)} "texture tex2" "${stem}.a" "float amount" 0.5`);
+      textures.push(`Texture "${stem}.cut" "float" "scale" "texture tex" "${stem}.amix" "float scale" 2`);
+      shapeParams = ` "texture alpha" "${stem}.cut"`;
+      note(`alpha mask: hard cutoff at ${cutoff} on the bilinear alpha through a gain-${MASK_GAIN} alpha texture (stochastic only inside a band of ${(1 / MASK_GAIN).toPrecision(2)} alpha units)`);
+    }
+  }
 
   // ----- metal end
   const metalNode = (): string => {
@@ -93,13 +141,13 @@ export function pbrtOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx): 
     if (m.coatWeight > 0) {
       const coated = add('coatedconductor', {
         type: 'coatedconductor',
-        params: `${rgbP('reflectance', d.base)} ${rough('conductor.', d.alphaU, d.alphaV)} ${f('interface.roughness', d.coatAlpha)} ${f('interface.eta', m.coatIor)} "float thickness" ${LAYERED_THICKNESS} ${layer} "bool remaproughness" false`,
+        params: `${reflectance()} ${rough('conductor.', d.alphaU, d.alphaV)} ${f('interface.roughness', d.coatAlpha)} ${f('interface.eta', m.coatIor)} "float thickness" ${LAYERED_THICKNESS} ${layer} "bool remaproughness" false`,
       });
       if (m.coatWeight >= 1) return coated;
       note(`coat_weight ${m.coatWeight} < 1: linear mix of the bare conductor and the coated one (OpenPBR scales the coat Fresnel instead)`);
       return mix(add('conductor', { type: 'conductor', params: `${rgbP('reflectance', d.base)} ${rough('', d.alphaU, d.alphaV)} "bool remaproughness" false` }), coated, m.coatWeight);
     }
-    return add('conductor', { type: 'conductor', params: `${rgbP('reflectance', d.base)} ${rough('', d.alphaU, d.alphaV)} "bool remaproughness" false` });
+    return add('conductor', { type: 'conductor', params: `${reflectance()} ${rough('', d.alphaU, d.alphaV)} "bool remaproughness" false` });
   };
 
   // ----- dielectric end
@@ -120,9 +168,9 @@ export function pbrtOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx): 
       if (m.specularWeight > 0) note('diffusetransmission has no specular lobe: exact only with specular_weight 0; the dielectric specular is dropped here (class B\')');
       return add('diffusetransmission', { type: 'diffusetransmission', params: `${rgbP('reflectance', refl)} ${rgbP('transmittance', trans)}` });
     }
-    const diffuse = (): string => add('diffuse', { type: 'diffuse', params: rgbP('reflectance', d.base) });
+    const diffuse = (): string => add('diffuse', { type: 'diffuse', params: reflectance() });
     const coated = (ior: number, uA: number, vA: number): string =>
-      add('coateddiffuse', { type: 'coateddiffuse', params: `${rgbP('reflectance', d.base)} ${rough('', uA, vA)} ${f('eta', ior)} "float thickness" ${LAYERED_THICKNESS} ${layer} "bool remaproughness" false` });
+      add('coateddiffuse', { type: 'coateddiffuse', params: `${reflectance()} ${rough('', uA, vA)} ${f('eta', ior)} "float thickness" ${LAYERED_THICKNESS} ${layer} "bool remaproughness" false` });
     if (m.coatWeight > 0) {
       note('clear coat on a dielectric: coateddiffuse with the coat IOR/roughness as the interface; the base dielectric specular lobe is not added');
       const c = coated(m.coatIor, d.coatAlpha, d.coatAlpha);
@@ -151,16 +199,24 @@ export function pbrtOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx): 
   };
 
   let top: string;
-  if (d.metal >= 1) top = metalNode();
+  if (tx.mr) top = metalTex ? mix(dielectricNode(), metalNode(), metalTex) : dielectricNode();
+  else if (d.metal >= 1) top = metalNode();
   else if (d.metal <= 0) top = dielectricNode();
   else top = mix(dielectricNode(), metalNode(), d.metal);
 
   const decls = nodes.map(([name, n]) =>
     'a' in n
-      ? `MakeNamedMaterial "${name}" "string type" "mix" "string materials" [ "${n.a}" "${n.b}" ] ${f('amount', n.amount)}`
+      ? `MakeNamedMaterial "${name}" "string type" "mix" "string materials" [ "${n.a}" "${n.b}" ] ${typeof n.amount === 'string' ? `"texture amount" "${n.amount}"` : f('amount', n.amount)}`
       : `MakeNamedMaterial "${name}" "string type" "${n.type}" ${n.params}`,
   );
-  return { decls, use: top, medium: d.metal < 1 ? d.medium : undefined, emission: d.emission };
+  // emissive texture: linear radiance (texel decoded from sRGB x emission_color x emission_luminance) as a PFM for `AreaLightSource "diffuse" "string filename"`
+  let emissionFile: string | undefined;
+  if (tx.emissive && d.emission) {
+    const e = d.emission;
+    emissionFile = ctx.textures!.rgb(tx.emissive, `emis-${stem}`, (r, g, b) => [srgbToLinear(r) * e[0], srgbToLinear(g) * e[1], srgbToLinear(b) * e[2]]);
+    note(`emissive texture '${tx.emissive.key}': a float PFM of the decoded texels x ${e.join(' ')}; DiffuseAreaLight reads it bilinearly at the shape uv`);
+  }
+  return { decls, use: top, medium: d.metal < 1 ? d.medium : undefined, ...(emissionFile ? {} : { emission: d.emission }), textures, shapeParams, ...(emissionFile ? { emissionFile } : {}) };
 }
 
 export const toPbrt: Exporter = (scene, opts) => {
@@ -177,7 +233,7 @@ export const toPbrt: Exporter = (scene, opts) => {
   lines.push(`PixelFilter "box" "float xradius" 0.5 "float yradius" 0.5`);
   lines.push(`Sampler "zsobol" "integer pixelsamples" ${opts.spp}`);
   // openpbr materials: named materials (and absorbers) first, so the integrator line knows whether media are in play
-  const ctx: NativeCtx = { renderer: 'pbrt', coverage: opts.coverage === true, layered: { ...LAYERED_DEFAULTS, ...opts.layered }, notes: new Set() };
+  const ctx: NativeCtx = { renderer: 'pbrt', coverage: opts.coverage === true, layered: { ...LAYERED_DEFAULTS, ...opts.layered }, notes: new Set(), textures: new TextureSet(scene) };
   const openpbr = new Map<string, PbrtOpenPbr>();
   for (const w of scene.meshes) {
     const m = scene.materials[w.material];
@@ -189,7 +245,7 @@ export const toPbrt: Exporter = (scene, opts) => {
   lines.push(`Integrator "${volumetric ? 'volpath' : 'path'}" "integer maxdepth" ${scene.integrator.maxDepth}${rrArgs}`);
   lines.push(`WorldBegin`);
   for (const [name, o] of openpbr) {
-    lines.push(...o.decls);
+    lines.push(...o.textures, ...o.decls);
     if (o.medium) lines.push(`MakeNamedMedium "med-${name}" "string type" "homogeneous" "rgb sigma_a" [ ${vec(o.medium.sigma)} ] "rgb sigma_s" [ 0.0 0.0 0.0 ] "float scale" 1.0`);
   }
   if (volumetric) approximations.push('pbrt: absorption-only interior media use `volpath` (patched no-RR, bench/references/pbrt-no-rr.patch) and RGB `sigma_a` that pbrt uplifts to unbounded spectra (a coloured sigma is slightly off per channel: measured by bench/references/openpbr-check.ts).');
@@ -224,28 +280,34 @@ export const toPbrt: Exporter = (scene, opts) => {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
     files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh, { flipV: true }) });
+    if (m.type === 'openpbr' && (m.specularRoughnessAnisotropy ?? 0) > 0 && !w.mesh.uvs) approximations.push(`pbrt: mesh '${w.desc.name}' is anisotropic but has no uvs: the GGX axis is pbrt's default uv frame, not a tangent the other renderers share (P2.26)`);
     lines.push(`AttributeBegin`);
     let emission = w.desc.emission;
+    let emissionFile: string | undefined;
     let twoSided = w.desc.twoSided === true;
     if (m.type === 'openpbr') {
       const o = openpbr.get(w.desc.material)!;
       lines.push(`  NamedMaterial "${o.use}"`);
       if (o.medium) lines.push(`  MediumInterface "med-${w.desc.material}" ""`);
-      if (o.emission) {
+      if (o.emission || o.emissionFile) {
         if (emission) throw new Error(`mesh '${w.desc.name}': both the mesh and its openpbr material emit; use one`);
-        emission = o.emission;
         twoSided = m.emissionTwoSided === true;
+        if (o.emissionFile) emissionFile = o.emissionFile;
+        else emission = o.emission;
       }
     } else {
       lines.push(`  ${material(m, (name) => name)}`);
     }
     if (emission) {
       lines.push(`  AreaLightSource "diffuse" "rgb L" [ ${vec(emission)} ] "bool twosided" ${twoSided ? 'true' : 'false'}`);
+    } else if (emissionFile) {
+      lines.push(`  AreaLightSource "diffuse" "string filename" "${emissionFile}" "bool twosided" ${twoSided ? 'true' : 'false'}`);
     }
-    lines.push(`  Shape "plymesh" "string filename" "${w.stem}.ply"`);
+    lines.push(`  Shape "plymesh" "string filename" "${w.stem}.ply"${m.type === 'openpbr' ? openpbr.get(w.desc.material)!.shapeParams : ''}`);
     lines.push(`AttributeEnd`);
   }
   approximations.push(...ctx.notes);
+  files.push(...ctx.textures!.files.values());
   files.push({ path: 'scene.pbrt', data: lines.join('\n') + '\n' });
   return { sceneFile: 'scene.pbrt', files, approximations };
 };

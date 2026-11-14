@@ -12,6 +12,7 @@ import type { OpenPbrParams, Rgb } from '../scenes/schema.ts';
 import { classifyOpenPbr, openPbrAnisotropyAlphas, resolveOpenPbr } from '../scenes/openpbr.ts';
 import type { OpenPbrResolved } from '../scenes/openpbr.ts';
 import { roughnessToAlpha } from './common.ts';
+import type { NativeTexture, TextureSet } from './textures.ts';
 
 export type NativeRenderer = 'pbrt' | 'mitsuba';
 
@@ -22,6 +23,11 @@ export interface NativeCtx {
   /** Layered-BSDF controls (pbrt `maxdepth` / `nsamples` of `coateddiffuse` and `coatedconductor`). */
   layered: { maxDepth: number; nSamples: number };
   notes: Set<string>;
+  /**
+   * Where the texture files of the scene go (P2.24). Without it an `openpbr` material that names a texture slot throws (or, with `coverage`,
+   * drops the slot); with it base colour, metallic-roughness and emissive textures and a base colour alpha mask are written.
+   */
+  textures?: TextureSet;
 }
 
 /**
@@ -98,8 +104,12 @@ export interface Derived {
   transmissive: boolean;
   /** Absorber for the interior of a closed mesh (transmission_depth > 0 and a non-white transmission_color). */
   medium?: HomogeneousAbsorber;
-  /** Emitted radiance `emission_luminance * emission_color`, or undefined. */
+  /** Emitted radiance `emission_luminance * emission_color`, or undefined. With an emissive texture it is the factor the texel (linear) multiplies. */
   emission?: Rgb;
+  /** Texture slots in use (decoded texels, sRGB base colour and emission, linear metallic-roughness). Only with `ctx.textures`. */
+  tex: { base?: NativeTexture; mr?: NativeTexture; emissive?: NativeTexture };
+  /** `alpha_mode` mask: the shape is cut out where `opacity * alpha >= cutoff` fails; `alpha` = the base colour texture's alpha channel (absent: constant 1). */
+  mask?: { opacity: number; cutoff: number; texture?: NativeTexture };
 }
 
 const TEXTURE_FIELDS = ['baseColorTexture', 'metallicRoughnessTexture', 'normalTexture', 'emissiveTexture'] as const;
@@ -120,14 +130,36 @@ export function deriveOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx)
   if (cls.class === 'C') {
     for (const r of cls.reasons.filter((x) => x.startsWith('C'))) cov(`class ${r}; dropped or approximated`);
   }
+  const tex: Derived['tex'] = {};
   for (const f of TEXTURE_FIELDS) {
-    if (m[f] === undefined) continue;
-    if (!ctx.coverage) throw new Error(`${tag}: texture slot '${f}' is not expressible in the native exporters for openpbr (only diffuse.reflectanceTexture is); pass 'coverage' to drop it`);
-    cov(`texture '${f}' dropped (the factor alone is exported)`);
+    const key = m[f];
+    if (key === undefined) continue;
+    if (!ctx.textures || f === 'normalTexture') {
+      const why = f === 'normalTexture' ? 'a normal map has no exact native equivalent (pbrt `normalmap` and Mitsuba `normalmap` use their own tangent frames)' : 'is not expressible without a texture set (ctx.textures)';
+      if (!ctx.coverage) throw new Error(`${tag}: texture slot '${f}' ${why}; pass 'coverage' to drop it`);
+      cov(`texture '${f}' dropped (the factor alone is exported)`);
+      continue;
+    }
+    let t: NativeTexture;
+    try {
+      t = ctx.textures.get(key);
+    } catch (e) {
+      throw new Error(`${tag}: texture slot '${f}': ${(e as Error).message}`);
+    }
+    const want = f === 'metallicRoughnessTexture' ? 'linear' : 'srgb';
+    if (t.colorSpace !== want) throw new Error(`${tag}: texture '${key}' in slot '${f}' is ${t.colorSpace}; the slot reads ${want} texels`);
+    if (f === 'baseColorTexture') {
+      if (m.baseColor.some((c) => c !== 1) || m.baseWeight !== 1) throw new Error(`${tag}: a base colour texture needs baseColor [1, 1, 1] and baseWeight 1 (neither renderer multiplies an image by a colour without baking it into the texels)`);
+      tex.base = t;
+    } else if (f === 'metallicRoughnessTexture') tex.mr = t;
+    else tex.emissive = t;
   }
+  let mask: Derived['mask'];
   if (m.alphaMode === 'mask') {
-    if (!ctx.coverage) throw new Error(`${tag}: alphaMode mask is not exported (needs texture/alpha support in both exporters); pass 'coverage' to render it opaque`);
-    cov('alpha mask ignored (rendered opaque)');
+    mask = { opacity: m.geometryOpacity, cutoff: m.alphaCutoff, ...(tex.base ? { texture: tex.base } : {}) };
+    note(`alpha_mode mask: cut out where opacity ${m.geometryOpacity} x base colour alpha ${tex.base ? '(texture)' : '(1)'} < cutoff ${m.alphaCutoff}`);
+  } else if (m.alphaMode === 'blend' && m.geometryOpacity < 1) {
+    cov('alpha blend is approximated as opaque');
   }
   if (m.geometryOpacity < 1 && m.alphaMode === 'opaque') note('geometry_opacity < 1 ignored in opaque alpha mode (as in our renderer)');
   if (m.baseDiffuseRoughness > 0) note('base_diffuse_roughness > 0 (Oren-Nayar) is not expressible; the base is Lambertian');
@@ -142,7 +174,7 @@ export function deriveOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx)
     const a = openPbrAnisotropyAlphas(m.specularRoughness, m.specularRoughnessAnisotropy);
     alphaU = a.alphaT;
     alphaV = a.alphaB;
-    note('anisotropic: the GGX tangent axis is the renderer\'s own dp/du of the mesh uvs, not the glTF TANGENT attribute (unverified, P2.26)');
+    note('anisotropic: the GGX tangent axis is the renderer\'s own dp/du of the mesh uvs (the loader carries TEXCOORD_0 for anisotropic materials); on AnisotropyStrengthTest it is the glTF TANGENT within 1.9 deg per vertex (3.7 deg per flat triangle), V75');
   }
   if (m.anisotropyRotation !== 0) note('anisotropy_rotation is ignored (the axis follows the mesh uv frame)');
 
@@ -168,5 +200,6 @@ export function deriveOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx)
     }
   }
   const emission = m.emissionLuminance > 0 ? (m.emissionColor.map((c) => c * m.emissionLuminance) as unknown as Rgb) : undefined;
-  return { m, base, metal, ior, alphaU, alphaV, anisotropic, coatAlpha: roughnessToAlpha(m.coatRoughness), thin: m.geometryThinWalled, transmissive, medium, emission };
+  if (tex.mr && anisotropic) throw new Error(`${tag}: a metallic-roughness texture with anisotropy is not exported (the roughness texture is isotropic)`);
+  return { m, base, metal, ior, alphaU, alphaV, anisotropic, coatAlpha: roughnessToAlpha(m.coatRoughness), thin: m.geometryThinWalled, transmissive, medium, emission, tex, ...(mask ? { mask } : {}) };
 }

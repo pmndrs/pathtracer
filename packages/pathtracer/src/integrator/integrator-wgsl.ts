@@ -43,6 +43,12 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   textureLod?: 'cone' | 0;
   /**
+   * The scene has `alphaMode` MASK materials (P1.4c5; set by the adapter from the scene copy; needs `textures`): a hit whose base colour alpha
+   * times `opacity` is below `alphaCutoff` is passed through without costing a bounce (a hard cutoff, as pbrt's `alpha` texture and Mitsuba's `mask`
+   * BSDF), and shadow rays pass through such hits too (`ptVisibleMasked`). Default false: no mask code at all (the kernel text is unchanged).
+   */
+  alphaMask?: boolean;
+  /**
    * OpenPBR mode (P2.21, P2.22, P2.30): the scene has `openpbr` materials. Selects the OpenPBR material adapter (`ptBsdfFromOpenPbr`) and compiles
    * only the lobes `features` names: stochastic metal/dielectric mix, thin-walled dielectric, layered dielectric-over-diffuse
    * (`layered.layering` albedo | stochastic) and the absorbing interior medium (path state: Beer's law over the distance to the exit
@@ -59,11 +65,12 @@ export interface ResolvedIntegratorOptions {
   sunVisible: boolean;
   textures: boolean;
   textureLod: 'cone' | 0;
+  alphaMask: boolean;
   materials: PtMaterialOptions | null;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, materials: o.materials ?? null };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), materials: o.materials ?? null };
 }
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
@@ -85,11 +92,13 @@ struct PtParams {
 export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const o = resolveIntegratorOptions(options);
   const tex = o.textures;
+  const mask = o.alphaMask;
   const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
   const mats = o.materials;
   const layered = !!mats?.features.layered;
   const stochastic = layered && (mats?.layered?.layering ?? 'albedo') === 'stochastic';
   const medium = !!mats?.features.medium;
+  const aniso = !!mats?.features.aniso;
   const evalFn = layered ? 'ptEval' : 'ptBsdfEval';
   const sampleFn = layered ? 'ptSample' : 'ptBsdfSample';
   const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
@@ -106,7 +115,8 @@ const PT_SUN_VISIBLE: bool = ${o.sunVisible};
 const PT_ORIGIN: f32 = 0.03125;
 const PT_FLOAT_SCALE: f32 = 0.0000152587890625;
 const PT_INT_SCALE: f32 = 256.0;
-${tex ? `const PT_TEX_CONE: bool = ${o.textureLod === 'cone'};
+${mask ? `const PT_MASK_SKIPS: u32 = 64u;
+` : ''}${tex ? `const PT_TEX_CONE: bool = ${o.textureLod === 'cone'};
 const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
 ` : ''}
 fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
@@ -119,7 +129,36 @@ fn ptSideNormal(n: vec3f, w: vec3f) -> vec3f {
     return select(-n, n, dot(n, w) > 0.0);
 }
 
-fn ptMis(pThis: f32, pOther: f32) -> f32 {
+${mask ? `fn ptMaskedOut(hit: RtHit, ray: RtRay) -> bool {
+    let m = rtMaterial(hit.material);
+    if (m.alphaMode != RT_ALPHA_MASK) {
+        return false;
+    }
+    let s = rtSurface(hit, ray, RT_SURF_UV);
+    let a = rtApplyMaterialTextures(m, s.uv, 0.0);
+    return a.opacity < a.alphaCutoff;
+}
+
+fn ptVisibleMasked(ray0: RtRay, mask: u32) -> bool {
+    var ray = ray0;
+    for (var i = 0u; i < PT_MASK_SKIPS; i++) {
+        let hit = rtClosest(ray, mask);
+        if (hit.t < 0.0) {
+            return true;
+        }
+        if (!ptMaskedOut(hit, ray)) {
+            return false;
+        }
+        let p = ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction));
+        ray = RtRay(p, 0.0, ray.direction, ray.tMax - length(p - ray.origin));
+        if (ray.tMax <= 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+` : ''}fn ptMis(pThis: f32, pOther: f32) -> f32 {
     if (!(pThis > 0.0)) {
         return 0.0;
     }
@@ -159,7 +198,7 @@ fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
     } else {
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);
     }
-    if (!rtVisible(ray, RT_MASK_ALL)) {
+    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
         return vec3f(0.0);
     }
     let pl = pick.pmf * li.pdf;
@@ -208,7 +247,8 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     var specularBounce = false;
     var depth = 0u;
     var etaScale = 1.0;
-    var prevP = origin;
+${mask ? `    var skips = 0u;
+` : ''}    var prevP = origin;
     var prevPdf = 0.0;
 ${medium ? `    var sigma = vec3f(0.0);
 ` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
@@ -219,7 +259,7 @@ ${medium ? `    var sigma = vec3f(0.0);
             radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
             break;
         }
-${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME);
+${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
         let coneW = rtConeAt(cone, hit.t);
         let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
         let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);
@@ -227,9 +267,18 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
         if (mat.normalTexture != RT_TEXTURE_NONE) {
             let nr = rtTexRecord(mat.normalTexture);
             shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, rtTexSampleRecord(nr, surf.uv, rtTexLodOf(nr, fp)).xyz);
-        }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL);
+        }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
         let mat = rtMaterial(hit.material);`}
 ${medium ? `        beta = beta * exp(-sigma * hit.t);
+` : ''}${mask ? `        if (mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff) {
+            skips += 1u;
+            if (skips > PT_MASK_SKIPS) {
+                break;
+            }
+            cone = RtCone(coneW, cone.spread);
+            ray = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+            continue;
+        }
 ` : ''}
         if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
             var w = 1.0;
@@ -253,8 +302,12 @@ ${medium ? `        beta = beta * exp(-sigma * hit.t);
         depth += 1u;
 ${layered ? `        ptLayerSeed = pixelSeed ^ (sampleIndex * 2654435761u) ^ (vertex * 2246822519u);
 ` : ''}
-        let frame = ptFrameFromNormal(${shadingNormal});
-        let wo = ptToLocal(frame, -ray.direction);
+${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
+        if (bp.kind == PT_BSDF_CONDUCTOR && mat.specularAnisotropy > 0.0) {
+            frame = ptFrameFromTangent(${shadingNormal}, surf.vertexTangent, mat.anisotropyRotation * 6.283185307179586);
+        }
+` : `        let frame = ptFrameFromNormal(${shadingNormal});
+`}        let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && !ptBsdfIsDelta(bp)) {
             radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex);
         }

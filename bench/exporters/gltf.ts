@@ -132,8 +132,22 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
     const pa = accessors.push({ bufferView: pv, componentType: 5126, count: pos.length / 3, type: 'VEC3', min, max }) - 1;
     const na = accessors.push({ bufferView: nv, componentType: 5126, count: pos.length / 3, type: 'VEC3' }) - 1;
     const ia = accessors.push({ bufferView: iv, componentType: 5125, count: w.mesh.indices.length, type: 'SCALAR' }) - 1;
+    const attributes: Record<string, number> = { POSITION: pa, NORMAL: na };
+    const uvs = w.mesh.uvs;
+    if (uvs) {
+      // TEXCOORD_0 as float VEC2, glTF uv convention (origin top-left): our own web adapter reads it back (readGlbMeshes); the texture images travel beside the glb (export-scenes.ts)
+      const uv = addView(Buffer.from(uvs.buffer, uvs.byteOffset, uvs.byteLength), 34962);
+      attributes['TEXCOORD_0'] = accessors.push({ bufferView: uv, componentType: 5126, count: uvs.length / 2, type: 'VEC2' }) - 1;
+      approx.add('uvs: TEXCOORD_0 is written for meshes whose material reads a texture; the glb carries no texture references or images (our web adapter reads the images from the sidecar files).');
+    }
+    const tangents = w.mesh.tangents;
+    if (tangents) {
+      // TANGENT (xyzw, the loader's world-space glTF tangent) for anisotropic meshes (P2.26); our web adapter reads it back (readGlbMeshes)
+      const tv = addView(Buffer.from(tangents.buffer, tangents.byteOffset, tangents.byteLength), 34962);
+      attributes['TANGENT'] = accessors.push({ bufferView: tv, componentType: 5126, count: tangents.length / 4, type: 'VEC4' }) - 1;
+    }
     const mat = makeMaterial(w.desc.material, m, w.desc.emission, w.desc.twoSided);
-    gltfMeshes.push({ name: w.desc.name, primitives: [{ attributes: { POSITION: pa, NORMAL: na }, indices: ia, material: mat }] });
+    gltfMeshes.push({ name: w.desc.name, primitives: [{ attributes, indices: ia, material: mat }] });
     nodes.push({ name: w.desc.name, mesh: gltfMeshes.length - 1 });
   }
 

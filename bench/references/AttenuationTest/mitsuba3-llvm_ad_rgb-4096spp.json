@@ -1,0 +1,45 @@
+{
+  "scene": "AttenuationTest",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 306.54,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-ryyAN0/scene.xml bench/references/AttenuationTest/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 600,
+      "height": 720,
+      "filter": "box"
+    },
+    "integrator": "volpath",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 17,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 306.3186728954315,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: absorption-only interior media use the `volpath` integrator (same max_depth and rr_depth rules as `path`); homogeneous medium with sigma_t = -ln(T)/depth per RGB channel (written as scale = max sigma and rgb = sigma / max sigma, because an `rgb` medium value must lie in [0, 1]), albedo 0.",
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere).",
+    "mitsuba: material 'm5_LabelMaterial': base colour texture 't0' (512x512, sRGB, wrap repeat): bitmap bilinear, level 0 only",
+    "mitsuba: material 'm5_LabelMaterial': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm12_FlatBackdrop': base colour texture 't2' (256x256, sRGB, wrap repeat): bitmap bilinear, level 0 only",
+    "mitsuba: material 'm12_FlatBackdrop': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm13_R1_Sample_1.0': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "mitsuba: material 'm14_R1_Sample_1.5': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "mitsuba: material 'm15_R1_Sample_2.0': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "mitsuba: material 'm16_R1_Sample_0.50': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "mitsuba: material 'm17_R1_Sample_0.25': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T12:24:35.733Z"
+}

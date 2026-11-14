@@ -37,7 +37,7 @@ export interface GltfSceneOptions {
   normals?: NormalMode;
   /** Carry the material's texture coordinates (default true; only primitives whose material uses a mapped texture get any). */
   uvs?: boolean;
-  /** Carry `TANGENT` (xyzw, transformed) when present. Default false. */
+  /** Carry `TANGENT` (xyzw, transformed) when present, and TEXCOORD_0 on the primitives of anisotropic materials (the uv frame the references derive the tangent from). Default false. */
   tangents?: boolean;
   /** Carry `COLOR_0` as rgba when present. Default false. */
   colors?: boolean;
@@ -318,10 +318,12 @@ export function gltfSceneFromJson(json: GltfJson, buffers: readonly Uint8Array[]
         const idx = prim.indices !== undefined ? read(prim.indices) : Array.from({ length: p.length / 3 }, (_, i) => i);
         const useShading = normalsMode === 'shading' && prim.attributes['NORMAL'] !== undefined;
         const nIn = useShading ? read(prim.attributes['NORMAL']!) : undefined;
-        const uvAttr = wantUv && sm.texCoord !== undefined ? prim.attributes[`TEXCOORD_${sm.texCoord}`] : undefined;
-        if (wantUv && sm.texCoord !== undefined && uvAttr === undefined) notes.push(`material ${mi}: primitive of '${nodeName}' lacks TEXCOORD_${sm.texCoord}; uvs are zero`);
+        // An anisotropic material (P2.26) with `tangents` on also carries TEXCOORD_0: pbrt and Mitsuba take the GGX axis from dp/du of the mesh uvs.
+        const uvSlot = sm.texCoord ?? (opts.tangents && (sm.material.specularRoughnessAnisotropy ?? 0) > 0 ? 0 : undefined);
+        const uvAttr = wantUv && uvSlot !== undefined ? prim.attributes[`TEXCOORD_${uvSlot}`] : undefined;
+        if (wantUv && uvSlot !== undefined && uvAttr === undefined) notes.push(`material ${mi}: primitive of '${nodeName}' lacks TEXCOORD_${uvSlot}; uvs are zero`);
         const uvIn = uvAttr !== undefined ? read(uvAttr) : undefined;
-        const emitUv = wantUv && sm.texCoord !== undefined;
+        const emitUv = wantUv && uvSlot !== undefined;
         const tanIn = opts.tangents && prim.attributes['TANGENT'] !== undefined ? read(prim.attributes['TANGENT']!) : undefined;
         const colIn = opts.colors && prim.attributes['COLOR_0'] !== undefined ? read(prim.attributes['COLOR_0']!) : undefined;
         const colN = colIn ? (json.accessors![prim.attributes['COLOR_0']!]!.type === 'VEC3' ? 3 : 4) : 0;

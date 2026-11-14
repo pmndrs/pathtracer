@@ -343,4 +343,23 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - A glTF-name `replace` on a Tier 1 sidecar (`dropMaterials` / `replace`) is how a metal-base variant of a Khronos scene is made
   (`ClearCoatTest-notex-metal`); `node bench/references/render.ts --scenes <n> --renderers pbrt --spp 4096` renders its pbrt reference in ~8 min on a loaded Mac
   (`--renderers mitsuba --coverage` for the Disney clearcoat stand-in).
+- Textured Tier 1 (P2.24): a metallic-roughness texture decides metalness per texel, so the adapter must give `ptMaterialFeatures` a material with `0 < metalness < 1`
+  (done in `pt-megakernel/index.ts`); with the factor 1 it compiled a pure-metal kernel and every dielectric texel rendered as plain Lambert (MetalRoughSpheres
+  non-metal rows +10..40% bright, flat across roughness). Look at a roughness-by-column strip before trusting any textured scene.
+- Native texture exports (`exporters/textures.ts`): pbrt reads a float imagemap from channel 0 (one grey PNG per data channel, `encoding linear`); `Texture "float"
+  "scale"` multiplies two textures (roughness alpha = G*G; pbrt's own remap is sqrt). Mitsuba has NO texture arithmetic: alpha, conductor k and mask opacity are baked
+  into raw PFM/PNG, `roughplastic` takes only a float `alpha` (blendbsdf chain over <= 8 roughness levels), and a `mask` BSDF needs `volpath` or `path` treats the
+  holes as shadow occluders. pbrt's alpha is stochastic (a < 1): gain 1000 makes the transition narrower than an 8-bit step. Colour PNGs are written without alpha.
+- Alpha MASK in our kernel (`alphaMask`, set by the adapter from the scene copy): shadow rays become closest-hit loops, so the `bvhTraceAny` walk is pruned and the
+  masked kernel is about 1.7 KB SMALLER than the plain textured one (42.4 vs 44.0 KB). No Tier 1 model that is in waves 1-2 uses MASK: `tex-mask` is the test.
+- The web glb export now carries TEXCOORD_0; glTF image textures travel as decoded RGBA8 `<scene>.tex<N>.rgba` next to it (`export-scenes.ts`), never through a browser decoder.
 
+- Anisotropy (P2.26): glTF `TANGENT` is dp/du of the uvs (AnisotropyStrengthTest: per smooth vertex max 1.9 deg, per flat triangle 3.7 deg at the centroid, 5.6 deg at its corners), and pbrt and Mitsuba derive their GGX axis from the
+  mesh uvs and take no tangent input (pbrt `plymesh` none, `trianglemesh` `S` only). So an anisotropic scene mesh must carry TEXCOORD_0 or each renderer falls back to its own default uv frame and they disagree silently:
+  the loader emits uvs for anisotropic materials when `tangents` is on (`gltf-desc.ts` sets both), the exporters add an `approximations` note when a mesh has none. Ours reads the web glb's `TANGENT` (default) or per-triangle dp/du
+  (`pt_tangent=uv`, `uvTangents`); on a faceted sphere the `uv` one matches the references per pixel, the smooth one only on means (README).
+- WGSL `#if` blocks left blank lines in the output (the preprocessor keeps line numbers), so adding one to `rtSurfaceWgsl` changed every kernel's minified bytes by +46. Gate new decode code with a JS template condition
+  (`${o.tangents ? `...\n` : ''}`), then `node bench/size-snapshot.ts` before/after and `cmp`.
+- `anisotropyRotation` in the material record is unorm16 TURNS in [0, 1) (`rotationTurns(radians)` in `to-scene-copy.ts`); the field used to take raw radians and clamp at 1. The exporters ignore the rotation.
+- macOS `sed -i` needs an empty suffix argument (`sed -i '' ...`); `sed -i 's/..//' file` treats the script as the suffix and the file as a command.
+- A second `node bench/references/render.ts` started while another agent's native render runs doubles the load: check `ps -eo command | grep -E "[p]brt|[m]itsuba_render"` first: wait with an `until ! pgrep -f '[b]ench/references/render.ts'` loop first.

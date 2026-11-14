@@ -24,7 +24,11 @@ for (const [name, layered] of Object.entries({ albedo: { layering: 'albedo' }, a
   variants[`pbr-${name}`] = () => ptMegakernelWgsl(caps, { format: {}, layout, ...mat(layered) } as never);
   variants[`pbr-${name}-coatedMetal`] = () => ptMegakernelWgsl(caps, { format: {}, layout, ...mat(layered, { coatedMetal: true }) } as never);
 }
+// Anisotropic metals (P2.26): the layout carries tangents and the material table has an anisotropic metal.
+variants['pbr-aniso'] = () => ptMegakernelWgsl(caps, { format: {}, layout: { ...layout, tangents: true }, ...mat({ layering: 'albedo' }, { aniso: true }) } as never);
 variants.tex = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures });
+// Alpha MASK (P1.4c5): the textured kernel + the cutout pass-through and the masked shadow-ray loop (only compiled for scenes with a MASK material).
+variants['tex-mask'] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true } });
 for (const [name, build] of Object.entries(variants)) {
   try { const code = build(); writeFileSync(`${out}/${name}.wgsl`, code); console.log(name, code.length); } catch (e) { console.log(name, 'skipped', String(e).slice(0, 80)); }
 }

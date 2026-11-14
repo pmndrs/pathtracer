@@ -53,6 +53,12 @@ export interface DescSceneCopyInput extends SceneCopyInput {
   meshNames: string[];
 }
 
+/** glTF `anisotropyRotation` (radians, any sign) as the scene copy's unorm field: turns in [0, 1). */
+export function rotationTurns(radians: number): number {
+  const t = radians / (2 * Math.PI);
+  return t - Math.floor(t);
+}
+
 /** The scene-copy material of one bench material (no emission). Exported so tests can check the mapping. */
 export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => number = (name) => {
   throw new RangeError(`texture '${name}' is not defined`);
@@ -82,7 +88,7 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
       return {
         baseColor: [...m.baseColor], baseWeight: m.baseWeight, metalness: m.baseMetalness,
         specularWeight: m.specularWeight, specularColor: [...m.specularColor], specularRoughness: m.specularRoughness, ior: m.specularIor,
-        specularAnisotropy: m.specularRoughnessAnisotropy, anisotropyRotation: m.anisotropyRotation,
+        specularAnisotropy: m.specularRoughnessAnisotropy, anisotropyRotation: rotationTurns(m.anisotropyRotation),
         transmissionWeight: m.transmissionWeight, transmissionColor: [...m.transmissionColor], transmissionDepth: m.transmissionDepth,
         coatWeight: m.coatWeight, coatColor: [...m.coatColor], coatRoughness: m.coatRoughness, coatIor: m.coatIor,
         sheenWeight: m.fuzzWeight, sheenColor: [...m.fuzzColor], sheenRoughness: m.fuzzRoughness,
@@ -160,7 +166,7 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
               throw new Error(`scene '${scene.name}': mesh '${desc.name}' is file geometry '${geometry.path}'; pass resolveFile`);
             })()
         : tessellate(geometry, desc.uv ? { uv: desc.uv } : {});
-    meshes.push({ positions: local.positions, indices: local.indices, normals: local.normals, ...(local.uvs ? { uvs: local.uvs } : {}) });
+    meshes.push({ positions: local.positions, indices: local.indices, normals: local.normals, ...(local.uvs ? { uvs: local.uvs } : {}), ...(local.tangents ? { tangents: local.tangents } : {}) });
     meshNames.push(desc.name);
     instances.push({
       meshIndex: i,

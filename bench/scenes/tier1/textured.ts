@@ -69,4 +69,34 @@ export const texCheckerHf = checkerScene(
   128,
 );
 
-export const tier1Scenes: readonly SceneDesc[] = [texChecker, texCheckerHf];
+/**
+ * `tex-mask` (P1.4c5, P2.24): an alpha-MASK cutout. A 2.4 m square screen floats 0.5 m above a grey ground; its base colour texture is an
+ * 8 x 8 checker whose orange cells have alpha 1 and whose blue cells alpha 100/255 (below the 0.5 cutoff, so they are holes). The bilinear alpha
+ * ramps 255 -> 100 across a texel, so the cutoff contour sits 82% of the way to the hole: it checks the interpolated threshold, not just the cell
+ * pattern. The sun throws the screen's shadow on the ground, so shadow rays must pass through the holes. Diffuse only (`specularWeight` 0), so
+ * pbrt-v4 (alpha texture) and Mitsuba (mask BSDF on `volpath`) can draw it.
+ */
+export const texMask: SceneDesc = {
+  version: 1,
+  name: 'tex-mask',
+  purpose: 'Alpha MASK from a base colour texture alpha (hard cutoff 0.5 on the bilinear alpha): a checker screen whose blue cells are holes, over a ground that receives its shadow. Compared with pbrt-v4 (alpha texture) and Mitsuba (mask BSDF).',
+  tier: 1,
+  camera: { type: 'perspective', position: [0, 2.4, 3.6], target: [0, 0.25, 0], up: [0, 1, 0], yFovDeg: 42 },
+  film: { width: 320, height: 240, filter: 'box' },
+  integrator: { maxDepth: 3 },
+  textures: {
+    screen: { generator: 'checker', cells: 8, a: [235, 150, 40], b: [60, 110, 190], marker: [230, 40, 40], alphaA: 255, alphaB: 100, width: 128, height: 128, colorSpace: 'srgb' },
+  },
+  materials: {
+    ground: { type: 'diffuse', reflectance: [0.6, 0.6, 0.6] },
+    screen: { type: 'openpbr', baseColor: [1, 1, 1], baseMetalness: 0, specularWeight: 0, baseColorTexture: 'screen', alphaMode: 'mask', alphaCutoff: 0.5, doubleSided: true },
+  },
+  meshes: [
+    { name: 'ground', geometry: { type: 'quad', size: [8, 8] }, material: 'ground' },
+    { name: 'screen', geometry: { type: 'quad', size: [2.4, 2.4] }, material: 'screen', transform: compose(translation(0, 0.5, 0)), uv: {} },
+  ],
+  lights: [{ type: 'directional', direction: [-0.35, -0.8, -0.3], irradiance: [3.2, 3.0, 2.7] }],
+  environment: { type: 'uniform', radiance: [0.45, 0.5, 0.6] },
+};
+
+export const tier1Scenes: readonly SceneDesc[] = [texChecker, texCheckerHf, texMask];

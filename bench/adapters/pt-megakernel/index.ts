@@ -12,13 +12,15 @@
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
-import { createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
+import { ALPHA_MODE, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
 import { PtMegakernel, ptMaterialFeatures, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
 import type { MaterialDesc, MeshDesc, SceneDesc } from '../../scenes/schema.ts';
 import { sceneDescToCopyInput } from '../../scenes/to-scene-copy.ts';
+import { uvTangents } from '../../scenes/tangents.ts';
+import { setImageTextureLoader } from '../../scenes/textures.ts';
 import { readPFM } from '../../metrics/pfm.ts';
 import { fetchSceneGlb, readGlbMeshes } from '../shared/glb.ts';
 import type { GpuContext } from '../shared/gpu.ts';
@@ -52,6 +54,11 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   transmissionTint?: boolean;
   /** Render `openpbr` materials that use lobes we do not implement (fuzz, thin film, dispersion, subsurface, anisotropy) with those lobes ignored, instead of skipping the scene. Default false. */
   coverage?: boolean;
+  /**
+   * Source of the anisotropy axis (P2.26): `'attribute'` (default) the glTF `TANGENT` the web export carries, interpolated and made orthogonal to the
+   * shading normal; `'uv'` dp/du of each triangle's uvs (`uvTangents`), the tangent pbrt-v4 and Mitsuba 3 derive themselves.
+   */
+  tangent?: 'attribute' | 'uv';
   /** Scrambling seed base. */
   seed?: number;
   /** Sample passes per submit. Default 8. */
@@ -95,7 +102,8 @@ export function openPbrUnsupported(desc: MaterialDesc): string | null {
   if (m.thinFilmWeight > 0) missing.push('thin film (P2.27)');
   if (m.transmissionDispersionScale > 0) missing.push('dispersion (P2.28)');
   if (m.subsurfaceWeight > 0) missing.push('diffuse transmission (P2.29)');
-  if (m.specularRoughnessAnisotropy > 0) missing.push('anisotropy (P2.26)');
+  // P2.26: anisotropic metals have the tangent frame and the split GGX alphas; a dielectric lobe (and a coat over the metal) is still isotropic
+  if (m.specularRoughnessAnisotropy > 0 && (m.baseMetalness === 0 || m.coatWeight > 0)) missing.push('anisotropy on a dielectric or under a coat (P2.26 does metals only)');
   return missing.length > 0 ? `uses ${missing.join(', ')}, not implemented` : null;
 }
 
@@ -181,8 +189,16 @@ export class PtMegakernelAdapter implements RendererAdapter {
     let resolveFile: ((geometry: unknown, mesh: MeshDesc) => TriangleMesh) | undefined;
     let fileMeshes: MeshDesc[] = [];
     if (files.length > 0) {
-      const { glb, approximations } = await fetchSceneGlb(scene);
+      const { glb, approximations, images } = await fetchSceneGlb(scene);
       this.approximations = approximations;
+      // glTF image textures: the Node exporter decoded them (export-scenes.ts); the scene copy reads them through the registered loader
+      if (images.size > 0) {
+        setImageTextureLoader((desc) => {
+          const image = images.get(`${desc.path}#${desc.image}`);
+          if (!image) throw new Error(`pt-megakernel: texture ${desc.path}#${desc.image} is not in the web export of '${scene.name}'`);
+          return image;
+        });
+      }
       const prims = readGlbMeshes(glb);
       if (prims.length === scene.meshes.length) {
         // The export has one node per mesh, in scene order, already in world space (Tier 1 glTF scenes: one file mesh per glTF material).
@@ -206,6 +222,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const input = sceneDescToCopyInput(scene, { ...(resolveFile ? { resolveFile: resolveFile as never } : {}), ...(hdriMap ? { hdriMap } : {}) });
     // The glb is baked into world space (the exporter applied each mesh's transform): the instance transform must not apply it again.
     for (const mesh of fileMeshes) input.instances[scene.meshes.indexOf(mesh)]!.objectToWorld = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    if (this.settings.tangent === 'uv') for (const mesh of input.meshes) if (mesh.tangents && mesh.uvs) mesh.tangents = uvTangents({ positions: mesh.positions, indices: mesh.indices ? Uint32Array.from(mesh.indices) : Uint32Array.from({ length: mesh.positions.length / 3 }, (_, i) => i), uvs: mesh.uvs as Float32Array });
     if (input.sun && this.settings.sunAngularRadius !== undefined) input.sun = { ...input.sun, angularRadius: this.settings.sunAngularRadius };
     const builder = createMeshBvhBuilder();
     const data = await buildTraceScene(
@@ -220,20 +237,22 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const loadMs = performance.now() - t0;
 
     // OpenPBR mode only when the scene has an `openpbr` material (the legacy adapter keeps the other scenes' kernel and images unchanged).
+    // A metallic-roughness texture decides metalness per texel (factor x B in [0, factor]): the kernel needs both lobes and the stochastic mix, whatever the factor says.
     let materials: PtMaterialOptions | null = null;
     if (Object.values(scene.materials).some((m) => m.type === 'openpbr')) {
       const layered: PtLayeredOptions = { layering: this.settings.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...(this.settings.albedoBase ? { albedoBase: this.settings.albedoBase } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
-      materials = { features: ptMaterialFeatures(input.materials.map((m) => createMaterial(m))), layered, layerThickness: this.settings.layerThickness ?? 1e-6, transmissionTint: this.settings.transmissionTint ?? true };
+      materials = { features: ptMaterialFeatures(input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m))), layered, layerThickness: this.settings.layerThickness ?? 1e-6, transmissionTint: this.settings.transmissionTint ?? true };
     }
     const t1 = performance.now();
-    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
+    const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
+    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
     this.limits = { maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth };
     this.kernel.setLimits(this.limits);
     this.kernel.setSeed(this.settings.seed ?? 0);
-    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
+    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium, ...(materials.features.aniso ? { mat_aniso: 1 } : {}) } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
     return { loadMs, compileMs: performance.now() - t1 };
   }
 

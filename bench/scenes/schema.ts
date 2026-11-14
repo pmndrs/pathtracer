@@ -74,7 +74,7 @@ export interface IntegratorDesc {
  */
 export type TextureDesc = (
   /** `cells` x `cells` checker of colours `a` and `b` (0-255 sRGB codes); `marker` paints the top-left cell of each tile `markerColor` so the orientation is visible. */
-  | { generator: 'checker'; cells: number; a: readonly [number, number, number]; b: readonly [number, number, number]; marker?: readonly [number, number, number] }
+  | { generator: 'checker'; cells: number; a: readonly [number, number, number]; b: readonly [number, number, number]; marker?: readonly [number, number, number]; /** Alpha (0-255) of the `a` and `b` cells (default 255; the marker cell is always 255). For alpha-mask scenes. */ alphaA?: number; alphaB?: number }
   /** One colour everywhere (0-255 codes; a `linear` texture holds raw bytes). */
   | { generator: 'solid'; color: readonly [number, number, number, number?] }
   /** Tangent-space normal map: a sine bump pattern `periods` times across, slope `amplitude` (tan of the maximum tilt). */

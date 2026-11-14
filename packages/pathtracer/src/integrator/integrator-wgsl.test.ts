@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, materials: null });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, materials: null });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -122,6 +122,19 @@ describe('integrator WGSL', () => {
       const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
       expect(code).not.toMatch(/rtTex|rtApplyMaterialTextures|PT_TEX_CONE|RtCone\(/);
       expect(ptIntegratorWgsl({})).not.toContain('cone');
+    });
+
+    it('alpha mask (P1.4c5): the mask code exists only with `alphaMask` and textures; the textured kernel without it is unchanged', () => {
+      const plain = build({ minify: false, shortenNames: false });
+      const masked = build({ minify: false, shortenNames: false, integrator: { alphaMask: true } });
+      expect(plain).not.toMatch(/ptMaskedOut|ptVisibleMasked|PT_MASK_SKIPS|skips/);
+      expect(masked).toContain('fn ptMaskedOut');
+      expect(masked).toContain('ptVisibleMasked(ray, RT_MASK_ALL)');
+      expect(masked).toContain('mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff');
+      expect(build({ minify: false, shortenNames: false, integrator: { alphaMask: false } })).toBe(plain);
+      // without textures there is no base colour alpha to read: the option is ignored and the kernel text is the plain one
+      const untex = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
+      expect(ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false, integrator: { alphaMask: true } })).toBe(untex);
     });
 
     it('binds the arrays then their samplers after the two scene buffers, in group 1', () => {

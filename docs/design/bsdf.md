@@ -50,6 +50,28 @@ Other checks: sample's pdf and f equal eval at the sampled direction (1e-6); rec
 rejects slightly wrong parameters at p < 1e-6. GPU (`bench/pages/bsdf-check.ts`, Apple): eval max rel error 2.2e-5,
 sample 5.6e-4, over 3 module variants × 3000 cases.
 
+## Anisotropic conductors (P2.26)
+
+The conductor lobe was always anisotropic in its local frame (`alpha` is a pair; D, Lambda and the VNDF stretch take x and y separately; pbrt's `TrowbridgeReitzDistribution`).
+What P2.26 adds is the frame and the alpha pair:
+
+- `ptOpenPbrAlpha(r, a)`: OpenPBR 1.1.2, `alpha_x = r^2 sqrt(2 / (1 + (1 - a)^2))`, `alpha_y = (1 - a) alpha_x` (a = 0: `r^2` on both axes, exactly). x is the tangent axis.
+  glTF strength converts to `(r, a)` with `gltfAnisotropyToOpenPbr` (tier1.md section 2), so the alpha pair equals glTF's `alpha_t = mix(alpha, 1, s^2)`, `alpha_b = alpha`.
+- `ptFrameFromTangent(n, tangent_xyzw, rotation)`: local +X = the vertex tangent made orthogonal to the shading normal (Gram-Schmidt), turned by `rotation` radians
+  from the tangent toward the bitangent `cross(n, t) * w` (glTF `anisotropyRotation`); a zero or parallel tangent falls back to `ptFrameFromNormal`. The integrator uses it only for a
+  conductor of a material with `specularAnisotropy > 0` (the tangent comes from `RT_SURF_TANGENT`, scene-copy.md), so every other lobe keeps the cheaper frame.
+- Gating (`PtMaterialFeatures.aniso`, key present only when true, as `coatedMetal`): `ptOpenPbrAlpha` in the adapter, `ptFrameFromTangent` (`PtBsdfOptions.aniso`) and the tangent request
+  in the integrator exist only when the material table has an anisotropic metal. Kernel bytes for every other scene are unchanged (11 variants of `bench/size-snapshot.ts` `cmp`-identical);
+  an aniso kernel is +1.9 KB (albedo-layered table: 49,132 -> 51,062 B; a table that is all metal and an env map is about 45 KB).
+- The material record stores `anisotropyRotation` as unorm16 turns in [0, 1) (`rotationTurns(radians)` in `to-scene-copy.ts`; before P2.26 the field carried raw radians and clamped at 1).
+- Anisotropic dielectrics, a coat over an anisotropic metal, and the layered BSDF stay isotropic (V76).
+
+Tests (`aniso.test.ts`, 12): `ptOpenPbrAlpha(r, 0)` is `r^2` exactly and the adapter with `aniso` on and anisotropy 0 gives bit-identical params, eval and sample; alpha_x^2 + alpha_y^2 = 2 r^4;
+the frame is orthonormal, right-handed, Gram-Schmidt of the tangent, falls back when degenerate, and turns toward `cross(n, t) * w` by the rotation; swapping alpha_x and alpha_y equals a 90 degree
+rotated frame (f and pdf to 1e-10 on 200 random pairs); the pdf integrates to at most 1 (brute force in polar coordinates, 4 alpha pairs x 3 angles); the sampler's albedo equals the brute-force integral
+of eval within 5 sigma; reciprocity f(wo, wi) = f(wi, wo) to 1e-9; chi-square of the sampled directions against the pdf for both VNDF samplers; WGSL gating. GPU: `openpbr-check` compares `ptOpenPbrAlpha`
+through the adapter for three anisotropic metals (115 table cases, 0 mismatches) and `ptFrameFromTangent` on 2000 random normals / tangents (zero and parallel included) / rotations (0 mismatches, 2e-5).
+
 ## Open choices (defaults hold until measured)
 
 1. **VNDF: standard or spherical cap.** Default standard (pbrt's exact warp, so renders diff cleanly against pbrt's

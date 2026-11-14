@@ -126,6 +126,10 @@ export interface SurfaceWgslOptions {
   normalOffset: number;
   uvOffset: number;
   positionOffset: number;
+  /** Float offset of the vertex tangent (xyzw); only read with `tangents` (P2.26). */
+  tangentOffset?: number;
+  /** Compile the vertex tangent decode (`RT_SURF_TANGENT`, `RtSurface.vertexTangent`); the layout stores tangents. Default false: the text is unchanged. */
+  tangents?: boolean;
   /** vec4u units before the first instance record: the scene header (`SCENE_HEADER_VEC4S`). Default `SURFACE_TABLE.HEADER_VEC4S`. */
   headerVec4s?: number;
 }
@@ -160,7 +164,10 @@ const RT_SURF_ALL: u32 = ${SURFACE.ALL}u;
 #if RT_SURFACE_TEXFRAME
 const RT_SURF_TEXFRAME: u32 = ${SURFACE.TEXTURE_FRAME}u;
 #endif
-
+${o.tangents ? `const RT_SURF_TANGENT: u32 = ${SURFACE.TANGENT}u;
+const RT_MESH_HAS_TANGENTS: u32 = ${MESH_FLAG.HAS_TANGENTS}u;
+const RT_SV_TANGENT: u32 = ${o.tangentOffset ?? 0}u;
+` : ''}
 const RT_MESH_HAS_NORMALS: u32 = ${MESH_FLAG.HAS_NORMALS}u;
 const RT_MESH_HAS_UVS: u32 = ${MESH_FLAG.HAS_UVS}u;
 const RT_SV_STRIDE: u32 = ${o.vertexStride}u;
@@ -181,7 +188,8 @@ struct RtSurface {
     uvDensity: f32,        // sqrt(uv area / world area) of the triangle (uv units per metre), 0 without uvs; RT_SURF_TEXFRAME
     tangent: vec4f,        // world dp/du (unit) and the bitangent handedness; RT_SURF_TEXFRAME
 #endif
-}
+${o.tangents ? `    vertexTangent: vec4f,  // interpolated vertex tangent, world space, unit (zero without data), w = bitangent sign; RT_SURF_TANGENT
+` : ''}}
 ${bindings}
 fn rtTableRow(index: u32) -> vec4f {
     return bitcast<vec4f>(rtSTable(index));
@@ -191,7 +199,40 @@ fn rtVertex3(vbase: u32, base: u32) -> vec3f {
     return vec3f(rtSVertex(vbase, base), rtSVertex(vbase, base + 1u), rtSVertex(vbase, base + 2u));
 }
 
-fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
+${o.tangents ? `fn rtSurfaceTangent(hit: RtHit) -> vec4f {
+    let header = rtSTable(0u);
+    if (hit.instance >= header.x) {
+        return vec4f(0.0, 0.0, 0.0, 1.0);
+    }
+    let vbase = header.w;
+    let record = RT_TABLE_HEADER_VEC4S + hit.instance * RT_INSTANCE_VEC4S;
+    let meshIndex = rtSTable(record + ${SURFACE_TABLE.INSTANCE_META}u).x;
+    let mesh = rtSTable(header.y + meshIndex);
+    if ((mesh.z & RT_MESH_HAS_TANGENTS) == 0u) {
+        return vec4f(0.0, 0.0, 0.0, 1.0);
+    }
+    let first = mesh.x + hit.triangle * 3u;
+    let v0 = (rtSIndex(first) + mesh.y) * RT_SV_STRIDE + RT_SV_TANGENT;
+    let v1 = (rtSIndex(first + 1u) + mesh.y) * RT_SV_STRIDE + RT_SV_TANGENT;
+    let v2 = (rtSIndex(first + 2u) + mesh.y) * RT_SV_STRIDE + RT_SV_TANGENT;
+    let w1 = hit.bary.x;
+    let w2 = hit.bary.y;
+    let w0 = 1.0 - w1 - w2;
+    let t = vec4f(rtSVertex(vbase, v0), rtSVertex(vbase, v0 + 1u), rtSVertex(vbase, v0 + 2u), rtSVertex(vbase, v0 + 3u)) * w0
+          + vec4f(rtSVertex(vbase, v1), rtSVertex(vbase, v1 + 1u), rtSVertex(vbase, v1 + 2u), rtSVertex(vbase, v1 + 3u)) * w1
+          + vec4f(rtSVertex(vbase, v2), rtSVertex(vbase, v2 + 1u), rtSVertex(vbase, v2 + 2u), rtSVertex(vbase, v2 + 3u)) * w2;
+    let q0 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W}u).xyz;
+    let q1 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 1}u).xyz;
+    let q2 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 2}u).xyz;
+    let world = vec3f(dot(q0, t.xyz), dot(q1, t.xyz), dot(q2, t.xyz));
+    let len2 = dot(world, world);
+    if (len2 > 1.0e-20) {
+        return vec4f(world * inverseSqrt(len2), select(1.0, -1.0, t.w < 0.0));
+    }
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+}
+
+` : ''}fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
     var s: RtSurface;
     s.geometricNormal = hit.normal;
     s.frontFace = hit.frontFace;
@@ -203,13 +244,17 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
     s.uvDensity = 0.0;
     s.tangent = vec4f(1.0, 0.0, 0.0, 1.0);
 #endif
-    if (hit.t < 0.0) {
+${o.tangents ? `    s.vertexTangent = vec4f(0.0, 0.0, 0.0, 1.0);
+` : ''}    if (hit.t < 0.0) {
         return s;
     }
     if ((want & RT_SURF_POSITION) != 0u) {
         s.position = ray.origin + ray.direction * hit.t;
     }
-#if RT_SURFACE_TEXFRAME
+${o.tangents ? `    if ((want & RT_SURF_TANGENT) != 0u) {
+        s.vertexTangent = rtSurfaceTangent(hit);
+    }
+` : ''}#if RT_SURFACE_TEXFRAME
     let needVertices = (want & (RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_POSITION | RT_SURF_TEXFRAME)) != 0u;
 #elif RT_SURFACE_POSITIONS
     let needVertices = (want & (RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_POSITION)) != 0u;

@@ -146,7 +146,7 @@ export function classifyOpenPbr(params: OpenPbrParams, ctx: ClassContext = {}): 
   if (m.fuzzWeight > 0) raise('C', 'fuzz (sheen) has no reference');
   if (m.thinFilmWeight > 0) raise('C', 'thin film (iridescence) has no reference');
   if (m.alphaMode === 'blend' && m.geometryOpacity < 1) raise('C', 'alpha blend has no reference');
-  else if (m.alphaMode === 'mask') raise('B', 'alpha mask needs texture/alpha support in both exporters');
+  else if (m.alphaMode === 'mask') raise('B', 'alpha mask: pbrt `alpha` texture is exact (gain-amplified bilinear alpha), Mitsuba `mask` reads a thresholded opacity bitmap (contour to 1/16 texel, volpath for shadow rays); the Tier 1 models using it are kitchen sinks anyway');
   if (m.transmissionDispersionScale > 0) raise("B'", 'dispersion: pbrt only (spectral eta); Mitsuba has a scalar IOR');
   if (m.subsurfaceWeight > 0) raise("B'", 'diffuse transmission: pbrt `diffusetransmission` only');
 

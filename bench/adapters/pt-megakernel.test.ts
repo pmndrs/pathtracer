@@ -1,7 +1,7 @@
 import { PT_BSDF_BLACK, PT_BSDF_CONDUCTOR, PT_BSDF_DIELECTRIC, PT_BSDF_DIFFUSE, ptBsdfFromMaterial } from '@pmndrs/pathtracer';
 import { createMaterial } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
-import { getScene, allScenes, tier1GltfSceneDescs } from '../scenes/index.ts';
+import { getScene, allScenes, tier1GltfSceneDescs, tier1TexturedGltfSceneDescs } from '../scenes/index.ts';
 import { materialFromDesc, sceneDescToCopyInput } from '../scenes/to-scene-copy.ts';
 import { ADAPTER_IDS, OWN_ADAPTER_IDS, unsupportedReason } from './registry.ts';
 import { PT_ADAPTER_ID, PtMegakernelAdapter } from './pt-megakernel/index.ts';
@@ -22,10 +22,10 @@ describe('pt-megakernel adapter', () => {
 
   it('renders every scene: env-sphere through its HDR map, Sponza from the web glb export', () => {
     const skipped = allScenes.filter((scene) => unsupportedReason(adapter.features, scene) !== null).map((scene) => scene.name);
-    // The Tier 1 glTF scenes use `openpbr` materials. Wave 1 renders all of them except SheenTestGrid (fuzz, P2.25: class C, no lobe yet; `pt_coverage=1` renders it with the fuzz ignored).
-    const tier1Gltf = new Set(tier1GltfSceneDescs.map((s) => s.name));
+    // The Tier 1 glTF scenes use `openpbr` materials. Waves 1 and 2 render all of them except SheenTestGrid and SheenTestGrid-notex (fuzz, P2.25: class C, no lobe yet; `pt_coverage=1` renders it with the fuzz ignored).
+    const tier1Gltf = new Set([...tier1GltfSceneDescs, ...tier1TexturedGltfSceneDescs].map((s) => s.name));
     expect(skipped.filter((name) => !tier1Gltf.has(name))).toEqual([]);
-    expect(skipped.filter((name) => tier1Gltf.has(name))).toEqual(['SheenTestGrid-notex']);
+    expect(skipped.filter((name) => tier1Gltf.has(name))).toEqual(['SheenTestGrid-notex', 'SheenTestGrid']);
     expect(unsupportedReason(new PtMegakernelAdapter({ coverage: true }).features, getScene('SheenTestGrid-notex'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toBeNull();

@@ -81,6 +81,7 @@ try {
     ...(args['pt_layer_depth'] ? { layerDepth: numberArg(args, 'pt_layer_depth', 64) } : {}),
     ...(args['pt_layer_thickness'] ? { layerThickness: numberArg(args, 'pt_layer_thickness', 1e-6) } : {}),
     ...(args['pt_tint'] ? { transmissionTint: args['pt_tint'] !== '0' } : {}),
+    ...(args['pt_tangent'] ? { tangent: args['pt_tangent'] as 'attribute' | 'uv' } : {}),
     ...(args['pt_coverage'] ? { coverage: args['pt_coverage'] === '1' } : {}),
     ...(args['pt_seed'] ? { seed: numberArg(args, 'pt_seed', 0) } : {}),
     ...(args['pt_prune'] ? { prune: args['pt_prune'] !== '0' } : {}),

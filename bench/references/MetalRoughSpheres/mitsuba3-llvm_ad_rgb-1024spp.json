@@ -1,0 +1,40 @@
+{
+  "scene": "MetalRoughSpheres",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 1024,
+  "seconds": 137.95,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-fFwW6V/scene.xml bench/references/MetalRoughSpheres/mitsuba3-llvm_ad_rgb-1024spp.pfm llvm_ad_rgb 1024",
+  "settings": {
+    "maxDepth": 8,
+    "rrStartDepth": null,
+    "film": {
+      "width": 768,
+      "height": 768,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 9,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 137.67955470085144,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere).",
+    "mitsuba: material 'm0': base colour texture 't0' (1024x1024, sRGB, wrap clamp): bitmap bilinear, level 0 only",
+    "mitsuba: material 'm0': metallic-roughness texture: roughness alpha = (1 x G)^2 baked into a float PFM (bilinear in alpha, not in G: second-order difference), metalness 1 x B as the blendbsdf weight bitmap",
+    "mitsuba: material 'm0': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm0': roughness texture on a dielectric over diffuse: 7 roughness levels (0, 42, 85, 128, 170, 212, 255) as a blendbsdf chain of plastics (roughplastic takes a float alpha), levels weighted by 0/1 bitmaps",
+    "mitsuba: material 'm0': textured conductor: eta 1 and k baked per texel from the base colour (PFM, raw), so bilinear filtering blends k rather than reflectance (differs from pbrt within one texel of an edge)"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T12:32:27.199Z"
+}

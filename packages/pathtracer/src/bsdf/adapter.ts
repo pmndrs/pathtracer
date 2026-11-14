@@ -127,6 +127,8 @@ export interface PtMaterialFeatures {
   medium: boolean;
   /** P2.23: some metal has a coat (`coatWeight > 0.5`, `coatIor != 1`): the layered BSDF gets its conductor bottom layer (implies `layered`). Optional so older literals still type. */
   coatedMetal?: boolean;
+  /** P2.26: some metal has `specularAnisotropy > 0`: its GGX alphas split along the tangent (`ptOpenPbrAlpha`) and the integrator builds the frame from the vertex tangent (`ptFrameFromTangent`); needs a surface layout with tangents. Optional like `coatedMetal`. */
+  aniso?: boolean;
 }
 
 export interface PtMaterialOptions {
@@ -149,6 +151,7 @@ export function ptMaterialFeatures(materials: readonly RtMaterial[]): PtMaterial
   const f: PtMaterialFeatures = { mix: false, thin: false, layered: false, medium: false };
   for (const m of materials) {
     if (m.metalness > 0 && m.metalness < 1) f.mix = true;
+    if (m.metalness > 0 && m.specularAnisotropy > 0) f.aniso = true; // the key exists only when true, as coatedMetal
     if (m.metalness > 0 && m.coatWeight > 0.5 && m.coatIor !== 1) {
       f.coatedMetal = true; // the key exists only when true: scenes without coated metals keep their feature object
       f.layered = true;
@@ -171,6 +174,16 @@ export function ptMaterialFeatures(materials: readonly RtMaterial[]): PtMaterial
 export function ptInternalReflectanceFit(ior: number): number {
   if (ior <= 1) return 0;
   return Math.min(1, Math.max(0, -1.44 / (ior * ior) + 0.71 / ior + 0.668 + 0.0636 * ior));
+}
+
+/**
+ * OpenPBR 1.1.2 GGX alphas of the specular lobe along the tangent (x) and bitangent (y): `alpha_x = r^2 sqrt(2 / (1 + (1 - a)^2))`,
+ * `alpha_y = (1 - a) alpha_x` for roughness `r`, anisotropy `a` (a = 0 gives r^2 on both axes exactly). The same pair the pbrt and Mitsuba exporters write.
+ */
+export function ptOpenPbrAlpha(roughness: number, anisotropy: number): readonly [number, number] {
+  if (!(anisotropy > 0)) return [roughness * roughness, roughness * roughness];
+  const ax = roughness * roughness * Math.sqrt(2 / (1 + (1 - anisotropy) * (1 - anisotropy)));
+  return [ax, (1 - anisotropy) * ax];
 }
 
 /** Default layer thickness of the OpenPBR adapter (transparent layer, see `PtMaterialOptions.layerThickness`). */
@@ -205,7 +218,7 @@ export function ptBsdfFromOpenPbr(m: RtMaterial, options: PtMaterialOptions, u: 
   const metal = f.mix ? u < m.metalness : m.metalness > 0.5;
   if (metal) {
     p.kind = PT_BSDF_CONDUCTOR;
-    p.alpha = [a, a];
+    p.alpha = f.aniso ? ptOpenPbrAlpha(m.specularRoughness, m.specularAnisotropy) : [a, a];
     if (m.conductorEtaK) {
       p.eta = [...m.conductorEta] as PtVec3;
       p.k = [...m.conductorK] as PtVec3;
@@ -283,6 +296,14 @@ fn ptMediumSigma(m: RtMaterial) -> vec3f {
     }
     return -log(max(m.transmissionColor, vec3f(1.0e-6))) / m.transmissionDepth;
 }
+` : ''}${f.aniso ? `
+fn ptOpenPbrAlpha(r: f32, a: f32) -> vec2f {
+    if (!(a > 0.0)) {
+        return vec2f(r * r);
+    }
+    let ax = r * r * sqrt(2.0 / (1.0 + (1.0 - a) * (1.0 - a)));
+    return vec2f(ax, (1.0 - a) * ax);
+}
 ` : ''}
 fn ptBsdfFromMaterial(m: RtMaterial, u: f32) -> PtBsdfParams {
     var p: PtBsdfParams;
@@ -295,7 +316,7 @@ fn ptBsdfFromMaterial(m: RtMaterial, u: f32) -> PtBsdfParams {
     let a = m.specularRoughness * m.specularRoughness;
     if (${f.mix ? 'u < m.metalness' : 'm.metalness > 0.5'}) {
         p.kind = PT_BSDF_CONDUCTOR;
-        p.alpha = vec2f(a);
+        ${f.aniso ? 'p.alpha = ptOpenPbrAlpha(m.specularRoughness, m.specularAnisotropy);' : 'p.alpha = vec2f(a);'}
         if (m.conductorEtaK) {
             p.eta = m.conductorEta;
             p.k = m.conductorK;

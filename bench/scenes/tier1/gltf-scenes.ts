@@ -15,6 +15,7 @@ import { buildGltfSceneDesc } from '../gltf-desc.ts';
 import type { GltfDescMaterial, GltfModelRef, GltfSceneBuild } from '../gltf-desc.ts';
 import type { GltfSidecar } from '../gltf-scene-desc.ts';
 import type { EnvironmentDesc, MaterialDesc, SceneDesc } from '../schema.ts';
+import anisotropy from './golden/AnisotropyStrengthTest.json' with { type: 'json' };
 import attenuation from './golden/AttenuationTest.json' with { type: 'json' };
 import clearcoat from './golden/ClearCoatTest.json' with { type: 'json' };
 import emissive from './golden/EmissiveStrengthTest.json' with { type: 'json' };
@@ -165,6 +166,17 @@ const sidecars = {
     environment: SKY,
     dropMaterials: ['Partial_Base', 'Partial_Coated', 'Partial_Coating', 'RoughVariations_Base', 'RoughVariations_Coated', 'RoughVariations_Coating', 'BaseNorm_Base', 'BaseNorm_Coated', 'BaseNorm_Coating', 'CoatNorm_Base', 'CoatNorm_Coated', 'CoatNorm_Coating', 'SharedNorm_Base', 'SharedNorm_Coated', 'SharedNorm_Coating', 'LabelMaterial'],
     replace: { Simple_Base: GOLD, Simple_Coated: GOLD_COATED },
+  }),
+  // 7 x 7 grid of r = 0.4 metal spheres (x -3..3 = roughness 0..1, y 0..6 = anisotropy strength 0..1) and a plane of text labels at z = 0. No backdrop in the
+  // model: spheres against the sky. All 49 materials are class A (white pure metal, KHR_materials_anisotropy). The tangent is glTF TANGENT = dp/du of the uvs (tangent check, V75).
+  anisotropy: make(anisotropy as GoldenFile, {
+    name: 'AnisotropyStrengthTest-notex',
+    purpose: 'Khronos AnisotropyStrengthTest without the label plane: 49 white metal spheres (7 x 7: roughness and KHR_materials_anisotropy strength grid), anisotropy axis = glTF TANGENT = dp/du of the uvs, under the sky (the model has no backdrop). Tier 1 anisotropy (P2.26); reference class A.',
+    camera: { type: 'perspective', position: [0, 3, 15], target: [0, 3, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 768, height: 768, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    environment: SKY,
+    dropMaterials: ['Label Mat'],
   }),
   // 4 x 4 spheres sheenColor 0..1 x sheenRoughness 0..1 in front of a backdrop at z = -0.04.
   sheen: make(sheen as GoldenFile, {

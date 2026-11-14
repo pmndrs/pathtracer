@@ -31,6 +31,11 @@ export const SURFACE = {
    * bitangent handedness). Opt-in: not part of ALL, and only compiled when the scene has textures (needs positions and uvs in the surface data).
    */
   TEXTURE_FRAME: 32,
+  /**
+   * Interpolated vertex tangent (P2.26), world space, unit, xyz (`RtSurface.vertexTangent`, w = bitangent sign). Opt-in: not part of ALL; only
+   * present when the surface layout stores tangents. The caller Gram-Schmidts it against the shading normal.
+   */
+  TANGENT: 64,
   ALL: 31,
 } as const;
 
@@ -53,7 +58,7 @@ export const SURFACE_TABLE = {
 } as const;
 
 /** Mesh-record flag bits. */
-export const MESH_FLAG = { HAS_NORMALS: 1, HAS_UVS: 2 } as const;
+export const MESH_FLAG = { HAS_NORMALS: 1, HAS_UVS: 2, HAS_TANGENTS: 4 } as const;
 
 /** Batch kernel workgroup sizes offered as a setting (D11). Default 64; 128 is the other candidate. */
 export const BATCH_WORKGROUP_SIZES = [32, 64, 128, 256] as const;

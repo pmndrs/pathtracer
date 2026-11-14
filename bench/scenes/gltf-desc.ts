@@ -47,23 +47,34 @@ export function materialUsesTexture(m: MaterialDesc): boolean {
   return (m.type === 'openpbr' || m.type === 'pbr') && !!(m.baseColorTexture || m.metallicRoughnessTexture || m.normalTexture || m.emissiveTexture);
 }
 
+/** An `openpbr` material with `specularRoughnessAnisotropy > 0` (needs the mesh tangent frame, P2.26). */
+export function isAnisotropic(m: MaterialDesc): boolean {
+  return m.type === 'openpbr' && (m.specularRoughnessAnisotropy ?? 0) > 0;
+}
+
 export function buildGltfSceneDesc(b: GltfSceneBuild): SceneDesc {
   const matches = (key: string | number, m: GltfDescMaterial): boolean => String(key) === String(m.index) || (m.name !== undefined && key === m.name);
   const dropped = (m: GltfDescMaterial): boolean => !!b.dropMaterials?.some((k) => matches(k, m));
   for (const k of [...(b.dropMaterials ?? []), ...Object.keys(b.replace ?? {})]) {
     if (!b.materials.some((m) => matches(k, m))) throw new Error(`scene '${b.name}': override names '${k}', which is no material of ${b.model.path}`);
   }
+  const anyAniso = b.materials.some((m) => {
+    if (dropped(m)) return false;
+    const replacement = Object.entries(b.replace ?? {}).find(([k]) => matches(k, m));
+    return isAnisotropic(replacement ? replacement[1] : m.material);
+  });
   const materials: Record<string, MaterialDesc> = {};
   const meshes: MeshDesc[] = [];
   const mesh = (index: number, name: string | undefined, material: MaterialDesc): void => {
     const key = gltfMaterialKey(index, name);
     materials[key] = material;
-    const uvs = materialUsesTexture(material);
+    const uvs = materialUsesTexture(material) || isAnisotropic(material);
     meshes.push({
       name: key,
-      geometry: { type: 'file', path: b.model.path, format: b.model.format, sha256: b.model.sha256, select: { material: index }, attributes: { ...(b.normals ? { normals: b.normals } : {}), ...(uvs ? { uvs: true } : {}) } },
+      // Anisotropic scenes (P2.26): every mesh carries TANGENT (one file load for the scene) and the anisotropic ones their uvs (the references' tangent is dp/du).
+      geometry: { type: 'file', path: b.model.path, format: b.model.format, sha256: b.model.sha256, select: { material: index }, attributes: { ...(b.normals ? { normals: b.normals } : {}), ...(uvs ? { uvs: true } : {}), ...(anyAniso ? { tangents: true } : {}) } },
       material: key,
-      ...(uvs ? { uv: {} } : {}),
+      ...(materialUsesTexture(material) ? { uv: {} } : {}),
       ...(b.scale !== undefined && b.scale !== 1 ? { transform: scaling(b.scale) } : {}),
     });
   };

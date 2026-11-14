@@ -83,6 +83,20 @@ under mirroring), then one sun, then one environment (constant radiance plus a r
 The slice-1 surface layout lives inside the copy; `rtSurface(hit, ray, want)` keeps its signature and flags. The CPU
 decode (`readSurfaceFromTable`) and the builder (`buildSurfaceTable`) are shared; the standalone stand-in (upload, bind group, `surface:` module option) was deleted in P1.4a.
 
+### Vertex tangents (P2.26)
+
+`SceneCopyMesh.tangents` (`x, y, z, w` per vertex, object space, glTF `TANGENT`: the direction of increasing u, `w` the bitangent sign) is stored when any mesh has
+them (`SurfaceTableOptions.tangents`, default derived): the vertex stride grows by 4 floats at the END (`offsets.tangent`, after the position), the mesh record
+gets `MESH_FLAG.HAS_TANGENTS`, `SurfaceLayout.tangents` is true. The key is absent otherwise, so scenes without anisotropic materials keep stride, buffers, fingerprints
+and kernel text (`bench/size-snapshot.ts`: all 11 existing variants `cmp`-identical; the layout's `tangents` key is added only when true).
+`rtSurface(hit, ray, want | RT_SURF_TANGENT)` (opt-in bit 64, not part of ALL) fills `RtSurface.vertexTangent`: the barycentric mix of the three vertex tangents, taken to
+world space by the instance's object-to-world 3x3 (a direction, not the normal matrix), normalised, `w` = sign of the mixed `w`; zero xyz when the mesh has none.
+It is made orthogonal to the shading normal by the caller (`ptFrameFromTangent`, Gram-Schmidt), because the normal map may change the normal. The decode is a separate
+function (`rtSurfaceTangent`), emitted by a JS template condition rather than `#if`: preprocessor-dropped lines leave blank lines, which would change the minified bytes.
+`SURFACE_TABLE` records, the scene header and the material record are untouched. The CPU twins are `readSurfaceFromTable` / `referenceSurface` (`tangent`, only when asked).
+Per-triangle dp/du of the uvs (the frame `RT_SURF_TEXFRAME` builds for normal maps) is NOT used for anisotropy: the bench makes it a per-vertex tangent instead
+(`bench/scenes/tangents.ts` `uvTangents`, setting `pt_tangent=uv`), so there is one decode path (V75).
+
 ## Verification
 
 Pack/unpack twins in TypeScript (80 unit tests: exhaustive f16 round trip, every field, alias statistics, hand-computed

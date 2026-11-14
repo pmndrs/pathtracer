@@ -9,6 +9,8 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { generateTexture } from '../scenes/textures.ts';
+import '../scenes/gltf-images.ts'; // registers the image decoder
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toGltf } from '../exporters/gltf.ts';
@@ -27,7 +29,18 @@ export function exportScene(scene: SceneDesc): string {
   mkdirSync(WEB_DIR, { recursive: true });
   writeFileSync(join(WEB_DIR, `${scene.name}.glb`), file.data);
   const sceneHash = createHash('sha256').update(JSON.stringify(scene)).digest('hex');
-  writeFileSync(join(WEB_DIR, `${scene.name}.json`), `${JSON.stringify({ scene: scene.name, sceneHash, approximations: out.approximations }, null, 2)}\n`);
+  // glTF image textures: decoded here (PNG/JPEG, the same decoder the native exporters use) and written as raw RGBA8, so the browser reads exactly the texels the references read
+  const textures: { key: string; file: string; width: number; height: number }[] = [];
+  for (const desc of Object.values(scene.textures ?? {})) {
+    if (desc.generator !== 'image') continue;
+    const key = `${desc.path}#${desc.image}`;
+    if (textures.some((t) => t.key === key)) continue;
+    const t = generateTexture(desc);
+    const file = `${scene.name}.tex${textures.length}.rgba`;
+    writeFileSync(join(WEB_DIR, file), t.data);
+    textures.push({ key, file, width: t.width, height: t.height });
+  }
+  writeFileSync(join(WEB_DIR, `${scene.name}.json`), `${JSON.stringify({ scene: scene.name, sceneHash, approximations: out.approximations, ...(textures.length ? { textures } : {}) }, null, 2)}\n`);
   return join(WEB_DIR, `${scene.name}.glb`);
 }
 
