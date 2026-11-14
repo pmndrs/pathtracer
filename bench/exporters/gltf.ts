@@ -54,6 +54,8 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
       case 'black':
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         break;
+      case 'openpbr':
+        throw new Error('gltf: openpbr materials are not exported yet (P2.20)');
       case 'conductor': {
         g.pbrMetallicRoughness.baseColorFactor = [conductorF0(m.eta[0], m.k[0]), conductorF0(m.eta[1], m.k[1]), conductorF0(m.eta[2], m.k[2]), 1];
         g.pbrMetallicRoughness.metallicFactor = 1;

@@ -1,0 +1,11 @@
+{
+"header": {"model":"EmissiveStrengthTest","sourceSha256":"074898ec4c3636230faffe0cacac7403c3f6135db61f943da28ffaa88ca2a39f","extensionsUsed":["KHR_materials_emissive_strength"],"materialCount":6,"classCounts":{"A":5,"B":1,"B'":0,"C":0}},
+"materials": [
+{"i":0,"name":"Emit4","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.8,"emissionColor":[0.1,0.5,0.9],"emissionLuminance":4,"specularIor":1.5}},
+{"i":1,"name":"FlatBackdrop","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.5,"specularIor":1.5},"textures":["baseColorTexture"]},
+{"i":2,"name":"Emit2","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.8,"emissionColor":[0.1,0.5,0.9],"emissionLuminance":2,"specularIor":1.5}},
+{"i":3,"name":"Emit1","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.8,"emissionColor":[0.1,0.5,0.9],"emissionLuminance":1,"specularIor":1.5}},
+{"i":4,"name":"Emit8","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.8,"emissionColor":[0.1,0.5,0.9],"emissionLuminance":8,"specularIor":1.5}},
+{"i":5,"name":"Emit16","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.8,"emissionColor":[0.1,0.5,0.9],"emissionLuminance":16,"specularIor":1.5}}
+]
+}

@@ -1,0 +1,17 @@
+{
+"header": {"model":"AnisotropyDiscTest","sourceSha256":"649b47c896f078fa56070f0ddaf07c57d6a7d109324acdd7d9f2d6748d9842ec","extensionsUsed":["KHR_materials_anisotropy"],"materialCount":12,"classCounts":{"A":12,"B":0,"B'":0,"C":0}},
+"materials": [
+{"i":0,"name":"roughness 0.1","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8409174,"specularIor":1.5,"specularRoughnessAnisotropy":0.99},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":1,"name":"roughness 0.2","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8412326,"specularIor":1.5,"specularRoughnessAnisotropy":0.96},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":2,"name":"roughness 0.3","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8425941,"specularIor":1.5,"specularRoughnessAnisotropy":0.91},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":3,"name":"roughness 0.4","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8462272,"specularIor":1.5,"specularRoughnessAnisotropy":0.84},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":4,"name":"roughness 0.5","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8537382,"specularIor":1.5,"specularRoughnessAnisotropy":0.75},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":5,"name":"roughness 0.6","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8669093,"specularIor":1.5,"specularRoughnessAnisotropy":0.64},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":6,"name":"roughness 0.7","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.887374,"specularIor":1.5,"specularRoughnessAnisotropy":0.51},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":7,"name":"roughness 0.8","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.9162552,"specularIor":1.5,"specularRoughnessAnisotropy":0.36},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":8,"name":"roughness 0.9","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.9539248,"specularIor":1.5,"specularRoughnessAnisotropy":0.19},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":9,"name":"roughness 1.0","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":1,"specularIor":1.5,"specularRoughnessAnisotropy":0},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]},
+{"i":10,"name":"text","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":1,"specularRoughness":1,"specularIor":1.5}},
+{"i":11,"name":"roughness 0.0","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.8408964,"specularIor":1.5,"specularRoughnessAnisotropy":1},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["anisotropyTexture"]}
+]
+}

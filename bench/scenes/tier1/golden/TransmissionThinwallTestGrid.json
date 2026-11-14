@@ -1,0 +1,18 @@
+{
+"header": {"model":"TransmissionThinwallTestGrid","sourceSha256":"e4ee8e5a28f81f75ef40b264ad22725e9065470b8ee02f9a4c6fa96b669cbcc7","extensionsUsed":["KHR_materials_transmission","KHR_materials_volume","KHR_materials_ior"],"materialCount":13,"classCounts":{"A":11,"B":2,"B'":0,"C":0}},
+"materials": [
+{"i":0,"name":"Backdrop","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.5,"specularIor":1.5},"textures":["baseColorTexture"]},
+{"i":1,"name":"Text","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":1,"specularIor":1.5}},
+{"i":2,"name":"Text Backdrop","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":1,"specularIor":1.5}},
+{"i":3,"name":"ThinWall_IOR1.00","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1,"transmissionWeight":1,"geometryThinWalled":true,"transmissionColor":[1,1,1]}},
+{"i":4,"name":"ThinWall_IOR1.33","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1.33,"transmissionWeight":1,"geometryThinWalled":true,"transmissionColor":[1,1,1]}},
+{"i":5,"name":"ThinWall_IOR1.50","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1.5,"transmissionWeight":1,"geometryThinWalled":true,"transmissionColor":[1,1,1]}},
+{"i":6,"name":"ThinWall_IOR1.76","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1.75999,"transmissionWeight":1,"geometryThinWalled":true,"transmissionColor":[1,1,1]}},
+{"i":7,"name":"ThinWall_IOR2.42","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":2.42,"transmissionWeight":1,"geometryThinWalled":true,"transmissionColor":[1,1,1]}},
+{"i":8,"name":"Volume_IOR2.42","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":2.42,"transmissionWeight":1,"transmissionColor":[1,1,1]}},
+{"i":9,"name":"Volume_IOR1.76","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1.75999,"transmissionWeight":1,"transmissionColor":[1,1,1]}},
+{"i":10,"name":"Volume_IOR1.50","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1.5,"transmissionWeight":1,"transmissionColor":[1,1,1]}},
+{"i":11,"name":"Volume_IOR1.33","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1.33,"transmissionWeight":1,"transmissionColor":[1,1,1]}},
+{"i":12,"name":"Volume_IOR1.00","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0,"specularIor":1,"transmissionWeight":1,"transmissionColor":[1,1,1]}}
+]
+}

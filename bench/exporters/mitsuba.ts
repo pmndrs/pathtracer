@@ -39,6 +39,8 @@ function bsdf(m: MaterialDesc, indent: string, textureFile: (name: string) => st
   switch (m.type) {
     case 'pbr':
       throw new Error('mitsuba: pbr materials are not expressible');
+    case 'openpbr':
+      throw new Error('mitsuba: openpbr materials are not exported yet (P2.20)');
     case 'diffuse':
       if (m.reflectanceTexture) {
         return wrap(`<bsdf type="diffuse"><texture type="bitmap" name="reflectance"><string name="filename" value="${textureFile(m.reflectanceTexture)}"/><string name="filter_type" value="bilinear"/><string name="wrap_mode" value="repeat"/><boolean name="raw" value="false"/></texture></bsdf>`);

@@ -1,0 +1,14 @@
+{
+"header": {"model":"TransmissionRoughnessTest","sourceSha256":"43ace8f8dfe0b6148dc4668e6a768c8853ba37cf1f0fe7de76eaf0ea8e94bb73","extensionsUsed":["KHR_materials_transmission","KHR_materials_ior","KHR_materials_volume"],"materialCount":9,"classCounts":{"A":6,"B":3,"B'":0,"C":0}},
+"materials": [
+{"i":0,"name":"LabelMat","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.8,"specularIor":1.5},"textures":["baseColorTexture"]},
+{"i":1,"name":"Mat_IOR_1.0","class":"A","openpbr":{"baseColor":[0.5,0.7,0.9],"baseMetalness":1,"specularRoughness":1,"specularIor":1,"transmissionWeight":1,"transmissionColor":[0.5,0.7,0.9]},"notes":["transmissionColor is a non-physical tint (depth 0): baseColor on the transmission lobe"],"textures":["metallicRoughnessTexture"]},
+{"i":2,"name":"Mat_IOR_1.33","class":"A","openpbr":{"baseColor":[0.5,0.7,0.9],"baseMetalness":1,"specularRoughness":1,"specularIor":1.33,"transmissionWeight":1,"transmissionColor":[0.5,0.7,0.9]},"notes":["transmissionColor is a non-physical tint (depth 0): baseColor on the transmission lobe"],"textures":["metallicRoughnessTexture"]},
+{"i":3,"name":"Mat_IOR_1.50","class":"A","openpbr":{"baseColor":[0.5,0.7,0.9],"baseMetalness":1,"specularRoughness":1,"specularIor":1.5,"transmissionWeight":1,"transmissionColor":[0.5,0.7,0.9]},"notes":["transmissionColor is a non-physical tint (depth 0): baseColor on the transmission lobe"],"textures":["metallicRoughnessTexture"]},
+{"i":4,"name":"Mat_IOR_1.76","class":"A","openpbr":{"baseColor":[0.5,0.7,0.9],"baseMetalness":1,"specularRoughness":1,"specularIor":1.76,"transmissionWeight":1,"transmissionColor":[0.5,0.7,0.9]},"notes":["transmissionColor is a non-physical tint (depth 0): baseColor on the transmission lobe"],"textures":["metallicRoughnessTexture"]},
+{"i":5,"name":"Mat_IOR_2.42","class":"A","openpbr":{"baseColor":[0.5,0.7,0.9],"baseMetalness":1,"specularRoughness":1,"specularIor":2.42,"transmissionWeight":1,"transmissionColor":[0.5,0.7,0.9]},"notes":["transmissionColor is a non-physical tint (depth 0): baseColor on the transmission lobe"],"textures":["metallicRoughnessTexture"]},
+{"i":6,"name":"Mat_Opaque","class":"A","openpbr":{"baseColor":[0.8,0.8,0.8],"baseMetalness":1,"specularRoughness":1,"specularIor":1.5},"textures":["metallicRoughnessTexture"]},
+{"i":7,"name":"FlatBackdrop","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.5,"specularIor":1.5},"textures":["baseColorTexture"]},
+{"i":8,"name":"SmoothVsRough","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.8,"doubleSided":true,"specularIor":1.5},"textures":["baseColorTexture"]}
+]
+}

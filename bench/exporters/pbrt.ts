@@ -25,6 +25,8 @@ function material(m: MaterialDesc, textureName: (name: string) => string): strin
   switch (m.type) {
     case 'pbr':
       throw new Error('pbrt: pbr materials are not expressible');
+    case 'openpbr':
+      throw new Error('pbrt: openpbr materials are not exported yet (P2.20)');
     case 'diffuse':
       if (m.reflectanceTexture) return `Material "diffuse" "texture reflectance" "${textureName(m.reflectanceTexture)}"`;
       return `Material "diffuse" "rgb reflectance" [ ${vec(m.reflectance)} ]`;

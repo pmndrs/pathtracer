@@ -253,3 +253,16 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - `rtTexSample` hardware filtering has 8-bit weights: compare against the f32 twin with 1e-2 absolute, never exact.
 - A textured emitter (`emissionTexture`) is left out of the light table on purpose (V52); a kernel built with `textures` and a scene copy
   without (or the reverse) throws in `PtMegakernel.setScene`.
+- Adding a member to `MaterialDesc` (bench/scenes/schema.ts) breaks `pnpm typecheck` in every exhaustive `switch (m.type)`:
+  `bench/exporters/pbrt.ts`, `mitsuba.ts`, `gltf.ts` (add a `case` that throws) and `bench/src/adapter.ts` (`FeatureSupport.materials`).
+  `materialFromDesc` in `to-scene-copy.ts` must map it too.
+- glTF material defaults are not OpenPBR's: no `pbrMetallicRoughness` means white, metallic 1, roughness 1 (OpenPBR: 0.8 grey,
+  metalness 0, roughness 0.3), so `gltfMaterialToOpenPbr` always writes baseColor/metalness/roughness explicitly. `KHR_materials_transmission`
+  without `KHR_materials_volume` (or `thicknessFactor` 0, the default) is a thin surface: `geometryThinWalled`. `attenuationDistance` absent = infinite
+  = no medium. `IORTestGrid` carries a volume on transmission-0 materials: read the factor, not the extension's presence.
+- glTF anisotropy to OpenPBR (`gltfAnisotropyToOpenPbr`) is not invertible at roughness 1 (alpha_t = alpha_b = 1 whatever the strength).
+- Tier 1 models: `node bench/assets/fetch.ts` (24 MB, `downloads/tier1/<Name>/`), then `node bench/scenes/tier1/goldens.ts --check`. The goldens
+  carry the sha256 of the model; a glb is read through `parseGlbContainer` (JSON chunk only). A new Tier 1 model: pin it with a throwaway
+  script that downloads, hashes and writes the manifest entry (the committed manifest is the only record of the hashes).
+- GitHub's contents API (`api.github.com/repos/.../contents/<path>?ref=<commit>`) lists a model directory at the pinned commit without cloning;
+  `raw.githubusercontent.com/<repo>/<commit>/...` serves the files. Only `IridescenceDielectricSpheres`/`IridescenceMetallicSpheres` lack a `glTF-Binary/`.

@@ -19,8 +19,9 @@
  * resolved by the caller (`resolveFile`); the bench's async glb loaders live elsewhere.
  */
 import type { SceneCopyInput, SceneCopyInstance, SceneCopyMesh, RtMaterialInput, SceneCopyOptions } from '@pmndrs/raytracer';
-import { buildSceneCopy, envMapMean, type SceneCopy } from '@pmndrs/raytracer';
+import { ALPHA_MODE, buildSceneCopy, envMapMean, type SceneCopy } from '@pmndrs/raytracer';
 import { compose, tessellate, type TriangleMesh } from './geometry.ts';
+import { resolveOpenPbr } from './openpbr.ts';
 import type { EnvironmentDesc, GeometryDesc, MaterialDesc, MeshDesc, Rgb, SceneDesc } from './schema.ts';
 import { generateTexture } from './textures.ts';
 
@@ -72,6 +73,26 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
         ...(desc.normalTexture ? { normalTexture: texture(desc.normalTexture) } : {}),
         ...(desc.emissiveTexture ? { emissionTexture: texture(desc.emissiveTexture) } : {}),
       };
+    case 'openpbr': {
+      // The fields the scene copy has today; thin film, dispersion, subsurface, diffuse roughness and the metal's F82 tint have no
+      // record slot yet (P2.21+), the rest map one to one.
+      const m = resolveOpenPbr(desc);
+      const tex = (name: string | undefined) => (name ? texture(name) : undefined);
+      const baseColorTexture = tex(m.baseColorTexture), roughnessMetalTexture = tex(m.metallicRoughnessTexture), normalTexture = tex(m.normalTexture), emissionTexture = tex(m.emissiveTexture);
+      return {
+        baseColor: [...m.baseColor], baseWeight: m.baseWeight, metalness: m.baseMetalness,
+        specularWeight: m.specularWeight, specularColor: [...m.specularColor], specularRoughness: m.specularRoughness, ior: m.specularIor,
+        specularAnisotropy: m.specularRoughnessAnisotropy, anisotropyRotation: m.anisotropyRotation,
+        transmissionWeight: m.transmissionWeight, transmissionColor: [...m.transmissionColor], transmissionDepth: m.transmissionDepth,
+        coatWeight: m.coatWeight, coatColor: [...m.coatColor], coatRoughness: m.coatRoughness, coatIor: m.coatIor,
+        sheenWeight: m.fuzzWeight, sheenColor: [...m.fuzzColor], sheenRoughness: m.fuzzRoughness,
+        emissionColor: [m.emissionColor[0] * m.emissionLuminance, m.emissionColor[1] * m.emissionLuminance, m.emissionColor[2] * m.emissionLuminance],
+        opacity: m.geometryOpacity, alphaCutoff: m.alphaCutoff, alphaMode: ALPHA_MODE[m.alphaMode],
+        thinWalled: m.geometryThinWalled, doubleSided: m.doubleSided, emissionTwoSided: m.emissionTwoSided,
+        ...(baseColorTexture !== undefined ? { baseColorTexture } : {}), ...(roughnessMetalTexture !== undefined ? { roughnessMetalTexture } : {}),
+        ...(normalTexture !== undefined ? { normalTexture } : {}), ...(emissionTexture !== undefined ? { emissionTexture } : {}),
+      };
+    }
     case 'conductor':
       return { conductorEtaK: true, conductorEta: [...desc.eta], conductorK: [...desc.k], metalness: 1, baseWeight: 1, specularRoughness: desc.roughness, specularWeight: 1 };
     case 'dielectric':
@@ -84,7 +105,7 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
 /** Does the material read any texture (so its meshes need uvs)? */
 export function materialUsesTexture(desc: MaterialDesc): boolean {
   if (desc.type === 'diffuse') return !!desc.reflectanceTexture;
-  if (desc.type === 'pbr') return !!(desc.baseColorTexture || desc.metallicRoughnessTexture || desc.normalTexture || desc.emissiveTexture);
+  if (desc.type === 'pbr' || desc.type === 'openpbr') return !!(desc.baseColorTexture || desc.metallicRoughnessTexture || desc.normalTexture || desc.emissiveTexture);
   return false;
 }
 

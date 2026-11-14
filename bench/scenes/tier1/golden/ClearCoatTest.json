@@ -1,0 +1,24 @@
+{
+"header": {"model":"ClearCoatTest","sourceSha256":"c3a1cbe318cd043b937130af4eb83ec2ea0b03613387b1b7d769dfab4ac15948","extensionsUsed":["KHR_materials_clearcoat"],"materialCount":19,"classCounts":{"A":6,"B":13,"B'":0,"C":0}},
+"materials": [
+{"i":0,"name":"Simple_Base","class":"B","openpbr":{"baseColor":[0.5,0.02,0.01],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5}},
+{"i":1,"name":"Simple_Coated","class":"B","openpbr":{"baseColor":[0.5,0.02,0.01],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5,"coatWeight":1,"coatRoughness":0.03,"coatIor":1.5}},
+{"i":2,"name":"Simple_Coating","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.03,"specularIor":1.5}},
+{"i":3,"name":"Partial_Base","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5}},
+{"i":4,"name":"Partial_Coated","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5,"coatWeight":1,"coatRoughness":0.03,"coatIor":1.5},"textures":["clearcoatTexture"]},
+{"i":5,"name":"Partial_Coating","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.03,"alphaMode":"blend","geometryOpacity":1,"specularIor":1.5},"textures":["baseColorTexture"]},
+{"i":6,"name":"RoughVariations_Base","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.6,"specularIor":1.5}},
+{"i":7,"name":"RoughVariations_Coated","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.6,"specularIor":1.5,"coatWeight":1,"coatRoughness":1,"coatIor":1.5},"textures":["clearcoatRoughnessTexture"]},
+{"i":8,"name":"RoughVariations_Coating","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":1,"specularIor":1.5},"textures":["metallicRoughnessTexture"]},
+{"i":9,"name":"BaseNorm_Base","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5},"textures":["normalTexture"]},
+{"i":10,"name":"BaseNorm_Coated","class":"B","openpbr":{"baseColor":[0.01284864,0.02186106,0.1106887],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5,"coatWeight":1,"coatRoughness":0.03,"coatIor":1.5},"textures":["normalTexture"]},
+{"i":11,"name":"BaseNorm_Coating","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.03,"specularIor":1.5}},
+{"i":12,"name":"CoatNorm_Base","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5}},
+{"i":13,"name":"CoatNorm_Coated","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5,"coatWeight":1,"coatRoughness":0.03,"coatIor":1.5},"textures":["clearcoatNormalTexture"]},
+{"i":14,"name":"CoatNorm_Coating","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.03,"specularIor":1.5},"textures":["normalTexture"]},
+{"i":15,"name":"SharedNorm_Base","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5},"textures":["normalTexture"]},
+{"i":16,"name":"SharedNorm_Coated","class":"B","openpbr":{"baseColor":[0.01298302,0.02217388,0.1094617],"baseMetalness":0,"specularRoughness":0.44,"specularIor":1.5,"coatWeight":1,"coatRoughness":0.03,"coatIor":1.5},"textures":["normalTexture","clearcoatNormalTexture"]},
+{"i":17,"name":"SharedNorm_Coating","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.03,"specularIor":1.5},"textures":["normalTexture"]},
+{"i":18,"name":"LabelMaterial","class":"A","openpbr":{"baseColor":[0,0,0],"baseMetalness":0,"specularRoughness":0.9,"emissionColor":[1,1,1],"emissionLuminance":1,"specularIor":1.5},"textures":["emissiveTexture"]}
+]
+}
