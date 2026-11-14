@@ -20,6 +20,13 @@ export interface ExportOptions {
   assetsDir: string;
   /** Samples per pixel written into the scene file. */
   spp: number;
+  /**
+   * `openpbr` materials only: write the closest approximation, flagged `coverage:` in `approximations`, where no native renderer
+   * expresses the material (reference class C, Mitsuba-only gaps); without it the exporter throws.
+   */
+  coverage?: boolean;
+  /** pbrt `coateddiffuse` / `coatedconductor` `maxdepth` and `nsamples` (default `LAYERED_DEFAULTS` in openpbr.ts). */
+  layered?: { maxDepth?: number; nSamples?: number };
 }
 
 export type Exporter = (scene: SceneDesc, opts: ExportOptions) => ExportResult;

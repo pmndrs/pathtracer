@@ -277,3 +277,14 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - WGSL const-array LUTs cost text: print `Number(v.toFixed(4))` and drop the leading `0` (`String(Float32)` prints 17 digits and tripled
   the table). `var<private>` for a table indexed at run time.
 - macOS `sed -i` needs `-i ''`; a failed `sed -i` in a chain is easy to miss. Use python or the Edit tool for source edits.
+- pbrt `coateddiffuse`/`coatedconductor` lose energy at their defaults: `thickness` 0.01 is an absorber even with `albedo` 0 (8% of a white
+  furnace) and `maxdepth` 10 truncates the walk (7% more). The exporters write thickness 1e-6, maxdepth 64 (V60).
+- Mitsuba `rgb` values on a medium parameter are reflectances and must be in [0, 1] (`sigma_t` 2.4 fails to load): write `scale` times a
+  normalised rgb. pbrt uplifts RGB `sigma_a` spectrally, so saturated absorbers are off by up to 8% per channel; grey is exact (V62).
+- pbrt `volpath` is patched like `path` (`rr`, `rrdepth`, V59). The patch file is the `git diff` of `.cache/native/pbrt-v4`: after editing the
+  working tree regenerate it with `git diff > bench/references/pbrt-no-rr.patch`, then `ninja -C .cache/native/pbrt-v4/build`.
+- pbrt `mix` picks material[1] with probability `amount` (hash-based per shading point), Mitsuba `blendbsdf` `weight` is the weight of the second
+  child. Do not wrap a transmissive child (dielectric) in `twosided` in Mitsuba; wrap the one-sided leaves individually.
+- `openpbr` export: class C throws unless `coverage` is passed (`ExportOptions.coverage`, `render.ts --coverage`); coverage output is flagged
+  `coverage:` in the sidecar and is not a reference. Both mesh and material emission on one mesh throws.
+

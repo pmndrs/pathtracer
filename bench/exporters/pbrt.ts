@@ -8,7 +8,8 @@
  * Area lights are one-sided unless `twoSided`. Russian roulette is disabled by the patched `bool rr false`
  * (bench/references/pbrt-no-rr.patch; stock pbrt-v4 cannot disable RR) when `rrStartDepth` is absent. Otherwise the
  * patch's `"integer rrdepth"` is set to rrStartDepth - 1: pbrt applies RR when `depth > rrdepth`, so RR first fires at
- * path vertex number rrStartDepth (1 = first surface hit); verified by variance with rrdepth 0/1/2 (stock = 1).
+ * path vertex number rrStartDepth (1 = first surface hit); verified by variance with rrdepth 0/1/2 (stock = 1). The patch covers `volpath` too.
+ * `openpbr` materials become named materials (`pbrtOpenPbr`); a scene with an absorbing interior uses `volpath` + `MakeNamedMedium`.
  */
 import type { MaterialDesc } from '../scenes/schema.ts';
 import { encodePly } from './ply.ts';
@@ -16,7 +17,10 @@ import { equirectToOctahedral, loadEnvImage } from './envmap.ts';
 import { writePFM } from '../metrics/pfm.ts';
 import { num, roughnessToAlpha, shorterAxisFovDeg, usedTextures, vec, worldMeshes } from './common.ts';
 import { encodePng } from './png.ts';
+import { cauchyFit, deriveOpenPbr, LAYERED_DEFAULTS, LAYERED_THICKNESS } from './openpbr.ts';
+import type { HomogeneousAbsorber, NativeCtx } from './openpbr.ts';
 import type { Exporter, ExportedFile } from './types.ts';
+import type { OpenPbrParams, Rgb } from '../scenes/schema.ts';
 
 /** pbrt octahedral environment resolution (square). 512² covers the 512×256 equirect with margin. */
 const OCTA_SIZE = 512;
@@ -26,7 +30,7 @@ function material(m: MaterialDesc, textureName: (name: string) => string): strin
     case 'pbr':
       throw new Error('pbrt: pbr materials are not expressible');
     case 'openpbr':
-      throw new Error('pbrt: openpbr materials are not exported yet (P2.20)');
+      throw new Error('pbrt: openpbr materials go through pbrtOpenPbr (named materials)');
     case 'diffuse':
       if (m.reflectanceTexture) return `Material "diffuse" "texture reflectance" "${textureName(m.reflectanceTexture)}"`;
       return `Material "diffuse" "rgb reflectance" [ ${vec(m.reflectance)} ]`;
@@ -37,6 +41,126 @@ function material(m: MaterialDesc, textureName: (name: string) => string): strin
     case 'dielectric':
       return `Material "dielectric" "float eta" ${num(m.ior)} "float roughness" ${num(roughnessToAlpha(m.roughness))} "bool remaproughness" false`;
   }
+}
+
+/** One pbrt material node: a leaf (`type` + parameters) or a `mix` of two named nodes (prob. `amount` of the second). */
+type Node = { type: string; params: string } | { type: 'mix'; a: string; b: string; amount: number };
+
+export interface PbrtOpenPbr {
+  /** `MakeNamedMaterial` lines, dependencies first. */
+  decls: string[];
+  /** Name of the top node (use as `NamedMaterial "<use>"`). */
+  use: string;
+  medium?: HomogeneousAbsorber;
+  emission?: Rgb;
+}
+
+const f = (name: string, v: number): string => `"float ${name}" ${num(v)}`;
+const rgbP = (name: string, v: readonly number[]): string => `"rgb ${name}" [ ${vec(v)} ]`;
+
+/**
+ * `openpbr` -> pbrt-v4 named materials (docs/design/tier1.md section 2):
+ *  - metalness 1: `conductor` (`reflectance` = base colour, eta 1 + complex k; anisotropic alphas via u/v roughness), with `coatedconductor`
+ *    when `coat_weight` > 0 (interface eta = coat IOR);
+ *  - metalness 0: transmission 1 -> `dielectric` (or `thindielectric` when thin-walled and smooth); transmission 0 -> `coateddiffuse`
+ *    (specular lobe = the coat interface; `diffuse` when the specular is off); thin-walled `subsurface` -> `diffusetransmission`;
+ *  - fractional metalness / transmission / coat weight -> `mix` (exact linear blend of the two ends);
+ *  - dispersion -> `spectrum eta` from a Cauchy fit of (specular_ior, Abbe number / scale);
+ *  - `transmission_depth` > 0 with a transmission colour -> an absorption-only interior medium (the caller emits `MakeNamedMedium`, a
+ *    `MediumInterface` and switches to `volpath`).
+ */
+export function pbrtOpenPbr(matName: string, p: OpenPbrParams, ctx: NativeCtx): PbrtOpenPbr {
+  const d = deriveOpenPbr(matName, p, ctx);
+  const { m } = d;
+  const note = (s: string): void => void ctx.notes.add(`pbrt: material '${matName}': ${s}`);
+  const cov = (s: string): void => void ctx.notes.add(`coverage: pbrt: material '${matName}': ${s}`);
+  const stem = matName.replace(/[^A-Za-z0-9_-]+/g, '_');
+  const nodes: Array<[string, Node]> = [];
+  let counter = 0;
+  const add = (label: string, n: Node): string => {
+    const name = `${stem}.${label}${counter++}`;
+    nodes.push([name, n]);
+    return name;
+  };
+  const mix = (a: string, b: string, amount: number): string => (amount <= 0 ? a : amount >= 1 ? b : add('mix', { type: 'mix', a, b, amount }));
+  const rough = (prefix: string, uAlpha: number, vAlpha: number): string =>
+    uAlpha === vAlpha ? `${f(`${prefix}roughness`, uAlpha)}` : `${f(`${prefix}uroughness`, uAlpha)} ${f(`${prefix}vroughness`, vAlpha)}`;
+  const layer = `"integer maxdepth" ${ctx.layered.maxDepth} "integer nsamples" ${ctx.layered.nSamples}`;
+
+  // ----- metal end
+  const metalNode = (): string => {
+    if (m.specularColor.some((c) => c !== 1)) note('specular_color != 1 on a metal (F82 tint) is ignored: reflectance = base_color is the F0');
+    if (m.coatWeight > 0) {
+      const coated = add('coatedconductor', {
+        type: 'coatedconductor',
+        params: `${rgbP('reflectance', d.base)} ${rough('conductor.', d.alphaU, d.alphaV)} ${f('interface.roughness', d.coatAlpha)} ${f('interface.eta', m.coatIor)} "float thickness" ${LAYERED_THICKNESS} ${layer} "bool remaproughness" false`,
+      });
+      if (m.coatWeight >= 1) return coated;
+      note(`coat_weight ${m.coatWeight} < 1: linear mix of the bare conductor and the coated one (OpenPBR scales the coat Fresnel instead)`);
+      return mix(add('conductor', { type: 'conductor', params: `${rgbP('reflectance', d.base)} ${rough('', d.alphaU, d.alphaV)} "bool remaproughness" false` }), coated, m.coatWeight);
+    }
+    return add('conductor', { type: 'conductor', params: `${rgbP('reflectance', d.base)} ${rough('', d.alphaU, d.alphaV)} "bool remaproughness" false` });
+  };
+
+  // ----- dielectric end
+  const etaParam = (): string => {
+    if (m.transmissionDispersionScale <= 0) return f('eta', d.ior);
+    const fit = cauchyFit(d.ior, m.transmissionDispersionAbbeNumber / m.transmissionDispersionScale);
+    const pts: string[] = [];
+    for (let nm = 360; nm <= 830; nm += 10) pts.push(`${nm} ${num(Number(fit.eta(nm).toFixed(6)))}`);
+    note(`dispersion: spectrum eta from a Cauchy fit n = A + B/lambda^2 (A = ${fit.a.toFixed(5)}, B = ${fit.b.toFixed(6)} um^2) of n_d = ${d.ior} and Abbe ${(m.transmissionDispersionAbbeNumber / m.transmissionDispersionScale).toFixed(3)}; pbrt terminates the secondary wavelengths at each refraction`);
+    return `"spectrum eta" [ ${pts.join(' ')} ]`;
+  };
+  const opaqueNode = (): string => {
+    if (m.subsurfaceWeight > 0) {
+      if (!d.thin) note('subsurface_weight > 0 on a non-thin-walled surface: exported as diffuse transmission anyway (OpenPBR would use a volume)');
+      const w = m.subsurfaceWeight;
+      const refl = d.base.map((b) => b * (1 - w)) as unknown as Rgb;
+      const trans = m.subsurfaceColor.map((c) => c * w) as unknown as Rgb;
+      if (m.specularWeight > 0) note('diffusetransmission has no specular lobe: exact only with specular_weight 0; the dielectric specular is dropped here (class B\')');
+      return add('diffusetransmission', { type: 'diffusetransmission', params: `${rgbP('reflectance', refl)} ${rgbP('transmittance', trans)}` });
+    }
+    const diffuse = (): string => add('diffuse', { type: 'diffuse', params: rgbP('reflectance', d.base) });
+    const coated = (ior: number, uA: number, vA: number): string =>
+      add('coateddiffuse', { type: 'coateddiffuse', params: `${rgbP('reflectance', d.base)} ${rough('', uA, vA)} ${f('eta', ior)} "float thickness" ${LAYERED_THICKNESS} ${layer} "bool remaproughness" false` });
+    if (m.coatWeight > 0) {
+      note('clear coat on a dielectric: coateddiffuse with the coat IOR/roughness as the interface; the base dielectric specular lobe is not added');
+      const c = coated(m.coatIor, d.coatAlpha, d.coatAlpha);
+      if (m.coatWeight >= 1) return c;
+      note(`coat_weight ${m.coatWeight} < 1: linear mix of the uncoated dielectric and the coated one`);
+      return mix(m.specularWeight > 0 && d.ior !== 1 ? coated(d.ior, d.alphaU, d.alphaV) : diffuse(), c, m.coatWeight);
+    }
+    if (m.specularWeight <= 0 || d.ior === 1) return diffuse();
+    if (d.anisotropic) note('anisotropic dielectric over diffuse: coateddiffuse takes u/v roughness on the interface');
+    note(`dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth ${ctx.layered.maxDepth}, nsamples ${ctx.layered.nSamples}); OpenPBR approximates the layering with albedo scaling`);
+    return coated(d.ior, d.alphaU, d.alphaV);
+  };
+  const glassNode = (): string => {
+    if (d.thin) {
+      if (d.alphaU > 0 || d.alphaV > 0) cov('rough thin-walled transmission has no reference: smooth thindielectric written');
+      return add('thindielectric', { type: 'thindielectric', params: etaParam() });
+    }
+    return add('dielectric', { type: 'dielectric', params: `${etaParam()} ${rough('', d.alphaU, d.alphaV)} "bool remaproughness" false` });
+  };
+  const dielectricNode = (): string => {
+    if (!d.transmissive) return opaqueNode();
+    const glass = glassNode();
+    if (m.transmissionWeight >= 1) return glass;
+    note(`transmission_weight ${m.transmissionWeight} < 1: linear mix of the opaque dielectric and the glass (OpenPBR layers them)`);
+    return mix(opaqueNode(), glass, m.transmissionWeight);
+  };
+
+  let top: string;
+  if (d.metal >= 1) top = metalNode();
+  else if (d.metal <= 0) top = dielectricNode();
+  else top = mix(dielectricNode(), metalNode(), d.metal);
+
+  const decls = nodes.map(([name, n]) =>
+    'a' in n
+      ? `MakeNamedMaterial "${name}" "string type" "mix" "string materials" [ "${n.a}" "${n.b}" ] ${f('amount', n.amount)}`
+      : `MakeNamedMaterial "${name}" "string type" "${n.type}" ${n.params}`,
+  );
+  return { decls, use: top, medium: d.metal < 1 ? d.medium : undefined, emission: d.emission };
 }
 
 export const toPbrt: Exporter = (scene, opts) => {
@@ -52,10 +176,23 @@ export const toPbrt: Exporter = (scene, opts) => {
   lines.push(`Film "rgb" "integer xresolution" ${scene.film.width} "integer yresolution" ${scene.film.height}`);
   lines.push(`PixelFilter "box" "float xradius" 0.5 "float yradius" 0.5`);
   lines.push(`Sampler "zsobol" "integer pixelsamples" ${opts.spp}`);
+  // openpbr materials: named materials (and absorbers) first, so the integrator line knows whether media are in play
+  const ctx: NativeCtx = { renderer: 'pbrt', coverage: opts.coverage === true, layered: { ...LAYERED_DEFAULTS, ...opts.layered }, notes: new Set() };
+  const openpbr = new Map<string, PbrtOpenPbr>();
+  for (const w of scene.meshes) {
+    const m = scene.materials[w.material];
+    if (m?.type === 'openpbr' && !openpbr.has(w.material)) openpbr.set(w.material, pbrtOpenPbr(w.material, m, ctx));
+  }
+  const volumetric = [...openpbr.values()].some((o) => o.medium);
   const rr = scene.integrator.rrStartDepth === undefined;
   const rrArgs = rr ? ' "bool rr" false' : ` "integer rrdepth" ${Math.max(0, scene.integrator.rrStartDepth! - 1)}`;
-  lines.push(`Integrator "path" "integer maxdepth" ${scene.integrator.maxDepth}${rrArgs}`);
+  lines.push(`Integrator "${volumetric ? 'volpath' : 'path'}" "integer maxdepth" ${scene.integrator.maxDepth}${rrArgs}`);
   lines.push(`WorldBegin`);
+  for (const [name, o] of openpbr) {
+    lines.push(...o.decls);
+    if (o.medium) lines.push(`MakeNamedMedium "med-${name}" "string type" "homogeneous" "rgb sigma_a" [ ${vec(o.medium.sigma)} ] "rgb sigma_s" [ 0.0 0.0 0.0 ] "float scale" 1.0`);
+  }
+  if (volumetric) approximations.push('pbrt: absorption-only interior media use `volpath` (patched no-RR, bench/references/pbrt-no-rr.patch) and RGB `sigma_a` that pbrt uplifts to unbounded spectra (a coloured sigma is slightly off per channel: measured by bench/references/openpbr-check.ts).');
 
   const env = scene.environment;
   if (env?.type === 'uniform') {
@@ -88,13 +225,27 @@ export const toPbrt: Exporter = (scene, opts) => {
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
     files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh, { flipV: true }) });
     lines.push(`AttributeBegin`);
-    lines.push(`  ${material(m, (name) => name)}`);
-    if (w.desc.emission) {
-      lines.push(`  AreaLightSource "diffuse" "rgb L" [ ${vec(w.desc.emission)} ] "bool twosided" ${w.desc.twoSided ? 'true' : 'false'}`);
+    let emission = w.desc.emission;
+    let twoSided = w.desc.twoSided === true;
+    if (m.type === 'openpbr') {
+      const o = openpbr.get(w.desc.material)!;
+      lines.push(`  NamedMaterial "${o.use}"`);
+      if (o.medium) lines.push(`  MediumInterface "med-${w.desc.material}" ""`);
+      if (o.emission) {
+        if (emission) throw new Error(`mesh '${w.desc.name}': both the mesh and its openpbr material emit; use one`);
+        emission = o.emission;
+        twoSided = m.emissionTwoSided === true;
+      }
+    } else {
+      lines.push(`  ${material(m, (name) => name)}`);
+    }
+    if (emission) {
+      lines.push(`  AreaLightSource "diffuse" "rgb L" [ ${vec(emission)} ] "bool twosided" ${twoSided ? 'true' : 'false'}`);
     }
     lines.push(`  Shape "plymesh" "string filename" "${w.stem}.ply"`);
     lines.push(`AttributeEnd`);
   }
+  approximations.push(...ctx.notes);
   files.push({ path: 'scene.pbrt', data: lines.join('\n') + '\n' });
   return { sceneFile: 'scene.pbrt', files, approximations };
 };

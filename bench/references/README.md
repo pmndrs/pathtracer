@@ -66,6 +66,31 @@ Renderer keys: `pbrt` (pbrt-v4-cpu), `mitsuba` (llvm_ad_rgb), `mitsuba-scalar` (
   rendering an orange marker in each tile's top-left cell and comparing the three images). Mitsuba never uses mip maps; pbrt `bilinear` picks a mip level
   from the camera ray differentials scaled by max(1/8, 1/sqrt(spp)), so keep texel density low (tex-checker: <= ~8 texels per pixel) when you want pbrt
   on level 0; `tex-checker-hf` deliberately exceeds it. Timings at 4096 spp, 320x240: pbrt 27 s, Mitsuba 15 s.
+- **`openpbr` materials and media (P2.20).** `bench/exporters/openpbr.ts` + `pbrtOpenPbr` / `mitsubaOpenPbr` map tier1.md section 2: metal ->
+  `conductor` / `roughconductor` (eta 1, k from the reflectance), glass -> `dielectric`, thin-walled -> `thindielectric`, dielectric over diffuse ->
+  `coateddiffuse` / `roughplastic` (`nonlinear true`), clearcoat on a metal -> `coatedconductor`, fractional metalness -> `mix` / `blendbsdf`,
+  thin-walled `subsurface` and dispersion -> pbrt only. Class C throws; `--coverage` (`ExportOptions.coverage`) writes the closest
+  approximation and every deviation is a `coverage:`-prefixed entry of the sidecar's `approximations`. The checks live in `openpbr-check.ts`
+  (`node bench/references/openpbr-check.ts [--scenes a,b] [--spp 256] [--coverage] [--furnace]`, 128x128, a few seconds per scene).
+  - **Media.** An absorption-only interior (`transmission_color` at `transmission_depth` metres; sigma = -ln(T)/depth) is `MakeNamedMedium
+    "homogeneous"` (`sigma_s` 0) + `MediumInterface "med-<material>" ""` on the shape and `Integrator "volpath"` in pbrt, and a homogeneous `interior`
+    medium + `volpath` in Mitsuba; scenes without media keep `path`. The mesh must be closed with outward normals (no nesting). Mitsuba's `rgb`
+    medium values must be in [0, 1]: sigma_t is `scale` times the normalised rgb. pbrt uplifts RGB `sigma_a` spectrally (V62): grey absorbers are
+    exact, saturated ones are off by up to 8% per channel (the closed form is Beer's law through an ior 1.5 slab, (1-R)^2 a / (1-R^2 a^2)).
+  - **`volpath` RR.** The no-RR patch covers `volpath` too (`"bool rr" false`, `"integer rrdepth"`, V59); verified by the same one-bounce furnace
+    variance (rrdepth 0 gives 3.8x the pixel std, `rr false` / rrdepth 1 / rrdepth 2 equal stock). Mitsuba `volpath` takes the same `max_depth`
+    (+1) and `rr_depth` as `path`. After pulling this change rebuild pbrt: `git -C .cache/native/pbrt-v4 apply` is only needed on a fresh clone
+    (the patch file is `git diff` of the working tree; `ninja -C .cache/native/pbrt-v4/build`).
+  - **`coateddiffuse` / `coatedconductor`.** pbrt's defaults are not energy conserving: `thickness` 0.01 absorbs even with `albedo` 0 (white furnace
+    0.9164 converged), and `maxdepth` 10 truncates the walk (0.9277 smooth with thickness 1e-6). The exporter writes `thickness` 1e-6, `maxdepth` 64,
+    `nsamples` 1 (`LAYERED_DEFAULTS`; `ExportOptions.layered` overrides). White-base furnace, ior 1.5, 128x128 at 256 spp: smooth coat pbrt
+    maxdepth 10 / 16 / 32 / 64 / 128 = 0.9277 / 0.9845 / 0.9994 / 0.9997 / 0.9997, Mitsuba roughplastic 1.0011; rough coat (roughness 0.3)
+    0.8842 / 0.9264 / 0.9357 / 0.9358 / 0.9358, Mitsuba 0.9191 (single-scatter GGX loss amplified by the internal bounces; not a maxdepth effect).
+  - **Agreement (pbrt vs Mitsuba, centre or whole image, 256 spp):** thin sheet 0.92320/0.92308/0.92297 vs 0.92311 (closed form 0.92308); grey slab
+    0.2765 vs 0.2766 (0.2765); emission 2.9996/1.4988/0.7490 vs 3/1.5/0.75 (pbrt's spectral round trip -0.01..-0.14%); grey metal +0.08%; rough
+    glass -0.04%; metalness 0.5 mix -0.1%; anisotropic metal +0.05% and relMSE 4.5e-4 (0.20 with alpha_u/alpha_v swapped); coloured metal -0.7% red
+    (spectral uplift); clay under a coat red -1.0% (V61).
+
 - **Samplers.** pbrt `zsobol`, Mitsuba `multijitter` (both unbiased; differences are noise, not bias).
 
 ## Systematic differences to expect

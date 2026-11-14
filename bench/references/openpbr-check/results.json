@@ -1,0 +1,620 @@
+{
+  "spp": 256,
+  "oc-thin": {
+    "purpose": "Thin-walled smooth dielectric sheet (ior 1.5) in front of an emissive wall: the centre pixel is the sheet transmittance 2n/(n^2+1) = 0.9231 (multiple internal reflections included).",
+    "pbrt": {
+      "seconds": 0.334,
+      "mean": [
+        0.9230725169181824,
+        0.92308309674263,
+        0.9230110347270966
+      ],
+      "center": [
+        0.9232020378112793,
+        0.9230766296386719,
+        0.922968864440918
+      ],
+      "approximations": []
+    },
+    "mitsuba": {
+      "seconds": 0.252,
+      "mean": [
+        0.9230659008026123,
+        0.9230659008026123,
+        0.9230659008026123
+      ],
+      "center": [
+        0.9231071472167969,
+        0.9231071472167969,
+        0.9231071472167969
+      ],
+      "approximations": []
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        0.000007167492747110774,
+        0.00001862881042712311,
+        -0.00005944249142370127
+      ],
+      "z": [
+        0.22955525600739735,
+        0.8332462734071955,
+        -0.6900900694759281
+      ]
+    },
+    "expected": [
+      0.923076923076923,
+      0.923076923076923,
+      0.923076923076923
+    ]
+  },
+  "oc-emission": {
+    "purpose": "Emission of an openpbr material: a quad with emission_luminance 3 x emission_color (1, 0.5, 0.25) seen head on over a black environment reads 3, 1.5, 0.75 (the base reflects black).",
+    "pbrt": {
+      "seconds": 0.431,
+      "mean": [
+        2.999568223953247,
+        1.4987879991531372,
+        0.7489764392375946
+      ],
+      "center": [
+        2.9995803833007812,
+        1.4988012313842773,
+        0.7489776611328125
+      ],
+      "approximations": [
+        "pbrt: material 'lamp': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling"
+      ]
+    },
+    "mitsuba": {
+      "seconds": 0.254,
+      "mean": [
+        3,
+        1.5,
+        0.75
+      ],
+      "center": [
+        3,
+        1.5,
+        0.75
+      ],
+      "approximations": [
+        "mitsuba: material 'lamp': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent"
+      ]
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.00014394606640547595,
+        -0.0008086539574293441,
+        -0.0013666127648118123
+      ],
+      "z": [
+        -31.951825775906684,
+        -246.511406751125,
+        -206.04356556296517
+      ]
+    },
+    "expected": [
+      3,
+      1.5,
+      0.75
+    ]
+  },
+  "oc-absorb": {
+    "purpose": "Absorbing glass slab (ior 1.5, 0.5 m, transmission_color 0.5/0.25/0.8 at depth 0.5 m) in front of an emissive wall: the centre pixel is the closed-form slab transmittance (1-R)^2 a / (1-R^2 a^2) per channel (Beer-Lambert through a MediumInterface/medium + volpath).",
+    "pbrt": {
+      "seconds": 0.489,
+      "mean": [
+        0.4897594600915909,
+        0.21142460405826569,
+        0.7220079898834229
+      ],
+      "center": [
+        0.4904444217681885,
+        0.2117781639099121,
+        0.7241711616516113
+      ],
+      "approximations": [
+        "pbrt: absorption-only interior media use `volpath` (patched no-RR, bench/references/pbrt-no-rr.patch) and RGB `sigma_a` that pbrt uplifts to unbounded spectra (a coloured sigma is slightly off per channel: measured by bench/references/openpbr-check.ts)."
+      ]
+    },
+    "mitsuba": {
+      "seconds": 0.439,
+      "mean": [
+        0.46066924531805853,
+        0.23023717101659713,
+        0.7375890852817975
+      ],
+      "center": [
+        0.46022643707692623,
+        0.2300704328226857,
+        0.736790903552901
+      ],
+      "approximations": [
+        "mitsuba: absorption-only interior media use the `volpath` integrator (same max_depth and rr_depth rules as `path`); homogeneous medium with sigma_t = -ln(T)/depth per RGB channel (written as scale = max sigma and rgb = sigma / max sigma, because an `rgb` medium value must lie in [0, 1]), albedo 0."
+      ]
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        0.05939694307914366,
+        -0.08898002690901084,
+        -0.021580225726990032
+      ],
+      "z": [
+        120.08522425418377,
+        -162.42264998167008,
+        -37.26971797579682
+      ]
+    },
+    "expected": [
+      0.46098439375750294,
+      0.2304230423042304,
+      0.7380357486065732
+    ]
+  },
+  "oc-absorb-grey": {
+    "purpose": "Absorbing glass slab (ior 1.5, 0.5 m, transmission_color 0.3/0.3/0.3 at depth 0.5 m) in front of an emissive wall: the centre pixel is the closed-form slab transmittance (1-R)^2 a / (1-R^2 a^2) per channel (Beer-Lambert through a MediumInterface/medium + volpath).",
+    "pbrt": {
+      "seconds": 0.475,
+      "mean": [
+        0.27638353407382965,
+        0.27642424404621124,
+        0.27633136510849
+      ],
+      "center": [
+        0.2765026092529297,
+        0.27640533447265625,
+        0.27683424949645996
+      ],
+      "approximations": [
+        "pbrt: absorption-only interior media use `volpath` (patched no-RR, bench/references/pbrt-no-rr.patch) and RGB `sigma_a` that pbrt uplifts to unbounded spectra (a coloured sigma is slightly off per channel: measured by bench/references/openpbr-check.ts)."
+      ]
+    },
+    "mitsuba": {
+      "seconds": 0.417,
+      "mean": [
+        0.27651693224106566,
+        0.27651693224106566,
+        0.27651693224106566
+      ],
+      "center": [
+        0.27662279197829776,
+        0.27662279197829776,
+        0.27662279197829776
+      ],
+      "approximations": [
+        "mitsuba: absorption-only interior media use the `volpath` integrator (same max_depth and rr_depth rules as `path`); homogeneous medium with sigma_t = -ln(T)/depth per RGB channel (written as scale = max sigma and rgb = sigma / max sigma, because an `rgb` medium value must lie in [0, 1]), albedo 0."
+      ]
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.0004826559863019021,
+        -0.00033531138042625037,
+        -0.0006715384353955442
+      ],
+      "z": [
+        -1.432327628117599,
+        -1.0490785763921167,
+        -1.2152095041514552
+      ]
+    },
+    "expected": [
+      0.27651981885391497,
+      0.27651981885391497,
+      0.27651981885391497
+    ]
+  },
+  "oc-metal": {
+    "purpose": "Rough grey metal sphere (reflectance 0.9, roughness 0.4) under a uniform sky and a quad light: pbrt conductor vs Mitsuba roughconductor, both with eta = 1 and k from the reflectance.",
+    "pbrt": {
+      "seconds": 0.356,
+      "mean": [
+        0.5385389775037766,
+        0.5385357439517975,
+        0.5383933633565903
+      ],
+      "center": [
+        0.3660104274749756,
+        0.36600399017333984,
+        0.3659358024597168
+      ],
+      "approximations": []
+    },
+    "mitsuba": {
+      "seconds": 0.422,
+      "mean": [
+        0.5380975931075227,
+        0.5380975931075227,
+        0.5380975931075227
+      ],
+      "center": [
+        0.3659707998740487,
+        0.3659707998740487,
+        0.3659707998740487
+      ],
+      "approximations": []
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        0.0008195960082587651,
+        0.0008135965888904946,
+        0.0005493571600207067
+      ],
+      "z": [
+        3.310877049526426,
+        3.46729546489455,
+        1.3329747700814887
+      ]
+    }
+  },
+  "oc-metal-copper": {
+    "purpose": "As oc-metal with a coloured reflectance (0.95, 0.64, 0.54): pbrt uplifts the RGB reflectance spectrally, Mitsuba (llvm_ad_rgb) works per channel; the difference is the spectral-uplift bias, informational.",
+    "pbrt": {
+      "seconds": 0.361,
+      "mean": [
+        0.5597766041755676,
+        0.4179346188902855,
+        0.37429531663656235
+      ],
+      "center": [
+        0.38634204864501953,
+        0.2603210210800171,
+        0.21973812580108643
+      ],
+      "approximations": []
+    },
+    "mitsuba": {
+      "seconds": 0.319,
+      "mean": [
+        0.5635118611407961,
+        0.417403070261571,
+        0.3743105437642953
+      ],
+      "center": [
+        0.38637569893035106,
+        0.26026681358052883,
+        0.2197826147748856
+      ],
+      "approximations": []
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.006672763629930042,
+        0.0012718463718700884,
+        -0.00004068212199333313
+      ],
+      "z": [
+        -24.598307427364887,
+        5.8784741453381315,
+        -0.11067823530374593
+      ]
+    }
+  },
+  "oc-aniso": {
+    "purpose": "Anisotropic metal (roughness 0.4, anisotropy 0.8) on a uv sphere: tests that pbrt and Mitsuba take the same tangent axis (dp/du of the PLY uv); u-alpha is the tangent direction.",
+    "pbrt": {
+      "seconds": 0.365,
+      "mean": [
+        0.5483049601316452,
+        0.5483026951551437,
+        0.5481274127960205
+      ],
+      "center": [
+        0.3475227355957031,
+        0.3475325107574463,
+        0.3475501537322998
+      ],
+      "approximations": [
+        "pbrt: material 'm': anisotropic: the GGX tangent axis is the renderer's own dp/du of the mesh uvs, not the glTF TANGENT attribute (unverified, P2.26)"
+      ]
+    },
+    "mitsuba": {
+      "seconds": 0.318,
+      "mean": [
+        0.5480309038721316,
+        0.5480309038721316,
+        0.5480309038721316
+      ],
+      "center": [
+        0.34747779308236204,
+        0.34747779308236204,
+        0.34747779308236204
+      ],
+      "approximations": [
+        "mitsuba: material 'm': anisotropic: the GGX tangent axis is the renderer's own dp/du of the mesh uvs, not the glTF TANGENT attribute (unverified, P2.26)"
+      ]
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        0.0004998245127087675,
+        0.0004956956903799842,
+        0.00017607023775112612
+      ],
+      "z": [
+        1.639759750984677,
+        1.7065281340679193,
+        0.39235443719717616
+      ]
+    }
+  },
+  "oc-glass": {
+    "purpose": "Rough glass sphere (ior 1.5, roughness 0.3, no absorption): pbrt dielectric vs Mitsuba roughdielectric.",
+    "pbrt": {
+      "seconds": 0.871,
+      "mean": [
+        0.4067903906106949,
+        0.4068092852830887,
+        0.4069269299507141
+      ],
+      "center": [
+        0.39590930938720703,
+        0.3958754539489746,
+        0.3959376811981201
+      ],
+      "approximations": []
+    },
+    "mitsuba": {
+      "seconds": 0.831,
+      "mean": [
+        0.40693374550392036,
+        0.40693374550392036,
+        0.40693374550392036
+      ],
+      "center": [
+        0.39604077208787203,
+        0.39604077208787203,
+        0.39604077208787203
+      ],
+      "approximations": []
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.00035240481715968314,
+        -0.0003059424288830338,
+        -0.000016748837947582913
+      ],
+      "z": [
+        -0.7528497307425487,
+        -0.6573323410724095,
+        -0.03310749740525326
+      ]
+    }
+  },
+  "oc-mix": {
+    "purpose": "Metalness 0.5 on a transmissive base: pbrt mix / Mitsuba blendbsdf of rough glass and rough grey metal (exact linear blend of two exact ends).",
+    "pbrt": {
+      "seconds": 0.894,
+      "mean": [
+        0.46653327345848083,
+        0.46660102903842926,
+        0.4665665328502655
+      ],
+      "center": [
+        0.3655383586883545,
+        0.36553430557250977,
+        0.3654932975769043
+      ],
+      "approximations": []
+    },
+    "mitsuba": {
+      "seconds": 0.803,
+      "mean": [
+        0.46707367338785843,
+        0.46707367338785843,
+        0.46707367338785843
+      ],
+      "center": [
+        0.36547987765516154,
+        0.36547987765516154,
+        0.36547987765516154
+      ],
+      "approximations": []
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.001158330948983626,
+        -0.0010129517939623904,
+        -0.0010869629557328055
+      ],
+      "z": [
+        -1.595190062707961,
+        -1.418785098581095,
+        -1.3515271064539984
+      ]
+    }
+  },
+  "oc-coated-clay": {
+    "purpose": "Dielectric over a clay diffuse base (class B): pbrt coateddiffuse (stochastic layers) vs Mitsuba roughplastic nonlinear; informational, they differ by a few percent.",
+    "pbrt": {
+      "seconds": 0.447,
+      "mean": [
+        0.333204984664917,
+        0.20503154397010803,
+        0.18214797228574753
+      ],
+      "center": [
+        0.22474098205566406,
+        0.08278700709342957,
+        0.05752268433570862
+      ],
+      "approximations": [
+        "pbrt: material 'm': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling"
+      ]
+    },
+    "mitsuba": {
+      "seconds": 0.34,
+      "mean": [
+        0.33650292461607023,
+        0.20487769517831111,
+        0.182292092333455
+      ],
+      "center": [
+        0.22798247904574964,
+        0.08274551420618081,
+        0.05782426814039354
+      ],
+      "approximations": [
+        "mitsuba: material 'm': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent"
+      ]
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.00989763089669792,
+        0.0007503664500490117,
+        -0.0007912251006636726
+      ],
+      "z": [
+        -22.647189072221828,
+        1.569184556819755,
+        -1.2013084860753138
+      ]
+    }
+  },
+  "oc-coat-metal": {
+    "purpose": "Clear coat over rough grey metal (class B, pbrt coatedconductor); Mitsuba has no equivalent (principled with the coverage option).",
+    "pbrt": {
+      "seconds": 0.498,
+      "mean": [
+        0.47707997262477875,
+        0.4770936667919159,
+        0.47709426283836365
+      ],
+      "center": [
+        0.330885648727417,
+        0.33085060119628906,
+        0.3306729793548584
+      ],
+      "approximations": []
+    },
+    "mitsuba": {
+      "seconds": 0.345,
+      "mean": [
+        0.5519976839841547,
+        0.5519976839841547,
+        0.5519976839841547
+      ],
+      "center": [
+        0.37873755145119503,
+        0.37873755145119503,
+        0.37873755145119503
+      ],
+      "approximations": [
+        "coverage: mitsuba: material 'm': a clear coat on a metal (pbrt coatedconductor) has no Mitsuba equivalent; wrote `principled` with clearcoat (Disney lobes, metallic 1)"
+      ]
+    },
+    "pbrt_vs_mitsuba": {
+      "relMean": [
+        -0.15703386362499525,
+        -0.15700065292400572,
+        -0.1569992074525697
+      ],
+      "z": [
+        -36.77720847685921,
+        -36.7737884457033,
+        -36.57011107828873
+      ]
+    }
+  },
+  "furnace": {
+    "oc-furnace-coat-r03": {
+      "pbrt maxdepth 10": {
+        "mean": [
+          0.8841603100299835,
+          0.8841770887374878,
+          0.8843253254890442
+        ],
+        "seconds": 0.472
+      },
+      "pbrt maxdepth 16": {
+        "mean": [
+          0.9264160096645355,
+          0.9264395534992218,
+          0.9265357553958893
+        ],
+        "seconds": 0.478
+      },
+      "pbrt maxdepth 32": {
+        "mean": [
+          0.9357148706912994,
+          0.9357204139232635,
+          0.9357567131519318
+        ],
+        "seconds": 0.489
+      },
+      "pbrt maxdepth 64": {
+        "mean": [
+          0.9358141422271729,
+          0.9358207285404205,
+          0.9358543157577515
+        ],
+        "seconds": 0.493
+      },
+      "pbrt maxdepth 128": {
+        "mean": [
+          0.9358141422271729,
+          0.9358207285404205,
+          0.9358543157577515
+        ],
+        "seconds": 0.48
+      },
+      "mitsuba roughplastic nonlinear": {
+        "mean": [
+          0.9191119837778388,
+          0.9191119837778388,
+          0.9191119837778388
+        ],
+        "seconds": 0.373
+      }
+    },
+    "oc-furnace-coat-r0": {
+      "pbrt maxdepth 10": {
+        "mean": [
+          0.9277132153511047,
+          0.9277248680591583,
+          0.9278277456760406
+        ],
+        "seconds": 0.409
+      },
+      "pbrt maxdepth 16": {
+        "mean": [
+          0.9844605624675751,
+          0.9844790995121002,
+          0.9844836294651031
+        ],
+        "seconds": 0.407
+      },
+      "pbrt maxdepth 32": {
+        "mean": [
+          0.9994281232357025,
+          0.9994155466556549,
+          0.9994312226772308
+        ],
+        "seconds": 0.425
+      },
+      "pbrt maxdepth 64": {
+        "mean": [
+          0.9996809959411621,
+          0.9996674358844757,
+          0.9996796548366547
+        ],
+        "seconds": 0.425
+      },
+      "pbrt maxdepth 128": {
+        "mean": [
+          0.9996809959411621,
+          0.9996674358844757,
+          0.9996796548366547
+        ],
+        "seconds": 0.412
+      },
+      "mitsuba roughplastic nonlinear": {
+        "mean": [
+          1.0011060786528105,
+          1.0011060786528105,
+          1.0011060786528105
+        ],
+        "seconds": 0.356
+      }
+    }
+  }
+}
