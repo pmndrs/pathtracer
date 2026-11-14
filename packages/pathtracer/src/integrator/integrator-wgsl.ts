@@ -11,6 +11,7 @@
  * Specialised per pipeline (module constants): sampler, NEE on/off, environment sampling, sun visibility, VNDF and transport
  * of the BSDF. Per dispatch (uniform): image size, sample index, seed, maxDepth, rrStartDepth, camera.
  */
+import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtSamplerKind } from './dimensions.ts';
 
@@ -41,6 +42,13 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    * averages the texture, so a full-pixel filter on top blurs it twice).
    */
   textureLod?: 'cone' | 0;
+  /**
+   * OpenPBR mode (P2.21, P2.22, P2.30): the scene has `openpbr` materials. Selects the OpenPBR material adapter (`ptBsdfFromOpenPbr`) and compiles
+   * only the lobes `features` names: stochastic metal/dielectric mix, thin-walled dielectric, layered dielectric-over-diffuse
+   * (`layered.layering` albedo | stochastic) and the absorbing interior medium (path state: Beer's law over the distance to the exit
+   * hit; inside/outside from the hit side, no nesting). Default null: the legacy adapter and the unchanged kernel text.
+   */
+  materials?: PtMaterialOptions | null;
 }
 
 export interface ResolvedIntegratorOptions {
@@ -51,10 +59,11 @@ export interface ResolvedIntegratorOptions {
   sunVisible: boolean;
   textures: boolean;
   textureLod: 'cone' | 0;
+  materials: PtMaterialOptions | null;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0 };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, materials: o.materials ?? null };
 }
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
@@ -77,6 +86,13 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const o = resolveIntegratorOptions(options);
   const tex = o.textures;
   const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
+  const mats = o.materials;
+  const layered = !!mats?.features.layered;
+  const stochastic = layered && (mats?.layered?.layering ?? 'albedo') === 'stochastic';
+  const medium = !!mats?.features.medium;
+  const evalFn = layered ? 'ptEval' : 'ptBsdfEval';
+  const sampleFn = layered ? 'ptSample' : 'ptBsdfSample';
+  const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
   return /* wgsl */ `
 alias PtRadiance = vec4f;
 ${PT_PARAMS_WGSL}
@@ -130,7 +146,7 @@ fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
         return vec3f(0.0);
     }
     let wiLocal = ptToLocal(frame, li.wi);
-    let e = ptBsdfEval(bp, wo, wiLocal);
+    let e = ${evalFn}(bp, wo, wiLocal);
     let f = e.f * abs(wiLocal.z);
     if (!(ptMax3(f) > 0.0)) {
         return vec3f(0.0);
@@ -194,7 +210,8 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     var etaScale = 1.0;
     var prevP = origin;
     var prevPdf = 0.0;
-${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
+${medium ? `    var sigma = vec3f(0.0);
+` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
     loop {
         let hit = rtClosest(ray, RT_MASK_ALL);
@@ -212,7 +229,8 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
             shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, rtTexSampleRecord(nr, surf.uv, rtTexLodOf(nr, fp)).xyz);
         }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL);
         let mat = rtMaterial(hit.material);`}
-
+${medium ? `        beta = beta * exp(-sigma * hit.t);
+` : ''}
         if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
             var w = 1.0;
             if (!(depth == 0u || specularBounce) && PT_NEE) {
@@ -227,13 +245,14 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
             radiance += beta * mat.emissionColor * w;
         }
 
-        let bp = ptBsdfFromMaterial(mat);
+        let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
         if (bp.kind == PT_BSDF_BLACK || depth >= maxDepth) {
             break;
         }
         let vertex = depth;
         depth += 1u;
-
+${layered ? `        ptLayerSeed = pixelSeed ^ (sampleIndex * 2654435761u) ^ (vertex * 2246822519u);
+` : ''}
         let frame = ptFrameFromNormal(${shadingNormal});
         let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && !ptBsdfIsDelta(bp)) {
@@ -242,7 +261,7 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
 
         let dirU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION));
         let compU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).y;
-        let s = ptBsdfSample(bp, wo, vec3f(compU, dirU.x, dirU.y));
+        let s = ${sampleFn}(bp, wo, vec3f(compU, dirU.x, dirU.y));
         if (s.flags == 0u || !(s.pdf > 0.0)) {
             break;
         }
@@ -251,8 +270,12 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
 ${tex ? `        cone = RtCone(coneW, cone.spread + select(PT_CONE_DIFFUSE_SPREAD, 0.0, specularBounce));
 ` : ''}        if ((s.flags & PT_FLAG_TRANSMISSION) != 0u) {
             etaScale = etaScale * s.etap * s.etap;
-        }
-        prevPdf = s.pdf;
+${medium ? `            sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.0);
+` : ''}        }
+        prevPdf = s.pdf;${stochastic ? `
+        if ((s.flags & PT_FLAG_PROPORTIONAL) != 0u) {
+            prevPdf = ptLayeredPdf(ptLayeredOf(bp), wo, s.wi, ptLayerSeed);
+        }` : ''}
         prevP = surf.position;
         let wiWorld = ptFromLocal(frame, s.wi);
         ray = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, wiWorld)), 0.0, wiWorld, PT_FAR);

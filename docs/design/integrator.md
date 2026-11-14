@@ -103,6 +103,64 @@ relMSE 4.5e-5 vs Mitsuba 4096 spp (pbrt-vs-Mitsuba floor 4.8e-5), 7.9e-5 vs pbrt
 bilinear filter picks its own mip level; floor 2.0e-4); LOD A/B in scene-copy.md open choice 9. Timing, best effort (load 3-12, not a result):
 0.47 ms/spp for both settings at 320x240.
 
+## OpenPBR materials (P2.21 wiring, P2.22, P2.30)
+
+A scene with an `openpbr` material compiles OpenPBR mode (`PtIntegratorOptions.materials: PtMaterialOptions`; the adapter sets it when any
+material of the scene has `type: 'openpbr'`, so every other scene keeps the legacy adapter and the same kernel text: `bench/size-snapshot.ts`
+diffed plain, env, pcg, readable and textured kernels `cmp`-identical, and the 64 spp PFMs of cornell, env-sphere, sponza-white and tex-checker are `cmp`-identical). The material
+adapter (`ptBsdfFromOpenPbr`, WGSL twin `ptBsdfOpenPbrWgsl`; rules in the header of `bsdf/adapter.ts`) takes a uniform `u` per vertex and picks, metal first:
+
+- **metal**: `u < metalness` (the `mix` feature: pbrt `mix`, the metal end with probability `metalness`, so the expectation is the exact linear blend; `metalness`
+  0 and 1 are exact; without the feature the legacy 0.5 threshold). Complex-Fresnel GGX conductor, eta 1, k from `base_weight * base_color` (what pbrt's and
+  Mitsuba's `reflectance` do; the OpenPBR F82 tint is not evaluated, DIVERGES V55/V64). `u` is the `.y` of the RR dimension pair of the vertex (RR uses `.x`).
+- **thick dielectric**: `transmission_weight > 0.5`, GGX dielectric with `specular_ior` and `specular_roughness`. `transmission_color` at `transmission_depth` 0
+  (a non-physical tint) is ignored on thick glass. **Interior medium** (`medium` feature): path state `sigma` (vec3, per metre) = `-ln(transmission_color) /
+  transmission_depth` of the material the ray entered; `beta *= exp(-sigma * hit.t)` at every hit (distance to the exit hit); a transmission event sets `sigma` to the material's
+  when it enters (`wo.z > 0`, the ray came from outside) and to 0 when it exits. No nesting: a ray inside one medium that enters another replaces it;
+  no absorption on NEE shadow rays (they cannot cross a glass boundary anyway; a light inside a medium is unsupported). Beer's law needs closed, consistently oriented meshes (outward normals).
+- **thin-walled dielectric** (`geometry_thin_walled`, `thin` feature): `PT_BSDF_THIN` = pbrt's `ThinDielectricBxDF`: R' = R + T^2 R / (1 - R^2), T' = 1 - R', delta lobes,
+  transmission goes straight through (`wi = -wo`, etap 1). Transmission is tinted by `transmission_color` (setting `transmissionTint`, default on; pbrt and Mitsuba `thindielectric` cannot tint, so a tinted thin wall differs from the references by construction).
+- **dielectric over diffuse** (`layered` feature): `PT_BSDF_LAYERED`, the P2.21 layered BSDF with an interface (`specular_ior`, `specular_roughness`, Fresnel scale
+  `specular_color * specular_weight`) over a Lambert base `base_weight * base_color`. A coat (`coat_weight > 0.5`) replaces the interface by (`coat_ior`, `coat_roughness`, scale 1) and drops the base's own specular lobe, which is what the pbrt exporter writes (`coateddiffuse`;
+  V67). A black base is still a lobe (IORTestGrid). `PtBsdfParams` carries it without growing: `reflectance` base, `eta` the Fresnel scale, `k = (thickness, internal reflectance, 0)`.
+- otherwise Lambert (`base`) or black.
+
+Settings: `layering` `'albedo' | 'stochastic'` (library default `albedo`; **the bench adapter defaults to `stochastic`, the reference mode**, pbrt's `coateddiffuse` walk with the exporters'
+`maxdepth` 64, `nsamples` 1 and `thickness` 1e-6; page args `pt_layering`, `pt_layer_depth`, `pt_layer_thickness`, `pt_exit_mis`), `albedoBase` `'openpbr' | 'internal'` (`pt_albedo_base`;
+`internal` reads `ptInternalReflectanceFit`, Egan-Hilgeman, within 0.012 of the numeric average), `transmissionTint` (`pt_tint`), `coverage` (`pt_coverage=1`: render a scene whose
+materials use a lobe we lack, fuzz / thin film / dispersion / subsurface / anisotropy, with that lobe ignored instead of skipping it). A stochastic layered sample has `PT_FLAG_PROPORTIONAL`: the throughput
+uses its `f |cos| / pdf` and the MIS density for the next emission hit is `ptLayeredPdf` (pbrt does the same). The seed of the walk is a hash of (pixel, sample, vertex), set once per vertex in a
+private variable (`ptLayerSeed`), so `ptEval/ptSample` keep the single-lobe signatures. Features are derived from the scene's material table (`ptMaterialFeatures`), so a scene without thin walls has no thin code, and so on.
+
+Kernel size, minified with short names (`PT_NO_FEATURES` = OpenPBR mode with no lobe): 40.5 KB (legacy 40.47), `thin` +0.5, `medium` +0.3, `mix` +0.04, `layered` albedo 48.3 (+7.9) / albedo + internal 48.4 / stochastic 49.5 (+9.1);
+all four lobes: 49.1 albedo, 50.3 stochastic; with an HDR environment map +2.8 (51.9 / 53.1). The unit-test caps are in `integrator-wgsl.test.ts`. The Tier 1 scenes
+use the sky map, so a layered scene is 51-53 KB: over the ~50 KB Windows-DXC class that `CLAUDE.md` names; DXC compile time of the layered kernels is unmeasured (open choice 11).
+
+### Results (1024 spp ours on M5, GPU; timing best effort, load 13-27 from other agents' CPU renders, so none of it is a result)
+
+Closed forms (`bench/scenes/ab/openpbr-check.ts`, 256 spp, field of view 1 degree): thin sheet 0.92313 vs 0.92308; thin furnace 1.00000 exactly; Beer slab (0.59016, 0.11521, 0.00922) vs (0.59021, 0.11521, 0.00922);
+layered furnace (white, ior 1.5, roughness 0.1, maxDepth 200) 0.99879 stochastic / 0.99945 albedo, 0 non-finite at 1024 spp. GPU twins (`node bench/runner/run.ts --page openpbr-check`): adapter 85 material x u cases 0 mismatches, thin sample
+max rel 5.9e-7, layered sample 9.2e-4 / eval 3.5e-6 (albedo), 0 non-finite in 60 000 stochastic samples. The P2.20 `oc-*` synthetic scenes (ours / pbrt / Mitsuba means): oc-thin 0.9231 / 0.9231 / 0.9231, oc-absorb-grey 0.2764 x 3, oc-absorb (0.4609, 0.2303, 0.7380) /
+(0.4898, 0.2114, 0.7220) / (0.4607, 0.2302, 0.7376), oc-emission (3, 1.5, 0.75) x 3, oc-metal 0.5385 / 0.5385 / 0.5381, oc-metal-copper 0.5639 / 0.5598 / 0.5635, oc-glass 0.4070 / 0.4068 / 0.4069, oc-mix 0.4666 / 0.4665 / 0.4671, oc-coated-clay (stochastic)
+(0.3415, 0.2061, 0.1830) / (0.3332, 0.2050, 0.1821) / (0.3365, 0.2049, 0.1823); oc-coat-metal ignores the coat (0.5385; pbrt `coatedconductor` 0.4771).
+
+Tier 1 wave 1 (`node bench/adapters/openpbr-compare.ts --report <name>`; relBias = mean ours / mean reference - 1; the 64 spp references are noise-dominated, judge the means and block means; 4096 spp where noted):
+
+| Scene | Lobes | relBias vs pbrt / Mitsuba | block-mean rms (32 px) | relMSE vs pbrt / Mitsuba (floor pbrt-vs-Mitsuba) |
+|---|---|---|---|---|
+| TransmissionThinwallTestGrid-notex (4096 / 4096 spp) | thin + thick glass | +0.02% / -0.01% | 0.11% / 0.09% | 7.04e-4 / 7.45e-4 (8.59e-4): passes the gate rule |
+| AttenuationTest-notex (4096 / 4096), `pt_tint=0` | thin + absorbing blocks | +1.49% / +0.04% | 4.69% / 0.43% | 4.09e-3 / 2.02e-3 (5.00e-3) |
+| AttenuationTest-notex, tint on (default) | same | -2.02% / -3.42% | 10.1% / 9.3% | 1.8e-2 / 1.6e-2: the thin R1 row is tinted in ours only (V68) |
+| EmissiveStrengthTest-notex (64 spp refs) | emission + layered backdrop/specular | +0.03% / +0.01% | 0.17% / 0.32% | |
+| MetalRoughSpheresNoTextures (64) | metal, mix, layered | -0.08% / +0.77% | 0.52% / 2.53% | |
+| ClearCoatTest-notex (64) | layered coat | -0.84% / +0.12% | 5.27% / 0.95% | the coated red torus is -10% vs pbrt only in red: pbrt's spectral uplift (below) |
+| IORTestGrid-notex (64) | layered, specular weight 0.25 | -0.57% / -0.67% | 8.7% / 8.7% | the S0.25 rows are coverage approximations in both references (class C) |
+| SheenTestGrid-notex (64), `pt_coverage=1` | layered, fuzz ignored | +0.11% / +0.46% | 0.63% / 2.84% | |
+
+Layering A/B on the class B scenes (relBias vs pbrt / Mitsuba): ClearCoat stochastic -0.84% / +0.12%, albedo + internal -0.59% / +0.36%, albedo +4.50% / +5.50%; MetalRough stochastic -0.08% / +0.77%, internal +2.78% / +3.65%, albedo +9.90% / +10.83%.
+Grey-base smooth `coateddiffuse` (ours vs pbrt 1024 spp, oc-coated-clay geometry) 1.0002: the stochastic port matches pbrt. A saturated base (0.5, 0.02, 0.01) reads 0.937 red / 1.028 green / 1.004 blue against pbrt at any roughness (0, 0.06, 0.3): pbrt is
+spectral and the walk multiplies the uplifted spectrum, so the three-channel result differs; ours agrees with Mitsuba (RGB) on that torus (relMSE 4.9e-4). Do not chase it in the layered code.
+
 ## Size
 
 **40.4 KB minified** (43.2 KB with an HDR env map; unit-test caps 41.5 / 44.5 KB), under the 50 KB Windows-DXC class. Three steps
@@ -170,3 +228,7 @@ sampler 1.3, Owen-Sobol 1.1, adapter 0.9. An `hdri` scene adds the map lookup, p
 8. **Hit position from barycentrics** (P1.8). Keep; identical on Tier 0 and on Sponza (relMSE 8.11e-3 both).
 9. **Sponza in the adapter (P2.9):** settled in practice: the glb is loaded in the page (the web exporter path).
 10. **Sun: cone (default) or delta like the references.** Keep the cone (physical, free); `pt_sun_radius=0` gives delta. Sponza A/B: mean 0.04% apart, same noise. A large close contact shadow could show more; re-check if a Tier 1 scene has one.
+11. **Layered kernel size (P2.21 wiring).** A layered scene with an environment map is 51.9 KB (albedo) / 53.1 KB (stochastic, all lobes): the layered BSDF is +7.9 / +9.1 KB over the Tier 0 kernel, 3 KB of it the
+    `albedo` table. Ideas if DXC compile time says so: split the stochastic walk's pdf function out of the albedo variant, a smaller table (8x8), drop `ptLayeredPdf` when `exitMis: 'none'`, a wavefront kernel for
+    the layered scenes. Settle: `compile_ms` on Windows for `PT_NO_FEATURES`, albedo and stochastic (`wgsl-map`/`competitor` pages report `compile_ms`).
+12. **Thin-walled tint and thick-glass tint at depth 0.** Thin glass applies `transmission_color`; thick glass ignores it at `transmission_depth` 0. OpenPBR applies the tint at each transmission event; the references apply none. A/B: `pt_tint=0` vs 1 on AttenuationTest R1 (tinted thin samples).

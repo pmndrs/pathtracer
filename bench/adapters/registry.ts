@@ -43,6 +43,10 @@ export function unsupportedReason(features: FeatureSupport, scene: SceneDesc): s
   const reasons: string[] = [];
   for (const [name, material] of Object.entries(scene.materials)) {
     if (!features.materials.includes(material.type)) reasons.push(`material "${name}" (${material.type}) is not exact in this renderer`);
+    else {
+      const why = features.materialUnsupported?.(material);
+      if (why) reasons.push(`material "${name}": ${why}`);
+    }
   }
   if (Object.keys(scene.textures ?? {}).length > 0 && !features.textures) reasons.push('image textures unsupported');
   if (scene.meshes.some((mesh) => mesh.emission) && !features.emissiveMeshes) reasons.push('emissive meshes unsupported');

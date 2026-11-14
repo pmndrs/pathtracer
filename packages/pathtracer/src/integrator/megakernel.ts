@@ -16,8 +16,9 @@
 import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
-import { ptBsdfAdapterWgsl } from '../bsdf/adapter.ts';
+import { ptBsdfAdapterWgsl, ptLayeredDispatchWgsl } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
+import { ptLayeredWgsl } from '../bsdf/layered-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { ptSamplerWgsl } from './dimensions.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
@@ -95,7 +96,10 @@ export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions,
     traceSlot: { group: 0, firstBinding: 0 },
     scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}) },
   });
-  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(options.integrator ?? {})), ptBsdfAdapterWgsl(), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(integratorOptions)].join('\n');
+  const mats = integrator.materials;
+  const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}) };
+  const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport })), ptLayeredDispatchWgsl()] : [];
+  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(integratorOptions)].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };

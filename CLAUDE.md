@@ -302,4 +302,20 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   chroma differently. Exporters write the decoded texels as PNG, so every renderer still reads the same bytes. PNG decoding is bit-exact vs PIL.
 - Models' "instanced triangles" in tier1.md are per unique mesh: baked, `AnisotropyRotationTest` is 13,876 (a mesh used twice) and the iridescence
   spheres 617,406 file triangles of which 16,212 are zero-area sphere-pole triangles dropped by the loader (601,194 kept).
+- OpenPBR mode (P2.21/22/30): `ptBsdfFromMaterial(m)` is the legacy adapter (a non-metal is pure Lambert); `ptBsdfFromMaterial(m, options, u)` is OpenPBR mode, used only by a scene
+  with an `openpbr` material (`pt-megakernel` decides; the `pbr` textured scenes stay legacy, so their images and the Tier 0 kernel text do not move: re-check with
+  `node bench/size-snapshot.ts <dir>` before and after a change and `cmp` the files, and `cmp` the 64 spp PFMs). Template strings in the WGSL generators: a gated block must emit
+  exactly the old text when off, including blank lines (`${on ? `..\n` : ''}` placed so that no extra `\n` appears), or the kernel is not byte-identical.
+- `PT_BSDF_LAYERED` reuses `PtBsdfParams` (`reflectance` base, `eta` Fresnel scale, `k` = thickness / internal reflectance): do not read `eta` as an IOR for that kind. A stochastic layered sample's `pdf` is
+  only proportional (`PT_FLAG_PROPORTIONAL`): MIS needs `ptLayeredPdf` as the previous pdf, the throughput uses the sample's own `f |cos| / pdf`.
+- A layered kernel is 48-53 KB (the Tier 1 scenes have an env map): over the 50 KB DXC class, see integrator.md open choice 11. `ptMaterialFeatures` keeps thin / medium / layered / mix code out of scenes that do not need it.
+- The web glb of an `openpbr` scene (`export-scenes.ts`) is geometry only (black placeholder materials; the glTF exporter has no `openpbr`); it is one node per mesh in scene order, already in world space,
+  and `pt-megakernel` reads the i-th primitive for the i-th mesh and applies an identity instance transform to file meshes (the old single-file path applied the scene transform on top of the baked one: harmless only because Sponza's is identity).
+- Medium / thin tests: `bench/scenes/ab/openpbr-check.ts` has closed forms (thin sheet T' = (1-R)/(1+R), thin furnace 1, Beer slab T^2 x / (1 - R^2 x^2), layered furnace) at a 1 degree field of view; a wider angle changes Fresnel.
+  `node bench/runner/run.ts --page openpbr-check` compares the OpenPBR WGSL with its TS twins.
+- On a loaded Mac `matrix.ts` waits `--load-wait` (120 s) per cell; correctness-only runs pass `--load-wait 0` (rows are then marked `loaded`, so no timing from them).
+- A stochastic layered `Sample_f` overflows f32 at near-smooth roughness (alpha ~0.002: each bounce multiplies f and pdf by ~1e4): inf / inf = NaN pixels, 1 in 1300. Rescaled in the sample (V72). pbrt's own `coateddiffuse` prints
+  "Not-a-number radiance value" at roughness 0.06 and blacks those samples. Check `non_finite_pixels` on any new layered scene and run `openpbr-check` (`stochastic_non_finite_mismatch`).
+- pbrt is spectral: a saturated base colour under multiple scattering (a layered base, 0.5 / 0.02 / 0.01) reads -6% red, +3% green against our RGB walk at ANY roughness, while a grey base matches to 0.02%. Judge layered code on grey
+  bases and against Mitsuba (RGB) for coloured ones.
 

@@ -15,7 +15,8 @@
  *
  * Not here on purpose: multiple-scattering compensation (the references do not have it; a Turquin LUT is a later
  * option), anisotropic rotation (alphaX/alphaY are kept in the struct, the frame has no tangent rotation yet),
- * thin dielectric, absorption.
+ * absorption (the interior medium is path state, P2.22). The thin-walled dielectric (`PT_BSDF_THIN`) is pbrt's
+ * `ThinDielectricBxDF`.
  */
 
 export type PtVec3 = readonly [number, number, number];
@@ -25,6 +26,19 @@ export const PT_BSDF_DIFFUSE = 0;
 export const PT_BSDF_CONDUCTOR = 1;
 export const PT_BSDF_DIELECTRIC = 2;
 export const PT_BSDF_BLACK = 3;
+/**
+ * Thin-walled smooth dielectric (P2.22; pbrt `ThinDielectricBxDF`, Mitsuba `thindielectric`): a sheet with two parallel interfaces and
+ * the inner reflections summed, so R' = R + T^2 R / (1 - R^2), T' = 1 - R'. Always a delta lobe; transmission goes straight through
+ * (`wi = -wo`, etap 1). `ior` is the relative IOR, `reflectance` the tint of the transmitted light (white = none; non-physical, as
+ * glTF's baseColor on transmission). Not in the default kernel: `PtBsdfOptions.thin`.
+ */
+export const PT_BSDF_THIN = 4;
+/**
+ * Dielectric interface over a Lambertian base (P2.21), evaluated by `ptLayered*` (layered.ts, not by `ptBsdfEval`). Packed into
+ * `PtBsdfParams` without growing it: `reflectance` = base colour, `ior`, `alpha` = interface GGX alpha, `eta` = interface Fresnel scale
+ * (`specular_weight * specular_color`), `k` = (layer thickness, internal reflectance of the interface, unused).
+ */
+export const PT_BSDF_LAYERED = 5;
 
 /** `PtBsdfSample.flags` bits. 0 means the sample failed (no direction, treat as absorbed). */
 export const PT_FLAG_DELTA = 1;
@@ -50,6 +64,11 @@ export interface PtBsdfOptions {
   vndf?: 'standard' | 'cap';
   /** Radiance transport divides transmission by etap^2 (pbrt `TransportMode::Radiance`, default); importance does not. */
   transport?: 'radiance' | 'importance';
+  /**
+   * WGSL only (the CPU twin always has it): compile the thin-walled dielectric (`PT_BSDF_THIN`) into the kernel. Default false: a
+   * scene without thin-walled materials keeps the kernel text and size.
+   */
+  thin?: boolean;
 }
 
 export interface PtBsdfEval {
@@ -242,7 +261,16 @@ function scale3(a: PtVec3, s: number): PtVec3 {
 export function ptBsdfIsDelta(p: PtBsdfParams): boolean {
   if (p.kind === PT_BSDF_CONDUCTOR) return ptIsSmooth(p.alpha);
   if (p.kind === PT_BSDF_DIELECTRIC) return p.ior === 1 || ptIsSmooth(p.alpha);
+  if (p.kind === PT_BSDF_THIN) return true;
   return false;
+}
+
+/** pbrt `ThinDielectricBxDF`: total reflectance R' of a sheet at |cos| = c (two interfaces, inner reflections summed); T' = 1 - R'. */
+export function ptThinReflectance(cos: number, eta: number): number {
+  let R = ptFrDielectric(cos, eta);
+  const T = 1 - R;
+  if (R < 1) R += (T * T * R) / (1 - R * R);
+  return R;
 }
 
 /** Orthonormal frame from a unit normal (Duff et al. 2017); local +Z = n. */
@@ -431,6 +459,18 @@ export function ptBsdfSample(p: PtBsdfParams, wo: PtVec3, u: PtVec3, options: Pt
         let ft = T * ptGgxD(a, wm) * ptGgxG(a, wo, wi) * Math.abs((dwi * dwo) / (wi[2] * wo[2] * denom));
         if (radiance) ft /= r.etap * r.etap;
         s = { wi, f: [ft, ft, ft], pdf, flags: PT_FLAG_TRANSMISSION, etap: r.etap };
+      }
+      break;
+    }
+    case PT_BSDF_THIN: {
+      const c = Math.abs(wo[2]);
+      const R = ptThinReflectance(c, p.ior);
+      const T = 1 - R;
+      if (u[0] < R) {
+        s = { wi: [-wo[0], -wo[1], wo[2]], f: [R / c, R / c, R / c], pdf: R, flags: PT_FLAG_REFLECTION | PT_FLAG_DELTA, etap: 1 };
+      } else {
+        const t = T / c;
+        s = { wi: neg(wo), f: [t * p.reflectance[0], t * p.reflectance[1], t * p.reflectance[2]], pdf: T, flags: PT_FLAG_TRANSMISSION | PT_FLAG_DELTA, etap: 1 };
       }
       break;
     }

@@ -69,6 +69,8 @@ function main(): void {
       repeat: { type: 'string', default: '1' },
       append: { type: 'boolean', default: false },
       interleave: { type: 'boolean', default: false },
+      /** Seconds the runner waits for the machine load to drop before running anyway (rows then carry valid=0 'loaded'). Correctness-only runs on a busy shared Mac pass 0. */
+      'load-wait': { type: 'string', default: '' },
     },
   });
   const renderers = values.renderers!.split(',').filter(Boolean);
@@ -95,7 +97,7 @@ function main(): void {
     return args;
   };
   const runRunner = (repeatArg: string, extra: string[], args: string[]): string => {
-    const run = spawnSync(process.execPath, [join(REPO, 'bench/runner/run.ts'), '--page', 'competitor', '--suite', 'competitor', '--timeout', values.timeout!, '--repeat', repeatArg, ...extra, '--args', ...args], { cwd: REPO, encoding: 'utf8' });
+    const run = spawnSync(process.execPath, [join(REPO, 'bench/runner/run.ts'), '--page', 'competitor', '--suite', 'competitor', '--timeout', values.timeout!, '--repeat', repeatArg, ...(values['load-wait'] ? ['--load-wait', values['load-wait']] : []), ...extra, '--args', ...args], { cwd: REPO, encoding: 'utf8' });
     const out = `${run.stdout}${run.stderr}`;
     const lines = out.split('\n').filter((l) => /PASS|FAIL|metrics:|FAILED|The page reported|Timed out/.test(l));
     console.log(lines.map((l) => l.slice(0, 400)).join('\n'));

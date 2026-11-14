@@ -72,7 +72,7 @@ sample 5.6e-4, over 3 module variants × 3000 cases.
 ## Layered dielectric over diffuse (P2.21, BSDF half)
 
 `packages/pathtracer/src/bsdf/layered.ts` (TS twin), `layered-wgsl.ts`, `layered-lut.ts`; check page `bench/pages/layered-check.ts`.
-Not wired into the integrator or the material adapter yet (the OpenPBR material contract is another task); `ptLayeredWgsl(options)`
+Wired into the megakernel in OpenPBR mode (see integrator.md, "OpenPBR materials"): `PT_BSDF_LAYERED` in `PtBsdfParams`, `ptLayeredDispatchWgsl()` glue, `ptMaterialFeatures` gating; `ptLayeredWgsl(options)`
 is appended after `ptBsdfWgsl`. Params: `PtLayeredParams { baseColor, ior, alpha, specularWeight, specularColor, thickness,
 internalReflectance }` (`ptLayered(base, ior, roughness, extra)` fills the defaults). Entry points `ptLayeredEval / Pdf / Sample`,
 same shapes as the single-lobe ones (WGSL adds a `seed: u32`). `specular_weight * specular_color` scales the interface's Fresnel
@@ -143,3 +143,15 @@ the gate question the candidates are `stochastic` (matches by construction, up t
 of the walk at base 0.8, 0.04 at 85 deg, but 8% over for white rough bases), and a 3D `E` table. Settle: the P2.21 A/B on one sphere
 under a uniform env against pbrt `coateddiffuse` (thickness 0.01 / 0 variants, maxdepth 100) and Mitsuba `roughplastic`
 (`nonlinear` true/false), when the material contract and exporters land (`layering`, `albedoBase`, `exitMis` are the three settings).
+
+### Wiring (P2.21, P2.22, P2.30): what the megakernel does with it
+
+- Interface choice per material (adapter): `specular_ior` / `specular_roughness` / Fresnel scale `specular_color * specular_weight`; a coat (`coat_weight > 0.5`) replaces it by the coat's (V67). Base `base_weight * base_color`.
+- `layering` in the bench adapter defaults to `stochastic` (reference mode; the exporters write `coateddiffuse` with `maxdepth` 64, `nsamples` 1, `thickness` 1e-6, so ours uses the same: `layerDepth` 64, `layerThickness` 1e-6). The library default stays `albedo`.
+  Settle with the class B numbers (TASKS P2.21 follow-up, per-scene relMSE vs pbrt/Mitsuba for `albedo` / `albedo + internal` / `stochastic`).
+- The `albedo` formula is still unverified against the OpenPBR 1.1.2 spec text (written from memory of its layering section): `albedo` must not become a default until that check is done.
+- The thin-walled dielectric (`PT_BSDF_THIN`, `bsdf.ts`) is pbrt's `ThinDielectricBxDF` and has CPU twin tests: normal incidence R' = 2R/(1+R) (0.0769 at ior 1.5), R' + T' = 1 at every angle, symmetric from either side.
+- **A/B result (P2.21 settle, 1024 spp ours vs 64 spp references; integrator.md has the table):** stochastic matches both references within 1% on ClearCoat and MetalRough; `albedo + internal` is within 3.7%; OpenPBR `albedo` is 4.5% / 9.9% bright against pbrt.
+  The stochastic port matches pbrt `coateddiffuse` on a grey base to 0.02% (smooth interface) and to 0.4% at roughness 0.3 in a furnace (0.9394 vs 0.9358; the pbrt `f` vs `Sample_f` quirk above shifts the MIS blend).
+- A stochastic `Sample_f` overflowed f32 (f and pdf grow by ~1e4 per bounce at alpha 0.002): rescaled in the sample, DIVERGES V72.
+

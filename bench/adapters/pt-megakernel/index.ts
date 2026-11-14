@@ -12,11 +12,12 @@
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
-import { detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
-import { PtMegakernel, type PtImage, type PtIntegratorOptions } from '@pmndrs/pathtracer';
+import { createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
+import { PtMegakernel, ptMaterialFeatures, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
-import type { SceneDesc } from '../../scenes/schema.ts';
+import { resolveOpenPbr } from '../../scenes/openpbr.ts';
+import type { MaterialDesc, MeshDesc, SceneDesc } from '../../scenes/schema.ts';
 import { sceneDescToCopyInput } from '../../scenes/to-scene-copy.ts';
 import { readPFM } from '../../metrics/pfm.ts';
 import { fetchSceneGlb, readGlbMeshes } from '../shared/glb.ts';
@@ -36,6 +37,21 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   lightSelection?: LightSelection;
   /** `textureLod: 'cone'` only: scale of the ray cone's starting spread. `'auto'` (default) = pbrt-v4's `max(1/8, 1/sqrt(spp))` of the render's spp; or a number (1 = a full pixel). */
   textureConeScale?: number | 'auto';
+  /**
+   * OpenPBR layering (P2.21; only scenes with an `openpbr` material read these). `layering` default `'stochastic'`, pbrt's `coateddiffuse` walk,
+   * the reference mode (the class B scenes agree with the reference only this way: `albedo` OpenPBR scaling is ~0.2 brighter on a bright
+   * base, bsdf.md); `'albedo'` is the cheap default of the library. `albedoBase` (albedo only) `'openpbr'` | `'internal'`; `exitMis`, `layerDepth`
+   * (walk length, default 64 as the exporters' `maxdepth`) and `layerThickness` (default 1e-6, the exporters' transparent layer) are the stochastic walk's.
+   */
+  layering?: 'albedo' | 'stochastic';
+  albedoBase?: 'openpbr' | 'internal';
+  exitMis?: 'pbrt' | 'none';
+  layerDepth?: number;
+  layerThickness?: number;
+  /** Tint thin-walled transmission by `transmission_color` (default true; pbrt and Mitsuba `thindielectric` cannot tint, so the reference differs on tinted thin walls). */
+  transmissionTint?: boolean;
+  /** Render `openpbr` materials that use lobes we do not implement (fuzz, thin film, dispersion, subsurface, anisotropy) with those lobes ignored, instead of skipping the scene. Default false. */
+  coverage?: boolean;
   /** Scrambling seed base. */
   seed?: number;
   /** Sample passes per submit. Default 8. */
@@ -70,12 +86,26 @@ function mergeMeshes(parts: readonly TriangleMesh[]): TriangleMesh {
 
 export const PT_ADAPTER_ID = 'pt-megakernel';
 
+/** Why an `openpbr` material is not rendered exactly: the OpenPBR lobes the megakernel does not have yet (P2.23+, class C), or null. */
+export function openPbrUnsupported(desc: MaterialDesc): string | null {
+  if (desc.type !== 'openpbr') return null;
+  const m = resolveOpenPbr(desc);
+  const missing: string[] = [];
+  if (m.fuzzWeight > 0) missing.push('fuzz/sheen (P2.25)');
+  if (m.thinFilmWeight > 0) missing.push('thin film (P2.27)');
+  if (m.transmissionDispersionScale > 0) missing.push('dispersion (P2.28)');
+  if (m.subsurfaceWeight > 0) missing.push('diffuse transmission (P2.29)');
+  if (m.specularRoughnessAnisotropy > 0) missing.push('anisotropy (P2.26)');
+  return missing.length > 0 ? `uses ${missing.join(', ')}, not implemented` : null;
+}
+
 const toImage = (image: PtImage): Image => ({ width: image.width, height: image.height, channels: 4, data: image.data });
 
 export class PtMegakernelAdapter implements RendererAdapter {
   readonly info: RendererInfo;
   readonly features: FeatureSupport = {
-    materials: ['diffuse', 'conductor', 'dielectric', 'black', 'pbr'],
+    materials: ['diffuse', 'conductor', 'dielectric', 'black', 'pbr', 'openpbr'],
+    materialUnsupported: (m) => (this.settings.coverage ? null : openPbrUnsupported(m)),
     textures: true,
     emissiveMeshes: true,
     directionalLight: true,
@@ -84,6 +114,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     rawOutput: true,
     notes:
       'Megakernel, NEE (one shadow ray) + power-heuristic MIS, Owen-Sobol, f32 accumulation. A sun with an angular radius is sampled as a cone (the references use a delta light). ' +
+      '`openpbr`: metal (complex Fresnel from base colour), stochastic metalness mix, thick and thin-walled dielectric, absorbing interior medium (Beer), dielectric-over-diffuse and coat via the layered BSDF (stochastic in reference mode), emission; fuzz, thin film, dispersion, subsurface and anisotropy skip the scene (`pt_coverage=1` renders them ignored). ' +
       'File geometry (Sponza) comes from the shared web glb export. HDR environment maps (equirect PFM): bilinear lookup, luminance importance sampling with MIS.',
   };
 
@@ -119,6 +150,12 @@ export class PtMegakernelAdapter implements RendererAdapter {
         seed: settings.seed ?? 0,
         lightSelection: lightSelectionName(settings.lightSelection ?? DEFAULT_LIGHT_SELECTION),
         textureLod: settings.textureLod ?? 0,
+        layering: settings.layering ?? 'stochastic',
+        ...(settings.albedoBase ? { albedoBase: settings.albedoBase } : {}),
+        ...(settings.exitMis ? { exitMis: settings.exitMis } : {}),
+        layerDepth: settings.layerDepth ?? 64,
+        layerThickness: settings.layerThickness ?? 1e-6,
+        transmissionTint: settings.transmissionTint ?? true,
         ...(settings.textureLod === 'cone' ? { textureConeScale: settings.textureConeScale ?? 'auto' } : {}),
       },
     };
@@ -141,13 +178,23 @@ export class PtMegakernelAdapter implements RendererAdapter {
     this.gpuContext = { adapter, device, summary: summarizeAdapter(adapter) };
 
     const files = scene.meshes.filter((mesh) => mesh.geometry.type === 'file');
-    let resolveFile: (() => TriangleMesh) | undefined;
-    if (files.length > 1) throw new Error(`pt-megakernel: scene '${scene.name}' has ${files.length} file meshes; the web export is one glb per scene`);
-    if (files.length === 1) {
+    let resolveFile: ((geometry: unknown, mesh: MeshDesc) => TriangleMesh) | undefined;
+    let fileMeshes: MeshDesc[] = [];
+    if (files.length > 0) {
       const { glb, approximations } = await fetchSceneGlb(scene);
       this.approximations = approximations;
-      const merged = mergeMeshes(readGlbMeshes(glb));
-      resolveFile = () => merged;
+      const prims = readGlbMeshes(glb);
+      if (prims.length === scene.meshes.length) {
+        // The export has one node per mesh, in scene order, already in world space (Tier 1 glTF scenes: one file mesh per glTF material).
+        const byMesh = new Map(scene.meshes.map((mesh, i) => [mesh, prims[i] as TriangleMesh]));
+        resolveFile = (_g, mesh) => byMesh.get(mesh) as TriangleMesh;
+        fileMeshes = files;
+      } else {
+        if (files.length > 1) throw new Error(`pt-megakernel: scene '${scene.name}' has ${files.length} file meshes but the web export has ${prims.length} nodes for ${scene.meshes.length} meshes`);
+        const merged = mergeMeshes(prims);
+        resolveFile = () => merged;
+        fileMeshes = files;
+      }
     }
     let hdriMap: Image | undefined;
     if (scene.environment?.type === 'hdri') {
@@ -156,7 +203,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
       if (!response.ok) throw new Error(`environment ${scene.environment.path}: HTTP ${response.status}. Run: node bench/scenes/tier0/generate-assets.ts`);
       hdriMap = readPFM(await response.arrayBuffer());
     }
-    const input = sceneDescToCopyInput(scene, { ...(resolveFile ? { resolveFile } : {}), ...(hdriMap ? { hdriMap } : {}) });
+    const input = sceneDescToCopyInput(scene, { ...(resolveFile ? { resolveFile: resolveFile as never } : {}), ...(hdriMap ? { hdriMap } : {}) });
+    // The glb is baked into world space (the exporter applied each mesh's transform): the instance transform must not apply it again.
+    for (const mesh of fileMeshes) input.instances[scene.meshes.indexOf(mesh)]!.objectToWorld = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     if (input.sun && this.settings.sunAngularRadius !== undefined) input.sun = { ...input.sun, angularRadius: this.settings.sunAngularRadius };
     const builder = createMeshBvhBuilder();
     const data = await buildTraceScene(
@@ -170,15 +219,21 @@ export class PtMegakernelAdapter implements RendererAdapter {
     this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene` });
     const loadMs = performance.now() - t0;
 
+    // OpenPBR mode only when the scene has an `openpbr` material (the legacy adapter keeps the other scenes' kernel and images unchanged).
+    let materials: PtMaterialOptions | null = null;
+    if (Object.values(scene.materials).some((m) => m.type === 'openpbr')) {
+      const layered: PtLayeredOptions = { layering: this.settings.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...(this.settings.albedoBase ? { albedoBase: this.settings.albedoBase } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
+      materials = { features: ptMaterialFeatures(input.materials.map((m) => createMaterial(m))), layered, layerThickness: this.settings.layerThickness ?? 1e-6, transmissionTint: this.settings.transmissionTint ?? true };
+    }
     const t1 = performance.now();
-    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
+    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
     this.limits = { maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth };
     this.kernel.setLimits(this.limits);
     this.kernel.setSeed(this.settings.seed ?? 0);
-    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
+    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
     return { loadMs, compileMs: performance.now() - t1 };
   }
 

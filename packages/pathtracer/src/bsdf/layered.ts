@@ -421,6 +421,11 @@ function stochasticSample(p: PtLayeredParams, wo0: PtVec3, u: PtVec3, o: PtLayer
     if (!ok(bs)) return FAIL;
     f = mul3(f, bs.f);
     pdf *= bs.pdf;
+    // Only f / pdf is meaningful (PROPORTIONAL): keep both inside f32 range. A near-smooth rough interface multiplies each by ~1e4 per bounce (the GPU overflowed to inf / inf = NaN).
+    if (pdf > 1e18 || pdf < 1e-18) {
+      f = scale3(f, 1 / pdf);
+      pdf = 1;
+    }
     specularPath = specularPath && (bs.flags & PT_FLAG_DELTA) !== 0;
     w = bs.wi;
     if (bs.flags & PT_FLAG_TRANSMISSION) {

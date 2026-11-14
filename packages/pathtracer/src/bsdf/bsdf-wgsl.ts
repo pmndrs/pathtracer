@@ -12,13 +12,15 @@ import type { PtBsdfOptions } from './bsdf.ts';
 export function ptBsdfWgsl(options: PtBsdfOptions = {}): string {
   const cap = (options.vndf ?? 'standard') === 'cap';
   const radiance = (options.transport ?? 'radiance') === 'radiance';
+  const thin = options.thin ?? false;
   return /* wgsl */ `
 const PT_PI: f32 = 3.14159265358979323846;
 const PT_BSDF_DIFFUSE: u32 = 0u;
 const PT_BSDF_CONDUCTOR: u32 = 1u;
 const PT_BSDF_DIELECTRIC: u32 = 2u;
 const PT_BSDF_BLACK: u32 = 3u;
-const PT_FLAG_DELTA: u32 = 1u;
+${thin ? `const PT_BSDF_THIN: u32 = 4u;
+` : ''}const PT_FLAG_DELTA: u32 = 1u;
 const PT_FLAG_REFLECTION: u32 = 2u;
 const PT_FLAG_TRANSMISSION: u32 = 4u;
 const PT_SMOOTH_ALPHA: f32 = 1e-3;
@@ -181,8 +183,17 @@ fn ptGgxSampleWm(alpha: vec2f, w: vec3f, u0: f32, u1: f32) -> vec3f {
 fn ptBsdfIsDelta(p: PtBsdfParams) -> bool {
   if (p.kind == PT_BSDF_CONDUCTOR) { return ptIsSmooth(p.alpha); }
   if (p.kind == PT_BSDF_DIELECTRIC) { return p.ior == 1.0 || ptIsSmooth(p.alpha); }
-  return false;
-}
+${thin ? `  if (p.kind == PT_BSDF_THIN) { return true; }
+` : ''}  return false;
+}${thin ? `
+
+// pbrt ThinDielectricBxDF: R' = R + T^2 R / (1 - R^2), T' = 1 - R'.
+fn ptThinReflectance(cos: f32, eta: f32) -> f32 {
+  var R = ptFrDielectric(cos, eta);
+  let T = 1.0 - R;
+  if (R < 1.0) { R += T * T * R / (1.0 - R * R); }
+  return R;
+}` : ''}
 
 // Generalised half vector (pbrt rough dielectric). ok = false when it is degenerate or back-facing.
 struct PtHalf { wm: vec3f, isRefl: bool, etap: f32, ok: bool }
@@ -338,7 +349,17 @@ fn ptBsdfSample(p: PtBsdfParams, wo: vec3f, u: vec3f) -> PtBsdfSample {
       }
     }
   }
-  if (s.pdf == 0.0 || s.wi.z == 0.0 || (s.f.x == 0.0 && s.f.y == 0.0 && s.f.z == 0.0)) { return fail; }
+${thin ? `  if (p.kind == PT_BSDF_THIN) {
+    let c = abs(wo.z);
+    let R = ptThinReflectance(c, p.ior);
+    let T = 1.0 - R;
+    if (u.x < R) {
+      s = PtBsdfSample(vec3f(-wo.x, -wo.y, wo.z), vec3f(R / c), R, PT_FLAG_REFLECTION | PT_FLAG_DELTA, 1.0);
+    } else {
+      s = PtBsdfSample(-wo, p.reflectance * (T / c), T, PT_FLAG_TRANSMISSION | PT_FLAG_DELTA, 1.0);
+    }
+  }
+` : ''}  if (s.pdf == 0.0 || s.wi.z == 0.0 || (s.f.x == 0.0 && s.f.y == 0.0 && s.f.z == 0.0)) { return fail; }
   return s;
 }
 `;

@@ -1,6 +1,7 @@
 import { buildCaps } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
 import { PT_PARAMS_BYTES, ptIntegratorWgsl, resolveIntegratorOptions } from './integrator-wgsl.ts';
+import { PT_NO_FEATURES, type PtMaterialFeatures, type PtMaterialOptions } from '../bsdf/adapter.ts';
 import { ptMegakernelWgsl } from './megakernel.ts';
 
 const caps = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
@@ -13,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0 });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, materials: null });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -171,5 +172,62 @@ describe('integrator WGSL', () => {
     for (const format of [{ triangleLeaves: 'indexed' as const }, { nodeFormat: 'f32' as const }]) {
       expect(ptMegakernelWgsl(caps, { format, layout }).length).toBeGreaterThan(30_000);
     }
+  });
+
+  describe('OpenPBR mode (P2.21 layered, P2.22 thin + medium, P2.30 mix): only the lobes a scene uses are compiled', () => {
+    const feats = (f: Partial<PtMaterialFeatures>, layered: PtMaterialOptions['layered'] = { layering: 'albedo' }): PtMaterialOptions => ({ features: { ...PT_NO_FEATURES, ...f }, layered });
+    const build = (materials: PtMaterialOptions | null, extra: object = {}, readable = false) => ptMegakernelWgsl(caps, { format: {}, layout, integrator: { materials, ...extra }, ...(readable ? { minify: false, shortenNames: false } : {}) });
+    const readable = (f: Partial<PtMaterialFeatures>, layered?: PtMaterialOptions['layered']) => build(feats(f, layered), {}, true);
+
+    it('without `materials` the kernel is the Tier 0 kernel (checked byte for byte against the pre-OpenPBR commit with bench/size-snapshot.ts): no thin, layered, mix or medium code', () => {
+      const code = readable({});
+      const legacy = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
+      expect(legacy).not.toMatch(/PT_BSDF_THIN|PT_BSDF_LAYERED|ptMediumSigma|ptLayerSeed|ptLayeredEval|sigma/);
+      expect(code).not.toBe(legacy);
+      expect(ptIntegratorWgsl({ materials: null })).toBe(ptIntegratorWgsl({}));
+    });
+
+    it('each feature adds its code and nothing else', () => {
+      const none = readable({});
+      expect(none).not.toMatch(/PT_BSDF_THIN|PT_BSDF_LAYERED|ptMediumSigma|ptLayerSeed|ptLayeredEval|var sigma/);
+      expect(readable({ thin: true })).toMatch(/PT_BSDF_THIN/);
+      expect(readable({ thin: true })).not.toMatch(/PT_BSDF_LAYERED|ptMediumSigma|var sigma/);
+      const medium = readable({ medium: true });
+      expect(medium).toMatch(/var sigma = vec3f\(0\.0\);/);
+      expect(medium).toMatch(/beta = beta \* exp\(-sigma \* hit\.t\);/);
+      expect(medium).toMatch(/sigma = select\(vec3f\(0\.0\), ptMediumSigma\(mat\), wo\.z > 0\.0\);/);
+      expect(medium).not.toMatch(/PT_BSDF_THIN|PT_BSDF_LAYERED/);
+      expect(readable({ mix: true })).toMatch(/ptBsdfFromMaterial\(mat, ptSample2D\(pixelSeed, sampleIndex, ptVertexPair\(depth, PT_SLOT_RR\)\)\.y\)/);
+      expect(readable({})).toMatch(/ptBsdfFromMaterial\(mat, 0\.0\)/);
+      const layered = readable({ layered: true });
+      expect(layered).toMatch(/PT_BSDF_LAYERED/);
+      expect(layered).toMatch(/ptLayerSeed = pixelSeed/);
+      expect(layered).not.toMatch(/PT_FLAG_PROPORTIONAL\) != 0u/);
+      expect(readable({ layered: true }, { layering: 'stochastic' })).toMatch(/PT_FLAG_PROPORTIONAL\) != 0u/);
+    });
+
+    it('the layered BSDF compiles only in the chosen layering: albedo carries the table, stochastic the walk', () => {
+      const a = readable({ layered: true }, { layering: 'albedo' });
+      const st = readable({ layered: true }, { layering: 'stochastic' });
+      expect(a).toMatch(/ptLayerAlbedoLut/);
+      expect(a).not.toMatch(/ptLayeredF\(/);
+      expect(st).toMatch(/fn ptLayeredF\(/);
+      expect(st).not.toMatch(/ptLayerAlbedoLut/);
+    });
+
+    it('sizes (minified, short names; P2.21/22/30): thin +0.5 KB, medium +0.3 KB, layered albedo +7.9 KB, stochastic +9.1 KB; all lobes with an env map under 53.5 KB', () => {
+      const legacy = ptMegakernelWgsl(caps, { format: {}, layout }).length;
+      const size = (f: Partial<PtMaterialFeatures>, layered?: PtMaterialOptions['layered'], extra: object = {}) => build(feats(f, layered), extra).length;
+      expect(size({})).toBeLessThan(legacy + 100);
+      expect(size({ mix: true })).toBeLessThan(legacy + 150);
+      expect(size({ thin: true })).toBeLessThan(legacy + 600);
+      expect(size({ medium: true })).toBeLessThan(legacy + 400);
+      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(48_700);
+      expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(49_900);
+      const all = { layered: true, mix: true, thin: true, medium: true };
+      expect(size(all, { layering: 'albedo' })).toBeLessThan(49_500);
+      expect(size(all, { layering: 'stochastic' })).toBeLessThan(50_700);
+      expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(53_500);
+    });
   });
 });

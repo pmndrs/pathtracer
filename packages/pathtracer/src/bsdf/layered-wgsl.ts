@@ -312,6 +312,10 @@ fn ptLayeredSample(p: PtLayeredParams, wo0: vec3f, u: vec3f, seed: u32) -> PtBsd
     if (!ptLayerOk(bs)) { return fail; }
     f = f * bs.f;
     pdf = pdf * bs.pdf;
+    if (pdf > 1e18 || pdf < 1e-18) {
+      f = f / pdf;
+      pdf = 1.0;
+    }
     specularPath = specularPath && ((bs.flags & PT_FLAG_DELTA) != 0u);
     w = bs.wi;
     if ((bs.flags & PT_FLAG_TRANSMISSION) != 0u) {
