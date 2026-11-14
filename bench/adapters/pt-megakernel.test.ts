@@ -22,11 +22,11 @@ describe('pt-megakernel adapter', () => {
 
   it('renders every scene: env-sphere through its HDR map, Sponza from the web glb export', () => {
     const skipped = allScenes.filter((scene) => unsupportedReason(adapter.features, scene) !== null).map((scene) => scene.name);
-    // The Tier 1 glTF scenes use `openpbr` materials. Waves 1 and 2 render all of them except SheenTestGrid and SheenTestGrid-notex (fuzz, P2.25: class C, no lobe yet; `pt_coverage=1` renders it with the fuzz ignored).
+    // The Tier 1 glTF scenes use `openpbr` materials. Waves 1 and 2 render all of them (the fuzz lobe, P2.25, made SheenTestGrid renderable; the thin film, P2.27, too).
     const tier1Gltf = new Set([...tier1GltfSceneDescs, ...tier1TexturedGltfSceneDescs].map((s) => s.name));
     expect(skipped.filter((name) => !tier1Gltf.has(name))).toEqual([]);
-    expect(skipped.filter((name) => tier1Gltf.has(name))).toEqual(['SheenTestGrid-notex', 'SheenTestGrid']);
-    expect(unsupportedReason(new PtMegakernelAdapter({ coverage: true }).features, getScene('SheenTestGrid-notex'))).toBeNull();
+    expect(skipped.filter((name) => tier1Gltf.has(name))).toEqual([]);
+    expect(unsupportedReason(adapter.features, getScene('SheenTestGrid-notex'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toBeNull();
   });

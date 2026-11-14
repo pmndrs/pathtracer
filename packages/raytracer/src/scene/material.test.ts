@@ -6,7 +6,7 @@ import {
   MATERIAL_RECORD_BYTES,
   MATERIAL_RECORD_VEC4S,
   MATERIAL_RECORD_WORDS,
-  MATERIAL_RESERVED_WORDS,
+  MATERIAL_THIN_FILM_WORDS,
   MATERIAL_WORD,
   U16_SLOT,
   UNORM16_SCALE,
@@ -139,14 +139,14 @@ describe('record layout', () => {
   it('the 25 unorm16 values plus one spare fill words 16-28 and the reserved words are 3', () => {
     expect(Math.max(...Object.values(U16_SLOT)) + 3).toBeLessThanOrEqual(25 + 2); // last colour slot + its two followers
     expect(U16_SLOT.alphaCutoff).toBe(24);
-    expect(MATERIAL_WORD.unorm + Math.ceil(25 / 2)).toBe(MATERIAL_RESERVED_WORDS.first);
-    expect(MATERIAL_RESERVED_WORDS.first + MATERIAL_RESERVED_WORDS.count).toBe(MATERIAL_RECORD_WORDS);
+    expect(MATERIAL_WORD.unorm + Math.ceil(25 / 2)).toBe(MATERIAL_THIN_FILM_WORDS.first);
+    expect(MATERIAL_THIN_FILM_WORDS.first + MATERIAL_THIN_FILM_WORDS.count).toBe(MATERIAL_RECORD_WORDS);
   });
 
   it('writes every field into a distinct place and leaves the reserved words zero', () => {
     const words = new Uint32Array(MATERIAL_RECORD_WORDS).fill(0xdeadbeef);
     packMaterial(distinct(), words);
-    for (let i = 0; i < MATERIAL_RESERVED_WORDS.count; i++) expect(words[MATERIAL_RESERVED_WORDS.first + i]).toBe(0);
+    for (let i = 0; i < MATERIAL_THIN_FILM_WORDS.count; i++) expect(words[MATERIAL_THIN_FILM_WORDS.first + i]).toBe(0);
     // The spare unorm half (high half of word 28) is 0, not left from the fill.
     expect(words[28]! >>> 16).toBe(0);
     // Changing any one field changes the record (no two fields alias).

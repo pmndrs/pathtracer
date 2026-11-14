@@ -10,6 +10,12 @@
 import type { PtBsdfOptions } from './bsdf.ts';
 
 export function ptBsdfWgsl(options: PtBsdfOptions = {}): string {
+  const code = ptBsdfWgslBase(options);
+  // P2.27: the conductor's three Fresnel calls go through `ptFrConductor` (thinfilm-wgsl.ts); the layered BSDF's own calls (`cEta`) are not touched.
+  return options.thinFilm ? code.replace(/ptFrComplex\((dwo|c), p\.eta, p\.k\)/g, 'ptFrConductor($1, p.eta, p.k)') : code;
+}
+
+function ptBsdfWgslBase(options: PtBsdfOptions): string {
   const cap = (options.vndf ?? 'standard') === 'cap';
   const radiance = (options.transport ?? 'radiance') === 'radiance';
   const thin = options.thin ?? false;

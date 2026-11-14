@@ -363,3 +363,21 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - `anisotropyRotation` in the material record is unorm16 TURNS in [0, 1) (`rotationTurns(radians)` in `to-scene-copy.ts`); the field used to take raw radians and clamp at 1. The exporters ignore the rotation.
 - macOS `sed -i` needs an empty suffix argument (`sed -i '' ...`); `sed -i 's/..//' file` treats the script as the suffix and the file as a command.
 - A second `node bench/references/render.ts` started while another agent's native render runs doubles the load: check `ps -eo command | grep -E "[p]brt|[m]itsuba_render"` first: wait with an `until ! pgrep -f '[b]ench/references/render.ts'` loop first.
+- OpenPBR spec text: `curl -sL https://raw.githubusercontent.com/AcademySoftwareFoundation/OpenPBR/main/index.html` (v1.1.2, Markdeep source, grep for
+  `Fuzz` / `Thin-film`); the Zeltner LTC tables and code are `tizian/ltc-sheen` (Apache-2.0), the Belcour-Barla RGB film is Khronos
+  `glTF-Sample-Renderer/source/Renderer/shaders/iridescence.glsl` (Apache-2.0); CIE 1931 CMFs come from `http://www.cvrl.org/database/data/cmfs/ciexyz31_1.csv`
+  (the `cvrl.cvrl.org` and `cvrl.ioo.ucl.ac.uk` hosts fail), D65 stops at 780 nm in the colour-science table (a loop to 830 gives NaN).
+- Fuzz and thin film are gated like the other lobes (`features.fuzz`, `features.thinFilm`): the kernel text without them must stay byte-identical, so
+  conditional template text may not leave parentheses behind (`(a)` vs `a` is a different byte count) and WGSL refuses `a && b || c` without
+  parentheses, so the fuzz variant writes `(a && b) || c` only when on. Check with `node bench/size-snapshot.ts <dir>` before and after and `cmp` every file.
+- A kernel with `features.fuzz` binds the LTC table at `@group(2) @binding(2)` (`PtMegakernel` creates it); a page that builds its own pipeline layout
+  must add that binding. Thin film needs `layering: 'albedo'` (`ptLayeredWgsl` throws on stochastic; the adapter falls back and notes it) and reads the
+  record words 29-31 through `ptMaterialFilm`, not through `RtMaterial` (adding fields to the WGSL struct changes every kernel).
+- `node bench/runner/run.ts --page lobe-oracle [--args fuzz=0|film=0 spp=256]`: sphere under a uniform unit sky, one scattering vertex, pixel = the BSDF's
+  directional albedo at the view angle, compared per mu_o bin with a brute-force CPU integral of the TS twin (fuzz) or the exact spectral Airy sum
+  `bench/metrics/thinfilm-airy.ts` (film; D65, linear Rec.709, constant spectrum c gives (c, c, c)). Film errors are small near normal and grow toward
+  grazing (unpolarised Fresnel inside the Airy sum, a metal's phase from k ignored): gate the mean and mu_o > 0.55, report the worst.
+- Khronos' `evalIridescence` clamps `R12 R23` to at least 1e-5, which leaves a 0.006 bias for a vanishing film, uses Schlick at the interfaces (0.008 error
+  at cos 0.7 against the exact spectral sum) and adds the harmonics through the Rec.709 image of XYZ without a white balance; ours fixes the first two and balances.
+- `IridescenceDielectricSpheres` is a 7 x 7 x 7 grid, material index = 49 ix + 7 iy + iz with x = base ior, y = film thickness (0.1-0.7 um), z = film ior (both
+  ship only as `.gltf` + `.bin`, pass `'gltf'` to `make`); one z slice (`i % 7 === 2`) is 49 spheres, 88k triangles.

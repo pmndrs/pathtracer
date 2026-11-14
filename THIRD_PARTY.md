@@ -67,6 +67,13 @@ as pbrt-v4 implements it); Dupuy and Benyoub, "Sampling Visible GGX Normals with
 (`vndf: 'cap'`); Duff et al., "Building an Orthonormal Basis, Revisited", JCGT 2017 (`ptFrameFromNormal`).
 Mitsuba 3 code was not read for the BSDFs.
 
+### 1.5 ltc-sheen (Zeltner, Burley, Chiang) and glTF-Sample-Renderer, Apache-2.0
+
+| Our file | Source | Licence | Notes |
+|---|---|---|---|
+| `packages/pathtracer/src/bsdf/fuzz-table.ts`, `fuzz.ts`, `fuzz-wgsl.ts` (P2.25) | <https://github.com/tizian/ltc-sheen>: `fitting/python/data/ltc_table_sheen_volume.cpp` (the 32 x 32 LTC table, copied as numbers) and `pbrt-v3/src/materials/sheenltc.cpp` (table lookup, LTC evaluation and sampling, re-written in TypeScript/WGSL) | Apache-2.0, Copyright Tizian Zeltner, Brent Burley, Matt Jen-Yuan Chiang | The fuzz BRDF OpenPBR 1.1.2 recommends (spec, Fuzz section). |
+| `packages/pathtracer/src/bsdf/thinfilm.ts`, `thinfilm-wgsl.ts` (P2.27) | <https://github.com/KhronosGroup/glTF-Sample-Renderer> `source/Renderer/shaders/iridescence.glsl` (`evalIridescence`, `evalSensitivity`, the Gaussian fit constants of the CIE 1931 curves in Fourier space), after Belcour and Barla, "A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence", SIGGRAPH 2017 | Apache-2.0, Copyright the Khronos Group | Re-written in TypeScript/WGSL; DIVERGES V82 lists the changes (white balance, thickness units). |
+
 ### 1.4 Clean-room status
 
 - NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC, NRD): nothing ported. NRD code never opened.

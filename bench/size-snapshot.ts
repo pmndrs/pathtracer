@@ -26,6 +26,12 @@ for (const [name, layered] of Object.entries({ albedo: { layering: 'albedo' }, a
 }
 // Anisotropic metals (P2.26): the layout carries tangents and the material table has an anisotropic metal.
 variants['pbr-aniso'] = () => ptMegakernelWgsl(caps, { format: {}, layout: { ...layout, tangents: true }, ...mat({ layering: 'albedo' }, { aniso: true }) } as never);
+// Fuzz (P2.25) and thin film (P2.27): only compiled for scenes that use them (the variants above stay byte-identical).
+variants['pbr-albedo-fuzz'] = () => ptMegakernelWgsl(caps, { format: {}, layout, ...mat({ layering: 'albedo' }, { fuzz: true }) } as never);
+variants['pbr-stochastic-fuzz'] = () => ptMegakernelWgsl(caps, { format: {}, layout, ...mat({ layering: 'stochastic', maxDepth: 64 }, { fuzz: true }) } as never);
+variants['pbr-fuzz-only'] = () => ptMegakernelWgsl(caps, { format: {}, layout, integrator: { materials: { features: { mix: false, thin: false, layered: false, medium: false, fuzz: true }, layered: { layering: 'albedo' } } } } as never);
+variants['pbr-albedo-thinFilm'] = () => ptMegakernelWgsl(caps, { format: {}, layout, ...mat({ layering: 'albedo' }, { thinFilm: true }) } as never);
+variants['pbr-albedo-fuzz-thinFilm'] = () => ptMegakernelWgsl(caps, { format: {}, layout, ...mat({ layering: 'albedo' }, { fuzz: true, thinFilm: true }) } as never);
 variants.tex = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures });
 // Alpha MASK (P1.4c5): the textured kernel + the cutout pass-through and the masked shadow-ray loop (only compiled for scenes with a MASK material).
 variants['tex-mask'] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true } });

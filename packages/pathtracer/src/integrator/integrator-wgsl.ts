@@ -99,8 +99,10 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const stochastic = layered && (mats?.layered?.layering ?? 'albedo') === 'stochastic';
   const medium = !!mats?.features.medium;
   const aniso = !!mats?.features.aniso;
-  const evalFn = layered ? 'ptEval' : 'ptBsdfEval';
-  const sampleFn = layered ? 'ptSample' : 'ptBsdfSample';
+  const fuzz = !!mats?.features.fuzz;
+  const film = !!mats?.features.thinFilm;
+  const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
+  const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
   const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
   return /* wgsl */ `
 alias PtRadiance = vec4f;
@@ -295,7 +297,10 @@ ${medium ? `        beta = beta * exp(-sigma * hit.t);
         }
 
         let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
-        if (bp.kind == PT_BSDF_BLACK || depth >= maxDepth) {
+${film ? `        ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5);
+` : ''}${fuzz ? `        ptFuzzW = mat.sheenWeight;
+        ptFuzzC = vec4f(mat.sheenColor, mat.sheenRoughness);
+` : ''}        if (${fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK'} || depth >= maxDepth) {
             break;
         }
         let vertex = depth;
@@ -308,7 +313,7 @@ ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
         }
 ` : `        let frame = ptFrameFromNormal(${shadingNormal});
 `}        let wo = ptToLocal(frame, -ray.direction);
-        if (PT_NEE && !ptBsdfIsDelta(bp)) {
+        if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
             radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex);
         }
 

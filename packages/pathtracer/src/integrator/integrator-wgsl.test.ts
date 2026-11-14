@@ -228,6 +228,24 @@ describe('integrator WGSL', () => {
       expect(st).not.toMatch(/ptLayerAlbedoLut/);
     });
 
+    it('fuzz (P2.25) and thin film (P2.27) add their code only for scenes that use them, and the kernel without them is unchanged', () => {
+      const base = readable({ layered: true });
+      expect(base).not.toMatch(/ptFuzz|ptFilm|ptFrConductor/);
+      const fz = readable({ layered: true, fuzz: true });
+      expect(fz).toMatch(/@group\(2\) @binding\(2\) var<storage, read> ptFuzzTable/);
+      expect(fz).toMatch(/ptFuzzW = mat\.sheenWeight;/);
+      expect(fz).toMatch(/ptFuzzedEval\(bp, wo, wiLocal\)/);
+      expect(fz).toMatch(/ptFuzzedSample\(bp, wo,/);
+      expect(fz).not.toMatch(/ptFilm/);
+      const flm = readable({ layered: true, thinFilm: true });
+      expect(flm).toMatch(/ptFilm = select\(vec3f\(0\.0\), ptMaterialFilm\(hit\.material\)/);
+      expect(flm).toMatch(/ptFrConductor\(dwo, p\.eta, p\.k\)/);
+      expect(flm).not.toMatch(/ptFuzz/);
+      expect(() => readable({ layered: true, thinFilm: true }, { layering: 'stochastic' })).toThrow(/albedo/);
+      // fuzz without a layered lobe: the base is dispatched straight to ptBsdfEval
+      expect(readable({ fuzz: true })).toMatch(/ptBsdfEval\(p, wo, wi\)/);
+    });
+
     it('sizes (minified, short names; P2.21/22/30): thin +0.5 KB, medium +0.3 KB, layered albedo +7.9 KB, stochastic +9.1 KB; all lobes with an env map under 53.5 KB', () => {
       const legacy = ptMegakernelWgsl(caps, { format: {}, layout }).length;
       const size = (f: Partial<PtMaterialFeatures>, layered?: PtMaterialOptions['layered'], extra: object = {}) => build(feats(f, layered), extra).length;

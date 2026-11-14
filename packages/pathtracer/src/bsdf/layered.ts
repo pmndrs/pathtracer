@@ -28,6 +28,7 @@
  * layers (wo and wi are negated, the sampled wi is negated back).
  */
 
+import { ptFilmActive, ptFilmFresnel, type PtThinFilm } from './thinfilm.ts';
 import {
   PT_BSDF_CONDUCTOR,
   PT_BSDF_DIFFUSE,
@@ -85,6 +86,8 @@ export interface PtLayeredParams {
    * GGX alpha. `baseColor` is then unused.
    */
   baseConductor?: { eta: PtVec3; k: PtVec3; alpha: number };
+  /** P2.27: thin film on the dielectric interface (the film sits between the ambient medium and the dielectric of IOR `ior`). Albedo layering only in the kernel. */
+  film?: PtThinFilm;
 }
 
 export interface PtLayeredOptions extends PtBsdfOptions {
@@ -237,16 +240,29 @@ interface Top {
   ior: number;
   alpha: readonly [number, number];
   s: PtVec3;
+  film?: PtThinFilm;
 }
 
 function topOf(p: PtLayeredParams): Top {
-  return { ior: p.ior, alpha: p.alpha, s: specScale(p) };
+  return { ior: p.ior, alpha: p.alpha, s: specScale(p), ...(ptFilmActive(p.film) ? { film: p.film } : {}) };
+}
+
+const dielectricF0 = (ior: number): PtVec3 => {
+  const f = ((ior - 1) / (ior + 1)) ** 2;
+  return [f, f, f];
+};
+
+/** The interface's Fresnel per channel at the cosine `cos` (the half-vector angle for a rough lobe): the plain dielectric, or the thin film blended in. */
+function topFresnel(top: Top, cos: number): PtVec3 {
+  const F = ptFrDielectric(cos, top.ior);
+  return top.film ? ptFilmFresnel(top.film, cos, [F, F, F], dielectricF0(top.ior)) : [F, F, F];
 }
 
 /** R' = s F, but total internal reflection stays total. */
-function reflectance(top: Top, F: number): PtVec3 {
+function reflectance(top: Top, F: number, cos: number): PtVec3 {
   if (F >= 1) return [1, 1, 1];
-  return [Math.min(1, top.s[0] * F), Math.min(1, top.s[1] * F), Math.min(1, top.s[2] * F)];
+  const Fv = top.film ? topFresnel(top, cos) : [F, F, F];
+  return [Math.min(1, top.s[0] * (Fv[0] as number)), Math.min(1, top.s[1] * (Fv[1] as number)), Math.min(1, top.s[2] * (Fv[2] as number))];
 }
 
 function roughA(alpha: readonly [number, number]): readonly [number, number] {
@@ -263,7 +279,7 @@ function topSample(top: Top, wo: PtVec3, uc: number, u0: number, u1: number, rad
   const eta = top.ior;
   if (topIsSpecular(top)) {
     const F = ptFrDielectric(wo[2], eta);
-    const Rv = reflectance(top, F);
+    const Rv = reflectance(top, F, wo[2]);
     const Tv: PtVec3 = [1 - Rv[0], 1 - Rv[1], 1 - Rv[2]];
     const pr = flags & PT_LAYER_REFLECTION ? avg(Rv) : 0;
     const pt = flags & PT_LAYER_TRANSMISSION ? avg(Tv) : 0;
@@ -284,7 +300,7 @@ function topSample(top: Top, wo: PtVec3, uc: number, u0: number, u1: number, rad
   const wm = ptGgxSampleWm(a, wo, u0, u1, vndf);
   const dwo = wo[0] * wm[0] + wo[1] * wm[1] + wo[2] * wm[2];
   const F = ptFrDielectric(dwo, eta);
-  const Rv = reflectance(top, F);
+  const Rv = reflectance(top, F, dwo);
   const Tv: PtVec3 = [1 - Rv[0], 1 - Rv[1], 1 - Rv[2]];
   const pr = flags & PT_LAYER_REFLECTION ? avg(Rv) : 0;
   const pt = flags & PT_LAYER_TRANSMISSION ? avg(Tv) : 0;
@@ -324,7 +340,7 @@ function topEval(top: Top, wo: PtVec3, wi: PtVec3, radiance: boolean, flags: num
   const dwo = wo[0] * wm[0] + wo[1] * wm[1] + wo[2] * wm[2];
   const dwi = wi[0] * wm[0] + wi[1] * wm[1] + wi[2] * wm[2];
   const F = ptFrDielectric(dwo, top.ior);
-  const Rv = reflectance(top, F);
+  const Rv = reflectance(top, F, dwo);
   const Tv: PtVec3 = [1 - Rv[0], 1 - Rv[1], 1 - Rv[2]];
   const pr = flags & PT_LAYER_REFLECTION ? avg(Rv) : 0;
   const pt = flags & PT_LAYER_TRANSMISSION ? avg(Tv) : 0;
@@ -540,10 +556,21 @@ interface Mix {
   pS: number;
 }
 
+/** `ptLayeredTopAlbedo` per channel: with a thin film the plain albedo is scaled by the film's Fresnel over the plain one at this angle (exact for a smooth interface). */
+function topAlbedo3(p: PtLayeredParams, mu: number): PtVec3 {
+  const E = ptLayeredTopAlbedo(p, mu);
+  if (!ptFilmActive(p.film) || p.ior === 1) return [E, E, E];
+  const c = Math.max(mu, 1e-6);
+  const F = ptFrDielectric(c, p.ior);
+  const Fc = ptFilmFresnel(p.film, c, [F, F, F], dielectricF0(p.ior));
+  const k = 1 / Math.max(F, 1e-6);
+  return [Math.min(1, E * (Fc[0] as number) * k), Math.min(1, E * (Fc[1] as number) * k), Math.min(1, E * (Fc[2] as number) * k)];
+}
+
 function albedoKeep(p: PtLayeredParams, mu: number): PtVec3 {
   const s = specScale(p);
-  const E = ptLayeredTopAlbedo(p, mu);
-  return [1 - Math.min(1, s[0] * E), 1 - Math.min(1, s[1] * E), 1 - Math.min(1, s[2] * E)];
+  const E = topAlbedo3(p, mu);
+  return [1 - Math.min(1, s[0] * E[0]), 1 - Math.min(1, s[1] * E[1]), 1 - Math.min(1, s[2] * E[2])];
 }
 
 /** `'internal'` base: 1 / (eta^2 (1 - rho R_i)) per channel (the two keep factors are applied by the caller). */
@@ -673,10 +700,10 @@ function albedoSample(p: PtLayeredParams, wo0: PtVec3, u: PtVec3, o: PtLayeredOp
   // One uniform picks the lobe, then is rescaled to a fresh uniform for the direction's first coordinate.
   if (u[0] < mix.pS) {
     if (topIsSpecular(top)) {
-      const F = ptFrDielectric(wo[2], p.ior);
+      const Fv = topFresnel(top, wo[2]);
       const sc = specScale(p);
       const c = wo[2];
-      return fix({ wi: [-wo[0], -wo[1], wo[2]], f: scale3([sc[0] * F, sc[1] * F, sc[2] * F], 1 / c), pdf: mix.pS, flags: PT_FLAG_REFLECTION | PT_FLAG_DELTA, etap: 1 });
+      return fix({ wi: [-wo[0], -wo[1], wo[2]], f: scale3([sc[0] * Fv[0], sc[1] * Fv[1], sc[2] * Fv[2]], 1 / c), pdf: mix.pS, flags: PT_FLAG_REFLECTION | PT_FLAG_DELTA, etap: 1 });
     }
     const s = topSample(top, wo, 0, u[1], u[2], (o.transport ?? 'radiance') === 'radiance', PT_LAYER_REFLECTION, o.vndf ?? 'standard');
     if (s.flags === 0) return FAIL;

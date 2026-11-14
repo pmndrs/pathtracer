@@ -20,6 +20,7 @@ import attenuation from './golden/AttenuationTest.json' with { type: 'json' };
 import clearcoat from './golden/ClearCoatTest.json' with { type: 'json' };
 import emissive from './golden/EmissiveStrengthTest.json' with { type: 'json' };
 import ior from './golden/IORTestGrid.json' with { type: 'json' };
+import iridescence from './golden/IridescenceDielectricSpheres.json' with { type: 'json' };
 import metalRough from './golden/MetalRoughSpheresNoTextures.json' with { type: 'json' };
 import sheen from './golden/SheenTestGrid.json' with { type: 'json' };
 import thinwall from './golden/TransmissionThinwallTestGrid.json' with { type: 'json' };
@@ -52,8 +53,8 @@ const greyBase = (c: unknown): boolean => Array.isArray(c) && Math.abs((c[0] as 
 
 export interface Tier1GltfScene { golden: GoldenFile; model: GltfModelRef; sidecar: GltfSidecar; scene: SceneDesc }
 
-function make(golden: GoldenFile, sidecar: GltfSidecar): Tier1GltfScene {
-  const model = goldenModelRef(golden);
+function make(golden: GoldenFile, sidecar: GltfSidecar, format: 'glb' | 'gltf' = 'glb'): Tier1GltfScene {
+  const model = goldenModelRef(golden, format);
   const build: GltfSceneBuild = { ...sidecar, model, materials: goldenMaterials(golden) };
   return { golden, model, sidecar, scene: buildGltfSceneDesc(build) };
 }
@@ -178,6 +179,18 @@ const sidecars = {
     environment: SKY,
     dropMaterials: ['Label Mat'],
   }),
+  // IridescenceDielectricSpheres is a 7 x 7 x 7 grid of r = 1.5 spheres (343 materials, 600k triangles; the file ships `.gltf` + `.bin` only): x = base ior
+  // (1..2), y = film thickness (0.1..0.7 um), z = film ior (1..2); the guides plane is not a sphere. The slice z = -3.5 (film ior 1.33, material index
+  // 49 ix + 7 iy + 2) keeps 49 spheres (about 88k triangles): base ior x film thickness on a 0.8 grey rough dielectric, seen down -Z so no other layer hides it. Class C (P2.27).
+  iridescence: make(iridescence as GoldenFile, {
+    name: 'IridescenceDielectricSpheres-slice',
+    purpose: 'IridescenceDielectricSpheres reduced to the 7 x 7 slice with film ior 1.33 (49 spheres: base ior 1-2 x film thickness 0.1-0.7 um on a 0.8 grey dielectric, roughness 0.1), seen down -Z under the sky; the other 294 spheres and the guides plane are dropped. Tier 1 iridescence (P2.27); coverage only.',
+    camera: { type: 'perspective', position: [0, 0, 30], target: [0, 0, -3.5], up: [0, 1, 0], yFovDeg: 44 },
+    film: { width: 768, height: 768, filter: 'box' },
+    integrator: { maxDepth: 4 },
+    environment: SKY,
+    dropMaterials: (iridescence as GoldenFile).materials.filter((m) => m.i % 7 !== 2 || m.i >= 343).map((m) => m.i),
+  }, 'gltf'),
   // 4 x 4 spheres sheenColor 0..1 x sheenRoughness 0..1 in front of a backdrop at z = -0.04.
   sheen: make(sheen as GoldenFile, {
     name: 'SheenTestGrid-notex',

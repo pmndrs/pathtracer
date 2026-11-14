@@ -80,7 +80,7 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
         ...(desc.emissiveTexture ? { emissionTexture: texture(desc.emissiveTexture) } : {}),
       };
     case 'openpbr': {
-      // The fields the scene copy has today; thin film, dispersion, subsurface, diffuse roughness and the metal's F82 tint have no
+      // The fields the scene copy has today; dispersion, subsurface, diffuse roughness and the metal's F82 tint have no
       // record slot yet (P2.21+), the rest map one to one.
       const m = resolveOpenPbr(desc);
       const tex = (name: string | undefined) => (name ? texture(name) : undefined);
@@ -92,6 +92,7 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
         transmissionWeight: m.transmissionWeight, transmissionColor: [...m.transmissionColor], transmissionDepth: m.transmissionDepth,
         coatWeight: m.coatWeight, coatColor: [...m.coatColor], coatRoughness: m.coatRoughness, coatIor: m.coatIor,
         sheenWeight: m.fuzzWeight, sheenColor: [...m.fuzzColor], sheenRoughness: m.fuzzRoughness,
+        thinFilmWeight: m.thinFilmWeight, thinFilmThickness: m.thinFilmThickness, thinFilmIor: m.thinFilmIor,
         emissionColor: [m.emissionColor[0] * m.emissionLuminance, m.emissionColor[1] * m.emissionLuminance, m.emissionColor[2] * m.emissionLuminance],
         opacity: m.geometryOpacity, alphaCutoff: m.alphaCutoff, alphaMode: ALPHA_MODE[m.alphaMode],
         thinWalled: m.geometryThinWalled, doubleSided: m.doubleSided, emissionTwoSided: m.emissionTwoSided,

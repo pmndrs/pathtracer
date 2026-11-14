@@ -36,6 +36,7 @@
 import type { RtMaterial } from '@pmndrs/raytracer';
 import { PT_BSDF_BLACK, PT_BSDF_CONDUCTOR, PT_BSDF_DIELECTRIC, PT_BSDF_DIFFUSE, PT_BSDF_LAYERED, PT_BSDF_THIN, type PtBsdfParams, type PtVec3 } from './bsdf.ts';
 import type { PtLayeredOptions, PtLayeredParams } from './layered.ts';
+import type { PtThinFilm } from './thinfilm.ts';
 
 /** k that gives a conductor with eta = 1 the normal-incidence reflectance `r` (clamped just below 1). */
 export function conductorKFromReflectance(r: number): number {
@@ -129,6 +130,10 @@ export interface PtMaterialFeatures {
   coatedMetal?: boolean;
   /** P2.26: some metal has `specularAnisotropy > 0`: its GGX alphas split along the tangent (`ptOpenPbrAlpha`) and the integrator builds the frame from the vertex tangent (`ptFrameFromTangent`); needs a surface layout with tangents. Optional like `coatedMetal`. */
   aniso?: boolean;
+  /** P2.25: some material has fuzz (`sheenWeight > 0` and a non-black `sheenColor`): the OpenPBR fuzz layer wraps the base BSDF (`ptFuzzWgsl`; the LTC table is bound at group 2, binding 2). Optional like `coatedMetal`. */
+  fuzz?: boolean;
+  /** P2.27: some metal (without a coat) or opaque dielectric (without a coat) has a thin film (`thinFilmWeight > 0`, thickness > 0): the film Fresnel is compiled (`ptThinFilmWgsl`) and the kernel needs albedo layering. Optional like `coatedMetal`. */
+  thinFilm?: boolean;
 }
 
 export interface PtMaterialOptions {
@@ -152,6 +157,8 @@ export function ptMaterialFeatures(materials: readonly RtMaterial[]): PtMaterial
   for (const m of materials) {
     if (m.metalness > 0 && m.metalness < 1) f.mix = true;
     if (m.metalness > 0 && m.specularAnisotropy > 0) f.aniso = true; // the key exists only when true, as coatedMetal
+    if (m.thinFilmWeight > 0 && m.thinFilmThickness > 0 && m.coatWeight <= 0.5 && m.transmissionWeight <= 0.5) f.thinFilm = true;
+    if (m.sheenWeight > 0 && Math.max(m.sheenColor[0], m.sheenColor[1], m.sheenColor[2]) > 0) f.fuzz = true;
     if (m.metalness > 0 && m.coatWeight > 0.5 && m.coatIor !== 1) {
       f.coatedMetal = true; // the key exists only when true: scenes without coated metals keep their feature object
       f.layered = true;
@@ -186,6 +193,15 @@ export function ptOpenPbrAlpha(roughness: number, anisotropy: number): readonly 
   return [ax, (1 - anisotropy) * ax];
 }
 
+/**
+ * The thin film a vertex of this material applies (P2.27), or undefined: the film sits between the coat-free dielectric or metal and the ambient
+ * medium, so a coat (`coatWeight > 0.5`) or a transmissive base drops it (DIVERGES V82).
+ */
+export function ptFilmOfMaterial(m: RtMaterial): PtThinFilm | undefined {
+  if (!(m.thinFilmWeight > 0 && m.thinFilmThickness > 0) || m.coatWeight > 0.5 || m.transmissionWeight > 0.5) return undefined;
+  return { weight: m.thinFilmWeight, thickness: m.thinFilmThickness, ior: m.thinFilmIor };
+}
+
 /** Default layer thickness of the OpenPBR adapter (transparent layer, see `PtMaterialOptions.layerThickness`). */
 export const PT_DEFAULT_LAYER_THICKNESS = 1e-6;
 
@@ -201,11 +217,11 @@ export function ptMediumAfterTransmission(m: RtMaterial, woZ: number): PtVec3 {
 }
 
 /** TS twin of the WGSL `ptLayeredOf`: the layered parameters packed in a `PT_BSDF_LAYERED` `PtBsdfParams`. */
-export function ptLayeredFromBsdf(p: PtBsdfParams): PtLayeredParams {
+export function ptLayeredFromBsdf(p: PtBsdfParams, film?: PtThinFilm): PtLayeredParams {
   if (p.k[2] > 0.5) {
     return { baseColor: [0, 0, 0], ior: p.ior, alpha: p.alpha, specularWeight: 1, specularColor: [1, 1, 1], thickness: p.k[0], internalReflectance: 0, baseConductor: { eta: p.reflectance, k: p.eta, alpha: p.k[1] } };
   }
-  return { baseColor: p.reflectance, ior: p.ior, alpha: p.alpha, specularWeight: 1, specularColor: p.eta, thickness: p.k[0], internalReflectance: p.k[1] };
+  return { baseColor: p.reflectance, ior: p.ior, alpha: p.alpha, specularWeight: 1, specularColor: p.eta, thickness: p.k[0], internalReflectance: p.k[1], ...(film ? { film } : {}) };
 }
 
 const BLACK_PARAMS = (): PtBsdfParams => ({ kind: PT_BSDF_BLACK, reflectance: [0, 0, 0], eta: [0, 0, 0], k: [0, 0, 0], alpha: [0, 0], ior: 1 });

@@ -33,6 +33,8 @@ export const ABLATIONS: Readonly<Record<string, Ablation>> = {
   ior: { label: 'specularIor forced to 1.5', strip: (p) => ((p.specularIor ?? 1.5) !== 1.5 ? { ...p, specularIor: 1.5 } : null) },
   coat: { label: 'coatWeight forced to 0', strip: (p) => ((p.coatWeight ?? 0) > 0 ? { ...p, coatWeight: 0 } : null) },
   fuzz: { label: 'fuzzWeight forced to 0 (sheen removed)', strip: (p) => ((p.fuzzWeight ?? 0) > 0 ? { ...p, fuzzWeight: 0 } : null) },
+  /** The thin film removed (thinFilmWeight 0). */
+  thinfilm: { label: 'thinFilmWeight forced to 0 (iridescence removed)', strip: (p) => ((p.thinFilmWeight ?? 0) > 0 ? { ...p, thinFilmWeight: 0 } : null) },
   /** emissive_strength removed: emissionLuminance 1 (the emissiveFactor stays). */
   strength: { label: 'emissive_strength forced to 1', strip: (p) => ((p.emissionLuminance ?? 0) > 0 && p.emissionLuminance !== 1 ? { ...p, emissionLuminance: 1 } : null) },
 };

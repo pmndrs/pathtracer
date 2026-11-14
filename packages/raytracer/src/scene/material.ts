@@ -24,7 +24,8 @@
  *     w12     (normal, emission) texture slots u16 x2
  *     w13-15  conductorEta, conductorK as f16 x6
  *     w16-28  25 unorm16 values, two per word, low half first (`U16_SLOT`), then one spare half
- *     w29-31  reserved, written 0: subsurface, thin film, fuzz, dispersion will land here
+ *     w29-31  thin film (P2.27): weight, thickness in micrometres, ior, f32 each; all 0 when the weight is 0 (the decode then gives the defaults 0, 0.5, 1.4).
+ *             Subsurface and dispersion have no slot yet.
  */
 import { LUMA, TEXTURE_SLOT_NONE } from './constants.ts';
 
@@ -33,8 +34,8 @@ export type Rgb3 = [number, number, number];
 export const MATERIAL_RECORD_VEC4S = 8;
 export const MATERIAL_RECORD_WORDS = 32;
 export const MATERIAL_RECORD_BYTES = 128;
-/** First reserved word and how many (documented room for lobes not implemented yet). */
-export const MATERIAL_RESERVED_WORDS = { first: 29, count: 3 } as const;
+/** The three thin-film words (weight, thickness, ior). */
+export const MATERIAL_THIN_FILM_WORDS = { first: 29, count: 3 } as const;
 
 export const MATERIAL_WORD = {
   baseColor: 0,
@@ -128,6 +129,12 @@ export interface RtMaterial {
   roughnessMetalTexture: number;
   normalTexture: number;
   emissionTexture: number;
+  /** OpenPBR `thin_film_weight` (coverage, [0, 1]); 0 = no film. */
+  thinFilmWeight: number;
+  /** OpenPBR `thin_film_thickness` in micrometres. */
+  thinFilmThickness: number;
+  /** OpenPBR `thin_film_ior`. */
+  thinFilmIor: number;
 }
 
 /** Every field optional; absent ones take the OpenPBR defaults (`defaultMaterial`). `emissionLuminance` defaults to the luminance of `emissionColor`. */
@@ -174,6 +181,9 @@ export function defaultMaterial(): RtMaterial {
     roughnessMetalTexture: TEXTURE_SLOT_NONE,
     normalTexture: TEXTURE_SLOT_NONE,
     emissionTexture: TEXTURE_SLOT_NONE,
+    thinFilmWeight: 0,
+    thinFilmThickness: 0.5,
+    thinFilmIor: 1.4,
   };
 }
 
@@ -312,7 +322,10 @@ export function packMaterial(material: RtMaterial, words: Uint32Array, wordOffse
   for (let i = 0; i < 3; i++) w(MATERIAL_WORD.conductor + i, (half[i * 2] as number) | ((half[i * 2 + 1] as number) << 16));
   const slots = slotsOf(material);
   for (let i = 0; i < 13; i++) w(MATERIAL_WORD.unorm + i, (slots[i * 2] ?? 0) | ((slots[i * 2 + 1] ?? 0) << 16));
-  for (let i = 0; i < MATERIAL_RESERVED_WORDS.count; i++) w(MATERIAL_RESERVED_WORDS.first + i, 0);
+  const film = material.thinFilmWeight > 0;
+  w(MATERIAL_THIN_FILM_WORDS.first, film ? f32Bits(finite(material.thinFilmWeight, 'thinFilmWeight')) : 0);
+  w(MATERIAL_THIN_FILM_WORDS.first + 1, film ? f32Bits(finite(material.thinFilmThickness, 'thinFilmThickness')) : 0);
+  w(MATERIAL_THIN_FILM_WORDS.first + 2, film ? f32Bits(finite(material.thinFilmIor, 'thinFilmIor')) : 0);
 }
 
 /** Reads one record. This is the TypeScript twin of the WGSL `rtMaterialAt`: the GPU decodes the same bits to the same values. */
@@ -323,6 +336,7 @@ export function unpackMaterial(words: ArrayLike<number>, wordOffset = 0): RtMate
   const unorm3 = (slot: number): Rgb3 => [unorm(slot), unorm(slot + 1), unorm(slot + 2)];
   const half = (i: number) => f16BitsToF32((w(MATERIAL_WORD.conductor + (i >> 1)) >>> ((i & 1) * 16)) & 0xffff);
   const flags = w(MATERIAL_WORD.flags);
+  const film = w(MATERIAL_THIN_FILM_WORDS.first) !== 0;
   return {
     baseColor: [f(0), f(1), f(2)],
     baseWeight: unorm(U16_SLOT.baseWeight),
@@ -358,6 +372,9 @@ export function unpackMaterial(words: ArrayLike<number>, wordOffset = 0): RtMate
     roughnessMetalTexture: w(MATERIAL_WORD.texturesA) >>> 16,
     normalTexture: w(MATERIAL_WORD.texturesB) & 0xffff,
     emissionTexture: w(MATERIAL_WORD.texturesB) >>> 16,
+    thinFilmWeight: film ? f(MATERIAL_THIN_FILM_WORDS.first) : 0,
+    thinFilmThickness: film ? f(MATERIAL_THIN_FILM_WORDS.first + 1) : 0.5,
+    thinFilmIor: film ? f(MATERIAL_THIN_FILM_WORDS.first + 2) : 1.4,
   };
 }
 

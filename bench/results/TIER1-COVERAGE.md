@@ -1,18 +1,18 @@
 # Tier 1 feature-coverage matrix
 
-Generated 2026-11-14 by `node bench/adapters/tier1-matrix.ts --report t1cov-1024` (P2.31, docs/design/tier1.md section 3). Data: `bench/results/reports/tier1/coverage.json`; the viewer's Coverage tab links each cell to its side-by-side comparison.
+Generated 2026-11-14 by `node bench/adapters/tier1-matrix.ts --report t1cov-1024b` (P2.31, docs/design/tier1.md section 3). Data: `bench/results/reports/tier1/coverage.json`; the viewer's Coverage tab links each cell to its side-by-side comparison.
 
 Columns ours, three-gpu-pathtracer and mutracer are **measured by ablation** at 1024 spp (noise from the 512 spp snapshot): each renders the full wave-1 scene and the same scene with the feature stripped from every material. The number after the symbol is ablation relMSE / own noise; "ffN" = N firefly pixels (above 4x the reference maximum) left out of the relMSEs. pbrt-v4 and Mitsuba 3 are **read from the exporters**: what the exporter did with a probe material of that row.
 
 | symbol | measured columns | pbrt / Mitsuba columns |
 | --- | --- | --- |
 | ● | full render is at least 10x the noise away from the stripped render, and (reference class A / B) agrees with the reference: excess relMSE over own noise within 1.5 x (A) or 5 x (B) of the floor relMSE(Mitsuba, pbrt) | exact: the exporter writes it without any approximation note |
-| ◐ | distinguishable but off the reference | approximate (class B layering, tint, unverified tangent) or only a coverage fallback is written (class C approximation) |
+| ◐ | distinguishable but off the reference | approximate (class B layering, tint) or only a coverage fallback is written (class C approximation) |
 | ○ | indistinguishable from stripped (or the renderer failed) | not expressible: the exporter drops the feature |
 | – | no scene yet | |
 
-Run conditions: load average (1 min) 2.5..29.1, browser GPU processes 0..0, 14 of 66 runs flagged loaded. Timing is not the point here; no timing in this page.
-Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-gpu-pathtracer 0.0.28; @meimu/mutracer 0.3.1.
+Run conditions: load average (1 min) 2.5..29.1, browser GPU processes 0..0, 14 of 72 runs flagged loaded. Timing is not the point here; no timing in this page.
+Versions: repo commit 7996b8f-di; browser Chrome/157.0.8103.52 headless; three-gpu-pathtracer 0.0.28; @meimu/mutracer 0.3.1.
 
 | row | class | ours (pt-megakernel) | three-gpu-pathtracer | mutracer | pbrt-v4 | Mitsuba 3 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -24,16 +24,16 @@ Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-g
 | KHR_materials_specular, factor 1 (pure Fresnel reflection) | A | ● 220x | ◐ 52534x ff1 | ◐ 64x | ● | ● |
 | KHR_materials_specular, factor < 1 (class C) | C | ● 180x | ● 308x ff3 | ● 56x | ◐ | ◐ |
 | KHR_materials_clearcoat (class B) | B | ● 68x | ◐ 524x | ◐ 263x | ◐ | ◐ |
-| KHR_materials_sheen (class C) | C | ○ 0x | ● 1275x | ● 734x | ○ | ○ |
+| KHR_materials_sheen (class C) | C | ● 543x | ● 1275x | ● 734x | ○ | ○ |
 | KHR_materials_emissive_strength | A | ● 6235x | ● 8883x | ● 3406x | ● | ● |
-| KHR_materials_iridescence (class C) (no scene yet) | C | – | – | – | ○ | ○ |
-| KHR_materials_anisotropy (no scene yet) | A | – | – | – | ◐ | ◐ |
+| KHR_materials_iridescence (class C) | C | ● 871x | ○ 1x | ○ 3x | ○ | ○ |
+| KHR_materials_anisotropy (no scene yet) | A | – | – | – | ● | ● |
 | KHR_materials_dispersion (class B') (no scene yet) | B' | – | – | – | ◐ | ○ |
 | KHR_materials_diffuse_transmission (class B') (no scene yet) | B' | – | – | – | ◐ | ○ |
 | transmission with a base colour tint (class B) (no scene yet) | B | – | – | – | ◐ | ◐ |
 | transmission, thin-walled, rough (class C) (no scene yet) | C | – | – | – | ◐ | ◐ |
-| alphaMode MASK / BLEND (no scene yet) | B | – | – | – | ○ | ○ |
-| texture slots (baseColor, metalRough, emissive, normal) (no scene yet) | B | – | – | – | ◐ | ◐ |
+| alphaMode MASK / BLEND (no scene yet) | B | – | – | – | ◐ | ◐ |
+| texture slots (baseColor, metalRough, emissive, normal) (no scene yet) | B | – | – | – | ○ | ○ |
 
 ## Per row
 
@@ -130,7 +130,7 @@ Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-g
 - extension: KHR_materials_sheen; reference class C; no reference
 - scene: `SheenTestGrid-notex`, stripped `SheenTestGrid-notex--no-fuzz`
 - note: stripped: fuzzWeight forced to 0. no reference (neither pbrt nor Mitsuba has a sheen lobe)
-- **ours (pt-megakernel)** ○ missing (relMSE vs pbrt 4.4e-4, vs Mitsuba 5.5e-4, floor 6.4e-4, mean bias 0.1% / 0.5%, ablation 0.0e+0, noise 1.3e-4): full and stripped renders are not distinguishable: relMSE 0.0e+0 is 0.0x the noise 1.3e-4 (needs >= 10x)
+- **ours (pt-megakernel)** ● full (relMSE vs pbrt 5.3e-2, vs Mitsuba 5.2e-2, floor 6.4e-4, mean bias 0.9% / 1.2%, ablation 5.1e-2, noise 9.3e-5): distinguishable from stripped: 543x the noise (relMSE 5.1e-2 vs 9.3e-5); no reference to judge against: distinguishable counts as supported
 - **three-gpu-pathtracer** ● full (relMSE vs pbrt 2.2e-1, vs Mitsuba 2.5e-1, floor 6.4e-4, mean bias 10.9% / 11.3%, ablation 6.2e-2, noise 4.9e-5): distinguishable from stripped: 1275x the noise (relMSE 6.2e-2 vs 4.9e-5); no reference to judge against: distinguishable counts as supported
 - **mutracer** ● full (relMSE vs pbrt 2.5e-1, vs Mitsuba 2.7e-1, floor 6.4e-4, mean bias 11.2% / 11.6%, ablation 9.3e-2, noise 1.3e-4): distinguishable from stripped: 734x the noise (relMSE 9.3e-2 vs 1.3e-4); no reference to judge against: distinguishable counts as supported
 - **pbrt-v4** ○ missing (floor 6.4e-4): exporter: none; coverage: pbrt: material 'm': class C: fuzz (sheen) has no reference; dropped or approximated; dropped: only a coverage fallback is written, the feature is absent
@@ -150,10 +150,11 @@ Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-g
 ### KHR_materials_iridescence (class C)
 
 - extension: KHR_materials_iridescence; reference class C; no reference
-- scene: no scene yet
-- **ours (pt-megakernel)** – no-scene: no wave-1 scene yet
-- **three-gpu-pathtracer** – no-scene: no wave-1 scene yet
-- **mutracer** – no-scene: no wave-1 scene yet
+- scene: `IridescenceDielectricSpheres-slice`, stripped `IridescenceDielectricSpheres-slice--no-thinfilm`
+- note: stripped: thinFilmWeight forced to 0. no reference (neither pbrt nor Mitsuba has a thin-film Fresnel)
+- **ours (pt-megakernel)** ● full (ablation 3.1e-2, noise 3.5e-5): distinguishable from stripped: 871x the noise (relMSE 3.1e-2 vs 3.5e-5); no reference to judge against: distinguishable counts as supported
+- **three-gpu-pathtracer** ○ missing (ablation 2.3e-3, noise 1.8e-3): full and stripped renders are not distinguishable: relMSE 2.3e-3 is 1.3x the noise 1.8e-3 (needs >= 10x)
+- **mutracer** ○ missing (ablation 4.8e-3, noise 1.6e-3): full and stripped renders are not distinguishable: relMSE 4.8e-3 is 3.0x the noise 1.6e-3 (needs >= 10x)
 - **pbrt-v4** ○ missing: exporter: none; coverage: pbrt: material 'm': class C: thin film (iridescence) has no reference; dropped or approximated; dropped: only a coverage fallback is written, the feature is absent
 - **Mitsuba 3** ○ missing: exporter: none; coverage: mitsuba: material 'm': class C: thin film (iridescence) has no reference; dropped or approximated; dropped: only a coverage fallback is written, the feature is absent
 
@@ -164,8 +165,8 @@ Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-g
 - **ours (pt-megakernel)** – no-scene: no wave-1 scene yet
 - **three-gpu-pathtracer** – no-scene: no wave-1 scene yet
 - **mutracer** – no-scene: no wave-1 scene yet
-- **pbrt-v4** ◐ approx: exporter: approximate; pbrt: material 'm': anisotropic: the GGX tangent axis is the renderer's own dp/du of the mesh uvs, not the glTF TANGENT attribute (unverified, P2.26)
-- **Mitsuba 3** ◐ approx: exporter: approximate; mitsuba: material 'm': anisotropic: the GGX tangent axis is the renderer's own dp/du of the mesh uvs, not the glTF TANGENT attribute (unverified, P2.26)
+- **pbrt-v4** ● full: exporter: exact; pbrt: mesh 's' is anisotropic but has no uvs: the GGX axis is pbrt's default uv frame, not a tangent the other renderers share (P2.26)
+- **Mitsuba 3** ● full: exporter: exact; mitsuba: mesh 's' is anisotropic but has no uvs: the GGX axis is Mitsuba's default uv frame, not a tangent the other renderers share (P2.26)
 
 ### KHR_materials_dispersion (class B')
 
@@ -214,8 +215,8 @@ Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-g
 - **ours (pt-megakernel)** – no-scene: no wave-1 scene yet
 - **three-gpu-pathtracer** – no-scene: no wave-1 scene yet
 - **mutracer** – no-scene: no wave-1 scene yet
-- **pbrt-v4** ○ missing: exporter: none; coverage: pbrt: material 'm': alpha mask ignored (rendered opaque); dropped: only a coverage fallback is written, the feature is absent
-- **Mitsuba 3** ○ missing: exporter: none; coverage: mitsuba: material 'm': alpha mask ignored (rendered opaque); dropped: only a coverage fallback is written, the feature is absent
+- **pbrt-v4** ◐ approx: exporter: approximate
+- **Mitsuba 3** ◐ approx: exporter: approximate
 
 ### texture slots (baseColor, metalRough, emissive, normal)
 
@@ -224,6 +225,6 @@ Versions: repo commit 49773b4-di; browser Chrome/157.0.8103.52 headless; three-g
 - **ours (pt-megakernel)** – no-scene: no wave-1 scene yet
 - **three-gpu-pathtracer** – no-scene: no wave-1 scene yet
 - **mutracer** – no-scene: no wave-1 scene yet
-- **pbrt-v4** ◐ approx: exporter: coverage; coverage: pbrt: material 'm': texture 'baseColorTexture' dropped (the factor alone is exported)
-- **Mitsuba 3** ◐ approx: exporter: coverage; coverage: mitsuba: material 'm': texture 'baseColorTexture' dropped (the factor alone is exported)
+- **pbrt-v4** ○ missing: exporter: none; exporter cannot express it even with coverage: pbrt: material 'm': texture slot 'baseColorTexture': unknown texture 'tex'
+- **Mitsuba 3** ○ missing: exporter: none; exporter cannot express it even with coverage: mitsuba: material 'm': texture slot 'baseColorTexture': unknown texture 'tex'
 

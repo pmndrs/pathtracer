@@ -18,6 +18,8 @@
  * `ThinDielectricBxDF`.
  */
 
+import { ptConductorF0, ptFilmActive, ptFilmFresnel, type PtThinFilm } from './thinfilm.ts';
+
 export type PtVec3 = readonly [number, number, number];
 
 /** `PtBsdfParams.kind`. */
@@ -73,6 +75,13 @@ export interface PtBsdfOptions {
    * anisotropic metals keeps the kernel text and size.
    */
   aniso?: boolean;
+  /**
+   * WGSL only: compile the thin-film Fresnel (`ptFrConductor`, P2.27) into the kernel; the layered BSDF has its own `film` option. Default false: a
+   * scene without iridescent materials keeps the kernel text and size.
+   */
+  thinFilm?: boolean;
+  /** The thin film (P2.27) on a conductor's Fresnel for this evaluation (the kernel sets it per vertex from the material). Absent or weight/thickness 0: no film. */
+  film?: PtThinFilm;
 }
 
 export interface PtBsdfEval {
@@ -253,8 +262,9 @@ function sameHemisphere(a: PtVec3, b: PtVec3): boolean {
   return a[2] * b[2] > 0;
 }
 
-function frConductor(p: PtBsdfParams, cos: number): PtVec3 {
-  return [ptFrComplex(cos, p.eta[0], p.k[0]), ptFrComplex(cos, p.eta[1], p.k[1]), ptFrComplex(cos, p.eta[2], p.k[2])];
+function frConductor(p: PtBsdfParams, cos: number, film?: PtThinFilm): PtVec3 {
+  const f: PtVec3 = [ptFrComplex(cos, p.eta[0], p.k[0]), ptFrComplex(cos, p.eta[1], p.k[1]), ptFrComplex(cos, p.eta[2], p.k[2])];
+  return ptFilmActive(film) ? ptFilmFresnel(film, cos, f, ptConductorF0(p.eta, p.k)) : f;
 }
 
 function scale3(a: PtVec3, s: number): PtVec3 {
@@ -350,7 +360,7 @@ export function ptBsdfEval(p: PtBsdfParams, wo: PtVec3, wi: PtVec3, options: PtB
       wm = normalize(wm);
       if (wm[2] < 0) wm = neg(wm);
       const dwo = Math.abs(dot(wo, wm));
-      const F = frConductor(p, dwo);
+      const F = frConductor(p, dwo, options.film);
       const s = (ptGgxD(a, wm) * ptGgxG(a, wo, wi)) / (4 * cosI * cosO);
       return { f: scale3(F, s), pdf: ptGgxVisiblePdf(a, wo, wm) / (4 * dwo) };
     }
@@ -428,7 +438,7 @@ export function ptBsdfSample(p: PtBsdfParams, wo: PtVec3, u: PtVec3, options: Pt
       if (ptIsSmooth(p.alpha)) {
         const wi: PtVec3 = [-wo[0], -wo[1], wo[2]];
         const c = Math.abs(wi[2]);
-        s = { wi, f: scale3(frConductor(p, c), 1 / c), pdf: 1, flags: PT_FLAG_REFLECTION | PT_FLAG_DELTA, etap: 1 };
+        s = { wi, f: scale3(frConductor(p, c, options.film), 1 / c), pdf: 1, flags: PT_FLAG_REFLECTION | PT_FLAG_DELTA, etap: 1 };
         break;
       }
       if (wo[2] === 0) return fail;
@@ -441,7 +451,7 @@ export function ptBsdfSample(p: PtBsdfParams, wo: PtVec3, u: PtVec3, options: Pt
       const cosO = Math.abs(wo[2]);
       const cosI = Math.abs(wi[2]);
       if (cosI === 0 || cosO === 0) return fail;
-      const f = scale3(frConductor(p, dwo), (ptGgxD(a, wm) * ptGgxG(a, wo, wi)) / (4 * cosI * cosO));
+      const f = scale3(frConductor(p, dwo, options.film), (ptGgxD(a, wm) * ptGgxG(a, wo, wi)) / (4 * cosI * cosO));
       s = { wi, f, pdf, flags: PT_FLAG_REFLECTION, etap: 1 };
       break;
     }

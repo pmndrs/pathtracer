@@ -27,6 +27,32 @@ function f32List(a: Float32Array): string {
 }
 
 export function ptLayeredWgsl(options: PtLayeredOptions = {}): string {
+  const code = ptLayeredWgslBase(options);
+  if (!options.thinFilm) return code;
+  if ((options.layering ?? 'albedo') !== 'albedo') throw new Error("ptLayeredWgsl: the thin film (thinFilm: true) needs layering 'albedo'");
+  // P2.27: the interface's reflection lobe, the albedo scale and the delta branch read the film Fresnel (thinfilm-wgsl.ts `ptFilmF`, `ptFilm`).
+  const swap = (from: string, to: string, text: string, all = false): string => {
+    if (!text.includes(from)) throw new Error(`ptLayeredWgsl: film patch target missing: ${from}`);
+    return all ? text.split(from).join(to) : text.replace(from, to);
+  };
+  let out = swap('ptLayerR(t, ptFrDielectric(dwo, t.ior))', 'ptFilmLayerR(t, dwo)', code, true);
+  out = swap('min(s * ptLayeredTopAlbedo(p, mu), vec3f(1.0))', 'min(s * ptFilmTopAlbedo(p, mu), vec3f(1.0))', out);
+  out = swap('sc * F / wo.z', 'sc * ptFilmF(wo.z, p.ior) / wo.z', out);
+  return `${out}
+fn ptFilmLayerR(t: PtTop, cosH: f32) -> vec3f {
+  if (ptFrDielectric(cosH, t.ior) >= 1.0) { return vec3f(1.0); }
+  return min(t.s * ptFilmF(cosH, t.ior), vec3f(1.0));
+}
+fn ptFilmTopAlbedo(p: PtLayeredParams, mu: f32) -> vec3f {
+  let E = ptLayeredTopAlbedo(p, mu);
+  if (p.ior == 1.0 || !ptFilmActive()) { return vec3f(E); }
+  let c = max(mu, 1e-6);
+  return min(vec3f(E) * ptFilmF(c, p.ior) / max(ptFrDielectric(c, p.ior), 1e-6), vec3f(1.0));
+}
+`;
+}
+
+function ptLayeredWgslBase(options: PtLayeredOptions): string {
   const stochastic = (options.layering ?? 'albedo') === 'stochastic';
   const maxDepth = Math.max(1, Math.floor(options.maxDepth ?? 10));
   const nSamples = Math.max(1, Math.floor(options.nSamples ?? 1));

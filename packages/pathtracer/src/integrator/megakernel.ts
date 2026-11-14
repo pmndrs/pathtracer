@@ -19,6 +19,9 @@ import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout 
 import { ptBsdfAdapterWgsl, ptLayeredDispatchWgsl } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
 import { ptLayeredWgsl } from '../bsdf/layered-wgsl.ts';
+import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
+import { ptFuzzWgsl } from '../bsdf/fuzz-wgsl.ts';
+import { ptThinFilmWgsl } from '../bsdf/thinfilm-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { ptSamplerWgsl } from './dimensions.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
@@ -98,9 +101,11 @@ export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions,
   });
   const mats = integrator.materials;
   if (mats?.features.aniso && !options.layout.tangents) throw new Error('ptMegakernelBuild: anisotropic materials (features.aniso) need a surface layout with tangents');
-  const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}), ...(mats?.features.aniso ? { aniso: true } : {}) };
-  const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
-  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(integratorOptions)].join('\n');
+  const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}), ...(mats?.features.aniso ? { aniso: true } : {}), ...(mats?.features.thinFilm ? { thinFilm: true } : {}) };
+  const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
+  const film = mats?.features.thinFilm ? [stripWgslComments(ptThinFilmWgsl())] : [];
+  const fuzz = mats?.features.fuzz ? [stripWgslComments(ptFuzzWgsl({ layered: !!mats.features.layered }))] : [];
+  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(integratorOptions)].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };
@@ -120,6 +125,8 @@ export class PtMegakernel {
   private readonly sceneLayout: GPUBindGroupLayout;
   private readonly ioLayout: GPUBindGroupLayout;
   private readonly paramsBuffer: GPUBuffer;
+  /** The fuzz LTC table (`features.fuzz` only, group 2 binding 2). */
+  private readonly fuzzTable: GPUBuffer | null;
   private readonly slotBytes: number;
   private slot = 0;
   private walkGroup: GPUBindGroup | null = null;
@@ -134,7 +141,8 @@ export class PtMegakernel {
   /** Sample passes encoded since the last `reset`. */
   samples = 0;
 
-  private constructor(device: GPUDevice, options: PtMegakernelOptions, pipeline: GPUComputePipeline, layouts: GPUBindGroupLayout[], wgslBytes: number) {
+  private constructor(device: GPUDevice, options: PtMegakernelOptions, pipeline: GPUComputePipeline, layouts: GPUBindGroupLayout[], wgslBytes: number, fuzzTable: GPUBuffer | null) {
+    this.fuzzTable = fuzzTable;
     this.device = device;
     this.options = options;
     this.pipeline = pipeline;
@@ -157,12 +165,19 @@ export class PtMegakernel {
         entries: [
           { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } },
           { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+          ...(options.integrator?.materials?.features.fuzz ? [{ binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
         ],
       }),
     ];
     // On a compile error this throws with original line numbers, names and source text (rtCreateComputePipelineAsync).
     const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: layouts }), code, map, entryPoint: 'ptMain', sourceMap: options.sourceMap });
-    return new PtMegakernel(device, options, pipeline, layouts, code.length);
+    let fuzzTable: GPUBuffer | null = null;
+    if (options.integrator?.materials?.features.fuzz) {
+      const table = ptFuzzTableF32();
+      fuzzTable = device.createBuffer({ label: `${label} fuzz ltc`, size: table.byteLength, usage: STORAGE | COPY_DST });
+      device.queue.writeBuffer(fuzzTable, 0, table);
+    }
+    return new PtMegakernel(device, options, pipeline, layouts, code.length, fuzzTable);
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
@@ -223,6 +238,7 @@ export class PtMegakernel {
       entries: [
         { binding: 0, resource: { buffer: this.paramsBuffer, offset: 0, size: PT_PARAMS_BYTES } },
         { binding: 1, resource: { buffer: this.accum } },
+        ...(this.fuzzTable ? [{ binding: 2, resource: { buffer: this.fuzzTable } }] : []),
       ],
     });
     const pass = encoder.beginComputePass({ label: 'pt samples', timestampWrites });
@@ -267,6 +283,7 @@ export class PtMegakernel {
 
   destroy(): void {
     this.paramsBuffer.destroy();
+    this.fuzzTable?.destroy();
     this.accum?.destroy();
     this.accum = null;
   }

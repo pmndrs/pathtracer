@@ -72,6 +72,50 @@ rotated frame (f and pdf to 1e-10 on 200 random pairs); the pdf integrates to at
 of eval within 5 sigma; reciprocity f(wo, wi) = f(wi, wo) to 1e-9; chi-square of the sampled directions against the pdf for both VNDF samplers; WGSL gating. GPU: `openpbr-check` compares `ptOpenPbrAlpha`
 through the adapter for three anisotropic metals (115 table cases, 0 mismatches) and `ptFrameFromTangent` on 2000 random normals / tangents (zero and parallel included) / rotations (0 mismatches, 2e-5).
 
+## Fuzz (P2.25) and thin film (P2.27): OpenPBR 1.1.2 lobes on top of the existing materials
+
+Both read the specification text (https://academysoftwarefoundation.github.io/OpenPBR/, v1.1.2, sections "Fuzz" and "Thin-film iridescence"), not memory;
+the formulas used are quoted in the file headers of `fuzz.ts` and `thinfilm.ts`. DIVERGES V80 (fuzz), V81 (glTF Charlie sheen is not OpenPBR fuzz), V82 (thin film).
+
+**Fuzz.** `f = w f_fuzz + (1 - w E_fuzz) f_base`, `f_fuzz = F R D / mu_i` with the Zeltner-Burley-Chiang LTC fit of a fibre volume (`ltc-sheen`, Apache-2.0, THIRD_PARTY 1.5):
+a 32 x 32 table (rows fuzz roughness, columns cos theta_o) of `(aInv, bInv, R)`, `D` the LTC density, perfect cosine importance sampling. `fuzz.ts` is the twin,
+`fuzz-wgsl.ts` the kernel code (the table is a storage buffer at group 2 binding 2, only with `features.fuzz`). The wrapper sits above whatever the adapter returned
+(Lambert, conductor, dielectric, layered, black): `ptFuzzedEval` / `ptFuzzedSample` replace `ptEval` / `ptSample` in the integrator, a black base still scatters when fuzz is on, and
+NEE runs for a delta base because the fuzz lobe is not delta. One-sample mixture sampling (`pf` = fuzz share of the albedo); every sample returns the total `f` and mixture `pdf`.
+
+Tests (`fuzz.test.ts`, 15): the table cells; bilinear lookup; the LTC density integrates to 1 within 3e-3 for six (cos, alpha, azimuth); the sampler agrees with the pdf
+(`E[g/pdf]` for two test functions); **furnace**: white fuzz over a white Lambert base integrates to 1 within 5e-3 for weight 1/0.6/0.25, roughness 0.1/0.5/0.9, five view angles (albedo scaling is exact by construction: the LTC is normalised);
+the base term is grey (a red fuzz does not tint it); `fuzz_weight` 0 and a black colour are **bitwise** the base for eval and sample; the mixture pdf integrates to at most 1.004 (Lambert and rough metal), exactly the lobe over a black base;
+sample and eval agree; Monte Carlo `f cos / pdf` gives the albedo, with a delta mirror base the delta part is `1 - w E`; reciprocity is approximate (median relative asymmetry below 0.5, the LTC bakes the cosine in).
+
+GPU oracle (`node bench/runner/run.ts --page lobe-oracle`): a sphere under a uniform unit sky, one scattering vertex, so pixel = `integral f cos dwi` at the view angle; the page integrates the twin on a 360 x 360 (theta, phi) grid and compares per view-angle bin (mu_o > 0.2, 256 spp):
+
+| case | max relative deviation | mean |
+|---|---|---|
+| white over grey Lambert | 0.30% | +0.05% |
+| coloured, w 0.7, over dark | 1.5% | +0.06% |
+| over a black base | 0.37% | +0.11% |
+| over layered dielectric (albedo layering) | 0.75% | +0.09% |
+| over rough metal | 0.38% | +0.05% |
+
+Kernel size: `pbr-albedo` 49.1 KB -> 51.8 KB with fuzz (+2.7 KB), `pbr-stochastic` 50.4 -> 53.0 KB, fuzz with no layered lobe 43.1 KB; every non-fuzz variant is byte-identical to before (`bench/size-snapshot.ts`).
+
+**Thin film.** A Fresnel modifier, not a slab (spec): `F = (1 - w) F_plain + w F_airy`. `F_airy` is the Belcour-Barla Fourier-space RGB model as the Khronos `iridescence.glsl` writes it
+(Apache-2.0, THIRD_PARTY 1.5) with exact Fresnel at both interfaces, a white balance on the harmonics and the result clamped to [0, 1]; the base is mapped to a real effective IOR from its normal-incidence reflectance
+(the spec's Gulbrandsen hint), so a dielectric (F0 of its IOR) and a metal (F0 from eta, k) go through the same function. Hooks: the conductor's `ptFrComplex` calls (`ptFrConductor`, `PtBsdfOptions.thinFilm`),
+and in the albedo layering the interface's reflection lobe, the albedo scale (`E_c = E F_film(mu) / F(mu)`) and the smooth-top delta branch (`ptLayeredWgsl({ thinFilm: true })`). The integrator writes `ptFilm`
+(weight, thickness in micrometres, ior) per vertex; a coat above 0.5 or a transmissive base switch it off. The record keeps the three values in the formerly reserved words 29-31.
+
+Tests (`thinfilm.test.ts`, 14): against the exact spectral Airy sum (`bench/metrics/thinfilm-airy.ts`: per-wavelength complex Fresnel for s and p, closed-form Airy, CIE 1931 2 degree + D65 on 5 nm steps, linear Rec.709; our colour-matching convention: a constant spectrum c gives RGB (c, c, c)):
+dielectric base within 0.012 absolute for cos >= 0.6 (0.05-2 um, film IOR 1.4 and 1.8), 0.065 at cos 0.25; grey metal within 0.04 near normal and 0.07 at cos 0.4; weight 0 and thickness 0 are the plain Fresnel **object itself**, and conductor / layered eval and sample are bitwise the film-free results;
+a vanishing film (1e-4 um) is within 0.004 of plain; the quarter-wave coating (n 1.38, 0.0996 um on glass) reflects less green than red and blue (magenta) and less than half of bare glass; a 20 um film washes out to the incoherent two-interface limit; reflectance stays in [0, 1].
+
+GPU oracle (same page; black base, so pixel = the Fresnel itself for a smooth lobe, 32 spp; the rough case 256 spp): smooth dielectric film 1.4 on glass 1.5, 0.15 / 0.3 / 0.6 / 1.0 um: mean absolute error 0.0015 / 0.0032 / 0.0027 / 0.0016, worst for mu_o > 0.55 0.0020 / 0.0025 / 0.0019 / 0.0012;
+film IOR 1.8: mean 0.011, worst near-normal 0.012; weight 0.5 (a linear blend): mean 0.0019; grey metal (eta 1, k 6) 0.2 / 0.5 um: mean 0.030 / 0.028, worst near-normal 0.024 / 0.033 (the metal's phase from k is ignored);
+rough dielectric (roughness 0.3, a 360 x 720 brute-force GGX x exact-film-Fresnel integral): mean 0.0026, worst near-normal 0.0024. The worst errors anywhere are at mu_o 0.2-0.3 (0.01-0.07), where the unpolarised Fresnel inside the Airy sum is the limit.
+
+Kernel size: `pbr-albedo` 49.1 -> 52.1 KB with the film (+3.0 KB), fuzz + film 54.8 KB (over the 50 KB soft cap, as the layered variants already were; the table is a binding, not text).
+
 ## Open choices (defaults hold until measured)
 
 1. **VNDF: standard or spherical cap.** Default standard (pbrt's exact warp, so renders diff cleanly against pbrt's

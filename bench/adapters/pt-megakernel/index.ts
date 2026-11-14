@@ -98,8 +98,6 @@ export function openPbrUnsupported(desc: MaterialDesc): string | null {
   if (desc.type !== 'openpbr') return null;
   const m = resolveOpenPbr(desc);
   const missing: string[] = [];
-  if (m.fuzzWeight > 0) missing.push('fuzz/sheen (P2.25)');
-  if (m.thinFilmWeight > 0) missing.push('thin film (P2.27)');
   if (m.transmissionDispersionScale > 0) missing.push('dispersion (P2.28)');
   if (m.subsurfaceWeight > 0) missing.push('diffuse transmission (P2.29)');
   // P2.26: anisotropic metals have the tangent frame and the split GGX alphas; a dielectric lobe (and a coat over the metal) is still isotropic
@@ -241,7 +239,13 @@ export class PtMegakernelAdapter implements RendererAdapter {
     let materials: PtMaterialOptions | null = null;
     if (Object.values(scene.materials).some((m) => m.type === 'openpbr')) {
       const layered: PtLayeredOptions = { layering: this.settings.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...(this.settings.albedoBase ? { albedoBase: this.settings.albedoBase } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
-      materials = { features: ptMaterialFeatures(input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m))), layered, layerThickness: this.settings.layerThickness ?? 1e-6, transmissionTint: this.settings.transmissionTint ?? true };
+      const features = ptMaterialFeatures(input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m)));
+      // The thin film (P2.27) lives in the albedo layering's Fresnel; the stochastic walk has no film (DIVERGES V82).
+      if (features.thinFilm && layered.layering === 'stochastic') {
+        layered.layering = 'albedo';
+        this.approximations.push('thin film: layering albedo (the stochastic walk has no film)');
+      }
+      materials = { features, layered, layerThickness: this.settings.layerThickness ?? 1e-6, transmissionTint: this.settings.transmissionTint ?? true };
     }
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
