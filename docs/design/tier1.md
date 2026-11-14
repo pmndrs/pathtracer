@@ -90,7 +90,7 @@ feature waves.
 | alphaMode MASK/BLEND | several | scene copy reads alpha (P1.4h GPU check open) |
 | `KHR_texture_transform` | two Compare models | none |
 | `KHR_lights_punctual`, `KHR_materials_unlit` | `DiffuseTransmissionTest` | none |
-| Instancing | `MetalRoughSpheresNoTextures`, `AttenuationTest` | loader bakes every instance world-space |
+| Instancing | `MetalRoughSpheresNoTextures`, `AttenuationTest` | loader bakes every instance world-space. P2.19 note: `MetalRoughSpheresNoTextures` has no shared mesh (102 meshes share *accessors*; 98 spheres of 10,598 triangles = 1,038,604 baked, ~75 MB of positions + normals) and only `AttenuationTest`/`AnisotropyRotationTest` reuse one mesh once, so baking costs nothing; `SceneDesc` has no shared-mesh instances, so an instance path is deferred until a model needs it |
 | Camera and lights | all (only `TransmissionTest` has a camera, none has lights) | sidecar per model |
 
 ## 2. Mapping to OpenPBR 1.1.2 and reference exactness

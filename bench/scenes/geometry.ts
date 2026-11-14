@@ -17,6 +17,10 @@ export interface TriangleMesh {
   indices: Uint32Array;
   /** `u, v` per vertex (glTF: origin top-left, v down), only when asked for (`MeshDesc.uv`). */
   uvs?: Float32Array;
+  /** `x, y, z, w` per vertex (world or object space like the positions; `w` = bitangent sign), glTF `TANGENT`. Only from the glTF scene loader. */
+  tangents?: Float32Array;
+  /** `r, g, b, a` per vertex, glTF `COLOR_0` (linear, 0-1). Only from the glTF scene loader. */
+  colors?: Float32Array;
 }
 
 export interface TessellateOptions {

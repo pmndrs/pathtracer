@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@pmndrs/bvh": "link:../../bvh",
     "@pmndrs/pathtracer": "workspace:*",
     "@pmndrs/raytracer": "workspace:*",
-    "@pmndrs/bvh": "link:../../bvh"
+    "jpeg-js": "0.4.4"
   },
   "scripts": {
     "bench": "node runner/run.ts",

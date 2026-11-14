@@ -1,0 +1,136 @@
+/**
+ * Tier 1 wave 1 scenes (docs/design/tier1.md sections 1.1 and 4; P2.19): Khronos `glTF-Sample-Assets` test models with a sidecar each
+ * (camera, environment, film, integrator, overrides). Wave 1 has no textures: the labels are dropped and the textured backdrop becomes a grey
+ * Lambertian, so the scene is named `<model>-notex` (`MetalRoughSpheresNoTextures` has none to begin with).
+ *
+ * The material tables come from the committed goldens (`golden/<Model>.json`, written by `goldens.ts` from `gltfMaterialToOpenPbr`), so the scenes
+ * exist without the download; the geometry is a `file` mesh per glTF material (`select.material`) resolved from `bench/assets/downloads/tier1/`
+ * (`node bench/assets/fetch.ts`). `gltf-scenes.test.ts` checks the golden-built scene equals one built from the downloaded model.
+ *
+ * Cameras were framed from the loaded bounds (every model views down -Z from +Z). Lighting is the procedural sky of `env-sphere`
+ * rotated 180 degrees about Y, so its sun hot spot is on the camera side. Film is small (these are coverage scenes; references come later).
+ */
+import { ENV_FILE } from '../tier0/env-sky.ts';
+import { buildGltfSceneDesc } from '../gltf-desc.ts';
+import type { GltfDescMaterial, GltfModelRef, GltfSceneBuild } from '../gltf-desc.ts';
+import type { GltfSidecar } from '../gltf-scene-desc.ts';
+import type { EnvironmentDesc, MaterialDesc, SceneDesc } from '../schema.ts';
+import attenuation from './golden/AttenuationTest.json' with { type: 'json' };
+import clearcoat from './golden/ClearCoatTest.json' with { type: 'json' };
+import emissive from './golden/EmissiveStrengthTest.json' with { type: 'json' };
+import ior from './golden/IORTestGrid.json' with { type: 'json' };
+import metalRough from './golden/MetalRoughSpheresNoTextures.json' with { type: 'json' };
+import sheen from './golden/SheenTestGrid.json' with { type: 'json' };
+import thinwall from './golden/TransmissionThinwallTestGrid.json' with { type: 'json' };
+
+interface GoldenFile {
+  header: { model: string; sourceSha256: string; materialCount: number };
+  materials: { i: number; name?: string; class: string; openpbr: Record<string, unknown> }[];
+}
+
+/** The pinned model file of a golden (the glb of every wave 1 model; `.gltf` models would need their format passed). */
+export function goldenModelRef(g: GoldenFile, format: 'glb' | 'gltf' = 'glb'): GltfModelRef {
+  const m = g.header.model;
+  return { path: `downloads/tier1/${m}/${m}.${format}`, format, sha256: g.header.sourceSha256 };
+}
+
+/** The material table of a golden as scene materials (sparse `openpbr`, defaults resolved by `resolveOpenPbr`). */
+export function goldenMaterials(g: GoldenFile): GltfDescMaterial[] {
+  return g.materials.map((m) => ({ index: m.i, ...(m.name !== undefined ? { name: m.name } : {}), material: { type: 'openpbr', ...m.openpbr } as MaterialDesc }));
+}
+
+/** The procedural sky, sun on the camera side. */
+const SKY: EnvironmentDesc = { type: 'hdri', path: ENV_FILE, scale: 1, rotationYDeg: 180 };
+/** The factor-only stand-in for every textured backdrop. */
+const GREY: MaterialDesc = { type: 'diffuse', reflectance: [0.5, 0.5, 0.5] };
+
+export interface Tier1GltfScene { golden: GoldenFile; model: GltfModelRef; sidecar: GltfSidecar; scene: SceneDesc }
+
+function make(golden: GoldenFile, sidecar: GltfSidecar): Tier1GltfScene {
+  const model = goldenModelRef(golden);
+  const build: GltfSceneBuild = { ...sidecar, model, materials: goldenMaterials(golden) };
+  return { golden, model, sidecar, scene: buildGltfSceneDesc(build) };
+}
+
+const sidecars = {
+  // R1..R5 volume and thin blocks, 20 x 20 backdrop at z = -2, labels left of the blocks. Drop the labels and the one row that needs a thickness texture.
+  attenuation: make(attenuation as GoldenFile, {
+    name: 'AttenuationTest-notex',
+    purpose: 'Khronos AttenuationTest without textures (labels and the thickness-texture row dropped, backdrop = grey Lambertian): attenuationDistance/Color and thickness on closed blocks and thin samples under the sky. Tier 1 volume coverage (P2.22).',
+    camera: { type: 'perspective', position: [1.5, 0.25, 21], target: [1.5, 0.25, 0], up: [0, 1, 0], yFovDeg: 40 },
+    film: { width: 600, height: 720, filter: 'box' },
+    integrator: { maxDepth: 16 },
+    environment: SKY,
+    dropMaterials: ['LabelMaterial', 'R3_ThicknessTex_Mat'],
+    replace: { FlatBackdrop: GREY },
+  }),
+  // 5 thin-walled and 5 solid spheres (IOR 1.0 .. 2.42) on a backdrop at z = -0.9; text and its plate dropped.
+  thinwall: make(thinwall as GoldenFile, {
+    name: 'TransmissionThinwallTestGrid-notex',
+    purpose: 'Khronos TransmissionThinwallTestGrid without textures (text dropped, checker backdrop = grey Lambertian): thin-walled (thickness 0) and volume spheres, IOR 1.0-2.42, roughness 0. Tier 1 thin-wall transmission (P2.22).',
+    camera: { type: 'perspective', position: [1.11, 3.28, 10.8], target: [1.11, 3.28, 0], up: [0, 1, 0], yFovDeg: 35 },
+    film: { width: 1000, height: 500, filter: 'box' },
+    integrator: { maxDepth: 16 },
+    environment: SKY,
+    dropMaterials: ['Text', 'Text Backdrop'],
+    replace: { Backdrop: GREY },
+  }),
+  // Five emissive cubes (factor {0.1, 0.5, 0.9} x strength 1, 2, 4, 8, 16), black base; backdrop replaced.
+  emissive: make(emissive as GoldenFile, {
+    name: 'EmissiveStrengthTest-notex',
+    purpose: 'Khronos EmissiveStrengthTest with the textured backdrop replaced by a grey Lambertian: five cubes, emissiveFactor (0.1, 0.5, 0.9) x emissiveStrength 1-16, black base. Tier 1 emissive_strength (P2.30).',
+    camera: { type: 'perspective', position: [0, -0.25, 7], target: [0, -0.25, 0], up: [0, 1, 0], yFovDeg: 40 },
+    film: { width: 1120, height: 400, filter: 'box' },
+    integrator: { maxDepth: 4 },
+    environment: SKY,
+    replace: { FlatBackdrop: GREY },
+  }),
+  // 7 x 7 grid x 2 layers (grey and gold, metalness 0..1 by row, roughness 0..1 by column) of 0.7 mm spheres, 1 mm pitch: scaled x1000. The unlabelled text plane (glTF default material) is dropped.
+  metalRough: make(metalRough as GoldenFile, {
+    name: 'MetalRoughSpheresNoTextures',
+    purpose: 'Khronos MetalRoughSpheresNoTextures (scaled x1000 from millimetres): 98 factor-only spheres, two 7 x 7 layers (grey and gold), metalness by row and roughness by column, 1.04 M triangles. Tier 1 core metallic-roughness; pure-metal rows are reference class A.',
+    scale: 1000,
+    camera: { type: 'perspective', position: [6.5, 7.5, 12], target: [3, 3, -1.5], up: [0, 1, 0], yFovDeg: 38 },
+    film: { width: 768, height: 768, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    environment: SKY,
+  }),
+  // 4 x 5 spheres (IOR 1.0..2.42 x specular 0.25 / 1 x black base T0 / white base T1) in front of a backdrop at z = -0.04.
+  ior: make(ior as GoldenFile, {
+    name: 'IORTestGrid-notex',
+    purpose: 'Khronos IORTestGrid without textures (text dropped, checker backdrop = grey Lambertian): spheres with ior 1.0-2.42 x specularFactor 0.25/1, black opaque and white transmissive bases. Tier 1 ior + specular.',
+    camera: { type: 'perspective', position: [0, 0, 1.4], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 640, height: 768, filter: 'box' },
+    integrator: { maxDepth: 16 },
+    environment: SKY,
+    dropMaterials: ['Text', 'Text Backdrop'],
+    replace: { Backdrop: GREY },
+  }),
+  // The factor-only "Simple" row (base, coated, coat only); every other row uses clearcoat/roughness/normal textures. No backdrop in the file: spheres against the sky.
+  clearcoat: make(clearcoat as GoldenFile, {
+    name: 'ClearCoatTest-notex',
+    purpose: 'Khronos ClearCoatTest, factor-only "Simple" row only (base layer, coated, coat only; the textured rows and labels dropped), seen against the sky (the model has no backdrop). Tier 1 clearcoat (P2.23).',
+    camera: { type: 'perspective', position: [0, 5.25, 5.2], target: [0, 5.25, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 1024, height: 384, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    environment: SKY,
+    dropMaterials: ['Partial_Base', 'Partial_Coated', 'Partial_Coating', 'RoughVariations_Base', 'RoughVariations_Coated', 'RoughVariations_Coating', 'BaseNorm_Base', 'BaseNorm_Coated', 'BaseNorm_Coating', 'CoatNorm_Base', 'CoatNorm_Coated', 'CoatNorm_Coating', 'SharedNorm_Base', 'SharedNorm_Coated', 'SharedNorm_Coating', 'LabelMaterial'],
+  }),
+  // 4 x 4 spheres sheenColor 0..1 x sheenRoughness 0..1 in front of a backdrop at z = -0.04.
+  sheen: make(sheen as GoldenFile, {
+    name: 'SheenTestGrid-notex',
+    purpose: 'Khronos SheenTestGrid without textures (text dropped, checker backdrop = grey Lambertian): 16 spheres, sheenColor 0-1 x sheenRoughness 0-1. Tier 1 sheen (P2.25); coverage only.',
+    camera: { type: 'perspective', position: [0, 0.055, 1.2], target: [0, 0.055, 0], up: [0, 1, 0], yFovDeg: 30 },
+    film: { width: 768, height: 768, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    environment: SKY,
+    dropMaterials: ['Text', 'Text Backdrop'],
+    replace: { Backdrop: GREY },
+  }),
+};
+
+/** Every static Tier 1 glTF scene with its golden, model reference and sidecar (tests rebuild them from the download). */
+export const tier1GltfScenes: readonly Tier1GltfScene[] = Object.values(sidecars);
+
+/** The `SceneDesc`s, registered in `scenes/index.ts` (`--scenes AttenuationTest-notex,...`). */
+export const tier1GltfSceneDescs: readonly SceneDesc[] = tier1GltfScenes.map((s) => s.scene);

@@ -1,7 +1,7 @@
 import { PT_BSDF_BLACK, PT_BSDF_CONDUCTOR, PT_BSDF_DIELECTRIC, PT_BSDF_DIFFUSE, ptBsdfFromMaterial } from '@pmndrs/pathtracer';
 import { createMaterial } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
-import { getScene, allScenes } from '../scenes/index.ts';
+import { getScene, allScenes, tier1GltfSceneDescs } from '../scenes/index.ts';
 import { materialFromDesc, sceneDescToCopyInput } from '../scenes/to-scene-copy.ts';
 import { ADAPTER_IDS, OWN_ADAPTER_IDS, unsupportedReason } from './registry.ts';
 import { PT_ADAPTER_ID, PtMegakernelAdapter } from './pt-megakernel/index.ts';
@@ -22,7 +22,10 @@ describe('pt-megakernel adapter', () => {
 
   it('renders every scene: env-sphere through its HDR map, Sponza from the web glb export', () => {
     const skipped = allScenes.filter((scene) => unsupportedReason(adapter.features, scene) !== null).map((scene) => scene.name);
-    expect(skipped).toEqual([]);
+    // The Tier 1 glTF scenes (P2.19) use `openpbr` materials, which this adapter does not list until the layered BSDF lands (P2.21+).
+    const tier1Gltf = new Set(tier1GltfSceneDescs.map((s) => s.name));
+    expect(skipped.filter((name) => !tier1Gltf.has(name))).toEqual([]);
+    expect(skipped.filter((name) => tier1Gltf.has(name))).toEqual([...tier1Gltf]);
     expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toBeNull();
   });

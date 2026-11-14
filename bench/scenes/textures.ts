@@ -11,12 +11,26 @@ export interface GeneratedTexture {
   data: Uint8Array;
   colorSpace: 'srgb' | 'linear';
   wrap: 'repeat' | 'clamp' | 'mirror';
+  filter?: 'linear' | 'nearest';
+}
+
+/** Decodes a `generator: 'image'` texture (Node, `gltf-images.ts` registers it): RGBA8, row 0 = top. */
+export type ImageTextureLoader = (desc: Extract<TextureDesc, { generator: 'image' }>) => { width: number; height: number; data: Uint8Array };
+let imageLoader: ImageTextureLoader | undefined;
+export function setImageTextureLoader(loader: ImageTextureLoader | undefined): void {
+  imageLoader = loader;
 }
 
 const byte = (v: number): number => Math.min(255, Math.max(0, Math.round(v * 255)));
 
 export function generateTexture(desc: TextureDesc): GeneratedTexture {
   const { width, height } = desc;
+  if (desc.generator === 'image') {
+    if (!imageLoader) throw new Error(`texture from '${desc.path}' image ${desc.image}: import bench/scenes/gltf-images.ts (Node) to decode image textures`);
+    const img = imageLoader(desc);
+    if (img.width !== width || img.height !== height) throw new RangeError(`texture '${desc.path}' image ${desc.image}: decoded ${img.width}x${img.height}, scene says ${width}x${height}`);
+    return { width, height, data: img.data, colorSpace: desc.colorSpace, wrap: desc.wrap ?? 'repeat', ...(desc.filter ? { filter: desc.filter } : {}) };
+  }
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError(`texture: bad size ${width}x${height}`);
   const data = new Uint8Array(width * height * 4);
   const put = (x: number, y: number, r: number, g: number, b: number, a = 255) => data.set([r, g, b, a], (y * width + x) * 4);

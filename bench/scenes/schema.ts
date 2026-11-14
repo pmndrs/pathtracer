@@ -81,12 +81,20 @@ export type TextureDesc = (
   | { generator: 'bumps'; periods: number; amplitude: number }
   /** Metallic-roughness (glTF: G = roughness, B = metalness): vertical stripes, `periods` of them, alternating (roughness, metalness) `a` and `b` (0-1). */
   | { generator: 'stripes-mr'; periods: number; a: readonly [number, number]; b: readonly [number, number] }
+  /**
+   * An image of a glTF file (`path` relative to bench/assets, `image` = index in the file's `images`; PNG or JPEG), decoded by the Node
+   * loader (`gltf-images.ts`, which registers itself with `textures.ts` when imported). `width`/`height` are the decoded size. The loader
+   * has already applied `KHR_texture_transform` to the uvs; it never changes the texels.
+   */
+  | { generator: 'image'; path: string; image: number; sha256?: string }
 ) & {
   width: number;
   height: number;
   colorSpace: 'srgb' | 'linear';
-  /** Default `repeat`. */
+  /** Default `repeat`. glTF has separate S and T wraps: the loader uses S and records a note when T differs. */
   wrap?: 'repeat' | 'clamp' | 'mirror';
+  /** Magnification filter the source asked for (glTF sampler). Default `linear`. Informational: the scene copy always samples bilinearly with mips. */
+  filter?: 'linear' | 'nearest';
 };
 
 /**
@@ -181,7 +189,13 @@ export type GeometryDesc =
   | { type: 'sphere'; radius: number; /** UV-sphere tessellation; same triangles go to every renderer. */ segments: number; rings: number }
   | { type: 'triangles'; positions: readonly number[]; indices: readonly number[]; normals?: readonly number[] }
   /** External file, path relative to bench/assets (downloaded, not in git). Formats: glb/gltf, ply, obj. */
-  | { type: 'file'; path: string; format: 'glb' | 'gltf' | 'ply' | 'obj'; sha256?: string };
+  | {
+      type: 'file'; path: string; format: 'glb' | 'gltf' | 'ply' | 'obj'; sha256?: string;
+      /** glTF only: only the triangles of this glTF material index (-1 = primitives without a material), merged over all nodes. Default: everything. */
+      select?: { material: number };
+      /** glTF only (`gltf-scene.ts` options): `normals` default `geometric`; `uvs` = the material's texture coordinates (with `KHR_texture_transform` applied); `tangents`, `colors` (COLOR_0 as rgba) are carried on the `TriangleMesh` for consumers that read them. */
+      attributes?: { normals?: 'geometric' | 'shading'; uvs?: boolean; tangents?: boolean; colors?: boolean };
+    };
 
 export interface MeshDesc {
   name: string;

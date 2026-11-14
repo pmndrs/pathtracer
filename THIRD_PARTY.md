@@ -85,6 +85,7 @@ in our packages. Versions, hashes and adapter ids are kept in [bench/adapters/CO
 | `three` / `@types/three` | 0.187.0 | MIT | dependency of the above |
 | `@meimu/mutracer` (github.com/pissang/mutracer, Yi Shen) | 0.3.1 | MIT | `bench/adapters/mutracer` (we never copy its code, CLAUDE.md) |
 | `oidn-webgpu` | pulled by mutracer | Apache-2.0 | not loaded: we never attach a denoiser |
+| `jpeg-js` (Eugene Ware; baseline/progressive decoder derived from pdf.js, Apache-2.0) | 0.4.4 | BSD-3-Clause | `bench/scenes/image-decode.ts` (JPEG textures of glTF models, Node only; PNG is our own decoder) |
 
 Tooling (dev only, not shipped): vite, vitest, typescript, eslint, `@webgpu/types` (all MIT/Apache-2.0/BSD under their own
 packages; see `pnpm-lock.yaml` for versions). Native reference renderers pbrt-v4 (BSD-2-Clause) and Mitsuba 3 (BSD-3-Clause)
