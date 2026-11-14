@@ -1,0 +1,35 @@
+{
+  "scene": "TransmissionThinwallTestGrid-notex",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 436.26,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-AZpAI3/scene.xml bench/references/TransmissionThinwallTestGrid-notex/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 1000,
+      "height": 500,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 17,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 436.1321551799774,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere)."
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T09:43:29.977Z"
+}

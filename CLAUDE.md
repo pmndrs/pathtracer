@@ -318,4 +318,8 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   "Not-a-number radiance value" at roughness 0.06 and blacks those samples. Check `non_finite_pixels` on any new layered scene and run `openpbr-check` (`stochastic_non_finite_mismatch`).
 - pbrt is spectral: a saturated base colour under multiple scattering (a layered base, 0.5 / 0.02 / 0.01) reads -6% red, +3% green against our RGB walk at ANY roughness, while a grey base matches to 0.02%. Judge layered code on grey
   bases and against Mitsuba (RGB) for coloured ones.
-
+- Tier 1 wave-1 references (P2.32a): 4096 spp costs 2.5-9 min per render here, all 14 fit. pbrt `volpath` with a saturated absorber (tint 0.1/0.5/0.9
+  at 1-2 m) writes negative red and 8-12% low blue (V62): AttenuationTest is not a pbrt reference for thick rows, use Mitsuba. A saturated gold
+  (blue base 0.012) differs in blue by 12-25% between pbrt and Mitsuba (spectral uplift); the dielectric-over-diffuse class B rows read 3-4% lower in
+  Mitsuba (roughplastic vs coateddiffuse). Agreement between the renderers on class C spheres (specular 0.25) is not evidence: both use the same F0 hack.
+  pbrt writes negative channels, count them (`negChannels`).

@@ -120,6 +120,12 @@ refraction Fresnel factor, which is exactly glTF's `baseColor` tint on transmiss
 | `KHR_materials_dispersion` | `transmission_dispersion_abbe_number` = 20 / dispersion | spectral `eta` from a Cauchy fit of (n_d, Vd) | scalar IOR only | B' (pbrt only); ours needs spectral (D7) or a 3-wavelength trick |
 | `KHR_materials_diffuse_transmission` (RC) | thin-walled `subsurface_weight`, `subsurface_color` | `diffusetransmission`, exact only with `specularFactor` 0 | none | B' (pbrt only, as a variant) |
 
+Wave-1 reference finding (P2.32a, `bench/references/README.md`): two class A assignments are weaker than the table says. (1) `KHR_materials_volume` with a
+saturated tint at optical depth above about 1 (AttenuationTest R5 1.0-2.0, R2 1.5-2.0): pbrt's RGB `sigma_a` uplift gives negative red and a blue 8-12% low
+(V62), so those rows are Mitsuba-only references (class A against Mitsuba, B against pbrt). (2) Metal with a saturated base colour (MetalRoughSpheres gold,
+blue 0.012): pbrt and Mitsuba differ by 12-25% in blue, so only grey metal is a class A gate there. The class C rows (specular < 1) agree between the two
+references only because both use the same F0-via-IOR approximation.
+
 Which reference is closer: pbrt for every layered case (coat, dielectric-over-diffuse), since its layering is physical and
 OpenPBR's albedo-scaling approximates it; Mitsuba's `principled` is Disney-based.
 

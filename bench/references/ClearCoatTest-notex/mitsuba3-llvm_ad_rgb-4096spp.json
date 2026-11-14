@@ -1,0 +1,38 @@
+{
+  "scene": "ClearCoatTest-notex",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 140.66,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-2IXK7o/scene.xml bench/references/ClearCoatTest-notex/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 8,
+    "rrStartDepth": null,
+    "film": {
+      "width": 1024,
+      "height": 384,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 9,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 140.4400281906128,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere).",
+    "mitsuba: material 'm0_Simple_Base': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm1_Simple_Coated': clear coat on a dielectric: roughplastic (nonlinear) with the coat IOR/roughness; the base dielectric specular lobe is not added",
+    "mitsuba: material 'm2_Simple_Coating': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T10:10:32.774Z"
+}

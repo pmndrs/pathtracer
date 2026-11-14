@@ -93,6 +93,52 @@ Renderer keys: `pbrt` (pbrt-v4-cpu), `mitsuba` (llvm_ad_rgb), `mitsuba-scalar` (
 
 - **Samplers.** pbrt `zsobol`, Mitsuba `multijitter` (both unbiased; differences are noise, not bias).
 
+## Tier 1 wave 1 (P2.32a; Nov 14 run, 4096 spp both renderers, one native render at a time, load avg 5 before / 20-30 during the all-core renders)
+
+```
+node bench/references/render.ts --scenes AttenuationTest-notex,TransmissionThinwallTestGrid-notex,EmissiveStrengthTest-notex,MetalRoughSpheresNoTextures,ClearCoatTest-notex --renderers pbrt,mitsuba --spp 4096
+node bench/references/render.ts --scenes IORTestGrid-notex,SheenTestGrid-notex --renderers pbrt,mitsuba --spp 4096 --coverage     # class C: coverage, not references
+```
+
+A 64 spp pass of all 14 renders took 60 s in total (2-6 s each), so 4096 spp costs 2.5-9 min per render; no scene needed the 1024 fallback. The
+sidecar has no "coverage" flag: coverage renders are recognised by their `coverage:`-prefixed `approximations` (IOR and Sheen only).
+
+| scene (film) | pbrt s / Mitsuba s | mean RGB pbrt | mean RGB Mitsuba | relMSE M vs P (floor) | relBias M/P | 16x16 block-mean max |
+|---|---|---|---|---|---|---|
+| AttenuationTest-notex (600x720) | 265 / 252 | 0.2639 0.3002 0.3890 | 0.2705 0.3005 0.3960 | 2.43e-2 | +1.45% | 19.7% |
+| TransmissionThinwallTestGrid-notex (1000x500) | 478 / 436 | 0.3750 0.3904 0.4639 | 0.3752 0.3906 0.4640 | 8.6e-4 | +0.03% | 0.73% |
+| EmissiveStrengthTest-notex (1120x400) | 548 / 285 | 0.2761 0.5311 0.8294 | 0.2763 0.5313 0.8293 | 1.8e-4 | +0.02% | 0.12% |
+| MetalRoughSpheresNoTextures (768x768) | 275 / 178 | 0.2910 0.2678 0.2390 | 0.2889 0.2656 0.2365 | 1.5e-3 | -0.85% | 11.8% |
+| IORTestGrid-notex (640x768, coverage) | 347 / 373 | 0.2962 0.3069 0.3622 | 0.2965 0.3072 0.3625 | 5.2e-4 | +0.09% | 0.77% |
+| ClearCoatTest-notex (1024x384) | 195 / 141 | 0.2984 0.2465 0.2918 | 0.2885 0.2484 0.2919 | 2.5e-3 | -0.95% | 17.0% |
+| SheenTestGrid-notex (768x768, coverage) | 423 / 280 | 0.2422 0.2495 0.3452 | 0.2414 0.2504 0.3421 | 6.0e-4 | -0.35% | 5.2% |
+
+0 non-finite pixels in all 14 images. pbrt writes negative channel values (spectral to sRGB gamut): Attenuation 24178, ClearCoat 3438, MetalRough
+1512, Sheen 21; Mitsuba none. Only Thinwall, Emissive and IOR are pure noise floors (relMSE 1.8e-4..8.6e-4, relBias <0.1%); the other four
+contain real pbrt-vs-Mitsuba model differences, so their relMSE is not a noise floor and a gate against pbrt there needs the region split below.
+Approximated materials (sidecar `approximations`): every dielectric-over-diffuse material is pbrt `coateddiffuse` vs Mitsuba `roughplastic`
+(Emissive 5 cubes, MetalRough 84 rows, IOR 8 + 10 class C, ClearCoat 3, Sheen 16); Attenuation's five R1 thin samples are exported untinted
+(depth 0 tint); IOR's ten specular 0.25 spheres and Sheen's twelve fuzz spheres are `coverage:`.
+
+Per-region verdicts (masks = projected bounds of each glTF material group, shrunk 15%, nearer groups win; there is no material-id image yet):
+
+- **Attenuation: pbrt is not valid for thick saturated absorbers (V62).** Tint (0.1, 0.5, 0.9) at 1 m: sigma = 2.3 / 0.69 / 0.105 per metre. R5 rows
+  1.0 / 1.5 / 2.0 (rows follow Beer's law ordering in both: darker with attenuation 1.0 < 1.5 < 2.0 in the file): pbrt red -0.006 (negative),
+  Mitsuba 0.016..0.040; blue pbrt 8-12% lower; green agrees to 0.1-0.5%; luminance M/P +10 / +14 / +17%. Thin rows (0.5, 0.25): +3.8 / +1.4%. The five
+  class B R1 thin samples agree to 0.06-0.25%. Use Mitsuba (per-channel, matches the closed form) for volume gates, or fit pbrt `sigma_a` spectra.
+- **MetalRoughSpheres:** grey metal row by roughness 0 / .17 / .33 / .5 / .67 / .83 / 1: M/P -0.12 / -0.09 / -0.09 / -0.23 / -0.65 / -1.65 / -4.07% (Smith G,
+  see above). Gold (blue base 0.012): -3..-10% luminance, blue -12..-25%, red/green -1..-8%: spectral uplift of a saturated reflectance in pbrt.
+  The 84 class B rows (dielectric over diffuse and metalness mixes): M/P -3.0% overall, worst single rows -12..-16%.
+- **ClearCoat (Simple row):** Coating (coat-only, class A) 0.02%; Base -2.7% (R -7%, G +2%); Coated -9.1% (R -15%, G +22%): class B layered models differ by colour.
+- **IOR:** 20 regions, M/P between -0.20% and +0.58%, relMSE 1.7e-6..1.7e-3 (black bases lowest). Specular 0.25 (class C) agrees as well as specular 1 because both exporters use the same IOR-based F0 scale.
+- **Sheen:** all 16 spheres M/P -3.6..-4.0% including sheenColor 0: the class B base dielectric, not sheen (neither renderer has it).
+- **Thinwall:** 10 regions within +-0.1% (relBias), IOR 1.0 thin sphere invisible (centre pixel -0.1% / -0.2% of the backdrop).
+- **Emissive:** G at the five cube centres (strength 1, 2, 4, 8, 16) 0.481 / 1.013 / 2.011 / 4.011 / 8.009 in pbrt, 0.483 / 1.013 / 2.012 / 4.014 / 8.016 in
+  Mitsuba: x2 per step both (0.5 x strength + ~0.01 of rough specular sky); R and B scale with 0.1 and 0.9 the same.
+- **Thin-wall closed form** (uniform env L=1, 256 spp, thin spheres vs backdrop only): each sphere shows two sheets in series, T2 = T^2 / (1 - (1-T)^2), T = (1-R)/(1+R),
+  pixel = T2 Lbg + (1 - T2). Measured/expected: IOR 1.33 -1.8%, 1.5 -2.9%, 1.76 -3.5%, 2.42 -2.7% (pbrt; Mitsuba within 0.1-0.3% of it): the common negative offset is
+  the sphere reflecting backdrop light onto the backdrop (not in the expression), same in both.
+
 ## Systematic differences to expect
 
 - pbrt-v4 spectral uplift of saturated RGB reflectances (red/green walls, copper) differs slightly from Mitsuba's RGB
