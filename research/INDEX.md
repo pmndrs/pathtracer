@@ -117,3 +117,13 @@ and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
 - **Measurement setup:** clock locking and power measurement; RenderDoc/PIX/Nsight captures.
 - **Gaps in the siblings:** nothing has ever run on AMD, and the Denoiser and upscaler are validated only on Apple.
   Every sibling's pending Windows runbook (bvh defaults, downsampler parity, upscaler audit) feeds the same machine.
+
+## 7. Tier 1 sources (2026-11-14, for docs/design/tier1.md)
+
+| Source | Link | Used for |
+|---|---|---|
+| glTF-Sample-Assets at the pinned commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb` (still `main` HEAD on 2026-11-14) | https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models | Model choice; per-model `LICENSE.md`, `metadata.json`, `.gltf` material JSON read through the GitHub tree API and raw URLs (no model bytes kept) |
+| Khronos glTF extension READMEs (`KHR_materials_*`) | https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos | Parameter semantics, defaults, status (all ratified except `KHR_materials_diffuse_transmission`, Release Candidate; `KHR_materials_subsurface` Initial Draft); dispersion = 20 / Abbe number |
+| OpenPBR Surface v1.1.2 | https://academysoftwarefoundation.github.io/OpenPBR/ | Target model. **It has no glTF mapping section** (no "glTF" or "KHR" anywhere in the 1.1.2 text); the mapping in tier1.md is ours. Useful sections: Specular (anisotropy formula, `specular_weight`/`specular_color` on metals), Transmission (`transmission_depth` 0 = non-physical tint; lengths default to cm), Thin-walled mode, Thin film, Fuzz. The Khronos dispersion README states OpenPBR uses the same 20/Abbe transform |
+| pbrt-v4 `materials.cpp` (local clone) | research/sources/native/pbrt-v4 | Material list: interface, diffuse, coateddiffuse, coatedconductor, diffusetransmission, dielectric, thindielectric, hair, conductor, measured, subsurface, mix. No sheen, no thin film. `uroughness`/`vroughness` on conductor and dielectric |
+| Mitsuba 3 `src/bsdfs` (local clone) | research/sources/native/mitsuba3 | principled (Disney: sheen, clearcoat, anisotropic, spec_trans), principledthin, plastic/roughplastic, thindielectric, blendbsdf, mask, normalmap, bumpmap. No diffuse transmission, no thin film, `dielectric` IOR is a scalar (no dispersion) |

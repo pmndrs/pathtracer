@@ -89,6 +89,22 @@ suggestion, pros/cons and the A/B that would settle it.
 | P2.14 | Several spp per thread / tiling vs one sample per dispatch | P3 | ⬜ | |
 | P2.15 | Megakernel precision timing vs competitors (interleaved) | quiet pass | 🟨 | 2026-11-14 quiet pass, run right after the competitors with the same settings (`bench/results/quiet-pass/20261114-1419/REPORT.md` §3): Cornell 13.9 ms/spp, 169 ms / 1.1 s to 1e-2 / 1e-3 (mutracer 1.5x / 1.2x faster; we have half its variance per spp); Sponza 49.3 ms/spp, ~34 s to 1e-2, fastest (1.4x mutracer, 1.6x tgpt-wavefront). Left: run it interleaved with them (add `pt-megakernel` to the baseline's renderers) |
 | P2.16 | Firefly / non-finite policy outside reference mode | — | ⬜ | none in reference mode; 0 non-finite on Tier 0 |
+| P2.17 | Tier 1 contract: OpenPBR-subset `MaterialDesc`, glTF-to-OpenPBR function, DIVERGES rows | — | ⬜ | docs/design/tier1.md §2/§5; the OpenPBR spec has no glTF section |
+| P2.18 | Tier 1 model fetch: MANIFEST + sha256 + THIRD_PARTY attribution (pinned commit 8f49239) | — | ⬜ | no downloads until picked up |
+| P2.19 | gltf-loader v2 (materials, UV, TANGENT, COLOR_0, instances, texture transform, sidecar overrides) | — | ⬜ | keeps the flat-normal default |
+| P2.20 | pbrt/Mitsuba exporters for Tier 1 (thindielectric, mix, coated*, media + volpath, diffusetransmission, dispersion) | — | ⬜ | extend the no-RR patch to volpath |
+| P2.21 | Dielectric-over-diffuse, specular_weight/color; `layering: albedo \| stochastic` A/B vs pbrt coateddiffuse and Mitsuba roughplastic | — | ⬜ | settles the "class B in reference mode" option |
+| P2.22 | Thin-walled transmission + absorption-only interior medium | — | ⬜ | wave 1 scenes |
+| P2.23 | Clearcoat lobe | — | ⬜ | |
+| P2.24 | Tier 1 textures wave (baseColor, metalRough, emissive, normal, MASK) + exporter textures | — | ⬜ | after P1.4c |
+| P2.25 | Sheen/fuzz lobe | — | ⬜ | coverage only |
+| P2.26 | Anisotropy with tangents (supersedes P2.7 for Tier 1) | — | ⬜ | tangent check vs pbrt/Mitsuba dp/du first |
+| P2.27 | Iridescence (thin film) + analytic oracle | — | ⬜ | coverage only |
+| P2.28 | Dispersion | — | ⬜ | waits for spectral (D7) |
+| P2.29 | Diffuse transmission | — | ⬜ | pbrt-only reference, specularFactor 0 variant |
+| P2.30 | Emissive strength + metal-rough wave 1 (factor-only) | — | ⬜ | class A rows |
+| P2.31 | Coverage matrix: `tier1-matrix.ts`, `coverage.json`, viewer tab, competitor ablation runs | — | ⬜ | |
+| P2.32 | Tier 1 gate run and report | — | ⬜ | depends on the Tier 1 gate question below |
 
 ## Parallel tracks
 
@@ -99,6 +115,15 @@ suggestion, pros/cons and the A/B that would settle it.
 | X3 | Adopt bvh PR #2 | lead | ✅ | 2026-11-14: `worker: 'never'` dropped (trace-core, trace-timing); Vite `server.fs.allow` includes the realpath of the linked bvh (`bench/runner/server.ts`; npm installs also need `optimizeDeps.exclude`); trace-core records `notes.workers` (`inlineReason`, `usesWorkers`): all four scenes built on workers. Edges set uses bvh's `sharedEdgeRays` (seed 555 plain; 777 + `verticalEvery: 0` transformed/mirrored). First SceneTrees pump is `frame(); await whenBuilt(); frame()` |
 
 ## Open questions for the maintainer
+
+- **Tier 1 gate: which scenes count toward "converges to pbrt-v4 within the noise floor"?** (docs/design/tier1.md §7)
+  Suggestion: class A only (thick dielectric + volume, thin smooth transmission, black-base ior, pure metals, emissive
+  strength, anisotropic metals after the tangent check); class B reported with d(ours, pbrt) / d(Mitsuba, pbrt); B' and C
+  coverage only.
+  - Pro: every gate scene has two references that agree to the floor; no gate result rests on an approximation.
+  - Con: the default glTF non-metal (dielectric over diffuse) would not gate; the class A list is short.
+  - Alternative: also gate class B in reference mode with `layering: 'stochastic'` against pbrt `coateddiffuse`.
+  - Settles it: sensitivity (stripped vs full ≥ 10x floor), d(pbrt, Mitsuba) per class B scene, and the P2.21 layering A/B.
 
 - **Capsaicin: a third reference renderer, or a cross-check only?** Suggestion: cross-check and native timing baseline on
   the RTX 3060, for opaque scenes only. Keep pbrt + Mitsuba as the references (D15).
