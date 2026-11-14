@@ -149,6 +149,22 @@ this track does not change that. It measures WebNN, it does not ship on it.
 - Settles it: the N2 microbench table (with the N5 rows). If ORT or WebNN beats `wgsl-f16` on the full train + infer step at equal output,
   revisit.
 
+**Follow the Denoiser's OIDN path.** The Denoiser (`~/Developer/Denoiser`, MIT, ours) went the same way: ORT-Web first,
+then a hand-written fused WGSL U-Net that became the default, with WebNN and ORT kept as selectable runtimes behind
+one `NetworkRuntime` interface (`wgsl` / `webnn` / `ort`, plus `AutoRuntime`). Copy that shape here: one MLP
+interface, the three WGSL arms plus `ort` and `webnn` as runtimes, an auto pick by measured speed. Reuse what it
+learned, read on the Mac before N1 (N0.4):
+- its parity method (dB against the native fp32 network; fp16 end-to-end measured 53 dB vs fp32) as our tolerance
+  model for f16 vs f32 arms;
+- its f16 partial sums and single-encoder fusion;
+- its subgroup-matrix conv kernel and why it helped only f32 on M5 Pro, before writing `wgsl-sgm`;
+- its ORT trap: wrong results on WebGPU Conv with more than 3 input channels (microsoft/onnxruntime#29651). An MLP
+  uses MatMul/Gemm rather than Conv, but check our ORT arm against the oracle first.
+
+Since the Denoiser is MIT and ours, its WGSL helpers can be ported directly (attribution in THIRD_PARTY.md is not
+needed within pmndrs, but name the source file in a comment). If both end up sharing an MLP/conv engine, that is the
+"second consumer" in §8.
+
 ## 4. Correctness first
 
 - **CPU oracle** (TypeScript, f64): the same net, encodings, loss and Adam. Forward matches within f16 tolerance;
