@@ -2,7 +2,7 @@
 
 _Last updated 2026-11-14._
 
-**Phase:** the phases are agreed (PHASES.md, decisions D1–D21) and three run at once. P0 has passed its gate on the Mac (quiet-machine competitor table, 2026-11-14); the RTX 3060 half waits on Windows. P1 (trace core) is built except moving reflections onto it, which is its gate. P2 (our own path tracer) matches pbrt-v4 and Mitsuba on all Tier 0 scenes (now including the HDR environment map) and on Sponza.
+**Phase:** the phases are agreed (PHASES.md, decisions D1–D21) and three run at once. P0 has passed its gate on the Mac (quiet-machine competitor table, 2026-11-14); the RTX 3060 half waits on Windows. P1 (trace core) is built except moving reflections onto it, which is its gate. P2 (our own path tracer) matches pbrt-v4 and Mitsuba on all Tier 0 scenes (including the HDR environment map) and on Sponza, and now renders textures and OpenPBR materials (metal, glass, thin glass, absorbing interiors, coat over diffuse and over metal). Tier 1 (glTF material test models) wave 1 agrees with the references wherever one is valid (bench/results/TIER1-WAVE1.md); the feature-coverage matrix vs the web competitors is in bench/results/TIER1-COVERAGE.md.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -42,10 +42,11 @@ _Last updated 2026-11-14._
   session with every app closed (docs/QUIET-PASS.md).
 
 **Next**
-- P2: the HDR sky scene in our path tracer; the light-picking A/B; reflections onto the core (P1.5).
+- P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
+- Reflections onto the core (P1.5, the P1 gate): a separate session card is waiting.
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 
 **Speed vs the web competitors (quiet M5, 2026-11-14):** our megakernel is fastest on Sponza (about 1.4x mutracer to equal error) and second on Cornell (mutracer 1.5x faster). Report: bench/results/quiet-pass/20261114-1419/REPORT.md.
 
-**Waiting on the maintainer:** the wide-BVH default (see the report); nothing blocks building meanwhile.
+**Waiting on the maintainer:** the wide-BVH default; the Tier 1 gate (class A only, or class B too); the default layering (OpenPBR albedo, albedo + internal reflection, or the pbrt walk). Nothing blocks building meanwhile.

@@ -46,8 +46,11 @@ as the siblings' reference renderer.
 **Progress:** the megakernel runs with Owen-Sobol, NEE + MIS, RR, Wächter-Binder offsets, vec4 radiance and the
 pbrt-v4 BSDF subset (diffuse, conductor, smooth/rough dielectric). It matches the references on Tier 0 (furnaces exact,
 quad light to its closed form, Cornell within the references' own disagreement) and on sponza-white (means within
-0.13%) and on env-sphere with an importance-sampled HDR map (P2.8; +0.01% vs Mitsuba). Left: Tier 1 scenes and the OpenPBR layering beyond the subset, OIDN on
-final frames, kernel size on Windows (P2.10), and the switch-over for the siblings.
+0.13%) and on env-sphere with an importance-sampled HDR map (P2.8; +0.01% vs Mitsuba). Textures (P1.4c) and OpenPBR
+materials (P2.17–P2.23) are in; Tier 1 wave 1 (7 glTF test models) agrees with whichever reference is valid, and the
+coverage matrix exists (P2.31). Left: Tier 1 wave 2 (anisotropy, textured models, sheen, iridescence, dispersion), the
+Tier 1 gate decision, OIDN on final frames, kernel size on Windows (P2.10; layered kernels are 51–52 KB), and the
+switch-over for the siblings.
 
 ## ⬜ P3 — Speed
 
