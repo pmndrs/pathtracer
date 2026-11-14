@@ -11,6 +11,10 @@ coop-matrix" line in [spec §7](../../spec/SPEC-draft.md) into a measurable trac
 The demo is also meant to be evidence: **does `subgroup-matrix` make a learned cache practical on the web, and on which
 GPUs?** That answer has to come from paired timings, not from vendor peak numbers.
 
+Companions: [nrc-diverges.md](nrc-diverges.md) (every difference from the paper and VkNRC, with its follow-up) and
+[subgroup-matrix-feedback.md](subgroup-matrix-feedback.md) (feature status as of 2026-11-14 and what we would ask the
+WebGPU group for).
+
 Markers as in the research notes: **[V]** checked against a source this session, **[M]** from memory, check against the
 PDF before quoting, **[U]** unknown, needs a test.
 
@@ -119,7 +123,7 @@ This is the case for `subgroup-matrix`, and it is also why the demo should run a
 | Default `maxComputeWorkgroupStorageSize` is 16 KiB | A 64×64 f16 layer is 8 KiB; a 128-record × 64 f16 activation tile is 16 KiB. Request the adapter maximum (`detectCaps`), keep one layer's weights resident at a time, size the record tile to fit. |
 | WGSL has no float atomics | Weight gradients cannot be `atomicAdd`ed in f32 across workgroups (VkNRC does). Either each workgroup writes a partial gradient and a separate reduction dispatch sums them (no "last workgroup" handoff, CLAUDE.md trap), or gradients are scaled to fixed point and `atomicAdd`ed as i32. Both are built and A/B'd. |
 | `subgroup-matrix` has no element-wise ops besides scalar add/sub/mul [V proposal] | ReLU and its derivative need a store to workgroup memory, a per-lane pass, and a reload between layers. That is the fully-fused pattern anyway, but it costs bandwidth the scalar path does not pay. |
-| `subgroup-matrix` ops need subgroup-uniform control flow and operands; workgroup x size must be a multiple of the max subgroup size [V proposal] | One subgroup owns whole tiles; record counts are padded to the tile size; no early-out per lane. |
+| `subgroup-matrix` ops need subgroup-uniform control flow and operands; workgroup x size must be a multiple of the max subgroup size [V proposal] | One subgroup owns whole tiles; record counts are padded to the tile size; no early-out per lane. Several subgroups per workgroup failed for the Denoiser (`li / 32` offsets); `@builtin(subgroup_id)` + `subgroup_uniformity` (Chrome 144/145) may fix it: probe in N0.2. |
 | Tile shapes are per device (`GPUAdapterInfo.subgroupMatrixConfigs`) [V proposal] | Metal: 8×8×8 (f16, f32). Vulkan on NVIDIA/AMD/Intel: typically 16×16×16 f16 [M]. D3D12 needs SM 6.10 linear algebra, not generally available [V note 06]. The kernel is generated per config. |
 | Which backend reaches the matrix units [U] | Metal `simdgroup_matrix` on Apple GPUs before M5 runs on the normal ALUs (the gain is register reuse, not more FLOP/s). M5 adds per-core neural accelerators behind Metal 4 tensor APIs; whether Dawn uses them is unknown. On Windows, Chrome runs Dawn on D3D12, which has no subgroup matrix; tensor cores are reachable only through the Vulkan backend, if Chrome lets us select it. |
 | No readback in the frame loop | Query and training-record counts live on the GPU (atomic append, as in the queue ABI); dispatches are indirect. |

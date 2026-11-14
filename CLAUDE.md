@@ -174,4 +174,10 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   still lists them fails validation. Bind exactly what each entry point uses.
 - `pnpm install --offline` fails in a fresh cloud container (empty pnpm metadata cache for `xatlas-web`); run a plain
   `pnpm install` after adding a workspace dependency.
+- Since Chrome 145 (`subgroup_uniformity` + `@builtin(subgroup_id)` from 144), control flow on `subgroup_id` is
+  subgroup-uniform; `local_invocation_index / 32` is not (verified Chrome 153). Derive per-subgroup offsets from
+  `subgroup_id`. Whether subgroup-matrix built-ins accept such offsets is untested (TASKS N0.2).
+- gpuweb issue bodies (not comments) are readable through `gh api -X GET search/issues -f q='repo:gpuweb/gpuweb <n>
+  in:number'`; proposal files through raw.githubusercontent.com. developer.chrome.com and googlesource are not
+  reachable from cloud sessions; use WebSearch summaries for those.
 
