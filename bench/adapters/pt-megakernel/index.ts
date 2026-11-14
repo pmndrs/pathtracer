@@ -4,7 +4,8 @@
  *
  * Scene: `SceneDesc` -> `sceneDescToCopyInput` (bench/scenes/to-scene-copy.ts) -> bvh `buildTraceScene` + the scene copy
  * (`buildSceneCopy`, barycentric positions). One instance per mesh, all static. `file` geometry and `hdri` environments are
- * not supported yet (Sponza needs the glb loader in the page, env maps need P1.4d): `unsupportedReason` skips them.
+ * `file` geometry is loaded from the shared web export (`fetchSceneGlb`, the same glb the web competitors read; baked world-space
+ * triangles, all primitives merged into one mesh). `hdri` environments are not supported yet (P1.4d): `unsupportedReason` skips them.
  *
  * Timing: wall clock around the dispatches, `onSubmittedWorkDone` at the end of the timed region, readback excluded (snapshot
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
@@ -13,8 +14,10 @@ import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceScen
 import { detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, type SceneCopyBuffers } from '@pmndrs/raytracer';
 import { PtMegakernel, type PtImage, type PtIntegratorOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
+import type { TriangleMesh } from '../../scenes/geometry.ts';
 import type { SceneDesc } from '../../scenes/schema.ts';
 import { sceneDescToCopyInput } from '../../scenes/to-scene-copy.ts';
+import { fetchSceneGlb, readGlbMeshes } from '../shared/glb.ts';
 import type { GpuContext } from '../shared/gpu.ts';
 
 /** Experiment switches (page args `pt_*`); defaults are the reference configuration. */
@@ -25,10 +28,35 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   maxDepth?: number;
   /** rrStartDepth override: a number, or 0 for off; the scene's own otherwise. */
   rrStartDepth?: number;
+  /** Sun angular radius override in radians (0 = delta light, as pbrt and Mitsuba); the scene's own otherwise. A/B for V35. */
+  sunAngularRadius?: number;
   /** Scrambling seed base. */
   seed?: number;
   /** Sample passes per submit. Default 8. */
   passesPerSubmit?: number;
+}
+
+/** Concatenates glb primitives (already world space) into one triangle mesh. */
+function mergeMeshes(parts: readonly TriangleMesh[]): TriangleMesh {
+  let vertices = 0;
+  let indices = 0;
+  for (const part of parts) {
+    vertices += part.positions.length / 3;
+    indices += part.indices.length;
+  }
+  const positions = new Float32Array(vertices * 3);
+  const normals = new Float32Array(vertices * 3);
+  const out = new Uint32Array(indices);
+  let vOffset = 0;
+  let iOffset = 0;
+  for (const part of parts) {
+    positions.set(part.positions, vOffset * 3);
+    normals.set(part.normals, vOffset * 3);
+    for (let i = 0; i < part.indices.length; i++) out[iOffset + i] = part.indices[i]! + vOffset;
+    vOffset += part.positions.length / 3;
+    iOffset += part.indices.length;
+  }
+  return { positions, normals, indices: out };
 }
 
 export const PT_ADAPTER_ID = 'pt-megakernel';
@@ -42,11 +70,11 @@ export class PtMegakernelAdapter implements RendererAdapter {
     emissiveMeshes: true,
     directionalLight: true,
     environment: ['uniform'],
-    fileGeometry: false,
+    fileGeometry: true,
     rawOutput: true,
     notes:
       'Megakernel, NEE (one shadow ray) + power-heuristic MIS, Owen-Sobol, f32 accumulation. A sun with an angular radius is sampled as a cone (the references use a delta light). ' +
-      'No file geometry (Sponza) and no environment maps yet.',
+      'File geometry (Sponza) comes from the shared web glb export. No environment maps yet.',
   };
 
   gpuContext: GpuContext | null = null;
@@ -72,6 +100,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         envSampling: settings.envSampling ?? 'uniform',
         sunVisible: settings.sunVisible ?? false,
         positions: settings.positions ?? 'barycentric',
+        ...(settings.sunAngularRadius !== undefined ? { sunAngularRadius: settings.sunAngularRadius } : {}),
         vndf: settings.vndf ?? 'standard',
         transport: settings.transport ?? 'radiance',
         ...(settings.maxDepth !== undefined ? { maxDepth: settings.maxDepth } : {}),
@@ -92,7 +121,17 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const { summarizeAdapter } = await import('../../runner/page-client.ts');
     this.gpuContext = { adapter, device, summary: summarizeAdapter(adapter) };
 
-    const input = sceneDescToCopyInput(scene, {});
+    const files = scene.meshes.filter((mesh) => mesh.geometry.type === 'file');
+    let resolveFile: (() => TriangleMesh) | undefined;
+    if (files.length > 1) throw new Error(`pt-megakernel: scene '${scene.name}' has ${files.length} file meshes; the web export is one glb per scene`);
+    if (files.length === 1) {
+      const { glb, approximations } = await fetchSceneGlb(scene);
+      this.approximations = approximations;
+      const merged = mergeMeshes(readGlbMeshes(glb));
+      resolveFile = () => merged;
+    }
+    const input = sceneDescToCopyInput(scene, resolveFile ? { resolveFile } : {});
+    if (input.sun && this.settings.sunAngularRadius !== undefined) input.sun = { ...input.sun, angularRadius: this.settings.sunAngularRadius };
     const builder = createMeshBvhBuilder();
     const data = await buildTraceScene(
       input.meshes.map((mesh) => ({ positions: mesh.positions, indices: mesh.indices ? Uint32Array.from(mesh.indices) : null })),

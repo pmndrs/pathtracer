@@ -23,7 +23,7 @@ API, all in the local shading frame (+Z = normal; `wo.z < 0` = arriving from ins
 
 ## Furnace (single scattering, brute-force integral of eval; sampling agrees to 1e-3)
 
-White conductor (F ≈ 1), albedo:
+White conductor (F ≈ 1), albedo (columns are perceptual roughness r, alpha = r²):
 
 | wo | r 0.05 | 0.1 | 0.25 | 0.5 | 1 |
 |---|---|---|---|---|---|
@@ -31,7 +31,7 @@ White conductor (F ≈ 1), albedo:
 | 60° | 1.0000 | 0.9997 | 0.9883 | 0.8573 | 0.4507 |
 | 80° | 0.9999 | 0.9981 | 0.9354 | 0.8556 | 0.6682 |
 
-Rough dielectric, ior 1.5, importance transport, R + T:
+Rough dielectric, ior 1.5, importance transport, R + T (perceptual roughness):
 
 | wo | r 0.05 | 0.1 | 0.25 | 0.5 | 1 |
 |---|---|---|---|---|---|

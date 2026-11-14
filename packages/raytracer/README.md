@@ -91,6 +91,17 @@ Adds `rtMaterial(id) -> RtMaterial` (128 B OpenPBR-subset records, `material.ts`
 `lights.ts`) and `rtSurface` over the copy's data.
 Bench scenes: `bench/scenes/to-scene-copy.ts`. Layout and WGSL: `scene/constants.ts`, `scene/scene-wgsl.ts`.
 
+### L2 shading (P1.3): `rtShade`
+
+```ts
+const code = rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout }, shade: { cache: 'external' }, minify: true });
+// WGSL: let s = rtShade(hit, ray, RT_SHADE_LAMBERT, vec3f(u0, u1, u2), RT_MASK_ALL);  radiance = rtShadeTotal(s)
+```
+
+Emission + one next-event ray + an indirect hook (`rtShadeIndirect`, black by default), in modes `RT_SHADE_FLAT` (no rays), `RT_SHADE_LAMBERT`
+and `RT_SHADE_FULL` (builtin diffuse + GGX, or your own `rtShadeBsdf`). TypeScript twin `shade()`. Design, hooks, numbers and open
+choices: [docs/design/shade.md](../../docs/design/shade.md). The module with shade is 50.2 KB unminified: pass `minify: true`.
+
 ### Budgets
 
 Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), scene copy 2 (surface, materials and lights together), batch IO 2-6. Generated

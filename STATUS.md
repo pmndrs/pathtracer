@@ -2,7 +2,7 @@
 
 _Last updated 2026-11-14._
 
-**Phase:** P0 is done except its timing gate (a quiet-machine rerun of the competitor table, queued in the quiet pass). P1 (trace core) is mostly built. P2 (our own path tracer) has started and already matches pbrt-v4 and Mitsuba on the small test scenes.
+**Phase:** the phases are agreed (PHASES.md, decisions D1–D21) and three run at once. P0 is done except its timing gate (a quiet-machine rerun of the competitor table, queued in the quiet pass). P1 (trace core) is built except moving reflections onto it, which is its gate. P2 (our own path tracer) matches pbrt-v4 and Mitsuba on the small test scenes and on Sponza.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -31,18 +31,18 @@ _Last updated 2026-11-14._
 - **Trace core (P1).** `@pmndrs/raytracer` traces rays on the GPU: a visibility test, a closest-hit trace and a surface
   lookup, from WGSL or as a batch over a ray buffer. All 590k test rays agree with bvh's CPU version (the remaining
   differences are explained float ties; primary rays must match exactly). It now carries the scene's materials and
-  lights on the GPU (the "scene copy"), with power-based light picking. Still to do in P1: one-bounce shading for the
-  sibling repos, and moving reflections onto it.
+  lights on the GPU (the "scene copy"), with power-based light picking. One-bounce shading for the sibling repos
+  (`rtShade`) is built and checked. Still to do in P1: moving reflections onto the core.
 - **Our path tracer (P2).** `@pmndrs/pathtracer` renders the test scenes and converges to the references: the furnace
   tests hit their exact values, the single-light scene matches its closed form, and Cornell sits within the references'
-  own disagreement. Materials so far: diffuse, metal and glass (smooth and rough), ported from pbrt-v4. Not yet: the HDR
-  sky scene and Sponza. Speed is not measured properly yet (best effort: Cornell 512² about 14 ms per sample on the M5).
+  own disagreement. Sponza agrees too (means within 0.13% of both references, error at the reference noise floor).
+  Materials so far: diffuse, metal and glass (smooth and rough), ported from pbrt-v4. Not yet: the HDR sky scene. Speed is not measured properly yet (best effort on the M5: Cornell 512² about 14 ms
+  per sample, Sponza 1280×720 about 51 ms).
 - **Quiet pass.** Timing that decides defaults or passes a gate is batched into one run the maintainer starts from a CLI
   session with every app closed (docs/QUIET-PASS.md).
 
 **Next**
-- P2: Sponza and the HDR sky scene in our path tracer; the light-picking A/B; one-bounce shading (P1.3) for the
-  siblings.
+- P2: the HDR sky scene in our path tracer; the light-picking A/B; reflections onto the core (P1.5).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - Wide BVH in the bvh repo: built and correct on its own branch; waiting for quiet-pass timings.
 

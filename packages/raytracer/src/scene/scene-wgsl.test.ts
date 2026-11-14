@@ -6,15 +6,12 @@ import { SCENE_COPY_STORAGE_BUFFERS } from './constants.ts';
 import { defaultMaterial } from './material.ts';
 import { rtLightsWgsl, rtMaterialWgsl, rtSceneBindingsWgsl, rtSceneWgsl } from './scene-wgsl.ts';
 import { SCENE_HEADER } from './constants.ts';
+import { RESERVED, balanced, declared, declaredIdentifiers } from '../wgsl-names.testutil.ts';
 
 const noFeatures = buildCaps({ features: new Set(), limits: {} }, new Set());
 const allFeatures = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
 const KERNEL_BYTE_LIMIT = 50_000;
 const slot = { group: 2, firstBinding: 0 };
-
-function declared(wgsl: string): string[] {
-  return [...wgsl.matchAll(/^(?:@[^\n]*?\s)?(?:struct|fn|const|alias|override|var(?:<[^>]*>)?)\s+([A-Za-z_]\w*)/gm)].map((m) => m[1] as string);
-}
 
 function fieldsOf(wgsl: string, struct: string): string[] {
   const body = new RegExp(`struct\\s+${struct}\\s*\\{([^}]*)\\}`).exec(wgsl)?.[1];
@@ -26,18 +23,6 @@ function fieldsOf(wgsl: string, struct: string): string[] {
     .map((line) => line.split(':')[0]!.trim());
 }
 
-function balanced(wgsl: string): boolean {
-  const depth = { '{': 0, '(': 0, '[': 0 };
-  for (const ch of wgsl) {
-    if (ch in depth) depth[ch as keyof typeof depth]++;
-    if (ch === '}') depth['{']--;
-    if (ch === ')') depth['(']--;
-    if (ch === ']') depth['[']--;
-    if (depth['{'] < 0 || depth['('] < 0 || depth['['] < 0) return false;
-  }
-  return depth['{'] === 0 && depth['('] === 0 && depth['['] === 0;
-}
-
 function sceneOptions(): RtModuleOptions[] {
   const out: RtModuleOptions[] = [];
   for (const normals of [false, true])
@@ -47,21 +32,6 @@ function sceneOptions(): RtModuleOptions[] {
           for (const nodeFormat of ['f32', 'quantized'] as const)
             out.push({ triangleLeaves, nodeFormat, scene: { slot, layout: { normals, uvs, positions } } });
   return out;
-}
-
-/** Words WGSL reserves (spec section 'Reserved Words') plus its keywords: a shader that uses one as an identifier fails to compile, and only a GPU says so. */
-const RESERVED = new Set(
-  `NULL Self abstract active alignas alignof as asm asm_fragment async attribute auto await become binding_array cast catch class co_await co_return co_yield coherent column_major common compile compile_fragment concept const_cast consteval constexpr constinit crate debugger decltype delete demote demote_to_helper do dynamic_cast enum explicit export extends extern external fallthrough filter final finally friend from fxgroup get goto groupshared highp impl implements import inline instanceof interface layout lowp macro macro_rules match mediump meta mod module move mut mutable namespace new nil noexcept noinline nointerpolation noperspective null nullptr of operator package packoffset partition pass patch pixelfragment precise precision premerge priv protected pub public readonly ref regardless register reinterpret_cast require resource restrict self set shared sizeof smooth snorm static static_assert static_cast std subroutine super target template this thread_local throw trait try type typedef typeid typename typeof union unless unorm unsafe unsized use using varying virtual volatile wgsl where with writeonly yield alias break case const const_assert continue continuing default diagnostic discard else enable false fn for if let loop override requires return struct switch true var while`.split(/\s+/),
-);
-
-/** Identifiers the code declares (let, var, const, fn, struct, parameters, fields). */
-function declaredIdentifiers(wgsl: string): Set<string> {
-  const names = new Set<string>();
-  for (const m of wgsl.matchAll(/\b(?:let|var(?:<[^>]*>)?|const|fn|struct|alias)\s+([A-Za-z_]\w*)/g)) names.add(m[1] as string);
-  for (const m of wgsl.matchAll(/\bfn\s+\w+\(([^)]*)\)/g)) for (const part of (m[1] as string).split(',')) names.add(part.split(':')[0]!.trim());
-  for (const m of wgsl.matchAll(/^\s{4}([A-Za-z_]\w*):\s*[\w<>]+,?\s*(?:\/\/.*)?$/gm)) names.add(m[1] as string);
-  names.delete('');
-  return names;
 }
 
 describe('scene copy WGSL', () => {

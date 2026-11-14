@@ -189,3 +189,17 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   there is its bias, not ours.
 - Own renderer runs: `node bench/adapters/matrix.ts --renderers pt-megakernel --scenes ... --spp 1024 --snapshots
   16,64,256 --name <n> [--extra pt_sampler=pcg]`, then `node bench/adapters/pt-agreement.ts --report <n>`.
+- `pt-megakernel` loads file geometry (Sponza) from the web glb export, not the Node glTF loader: run
+  `node bench/assets/fetch.ts` and `node bench/adapters/export-scenes.ts` first (a stale export throws on the SceneDesc
+  sha256). `readGlbMeshes` (`bench/adapters/shared/glb.ts`) reads only our own export: float POSITION/NORMAL, u32
+  indices, no node matrices, no strides.
+- Sponza at 1024 spp reads relMSE ~8e-3 against the 4096 spp references; that is noise, not error. Judge agreement by
+  mean/relBias, block means against the references' own spread, and the 1/spp slope.
+- `SunInput.direction` is the direction light travels (down for an overhead sun); `RtSunLight.direction` points toward
+  the sun. The wrong sign gives a plane lit only by the sky, not an error.
+- `rtModuleWgsl` with `shade` is ~50 KB unminified: pass `minify: true` (`rtMinifyWgsl`, keeps line numbers).
+  `shade: true` already appends `rtLightSampleWgsl`; appending it again declares it twice.
+- pt's material adapter thresholds metalness at 0.5 and makes non-metals pure Lambert (no dielectric lobe): compare
+  `rtShade` FULL with pt only on diffuse or eta/k conductor materials.
+- Binding one buffer as read-only and read-write storage in the same compute pass fails validation: give dummy
+  bindings their own buffers.

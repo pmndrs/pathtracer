@@ -51,7 +51,7 @@ scramble, so the first 2^m samples of every pair are a (0,m,2)-net. `pcg` is the
 Pipeline constants: `sampler` (owen-sobol | pcg), `nee`, `envSampling` (uniform | none), `sunVisible`, `vndf`,
 `transport`. Per dispatch: size, sample index, seed, `maxDepth`, `rrStartDepth`, camera. Bench page args: `pt_sampler`,
 `pt_nee`, `pt_env`, `pt_sun_visible`, `pt_positions`, `pt_vndf`, `pt_transport`, `pt_maxdepth`, `pt_rr`, `pt_seed`,
-`pt_passes` (`matrix.ts --extra k=v,...`).
+`pt_passes`, `pt_sun_radius` (radians, 0 = delta sun) (`matrix.ts --extra k=v,...`).
 
 ## Agreement (1024 spp, M5; timings best effort)
 
@@ -62,6 +62,7 @@ Pipeline constants: `sampler` (owen-sobol | pcg), `nee`, `envSampling` (uniform 
 | furnace-conductor | 2.42e-5 | 7.99e-6 | 3.15e-5 | 0.69285 vs pbrt 0.69286; Mitsuba 0.69040 (its Smith G) |
 | quad-light | 4.72e-5 | 4.79e-5 | 1.84e-6 | closed form over the plane to 9e-5 |
 | cornell | 7.25e-5 | 4.82e-4 | 4.39e-4 | the 0.69% vs pbrt is pbrt's spectral uplift; Mitsuba RGB agrees with us |
+| sponza-white | 8.11e-3 | 8.28e-3 | 4.09e-3 | at the noise floor (reference noise ~2e-3 + ours; 1/spp slope holds); relBias -0.13% vs Mitsuba; delta sun and positions=ray identical (P2.9, `reports/pt-sponza*`) |
 
 0 non-finite pixels. GPU twins (`pt-check`): sampler bit-identical, adapter 0 mismatches, light sampling max rel 1.3e-5,
 end-to-end sun/sky plane within 0.4% of a closed form.
@@ -94,5 +95,6 @@ at 54 KB.
 6. **One sample per dispatch vs several per thread vs tiles.** Keep one per dispatch (watchdog-safe). Settle in P3 with
    `pt_passes` and spp-per-thread.
 7. **4 dimension pairs per vertex** (RR pair half used). Keep; small cost next to traversal.
-8. **Hit position from barycentrics** (P1.8). Keep; identical on Tier 0, re-test on Sponza scale.
-9. **Sponza in the adapter (P2.9):** load the glb in the page (matches the web exporter path).
+8. **Hit position from barycentrics** (P1.8). Keep; identical on Tier 0 and on Sponza (relMSE 8.11e-3 both).
+9. **Sponza in the adapter (P2.9):** settled in practice: the glb is loaded in the page (the web exporter path).
+10. **Sun: cone (default) or delta like the references.** Keep the cone (physical, free); `pt_sun_radius=0` gives delta. Sponza A/B: mean 0.04% apart, same noise. A large close contact shadow could show more; re-check if a Tier 1 scene has one.

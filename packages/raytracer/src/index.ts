@@ -7,3 +7,4 @@ export * from './sampling/owen-sobol.ts';
 export * from './sampling/owen-sobol-wgsl.ts';
 export * from './trace/index.ts';
 export * from './scene/index.ts';
+export * from './shade/index.ts';

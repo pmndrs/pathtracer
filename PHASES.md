@@ -1,7 +1,10 @@
 # Phases
 
-Each phase ends with a number from the bench. Details and rationale: [spec/SPEC-draft.md](spec/SPEC-draft.md) §11.
-Status: ⬜ not started · 🟨 in progress · ✅ done.
+Agreed 2026-11-13 (decisions D1–D21 in [DECISIONS.md](DECISIONS.md)); no longer under discussion. Each phase ends with a
+number from the bench. Details and rationale: [spec/SPEC-draft.md](spec/SPEC-draft.md) §11. Task-level progress:
+[TASKS.md](TASKS.md). Phases overlap: a phase starts as soon as what it needs exists, and its gate is checked when the
+numbers are in.
+Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-14._
 
 ## 🟨 P0 — Foundations: know the number to beat
 
@@ -15,7 +18,11 @@ Status: ⬜ not started · 🟨 in progress · ✅ done.
 **Exit gate:** one command prints time-to-equal-error for each competitor on Cornell and Sponza against pbrt-v4, on M5
 (and on RTX 3060L once Windows runs it).
 
-## ⬜ P1 — Trace core for utility consumers (@pmndrs/raytracer)
+**Progress:** everything above is built (P0.1–P0.17, P0.19, P0.26, P0.30). The command exists and its first table ran,
+but on a heavily loaded machine, so the gate waits on the quiet-machine rerun (P0.25, in the
+[quiet pass](docs/QUIET-PASS.md)). The 3060L half waits on the Windows tasks (W1–W10).
+
+## 🟨 P1 — Trace core for utility consumers (@pmndrs/raytracer)
 
 L0 visibility, L1 closest-hit (intervals, ray cones), lazy `rtSurface`, L2 one-bounce shade; inline WGSL + batch
 dispatcher; queue ABI; material/light scene copy. Reflections moves onto it.
@@ -23,11 +30,23 @@ dispatcher; queue ABI; material/light scene copy. Reflections moves onto it.
 regression in reflection rays/s.
 **Parallel (in bvh):** BVH4 / CWBVH8 vs BVH2. Gate ≥1.3× incoherent closest-hit on 3060L and M5.
 
-## ⬜ P2 — Reference path tracer, megakernel (@pmndrs/pathtracer)
+**Progress:** built and checked: L0/L1/`rtSurface` and the batch tracer (P1.1, 590k test rays agree with bvh's CPU
+walk), the scene copy with materials, lights and light sampling (P1.4), and L2 `rtShade` (P1.3). Left: reflections
+onto the core (P1.5, the gate itself), the trace settings A/B (P1.6, quiet pass), incremental scene updates, textures,
+environment maps (P1.4b–e). Wide BVH (X1): both formats built and correct on a bvh branch; best-effort M5 numbers are
+near the gate for BVH4 (1.28–1.32×) and below it for CWBVH; waits on the quiet pass and the 3060.
+
+## 🟨 P2 — Reference path tracer, megakernel (@pmndrs/pathtracer)
 
 Owen-Sobol, OpenPBR-subset uber BSDF, NEE + MIS, area/env/sun lights, RR, robust offsets, vec4 radiance, OIDN final.
 **Exit gate:** converges to pbrt-v4 within the pbrt-vs-Mitsuba noise floor on Tier 0–1; replaces three-gpu-pathtracer
 as the siblings' reference renderer.
+
+**Progress:** the megakernel runs with Owen-Sobol, NEE + MIS, RR, Wächter-Binder offsets, vec4 radiance and the
+pbrt-v4 BSDF subset (diffuse, conductor, smooth/rough dielectric). It matches the references on Tier 0 (furnaces exact,
+quad light to its closed form, Cornell within the references' own disagreement) and on sponza-white (means within
+0.13%). Left: the environment-map scene (P2.8), Tier 1 scenes and the OpenPBR layering beyond the subset, OIDN on
+final frames, kernel size on Windows (P2.10), and the switch-over for the siblings.
 
 ## ⬜ P3 — Speed
 
@@ -42,6 +61,8 @@ Blue-noise sampler, demodulated AOVs, SVGF-class filter → upscaler, ReSTIR DI,
 preview mode; gi moves onto the core.
 **Exit gate:** ~30 fps on 3060L-class (half-res → 1080p, 2 bounces + ReSTIR DI; estimate to confirm in P3); steadier
 in motion than preview mode on the Denoiser scorecard metrics.
+
+Already done early: our own blue-noise textures (P0.17, D16).
 
 ## ⬜ P5 — Breadth
 

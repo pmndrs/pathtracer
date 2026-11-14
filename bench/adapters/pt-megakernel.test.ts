@@ -20,11 +20,11 @@ describe('pt-megakernel adapter', () => {
     expect(custom.info.config).toMatchObject({ sampler: 'pcg', nee: false, positions: 'ray', maxDepth: 3 });
   });
 
-  it('renders every Tier 0 scene except env-sphere (no environment map yet) and the Tier 2 Sponza (file geometry)', () => {
+  it('renders every scene except env-sphere (no environment map yet); Sponza comes from the web glb export', () => {
     const skipped = allScenes.filter((scene) => unsupportedReason(adapter.features, scene) !== null).map((scene) => scene.name);
-    expect(skipped.sort()).toEqual(['env-sphere', 'sponza-white']);
+    expect(skipped.sort()).toEqual(['env-sphere']);
     expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toMatch(/hdri/);
-    expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toMatch(/file geometry/);
+    expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toBeNull();
   });
 });
 
