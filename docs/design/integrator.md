@@ -49,7 +49,7 @@ scramble, so the first 2^m samples of every pair are a (0,m,2)-net. `pcg` is the
 ## Settings
 
 Pipeline constants: `sampler` (owen-sobol | pcg), `nee`, `envSampling` (uniform | importance | none), `envMap` (compile
-the environment-map code), `sunVisible`, `vndf`, `transport`. Kernel text (host options, not pipeline constants): `minify`, `prune`, `shortenNames` (all default true; page args `pt_prune=0`, `pt_shorten=0`). Per dispatch: size, sample index, seed, `maxDepth`, `rrStartDepth`, camera. Bench page args: `pt_sampler`,
+the environment-map code), `sunVisible`, `vndf`, `transport`. Kernel text (host options, not pipeline constants): `minify`, `prune`, `shortenNames` (all default true; page args `pt_prune=0`, `pt_shorten=0`), `sourceMap` (default false; see Size, reading compiler errors). Per dispatch: size, sample index, seed, `maxDepth`, `rrStartDepth`, camera. Bench page args: `pt_sampler`,
 `pt_nee`, `pt_env` (uniform|importance|none; the adapter's default is importance for an `hdri` scene, uniform otherwise), `pt_sun_visible`, `pt_positions`, `pt_vndf`, `pt_transport`, `pt_maxdepth`, `pt_rr`, `pt_seed`,
 `pt_passes`, `pt_sun_radius` (radians, 0 = delta sun) (`matrix.ts --extra k=v,...`).
 
@@ -93,9 +93,26 @@ leave ~7 for the alias coin (distorted probabilities). The light-selection power
    (bvh `bvhClosestPointToTriangle`/`OnEdges`, `rtVisibleSegment`, cone helpers, `rtLightPmfOfHit`, `ptBsdfPdf`, unused consts).
    Needs no scene knowledge; a scene-specialised kernel (drop absent light kinds / lobes) would cut more but recompiles per scene.
 3. `shortenNames` (`rtShortenWgsl`): top-level struct/fn/const/alias/var names become `A`..`Zz` by use count (not `override`s,
-   bindings, `ptMain`, or a name also used as member/parameter/local): -8.3 KB. Line numbers are unchanged by this step; a
-   compiler message shows the short names (`shortenNames: false` for readable text), and pruning shifts lines after a dropped
-   declaration (`prune: false` keeps them).
+   bindings, `ptMain`, or a name also used as member/parameter/local): -8.3 KB. Line numbers are unchanged by this step;
+   pruning shifts lines after a dropped declaration.
+
+**Reading compiler errors (P2.10b).** The size steps keep a source map, like a TS build: `ptMegakernelBuild(caps, options)` returns
+`{ code, map }` (`map.lines`: compiled line -> readable line; `map.names`: short -> original name; `map.sources`: the readable text:
+comment-free, nothing pruned, long names, `enable` lines included, i.e. what `prune: false, shortenNames: false, minify: false`
+compiles). `PtMegakernel.create` (and `RtBatchTracer.create`) go through `rtCreateComputePipelineAsync`: nothing extra runs on
+success, and a compile error is thrown as
+
+```
+WGSL (pt megakernel) failed to compile:
+error at source line 2045 (compiled line 1843): too few arguments in call to 'ptSample2D', expected 3, got 1
+  2044 | fn ptSampleLd(p: vec3f, ...) -> vec3f {
+> 2045 |     let selectU = ptSample2D(pixelSeed, ...
+```
+
+with the original names and line numbers, the compiled line in brackets and two lines of context. By hand: `rtMapCompilationInfo(await module.getCompilationInfo(), map)`
+or `rtCheckShaderModule(module, map)`. Lines and names only: columns do not survive minify (`linePos` is the compiled one). `sourceMap: true`
+also passes a Source Map v3 as `GPUShaderModuleDescriptor.sourceMap` (browsers may ignore it; Chrome 157 does). Check it on a real
+compiler: `node bench/runner/run.ts --page wgsl-map --args inject=1` (exits non-zero by design: Dawn logs the injected error).
 
 Where the bytes are (pruned, readable names): bvh walk and helpers 14.1 KB (`bvhWalkClosest` 3.3, `bvhWalkAny` 2.9, watertight 1.3,
 node/triangle/instance loads 2.5), BSDF 9.8 (`ptBsdfSample` 2.9, `ptBsdfEval` 1.6, `ptBsdfFromMaterial` 0.7), integrator 5.0

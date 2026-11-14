@@ -232,7 +232,10 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   sweep started with `nohup sh script &` can only be waited for; plan sweeps short (3 seeds x 4 strategies x 4 scenes took ~50 min
   with Sponza at 51 s per 1024 spp cell).
 - Megakernel text (P2.10): `ptMegakernelWgsl` prunes unreachable top-level declarations and renames top-level names to 1-2
-  letters by default (40.4 KB, 43.2 KB with a map). Compiler messages then name `C5`, not `ptParams`: use `shortenNames: false`
-  (and `prune: false` so line numbers match too). Tests that look for a name or constant in the kernel text must pass
+  letters by default (40.4 KB, 43.2 KB with a map). Compiler messages would name `C5` at shifted lines, so there is a source map
+  (P2.10b): `PtMegakernel.create`/`RtBatchTracer.create` already throw translated errors (original names, source line + context);
+  by hand use `ptMegakernelBuild(...).map` with `rtMapCompilationInfo(await module.getCompilationInfo(), map)`, and compile
+  through `rtCreateComputePipelineAsync({ code, map })`. Lines and names only (no columns); the source is the comment-free readable
+  text. A new transform stage must return a line map and compose it (`rtComposeSourceMaps`). Tests that look for a name or constant in the kernel text must pass
   `shortenNames: false`. `rtShortenWgsl` skips any name also used as a member, parameter or local; keep new WGSL names unique
   per top-level scope. `node bench/size-breakdown.ts [--env]` prints where the bytes go.

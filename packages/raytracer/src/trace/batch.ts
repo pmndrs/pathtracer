@@ -23,6 +23,7 @@ import {
   type SceneFormat,
 } from './modules.ts';
 import { BATCH_PARAMS_BYTES, dispatchGrid, packBatchParams, resultBytes } from './records.ts';
+import { rtCreateComputePipelineAsync } from './wgsl-source-map.ts';
 
 // GPUBufferUsage bits, spelled out so this module loads in Node (tests) where the WebGPU globals do not exist.
 const STORAGE = 0x80; // GPUBufferUsage.STORAGE
@@ -139,19 +140,11 @@ export class RtBatchTracer {
     const sceneLayout = device.createBindGroupLayout({ label: `${label} scene`, entries: withBindings(rtWalkEntries(format)) });
     const ioLayout = device.createBindGroupLayout({ label: `${label} io`, entries: rtBatchEntries(resolved) });
     const code = rtBatchKernelWgsl(caps, { ...options, ...resolved });
-    const pipeline = await device.createComputePipelineAsync({
-      label,
-      layout: device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, ioLayout] }),
-      compute: { module: device.createShaderModule({ label, code }), entryPoint: 'rtBatch' },
-    });
+    const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, ioLayout] }), code, entryPoint: 'rtBatch' });
     let argsPipeline: GPUComputePipeline | null = null;
     if (resolved.indirect) {
       const argsCode = rtBatchArgsKernelWgsl(caps, resolved);
-      argsPipeline = await device.createComputePipelineAsync({
-        label: `${label} args`,
-        layout: 'auto',
-        compute: { module: device.createShaderModule({ label: `${label} args`, code: argsCode }), entryPoint: 'rtBatchArgs' },
-      });
+      argsPipeline = await rtCreateComputePipelineAsync(device, { label: `${label} args`, layout: 'auto', code: argsCode, entryPoint: 'rtBatchArgs' });
     }
     return new RtBatchTracer(device, resolved, format, label, pipeline, sceneLayout, ioLayout, argsPipeline);
   }

@@ -102,6 +102,17 @@ Emission + one next-event ray + an indirect hook (`rtShadeIndirect`, black by de
 and `RT_SHADE_FULL` (builtin diffuse + GGX, or your own `rtShadeBsdf`). TypeScript twin `shade()`. Design, hooks, numbers and open
 choices: [docs/design/shade.md](../../docs/design/shade.md). The module with shade is 50.2 KB unminified: pass `minify: true`.
 
+### Size transforms and source maps (P2.10, P2.10b)
+
+`rtTransformWgsl(code, { prune, shorten, minify, keep })` -> `{ code, map, dropped }`: `rtPruneWgsl` (call-graph dead declarations),
+`rtShortenWgsl` (top-level names to 1-2 letters), `rtMinifyWgsl` (whitespace; line breaks kept). `map` is an `RtWgslSourceMap`
+(`lines`: compiled -> source line, `names`: short -> original, `sources`, `enableLines`). Read compiler output with
+`rtMapCompilationMessage(msg, map)` / `rtMapCompilationInfo(info, map)` (original line and names, `sourceLine` text),
+`rtFormatCompilationMessages`, `rtFormatSourceContext`; `rtCheckShaderModule(module, map, label)` throws the translated text;
+`rtCreateComputePipelineAsync(device, { code, map, layout, entryPoint, sourceMap? })` creates the module and pipeline, does nothing extra on
+success and throws the translated text on failure. `rtWgslSourceMapV3(map)` makes a Source Map v3 (line level). Composition:
+`rtComposeSourceMaps`, `rtComposeLineMaps`. `rtPruneWgsl` now also returns `lineMap`.
+
 ### Budgets
 
 Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), scene copy 2 (surface, materials and lights together), batch IO 2-6. Generated

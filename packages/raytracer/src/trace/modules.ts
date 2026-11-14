@@ -17,6 +17,7 @@ import { SCENE_COPY_STORAGE_BUFFERS, SCENE_HEADER_VEC4S } from '../scene/constan
 import { rtSceneWgsl } from '../scene/scene-wgsl.ts';
 import { rtShadeWgsl } from '../shade/shade-wgsl.ts';
 import type { RtShadeOptions } from '../shade/shade.ts';
+import { rtComposeSourceMaps, rtWgslIdentityMap, type RtWgslBuild } from './wgsl-source-map.ts';
 
 export type { AnyHitOrder, BindingSlot, ModuleBindingEntry };
 
@@ -109,23 +110,32 @@ export function rtMinifyWgsl(code: string): string {
  * it shift: run it on the source you compile, not on a copy used to read compiler messages (or keep `prune: false`).
  * Entry points are declarations preceded by `@compute`/`@vertex`/`@fragment`; every `@group` binding is kept (the pipeline layout
  * names it). Needs comment-free, preprocessed, NOT yet minified source (declarations start in column 0). Returns the kept
- * source and the dropped names.
+ * source, the dropped names and `lineMap` (output line -> input line, 0-based; see `RtWgslSourceMap`).
  */
-export function rtPruneWgsl(code: string): { code: string; dropped: string[] } {
+export function rtPruneWgsl(code: string): { code: string; dropped: string[]; lineMap: Int32Array } {
   const declRe = /^(?:@[^\n]*?\s)?(?:struct|fn|const|alias|override|var(?:<[^>]*>)?)\s+([A-Za-z_]\w*)/;
   const lines = code.split('\n');
-  const chunks: { name: string; lines: string[]; root: boolean }[] = [{ name: '', lines: [], root: true }];
-  for (const line of lines) {
+  type Chunk = { name: string; lines: string[]; src: number[]; root: boolean };
+  const chunks: Chunk[] = [{ name: '', lines: [], src: [], root: true }];
+  lines.forEach((line, at) => {
     const m = declRe.exec(line);
     if (m) {
       // A lone attribute line (`@compute @workgroup_size(..)`) belongs to the declaration after it.
-      const prev = chunks[chunks.length - 1] as { name: string; lines: string[]; root: boolean };
+      const prev = chunks[chunks.length - 1] as Chunk;
       let carry: string[] = [];
+      let carrySrc: number[] = [];
       const last = prev.lines[prev.lines.length - 1];
-      if (prev.lines.length > 0 && last !== undefined && /^@(compute|vertex|fragment)\b/.test(last) && !declRe.test(last)) carry = [prev.lines.pop() as string];
-      chunks.push({ name: m[1] as string, lines: [...carry, line], root: false });
-    } else (chunks[chunks.length - 1] as { lines: string[] }).lines.push(line);
-  }
+      if (prev.lines.length > 0 && last !== undefined && /^@(compute|vertex|fragment)\b/.test(last) && !declRe.test(last)) {
+        carry = [prev.lines.pop() as string];
+        carrySrc = [prev.src.pop() as number];
+      }
+      chunks.push({ name: m[1] as string, lines: [...carry, line], src: [...carrySrc, at], root: false });
+    } else {
+      const c = chunks[chunks.length - 1] as Chunk;
+      c.lines.push(line);
+      c.src.push(at);
+    }
+  });
   for (const c of chunks) if (c.name) c.root = /^@(group|compute|vertex|fragment)\b/.test(c.lines[0] as string);
   const byName = new Map(chunks.filter((c) => c.name).map((c) => [c.name, c]));
   const seen = new Set<string>();
@@ -139,11 +149,12 @@ export function rtPruneWgsl(code: string): { code: string; dropped: string[] } {
   while (stack.length) visit(stack.pop() as { name: string; lines: string[] });
   const dropped: string[] = [];
   const out: string[] = [];
+  const srcOf: number[] = [];
   for (const c of chunks) {
     if (!c.root && !seen.has(c.name)) dropped.push(c.name);
-    else out.push(...c.lines);
+    else { out.push(...c.lines); srcOf.push(...c.src); }
   }
-  return { code: out.join('\n'), dropped };
+  return { code: out.join('\n'), dropped, lineMap: Int32Array.from(srcOf) };
 }
 
 /**
@@ -197,6 +208,43 @@ export function rtShortenWgsl(code: string, keep: readonly string[] = []): { cod
     names.set(old, next);
   }
   return { code: code.replace(/[A-Za-z_]\w*/g, (id) => names.get(id) ?? id), names };
+}
+
+export interface RtWgslTransformOptions {
+  /** `rtPruneWgsl`. Default true. */
+  prune?: boolean;
+  /** `rtShortenWgsl`. Default true. */
+  shorten?: boolean;
+  /** `rtMinifyWgsl`. Default true. */
+  minify?: boolean;
+  /** Names `rtShortenWgsl` must keep (entry points the host looks up). */
+  keep?: readonly string[];
+}
+
+/**
+ * The size pipeline in one call: prune, shorten, minify (each optional), with the source map that undoes it. `code` is the
+ * readable, comment-free, preprocessed text (any `enable` lines first); the map's source is that text. Each stage composes its line
+ * map onto the previous one. Read compiler messages with `rtMapCompilationInfo(info, map)`.
+ */
+export function rtTransformWgsl(code: string, options: RtWgslTransformOptions = {}): RtWgslBuild & { dropped: string[] } {
+  let map = rtWgslIdentityMap(code);
+  let text = code;
+  let dropped: string[] = [];
+  if (options.prune ?? true) {
+    const pruned = rtPruneWgsl(text);
+    text = pruned.code;
+    dropped = pruned.dropped;
+    map = rtComposeSourceMaps(map, { lines: pruned.lineMap });
+  }
+  if (options.shorten ?? true) {
+    const shortened = rtShortenWgsl(text, options.keep ?? []);
+    text = shortened.code;
+    const names: Record<string, string> = {};
+    for (const [old, short] of shortened.names) names[short] = old;
+    map = rtComposeSourceMaps(map, { names });
+  }
+  if (options.minify ?? true) text = rtMinifyWgsl(text); // keeps every line break: the line map is unchanged
+  return { code: text, map, dropped };
 }
 
 function surfaceLayoutOf(options: RtModuleOptions): SurfaceLayout | null {

@@ -13,7 +13,8 @@
  * is never rewritten before the pass that read it ran, as long as no more than `PT_PARAM_SLOTS` passes are outstanding.
  * Accumulation is f32 `array<vec4f>` (sum of radiance, w = samples); `readImage` divides. Nothing here reads back unless you call it.
  */
-import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtPruneWgsl, rtSceneBindGroupEntries, rtShortenWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
+import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
+import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
@@ -55,15 +56,17 @@ export interface PtMegakernelOptions {
   /**
    * Drop top-level declarations `ptMain` and the bindings cannot reach (`rtPruneWgsl`: bvh closest-point queries, unused light and
    * cone helpers, ...). Default true; the text shrinks by about 4.7 KB and every result is bit-identical. Dropped lines shift
-   * compiler line numbers after them, so set false when reading a compiler message against the unpruned source.
+   * compiler line numbers after them; `ptMegakernelBuild(...).map` translates them back (so does the error `create` throws).
    */
   prune?: boolean;
   /**
    * Rename top-level functions, structs and constants to 1-2 letter names (`rtShortenWgsl`; entry point, bindings and overrides
-   * keep theirs). Default true; saves about 8 KB, results bit-identical. Compiler messages then show short names, and
-   * `ptMegakernelWgsl(..., { shortenNames: false })` gives the readable source (same line numbers).
+   * keep theirs). Default true; saves about 8 KB, results bit-identical. Compiler messages then show short names;
+   * the source map (`ptMegakernelBuild(...).map`, applied by `create` on a compile error) gives the original names back.
    */
   shortenNames?: boolean;
+  /** Also pass a Source Map v3 as `GPUShaderModuleDescriptor.sourceMap` (browsers may ignore it). Default false. */
+  sourceMap?: boolean;
   label?: string;
 }
 
@@ -76,12 +79,10 @@ export interface PtImage {
 }
 
 /** Indentation and the spaces around `{ } ( ) , ;` removed; line breaks kept. Only safe on comment-free source. */
-export function minifyWgsl(code: string): string {
-  return code.replace(/^[ \t]+/gm, '').replace(/[ \t]*([{}(),;])[ \t]*/g, '$1');
-}
+export const minifyWgsl = rtMinifyWgsl;
 
-/** The kernel's source for these options (what `create` compiles). Exported for size checks and the tests. */
-export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify' | 'prune' | 'shortenNames'>): string {
+/** The kernel's source and the map that reads its compiler messages (`rtMapCompilationInfo`). `create` compiles `code`. */
+export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
   const integrator = resolveIntegratorOptions(options.integrator);
   const raytracer = rtModuleWgsl(caps, {
     ...options.format,
@@ -91,10 +92,13 @@ export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 
   });
   const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(options.integrator ?? {})), ptBsdfAdapterWgsl(), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(options.integrator ?? {})].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
-  const joined = `${raytracer}\n${ours}`;
-  const pruned = (options.prune ?? true) ? rtPruneWgsl(joined).code : joined;
-  const code = (options.shortenNames ?? true) ? rtShortenWgsl(pruned, ['ptMain']).code : pruned;
-  return (options.minify ?? true) ? minifyWgsl(code) : code;
+  const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
+  return { code, map };
+}
+
+/** The kernel's source for these options (what `create` compiles). Exported for size checks and the tests. */
+export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify' | 'prune' | 'shortenNames'>): string {
+  return ptMegakernelBuild(caps, options).code;
 }
 
 export class PtMegakernel {
@@ -134,7 +138,7 @@ export class PtMegakernel {
 
   static async create(device: GPUDevice, caps: Caps, options: PtMegakernelOptions): Promise<PtMegakernel> {
     const label = options.label ?? 'pt megakernel';
-    const code = ptMegakernelWgsl(caps, options);
+    const { code, map } = ptMegakernelBuild(caps, options);
     const layouts = [
       device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) }),
       device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries() }),
@@ -146,11 +150,8 @@ export class PtMegakernel {
         ],
       }),
     ];
-    const pipeline = await device.createComputePipelineAsync({
-      label,
-      layout: device.createPipelineLayout({ bindGroupLayouts: layouts }),
-      compute: { module: device.createShaderModule({ label, code }), entryPoint: 'ptMain' },
-    });
+    // On a compile error this throws with original line numbers, names and source text (rtCreateComputePipelineAsync).
+    const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: layouts }), code, map, entryPoint: 'ptMain', sourceMap: options.sourceMap });
     return new PtMegakernel(device, options, pipeline, layouts, code.length);
   }
 
