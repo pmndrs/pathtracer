@@ -56,7 +56,8 @@ simplification.
 - Normals world-space; adapters convert (OIDN aux wants view-space).
 - Jitter in pixels, x right / y down, [−0.5, 0.5]; exactly one jitter owner per pipeline.
 - Image row 0 = top. Interchange images are **PFM** (float32, linear); PNG only for previews.
-- WGSL prefixes: `bvh*` belongs to @pmndrs/bvh, `gi*` to @pmndrs/gi, `rt*` raytracer, `pt*` pathtracer.
+- WGSL prefixes: `bvh*` belongs to @pmndrs/bvh, `gi*` to @pmndrs/gi, `rt*` raytracer, `pt*` pathtracer. `nn*` is the private research MLP
+  (`packages/mlp`, track N).
 
 ## Tooling
 
@@ -164,3 +165,13 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev`; the build in a fresh clone under
   `.cache/native/vknrc` takes ~50 s. It runs only on NVIDIA (requires `VK_NV_cooperative_matrix`, float atomics, ray
   query), loads one OBJ (normalised to [-1, 1]) and shows only FPS: timing it needs a local timestamp patch.
+- WebGPU works in a GPU-less cloud container: the runner with `PT_CHROME_FLAGS="--no-sandbox --use-webgpu-adapter=swiftshader
+  --use-angle=swiftshader --enable-unsafe-swiftshader --enable-unsafe-webgpu"`, `--allow-software` and `--chrome
+  /opt/pw-browsers/chromium-*/chrome-linux*/chrome`. SwiftShader gives subgroups, 32 KiB workgroup memory and timestamps,
+  but no `shader-f16` and no subgroup-matrix: f32 correctness only, never timings. `navigator.gpu` is undefined on
+  `about:blank` (not a secure context); pages must be served from localhost.
+- `layout: 'auto'` drops bindings a kernel never reads (e.g. a uniform only another entry point uses); a bind group that
+  still lists them fails validation. Bind exactly what each entry point uses.
+- `pnpm install --offline` fails in a fresh cloud container (empty pnpm metadata cache for `xatlas-web`); run a plain
+  `pnpm install` after adding a workspace dependency.
+

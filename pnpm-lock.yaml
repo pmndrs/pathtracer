@@ -38,6 +38,9 @@ importers:
 
   bench:
     dependencies:
+      '@pathtracer/mlp':
+        specifier: workspace:*
+        version: link:../packages/mlp
       '@pmndrs/bvh':
         specifier: link:../../bvh
         version: link:../../bvh
@@ -63,6 +66,8 @@ importers:
       three-mesh-bvh:
         specifier: 0.9.18
         version: 0.9.18(three@0.187.0)
+
+  packages/mlp: {}
 
   packages/pathtracer:
     dependencies:

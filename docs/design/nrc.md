@@ -129,6 +129,21 @@ won only on the larger nets (via CoreML), and its subgroup-matrix conv kernel **
 ([01 §3.3](../../research/notes/01-local-ecosystem.md)). So "subgroup-matrix is a big win" is a hypothesis, most
 likely to hold on NVIDIA/AMD through Vulkan, and it may not hold on Apple. The plan below is built to find out.
 
+### 2b. What the Denoiser measured on the M5 Pro (github.com/pmndrs/denoiser, `docs/specs/runtimes.md`)
+
+- Peak rates in Chrome: **f16 FMA ~6.6 TFMA/s, subgroup-matrix MMA ~3.8 TMAC/s (f32 8×8×8), f32 FMA ~3.1 TFMA/s.**
+  On Apple, plain f16 math outruns the matrix path.
+- f16 subgroup matrices exist on Apple only as f16 × f16 → f16 (f16 accumulation), at about the f32 matrix rate.
+  VkNRC accumulates in f16 too, so that config is usable for the MLP; it is just not faster there.
+- More than one subgroup per workgroup on the matrix path fails WGSL uniformity analysis: matrix load/store offsets
+  must be workgroup-uniform and `subgroupBroadcastFirst` does not count. So one subgroup (32 threads) per workgroup,
+  and the 128-record, 4-subgroup tile VkNRC uses does not port as is.
+- Its subgroup-matrix conv went 57 → 44–50 ms on fp32; for fp16 the portable kernel stayed faster.
+
+**Expectation, before measuring:** on the Mac, `wgsl-f16` is likely to match or beat `wgsl-sgm`; subgroup-matrix should
+pay off where it maps to tensor cores (NVIDIA/AMD via Vulkan). The Windows runs decide the demo's headline; the Mac
+runs decide the portable default.
+
 ## 3. Backends: hand-written WGSL first, ORT and WebNN as A/B arms
 
 The question "ONNX like the Denoiser, or hand-written WGSL?" comes down to one fact: **NRC trains online, every
@@ -228,6 +243,23 @@ Rows are in [TASKS.md](../../TASKS.md) section N. Each stage ends with a bench o
 
 Order matters: N2 can kill the track cheaply. If `wgsl-sgm` gives nothing on any device we can run, the demo still
 works on `wgsl-f16` at the upscaler's resolution, and the write-up says so.
+
+### Status and how to run (2026-11-14)
+
+N1's engine exists: `packages/mlp` (`@pathtracer/mlp`, private, WGSL prefix `nn`). Portable kernels (V28): one thread
+per record, one layer's weights staged in workgroup memory, activations and deltas stored, a deterministic per-weight
+gradient pass, Adam/EMA, GPU-side counts and indirect dispatch. Verified for f32 against the oracle on SwiftShader in a
+cloud session (see TASKS N1); f16 and every timing need a real GPU:
+
+```sh
+node bench/runner/run.ts --page mlp-check --ab precision=f32,f16
+node bench/runner/run.ts --page mlp-fit --args oracleSteps=8 batch=1024 precision=f16
+node bench/runner/run.ts --page mlp-fit --ab precision=f32,f16 --repeat 2   # 256², batch 16384, snapshots to 1024 steps
+```
+
+Without a GPU (correctness only): `PT_CHROME_FLAGS="--no-sandbox --use-webgpu-adapter=swiftshader
+--use-angle=swiftshader --enable-unsafe-swiftshader --enable-unsafe-webgpu"` and `--allow-software`, with small sizes
+(`size=64 batch=1024`; SwiftShader takes ~150 ms per step).
 
 ## 7. Open choices (each one settled by an A/B, not here)
 

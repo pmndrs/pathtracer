@@ -1,0 +1,12 @@
+{
+  "name": "@pathtracer/mlp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "license": "MIT",
+  "description": "Research track N: a small fully-fused MLP (inference + online training) in WGSL, with a CPU oracle. Not published.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
