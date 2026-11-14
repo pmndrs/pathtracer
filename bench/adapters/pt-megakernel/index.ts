@@ -34,6 +34,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   sunAngularRadius?: number;
   /** Light-selection weights for NEE (P1.4f): `power` (default), `kind`, `{ capped: share }`. Noise only. */
   lightSelection?: LightSelection;
+  /** `textureLod: 'cone'` only: scale of the ray cone's starting spread. `'auto'` (default) = pbrt-v4's `max(1/8, 1/sqrt(spp))` of the render's spp; or a number (1 = a full pixel). */
+  textureConeScale?: number | 'auto';
   /** Scrambling seed base. */
   seed?: number;
   /** Sample passes per submit. Default 8. */
@@ -73,7 +75,8 @@ const toImage = (image: PtImage): Image => ({ width: image.width, height: image.
 export class PtMegakernelAdapter implements RendererAdapter {
   readonly info: RendererInfo;
   readonly features: FeatureSupport = {
-    materials: ['diffuse', 'conductor', 'dielectric', 'black'],
+    materials: ['diffuse', 'conductor', 'dielectric', 'black', 'pbr'],
+    textures: true,
     emissiveMeshes: true,
     directionalLight: true,
     environment: ['uniform', 'hdri'],
@@ -92,6 +95,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
   private sceneBuffers: SceneCopyBuffers | null = null;
   private scene: SceneDesc | null = null;
   private lastStats: Record<string, number> = {};
+  private limits: { maxDepth: number; rrStartDepth?: number } = { maxDepth: 1 };
 
   constructor(settings: PtAdapterSettings = {}) {
     this.settings = settings;
@@ -114,6 +118,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.rrStartDepth !== undefined ? { rrStartDepth: settings.rrStartDepth } : {}),
         seed: settings.seed ?? 0,
         lightSelection: lightSelectionName(settings.lightSelection ?? DEFAULT_LIGHT_SELECTION),
+        textureLod: settings.textureLod ?? 0,
+        ...(settings.textureLod === 'cone' ? { textureConeScale: settings.textureConeScale ?? 'auto' } : {}),
       },
     };
   }
@@ -165,13 +171,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const loadMs = performance.now() - t0;
 
     const t1 = performance.now();
-    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, integrator: { ...this.settings, envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
+    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
-    this.kernel.setLimits({ maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth });
+    this.limits = { maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth };
+    this.kernel.setLimits(this.limits);
     this.kernel.setSeed(this.settings.seed ?? 0);
-    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0 };
+    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
     return { loadMs, compileMs: performance.now() - t1 };
   }
 
@@ -183,6 +190,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const device = gpu.device;
     const perSubmit = this.settings.passesPerSubmit ?? 8;
     if (budget.seed !== undefined) kernel.setSeed(budget.seed);
+    const coneSetting = this.settings.textureConeScale ?? 'auto';
+    kernel.setLimits({ ...this.limits, textureConeScale: coneSetting === 'auto' ? Math.max(0.125, 1 / Math.sqrt(spp)) : coneSetting });
     {
       const encoder = device.createCommandEncoder({ label: 'pt reset' });
       kernel.reset(encoder);

@@ -7,7 +7,7 @@
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
  *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg  pt_nee=0|1  pt_env=uniform|importance|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
- *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
+ *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_texture_lod=0|cone  pt_texture_cone_scale=auto|N  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
  * `skipped=1` and upload nothing.
@@ -73,6 +73,8 @@ try {
     ...(args['pt_maxdepth'] ? { maxDepth: numberArg(args, 'pt_maxdepth', 1) } : {}),
     ...(args['pt_rr'] ? { rrStartDepth: numberArg(args, 'pt_rr', 0) } : {}),
     ...(args['pt_light_selection'] ? { lightSelection: parseLightSelection(args['pt_light_selection']) } : {}),
+    ...(args['pt_texture_lod'] ? { textureLod: args['pt_texture_lod'] === 'cone' ? ('cone' as const) : (0 as const) } : {}),
+    ...(args['pt_texture_cone_scale'] ? { textureConeScale: args['pt_texture_cone_scale'] === 'auto' ? ('auto' as const) : numberArg(args, 'pt_texture_cone_scale', 1) } : {}),
     ...(args['pt_seed'] ? { seed: numberArg(args, 'pt_seed', 0) } : {}),
     ...(args['pt_prune'] ? { prune: args['pt_prune'] !== '0' } : {}),
     ...(args['pt_shorten'] ? { shortenNames: args['pt_shorten'] !== '0' } : {}),

@@ -14,15 +14,19 @@ import type { MaterialDesc } from '../scenes/schema.ts';
 import { encodePly } from './ply.ts';
 import { equirectToOctahedral, loadEnvImage } from './envmap.ts';
 import { writePFM } from '../metrics/pfm.ts';
-import { num, roughnessToAlpha, shorterAxisFovDeg, vec, worldMeshes } from './common.ts';
+import { num, roughnessToAlpha, shorterAxisFovDeg, usedTextures, vec, worldMeshes } from './common.ts';
+import { encodePng } from './png.ts';
 import type { Exporter, ExportedFile } from './types.ts';
 
 /** pbrt octahedral environment resolution (square). 512² covers the 512×256 equirect with margin. */
 const OCTA_SIZE = 512;
 
-function material(m: MaterialDesc): string {
+function material(m: MaterialDesc, textureName: (name: string) => string): string {
   switch (m.type) {
+    case 'pbr':
+      throw new Error('pbrt: pbr materials are not expressible');
     case 'diffuse':
+      if (m.reflectanceTexture) return `Material "diffuse" "texture reflectance" "${textureName(m.reflectanceTexture)}"`;
       return `Material "diffuse" "rgb reflectance" [ ${vec(m.reflectance)} ]`;
     case 'black':
       return `Material "diffuse" "rgb reflectance" [ 0 0 0 ]`;
@@ -67,12 +71,22 @@ export const toPbrt: Exporter = (scene, opts) => {
     approximations.push('pbrt: directional light angularRadius is ignored (pbrt distant lights are delta lights); `L` is used as irradiance.');
   }
 
+  // Image textures: pbrt-v4 `imagemap` with the `bilinear` filter. It does pick a mip level from the camera ray differentials (scaled by
+  // max(1/8, 1/sqrt(spp)), so at the reference spp the footprint is an eighth of a pixel and a texture at most a few texels per pixel stays
+  // on level 0); Mitsuba's `bitmap` bilinear never uses mips. pbrt flips t (image row 0 = t 1), so the PLY v is written as 1 - v.
+  const textures = usedTextures(scene, 'pbrt');
+  for (const t of textures.values()) {
+    if (t.wrap === 'mirror') throw new Error(`pbrt: texture '${t.name}' wrap 'mirror' does not exist in pbrt-v4 (repeat, clamp, black, octahedralsphere)`);
+    files.push({ path: t.file, data: encodePng(t.width, t.height, t.data) });
+    lines.push(`Texture "${t.name}" "spectrum" "imagemap" "string filename" "${t.file}" "string filter" "bilinear" "string wrap" "${t.wrap}" "string encoding" "sRGB"`);
+  }
+  if (textures.size > 0) approximations.push('pbrt: image textures use the `bilinear` imagemap filter, which still selects a mip level from the (scaled) camera ray differentials; Mitsuba bilinear is level 0 only. Spectral uplift of the texel RGB as for any reflectance.');
   for (const w of worldMeshes(scene, opts.assetsDir)) {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
-    files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh) });
+    files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh, { flipV: true }) });
     lines.push(`AttributeBegin`);
-    lines.push(`  ${material(m)}`);
+    lines.push(`  ${material(m, (name) => name)}`);
     if (w.desc.emission) {
       lines.push(`  AreaLightSource "diffuse" "rgb L" [ ${vec(w.desc.emission)} ] "bool twosided" ${w.desc.twoSided ? 'true' : 'false'}`);
     }

@@ -157,6 +157,9 @@ const RT_SURF_SHADING_NORMAL: u32 = ${SURFACE.SHADING_NORMAL}u;
 const RT_SURF_UV: u32 = ${SURFACE.UV}u;
 const RT_SURF_MATERIAL: u32 = ${SURFACE.MATERIAL}u;
 const RT_SURF_ALL: u32 = ${SURFACE.ALL}u;
+#if RT_SURFACE_TEXFRAME
+const RT_SURF_TEXFRAME: u32 = ${SURFACE.TEXTURE_FRAME}u;
+#endif
 
 const RT_MESH_HAS_NORMALS: u32 = ${MESH_FLAG.HAS_NORMALS}u;
 const RT_MESH_HAS_UVS: u32 = ${MESH_FLAG.HAS_UVS}u;
@@ -174,6 +177,10 @@ struct RtSurface {
     shadingNormal: vec3f,  // interpolated, world space, on the geometric normal's side; the geometric normal without data
     uv: vec2f,             // zero without data
     material: u32,
+#if RT_SURFACE_TEXFRAME
+    uvDensity: f32,        // sqrt(uv area / world area) of the triangle (uv units per metre), 0 without uvs; RT_SURF_TEXFRAME
+    tangent: vec4f,        // world dp/du (unit) and the bitangent handedness; RT_SURF_TEXFRAME
+#endif
 }
 ${bindings}
 fn rtTableRow(index: u32) -> vec4f {
@@ -192,13 +199,19 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
     s.shadingNormal = hit.normal;
     s.uv = vec2f(0.0);
     s.position = vec3f(0.0);
+#if RT_SURFACE_TEXFRAME
+    s.uvDensity = 0.0;
+    s.tangent = vec4f(1.0, 0.0, 0.0, 1.0);
+#endif
     if (hit.t < 0.0) {
         return s;
     }
     if ((want & RT_SURF_POSITION) != 0u) {
         s.position = ray.origin + ray.direction * hit.t;
     }
-#if RT_SURFACE_POSITIONS
+#if RT_SURFACE_TEXFRAME
+    let needVertices = (want & (RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_POSITION | RT_SURF_TEXFRAME)) != 0u;
+#elif RT_SURFACE_POSITIONS
     let needVertices = (want & (RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_POSITION)) != 0u;
 #else
     let needVertices = (want & (RT_SURF_SHADING_NORMAL | RT_SURF_UV)) != 0u;
@@ -238,6 +251,30 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface {
         let b = vec2f(rtSVertex(vbase, v1 + RT_SV_UV), rtSVertex(vbase, v1 + RT_SV_UV + 1u));
         let c = vec2f(rtSVertex(vbase, v2 + RT_SV_UV), rtSVertex(vbase, v2 + RT_SV_UV + 1u));
         s.uv = a * w0 + b * w1 + c * w2;
+    }
+#endif
+#if RT_SURFACE_TEXFRAME
+    if ((want & RT_SURF_TEXFRAME) != 0u && (mesh.z & RT_MESH_HAS_UVS) != 0u) {
+        let p0 = rtVertex3(vbase, v0 + RT_SV_POSITION);
+        let e1 = rtVertex3(vbase, v1 + RT_SV_POSITION) - p0;
+        let e2 = rtVertex3(vbase, v2 + RT_SV_POSITION) - p0;
+        let a = vec2f(rtSVertex(vbase, v0 + RT_SV_UV), rtSVertex(vbase, v0 + RT_SV_UV + 1u));
+        let d1 = vec2f(rtSVertex(vbase, v1 + RT_SV_UV), rtSVertex(vbase, v1 + RT_SV_UV + 1u)) - a;
+        let d2 = vec2f(rtSVertex(vbase, v2 + RT_SV_UV), rtSVertex(vbase, v2 + RT_SV_UV + 1u)) - a;
+        let det = d1.x * d2.y - d1.y * d2.x;
+        let q0 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W}u).xyz;
+        let q1 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 1}u).xyz;
+        let q2 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 2}u).xyz;
+        let f1 = vec3f(dot(q0, e1), dot(q1, e1), dot(q2, e1));
+        let f2 = vec3f(dot(q0, e2), dot(q1, e2), dot(q2, e2));
+        let area2 = length(cross(f1, f2));
+        if (abs(det) > 1.0e-30 && area2 > 0.0) {
+            s.uvDensity = sqrt(abs(det) / area2);
+            let inv = 1.0 / det;
+            let tu = (f1 * d2.y - f2 * d1.y) * inv;
+            let bv = (f1 * d2.x - f2 * d1.x) * inv;
+            s.tangent = vec4f(normalize(tu), select(1.0, -1.0, dot(cross(hit.normal, tu), bv) < 0.0));
+        }
     }
 #endif
 #if RT_SURFACE_NORMALS

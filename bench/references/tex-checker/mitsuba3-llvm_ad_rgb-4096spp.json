@@ -1,0 +1,36 @@
+{
+  "scene": "tex-checker",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 15.45,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-CptiFg/scene.xml bench/references/tex-checker/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 3,
+    "rrStartDepth": null,
+    "film": {
+      "width": 320,
+      "height": 240,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 4,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 15.29163384437561,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: directional light angularRadius is ignored (delta direction).",
+    "mitsuba: bitmap textures with filter_type bilinear (level 0 only, no mip maps), wrap repeat, raw false (sRGB decoded to linear before filtering)."
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T08:40:32.094Z"
+}

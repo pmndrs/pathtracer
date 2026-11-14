@@ -40,8 +40,16 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
     switch (m.type) {
       case 'diffuse':
         g.pbrMetallicRoughness.baseColorFactor = [...m.reflectance, 1];
+        if (m.reflectanceTexture) approx.add('diffuse: reflectanceTexture is dropped (the web renderers skip textured scenes).');
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         approx.add('diffuse: baseColor = reflectance, metallic 0, roughness 1, KHR_materials_specular specularFactor 0 to remove the default 4% dielectric lobe (a viewer without that extension adds a weak specular lobe).');
+        break;
+      case 'pbr':
+        g.pbrMetallicRoughness.baseColorFactor = [...m.baseColor, 1];
+        g.pbrMetallicRoughness.metallicFactor = m.metalness;
+        g.pbrMetallicRoughness.roughnessFactor = m.roughness;
+        if (m.emissive) g.emissiveFactor = [...m.emissive];
+        approx.add('pbr: the glb carries the factors only; texture references are dropped (the web renderers skip textured scenes).');
         break;
       case 'black':
         ext['KHR_materials_specular'] = { specularFactor: 0 };

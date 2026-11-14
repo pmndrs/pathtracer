@@ -13,7 +13,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0 });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -109,6 +109,47 @@ describe('integrator WGSL', () => {
     expect(readable({ envMap: true, envSampling: 'importance' })).toContain('RT_ENV_IMPORTANCE: bool = true');
     expect(readable({ envMap: true, envSampling: 'uniform' })).toContain('RT_ENV_IMPORTANCE: bool = false');
     expect(readable({})).not.toContain('rtEnvMapLookup');
+  });
+
+  describe('material textures (P1.4c)', () => {
+    const texLayout = { normals: true, uvs: true, positions: true };
+    const bucket = (srgb: boolean, wrap: 'repeat' | 'clamp' | 'mirror' = 'repeat') => ({ width: 256, height: 256, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), wrap, layers: 2, mipLevels: 9 });
+    const textures = { buckets: [bucket(false), bucket(true), bucket(true, 'clamp')] };
+    const build = (extra: object = {}) => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, ...extra });
+
+    it('emits no texture code without textures: the untextured kernel text does not mention them', () => {
+      const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
+      expect(code).not.toMatch(/rtTex|rtApplyMaterialTextures|PT_TEX_CONE|RtCone\(/);
+      expect(ptIntegratorWgsl({})).not.toContain('cone');
+    });
+
+    it('binds the arrays then their samplers after the two scene buffers, in group 1', () => {
+      const code = ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, minify: false, shortenNames: false });
+      for (let i = 0; i < 3; i++) {
+        expect(code).toContain(`@group(1) @binding(${2 + i}) var rtTex${i}: texture_2d_array<f32>;`);
+        expect(code).toContain(`@group(1) @binding(${5 + i}) var rtSmp${i}: sampler;`);
+      }
+      expect(code).not.toContain('rtTex3');
+      expect(code).toContain('RT_SURF_TEXFRAME');
+    });
+
+    it('lod setting is a module constant: 0 (reference) or cone', () => {
+      const readable = (textureLod: 0 | 'cone') => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { textureLod }, minify: false, shortenNames: false });
+      expect(readable(0)).toContain('PT_TEX_CONE: bool = false');
+      expect(readable('cone')).toContain('PT_TEX_CONE: bool = true');
+    });
+
+    it('size: about 3 KB over the untextured kernel, under 45.5 KB, 47.5 KB with an environment map', () => {
+      const plain = ptMegakernelWgsl(caps, { format: {}, layout: texLayout }).length;
+      const textured = build().length;
+      expect(textured - plain).toBeGreaterThan(2_000);
+      expect(textured).toBeLessThan(45_500);
+      expect(build({ integrator: { envMap: true, envSampling: 'importance' } }).length).toBeLessThan(47_500);
+    });
+
+    it('textures need a surface layout with uvs and positions', () => {
+      expect(() => ptMegakernelWgsl(caps, { format: {}, layout: { normals: true, uvs: false, positions: true }, textures })).toThrow(/uvs and positions/);
+    });
   });
 
   it('pruning and short names keep the entry point and the bindings, and drop the bvh closest-point queries', () => {

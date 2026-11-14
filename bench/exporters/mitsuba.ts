@@ -15,8 +15,12 @@ import type { MaterialDesc } from '../scenes/schema.ts';
 import { encodePly, flipMesh } from './ply.ts';
 import { equirectForMitsuba, loadEnvImage } from './envmap.ts';
 import { writePFM } from '../metrics/pfm.ts';
-import { num, roughnessToAlpha, worldMeshes } from './common.ts';
+import { num, roughnessToAlpha, usedTextures, worldMeshes } from './common.ts';
+import { encodePng } from './png.ts';
 import type { Exporter, ExportedFile } from './types.ts';
+
+/** Does Mitsuba's bitmap lookup want v = 0 at the bottom of the image (like pbrt)? Verified with an asymmetric texture, see bench/references/README.md. */
+const MITSUBA_FLIP_V = false;
 
 const rgb = (name: string, v: readonly number[]) => `<rgb name="${name}" value="${v.join(', ')}"/>`;
 
@@ -29,11 +33,16 @@ const rgb = (name: string, v: readonly number[]) => `<rgb name="${name}" value="
 const optical = (name: string, v: readonly number[]) =>
   v[0] === v[1] && v[1] === v[2] ? `<spectrum name="${name}" value="${v[0]}"/>` : rgb(name, v);
 
-function bsdf(m: MaterialDesc, indent: string): string {
+function bsdf(m: MaterialDesc, indent: string, textureFile: (name: string) => string): string {
   const i2 = indent + '  ';
   const wrap = (inner: string) => `${indent}<bsdf type="twosided">\n${i2}${inner}\n${indent}</bsdf>`;
   switch (m.type) {
+    case 'pbr':
+      throw new Error('mitsuba: pbr materials are not expressible');
     case 'diffuse':
+      if (m.reflectanceTexture) {
+        return wrap(`<bsdf type="diffuse"><texture type="bitmap" name="reflectance"><string name="filename" value="${textureFile(m.reflectanceTexture)}"/><string name="filter_type" value="bilinear"/><string name="wrap_mode" value="repeat"/><boolean name="raw" value="false"/></texture></bsdf>`);
+      }
       return wrap(`<bsdf type="diffuse">${rgb('reflectance', m.reflectance)}</bsdf>`);
     case 'black':
       return wrap(`<bsdf type="diffuse">${rgb('reflectance', [0, 0, 0])}</bsdf>`);
@@ -95,21 +104,28 @@ export const toMitsuba: Exporter = (scene, opts) => {
     approximations.push('mitsuba: directional light angularRadius is ignored (delta direction).');
   }
 
+  const textures = usedTextures(scene, 'mitsuba');
+  for (const t of textures.values()) {
+    if (t.wrap !== 'repeat') throw new Error(`mitsuba: texture '${t.name}' wrap '${t.wrap}' is not exported (the bench textures repeat)`);
+    files.push({ path: t.file, data: encodePng(t.width, t.height, t.data) });
+  }
+  if (textures.size > 0) approximations.push('mitsuba: bitmap textures with filter_type bilinear (level 0 only, no mip maps), wrap repeat, raw false (sRGB decoded to linear before filtering).');
+  const textureFile = (name: string) => (textures.get(name) as { file: string }).file;
   for (const w of worldMeshes(scene, opts.assetsDir)) {
     const m = scene.materials[w.desc.material];
     if (!m) throw new Error(`mesh '${w.desc.name}': unknown material '${w.desc.material}'`);
-    files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh) });
+    files.push({ path: `${w.stem}.ply`, data: encodePly(w.mesh, { flipV: MITSUBA_FLIP_V }) });
     const emitter = (rad: readonly number[]) => `    <emitter type="area">${rgb('radiance', rad)}</emitter>`;
     x.push(`  <shape type="ply">`);
     x.push(`    <string name="filename" value="${w.stem}.ply"/>`);
-    x.push(bsdf(m, '    '));
+    x.push(bsdf(m, '    ', textureFile));
     if (w.desc.emission) x.push(emitter(w.desc.emission));
     x.push(`  </shape>`);
     if (w.desc.emission && w.desc.twoSided) {
       files.push({ path: `${w.stem}-back.ply`, data: encodePly(flipMesh(w.mesh)) });
       x.push(`  <shape type="ply">`);
       x.push(`    <string name="filename" value="${w.stem}-back.ply"/>`);
-      x.push(bsdf(m, '    '));
+      x.push(bsdf(m, '    ', textureFile));
       x.push(emitter(w.desc.emission));
       x.push(`  </shape>`);
       approximations.push(`mitsuba: two-sided emitter '${w.desc.name}' exported as two coincident one-sided emitters (front + flipped copy); light sampling sees 2x the emitter area.`);

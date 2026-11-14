@@ -11,7 +11,7 @@
  *
  * Everything here is plain CPU code (Node tests). The WGSL twin is `rtSampleLight` in scene-wgsl.ts.
  */
-import { LIGHT_FLAG, LIGHT_KIND, LIGHT_RECORD_VEC4S, LIGHT_WORD, SCENE_NONE } from './constants.ts';
+import { LIGHT_FLAG, LIGHT_KIND, LIGHT_RECORD_VEC4S, LIGHT_WORD, SCENE_NONE, TEXTURE_SLOT_NONE } from './constants.ts';
 import { bitsF32, f32Bits, luminance, type Rgb3, type RtMaterial } from './material.ts';
 
 export type Vec3Tuple = [number, number, number];
@@ -333,7 +333,8 @@ export function buildTriangleLights(meshes: readonly LightMeshInput[], instances
       for (let t = 0; t < triangleCount; t++) {
         const id = triangleMaterialOf(mesh, instance, t);
         const material = id < materials.length ? (materials[id] as RtMaterial) : undefined;
-        if (!material || !(material.emissionLuminance > 0)) continue;
+        // A textured emitter is not a constant-radiance light: it is found by BSDF sampling only (P1.4c), never by NEE.
+        if (!material || !(material.emissionLuminance > 0) || material.emissionTexture !== TEXTURE_SLOT_NONE) continue;
         const [a, b, c] = worldTriangle(mesh, instance.objectToWorld, t);
         const e1: Vec3Tuple = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         const e2: Vec3Tuple = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];

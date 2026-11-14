@@ -15,6 +15,7 @@ import { surfaceVertexOffsets, type SurfaceLayout } from './surface-table.ts';
 import { RT_CORE_WGSL, rtBatchArgsWgsl, rtBatchWgsl, rtSurfaceWgsl } from './wgsl-source.ts';
 import { SCENE_COPY_STORAGE_BUFFERS, SCENE_HEADER_VEC4S } from '../scene/constants.ts';
 import { rtSceneWgsl } from '../scene/scene-wgsl.ts';
+import type { TextureLayout } from '../scene/texture.ts';
 import { rtShadeWgsl } from '../shade/shade-wgsl.ts';
 import type { RtShadeOptions } from '../shade/shade.ts';
 import { rtComposeSourceMaps, rtWgslIdentityMap, type RtWgslBuild } from './wgsl-source-map.ts';
@@ -47,7 +48,7 @@ export interface RtModuleOptions extends SceneFormat {
    * Include the scene copy (D4): `rtSurface` (unless `surface: false`), `rtMaterial` and the light functions, over the scene
    * copy's two bindings at `slot` (`rtSceneEntries`). `layout` is `SceneCopy.layout`. Default: no scene, no `rtSurface`.
    */
-  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean } | false;
+  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean; /** Material textures (P1.4c): `SceneCopy.textureLayout`. Adds `rtTexSample`, `rtApplyMaterialTextures`, `rtApplyNormalMap` and the `RT_SURF_TEXFRAME` surface data; needs materials, uvs and positions in the layout. */ textures?: TextureLayout | null } | false;
   /**
    * Add L2 `rtShade` (P1.3, `shade/`): one-bounce shading with a hook for the indirect term. Needs `scene` with surface, materials and lights;
    * it adds the light point sampling (`rtSampleLightLi`, as `scene.sampling`), so do not append `rtLightSampleWgsl()` yourself. `true` = defaults.
@@ -260,6 +261,7 @@ function coreDefines(options: RtModuleOptions): Defines {
     RT_SURFACE_NORMALS: !!layout?.normals,
     RT_SURFACE_UVS: !!layout?.uvs,
     RT_SURFACE_POSITIONS: !!layout?.positions,
+    RT_SURFACE_TEXFRAME: !!layout && !!options.scene && !!options.scene.textures,
   };
 }
 
@@ -272,10 +274,11 @@ function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): st
     if (shade && (options.scene.surface === false || options.scene.materials === false || options.scene.lights === false)) {
       throw new Error('rtModuleWgsl: shade needs scene surface, materials and lights');
     }
-    source += rtSceneWgsl({ group: slot.group, firstBinding: slot.firstBinding, materials: options.scene.materials, lights: options.scene.lights, sampling: options.scene.sampling || shade });
+    source += rtSceneWgsl({ group: slot.group, firstBinding: slot.firstBinding, materials: options.scene.materials, lights: options.scene.lights, sampling: options.scene.sampling || shade, textures: options.scene.textures });
   } else if (options.shade) {
     throw new Error('rtModuleWgsl: shade needs the scene copy (scene option)');
   }
+  if (options.scene && options.scene.textures && !(layout && layout.uvs && layout.positions)) throw new Error('rtModuleWgsl: scene textures need a surface layout with uvs and positions');
   if (layout) {
     const offsets = surfaceVertexOffsets(layout);
     const base = { vertexStride: Math.max(offsets.stride, 1), normalOffset: offsets.normal, uvOffset: offsets.uv, positionOffset: offsets.position };

@@ -41,7 +41,7 @@ describe('bench materials -> BSDFs through the scene copy records', () => {
   it('every material of every renderable scene maps to a lobe the kernel implements, with the parameters the scene gave', () => {
     for (const scene of allScenes.filter((s) => unsupportedReason(adapter.features, s) === null)) {
       for (const [name, desc] of Object.entries(scene.materials)) {
-        const p = ptBsdfFromMaterial(createMaterial(materialFromDesc(desc)));
+        const p = ptBsdfFromMaterial(createMaterial(materialFromDesc(desc, (n) => Object.keys(scene.textures ?? {}).indexOf(n))));
         if (desc.type === 'diffuse') expect(p.reflectance, `${scene.name}/${name}`).toEqual([...desc.reflectance]);
         if (desc.type === 'conductor') {
           expect(p.eta).toEqual([...desc.eta]);

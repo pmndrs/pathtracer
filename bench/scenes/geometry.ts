@@ -15,6 +15,8 @@ export interface TriangleMesh {
   normals: Float32Array;
   /** 3 indices per triangle, CCW seen from outside. */
   indices: Uint32Array;
+  /** `u, v` per vertex (glTF: origin top-left, v down), only when asked for (`MeshDesc.uv`). */
+  uvs?: Float32Array;
 }
 
 export interface TessellateOptions {
@@ -23,6 +25,8 @@ export interface TessellateOptions {
    * boundary would perturb a quantitative test (e.g. dielectric furnace). Default false (smooth analytic normals).
    */
   flat?: boolean;
+  /** Add uvs (quad and sphere only; see `MeshDesc.uv`). */
+  uv?: { scale?: readonly [number, number] };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -142,13 +146,19 @@ export function normalize3(v: Vec3): [number, number, number] {
 // ---------------------------------------------------------------------------------------------------------------
 
 /** Quad in the local XZ plane, centred on the origin, normal +Y. 4 vertices, 2 triangles. */
-export function tessellateQuad(size: readonly [number, number]): TriangleMesh {
+export function tessellateQuad(size: readonly [number, number], uv?: TessellateOptions['uv']): TriangleMesh {
   const hx = size[0] / 2, hz = size[1] / 2;
-  return {
+  const mesh: TriangleMesh = {
     positions: new Float32Array([-hx, 0, hz, hx, 0, hz, hx, 0, -hz, -hx, 0, -hz]),
     normals: new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
   };
+  if (uv) {
+    const [su, sv] = uv.scale ?? [1, 1];
+    // u = x / size_x + 1/2, v = z / size_z + 1/2: seen from above (+Y down) with -Z up the image, the texture reads upright.
+    mesh.uvs = new Float32Array([0, sv, su, sv, su, 0, 0, 0]);
+  }
+  return mesh;
 }
 
 /** Axis-aligned box centred on the origin, flat normals (24 vertices, 12 triangles). */
@@ -214,7 +224,52 @@ export function tessellateSphere(radius: number, segments: number, rings: number
   }
   for (let s = 0; s < segments; s++) idx.push(south, ring(rings - 1, s), ring(rings - 1, s + 1));
   const mesh: TriangleMesh = { positions: new Float32Array(pos), normals: new Float32Array(nor), indices: new Uint32Array(idx) };
+  if (opts.uv) return sphereWithUvs(mesh, opts.flat ?? false, opts.uv.scale ?? [1, 1]);
   return opts.flat ? unweld(mesh) : mesh;
+}
+
+/**
+ * Un-welds a UV sphere (every triangle owns its vertices, normals stay the smooth analytic ones unless `flat`) and assigns uvs: u = azimuth
+ * from +X toward +Z over 0..1, v = polar angle from the north pole over 0..1. A triangle that straddles the seam gets u + 1 on its low side
+ * (repeat wrap does the rest) and a pole vertex takes the mean u of the other two, so no texel smears and no triangle spans the whole texture.
+ */
+function sphereWithUvs(mesh: TriangleMesh, flat: boolean, scale: readonly [number, number]): TriangleMesh {
+  const n = mesh.indices.length;
+  const positions = new Float32Array(n * 3);
+  const normals = new Float32Array(n * 3);
+  const uvs = new Float32Array(n * 2);
+  const indices = new Uint32Array(n);
+  for (let t = 0; t < n; t += 3) {
+    const u: number[] = [];
+    const v: number[] = [];
+    const pole: boolean[] = [];
+    for (let k = 0; k < 3; k++) {
+      const i = mesh.indices[t + k]!;
+      const x = mesh.normals[i * 3]!, y = mesh.normals[i * 3 + 1]!, z = mesh.normals[i * 3 + 2]!;
+      positions.set([mesh.positions[i * 3]!, mesh.positions[i * 3 + 1]!, mesh.positions[i * 3 + 2]!], (t + k) * 3);
+      normals.set([x, y, z], (t + k) * 3);
+      const isPole = Math.abs(y) > 0.999999;
+      pole.push(isPole);
+      let a = Math.atan2(z, x) / (2 * Math.PI);
+      a -= Math.floor(a);
+      u.push(isPole ? 0 : a);
+      v.push(Math.acos(Math.min(1, Math.max(-1, y))) / Math.PI);
+    }
+    const real = [0, 1, 2].filter((k) => !pole[k]);
+    const lo = Math.min(...real.map((k) => u[k]!)), hi = Math.max(...real.map((k) => u[k]!));
+    if (hi - lo > 0.5) for (const k of real) if (u[k]! < 0.5) u[k] = u[k]! + 1;
+    const mean = real.reduce((acc, k) => acc + u[k]!, 0) / real.length;
+    for (let k = 0; k < 3; k++) {
+      if (pole[k]) u[k] = mean;
+      uvs.set([u[k]! * scale[0], v[k]! * scale[1]], (t + k) * 2);
+      indices[t + k] = t + k;
+    }
+  }
+  if (flat) {
+    const welded = unweld({ positions, normals, indices });
+    return { ...welded, uvs };
+  }
+  return { positions, normals, indices, uvs };
 }
 
 /** Duplicate vertices so every triangle has its own, with the geometric normal as the vertex normal. */
@@ -245,9 +300,10 @@ function sub3(a: Vec3, b: Vec3): [number, number, number] {
 
 /** Tessellate any schema geometry (except `file`: Node-side loading is in file-geometry.ts) in local space. */
 export function tessellate(geometry: GeometryDesc, opts: TessellateOptions = {}): TriangleMesh {
+  if (opts.uv && geometry.type !== 'quad' && geometry.type !== 'sphere') throw new Error(`tessellate: uvs are only generated for quad and sphere, not '${geometry.type}'`);
   switch (geometry.type) {
     case 'quad':
-      return tessellateQuad(geometry.size);
+      return tessellateQuad(geometry.size, opts.uv);
     case 'box':
       return tessellateBox(geometry.size);
     case 'sphere':
@@ -287,7 +343,7 @@ export function computeVertexNormals(positions: Float32Array, indices: Uint32Arr
  * Exporters write exactly this (pbrt/Mitsuba/glTF get identity object transforms; no per-renderer transform maths).
  */
 export function meshToWorld(mesh: MeshDesc, opts: TessellateOptions = {}): TriangleMesh {
-  return transformMesh(tessellate(mesh.geometry, opts), mesh.transform);
+  return transformMesh(tessellate(mesh.geometry, { ...(mesh.uv ? { uv: mesh.uv } : {}), ...opts }), mesh.transform);
 }
 
 /** Apply a column-major object-to-world matrix to a mesh (normals by the inverse transpose; winding flips on mirror). */
@@ -311,7 +367,7 @@ export function transformMesh(local: TriangleMesh, m: Mat4 | undefined): Triangl
       indices[t + 2] = tmp;
     }
   }
-  return { positions, normals, indices };
+  return { positions, normals, indices, ...(local.uvs ? { uvs: local.uvs } : {}) };
 }
 
 /** Total surface area of a triangle mesh. */

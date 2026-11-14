@@ -239,3 +239,17 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   text. A new transform stage must return a line map and compose it (`rtComposeSourceMaps`). Tests that look for a name or constant in the kernel text must pass
   `shortenNames: false`. `rtShortenWgsl` skips any name also used as a member, parameter or local; keep new WGSL names unique
   per top-level scope. `node bench/size-breakdown.ts [--env]` prints where the bytes go.
+- Textures (P1.4c): an sRGB texture must be `rgba8unorm-srgb` (hardware decode before filtering); decoding in the shader after a linear
+  filter reads dark at edges. Alpha is never decoded. Colour fields (base colour, emission) need `srgb` textures, data fields (metallic-
+  roughness, normal) `linear`: `buildSceneCopy` throws on a mismatch. Textures force `surface.positions` on (texture frame, cone LOD).
+- Texture uv convention is glTF's: (0, 0) = first texel of row 0 (top-left), v down. pbrt-v4 flips t (the exporter writes v' = 1 - v to
+  the PLY); Mitsuba `bitmap` reads v as glTF does (verified with an asymmetric marker texture; `MITSUBA_FLIP_V` in the exporter).
+- pbrt `imagemap filter "bilinear"` still picks a mip level from ray differentials scaled by max(1/8, 1/sqrt(spp)); Mitsuba bilinear is
+  level 0 only. Keep reference textures at most ~8 texels per pixel (or compare with Mitsuba) so pbrt stays on level 0.
+- Normal map frames: glTF green = image up = decreasing v; the bitangent is cross(n, t) x handedness. Verify any change with
+  `--page texture-check` (closed-form normal-map planes to 1e-7), not by eye.
+- A texture bucket is one binding + one sampler (wrap mode is part of the bucket); 8 buckets by default, merged when more. WGSL has no
+  sampler arrays. `rtSceneCopyLayoutEntries(0, copy.textureLayout)` must be used for the layout, or the bind group will not match the kernel.
+- `rtTexSample` hardware filtering has 8-bit weights: compare against the f32 twin with 1e-2 absolute, never exact.
+- A textured emitter (`emissionTexture`) is left out of the light table on purpose (V52); a kernel built with `textures` and a scene copy
+  without (or the reverse) throws in `PtMegakernel.setScene`.

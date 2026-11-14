@@ -60,6 +60,12 @@ Renderer keys: `pbrt` (pbrt-v4-cpu), `mitsuba` (llvm_ad_rgb), `mitsuba-scalar` (
   +0.39% bright. Checked on a diffuse plane under the env-sphere sky: analytic irradiance (CPU quadrature of the bilinear map) vs
   ours 3e-6, Mitsuba 1e-5, pbrt -0.05% R/-0.06% G (the octahedral map itself is exact to 3e-5; the rest is pbrt's spectral round trip).
   Rotation: Mitsuba's `rotate y` equals our `rotationYDeg` convention to 3e-6 (probed).
+- **Textures (P1.4c).** `diffuse.reflectanceTexture` is the only expressible texture (white `reflectance`; PNG written by `exporters/png.ts`).
+  pbrt `imagemap` with `filter "bilinear"`, `wrap "repeat"`, `encoding "sRGB"`; Mitsuba `bitmap` with `filter_type bilinear`, `wrap_mode repeat`,
+  `raw false`. Uvs go in the PLY: our uv origin is the glTF top-left, pbrt flips t (v written as 1 - v), Mitsuba reads it as is (checked by
+  rendering an orange marker in each tile's top-left cell and comparing the three images). Mitsuba never uses mip maps; pbrt `bilinear` picks a mip level
+  from the camera ray differentials scaled by max(1/8, 1/sqrt(spp)), so keep texel density low (tex-checker: <= ~8 texels per pixel) when you want pbrt
+  on level 0; `tex-checker-hf` deliberately exceeds it. Timings at 4096 spp, 320x240: pbrt 27 s, Mitsuba 15 s.
 - **Samplers.** pbrt `zsobol`, Mitsuba `multijitter` (both unbiased; differences are noise, not bias).
 
 ## Systematic differences to expect

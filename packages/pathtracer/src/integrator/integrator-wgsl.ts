@@ -28,6 +28,19 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   envMap?: boolean;
   /** A sun with an angular radius is visible to camera and specular paths (default false: the references' sun is a delta light and invisible). */
   sunVisible?: boolean;
+  /**
+   * The scene has material textures (P1.4c; set by `PtMegakernel.create` from `textures`): the kernel fetches them in the material
+   * decode and tracks a ray cone. Default false: no texture code at all (the kernel text is unchanged).
+   */
+  textures?: boolean;
+  /**
+   * Level of detail of texture lookups: `0` (default) always the base level, the reference setting (pbrt `bilinear` and Mitsuba `bilinear`
+   * do not use mips); `'cone'` ray cones (Akenine-Moller et al. 2021): the width starts at the pixel angle, grows with distance, a
+   * specular bounce keeps its spread, a non-delta bounce adds `PT_CONE_DIFFUSE_SPREAD` radians. The starting spread is the pixel angle times
+   * `PtLimits.textureConeScale` (default 1; pbrt-v4 uses max(1/8, 1/sqrt(spp)): with many samples per pixel the pixel box already
+   * averages the texture, so a full-pixel filter on top blurs it twice).
+   */
+  textureLod?: 'cone' | 0;
 }
 
 export interface ResolvedIntegratorOptions {
@@ -36,10 +49,12 @@ export interface ResolvedIntegratorOptions {
   envSampling: 'uniform' | 'importance' | 'none';
   envMap: boolean;
   sunVisible: boolean;
+  textures: boolean;
+  textureLod: 'cone' | 0;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0 };
 }
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
@@ -60,6 +75,8 @@ struct PtParams {
 /** The integrator module text, to append after the raytracer module, the light sampling, the Owen-Sobol functions, the BSDF, its adapter and the sampler. */
 export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const o = resolveIntegratorOptions(options);
+  const tex = o.textures;
+  const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
   return /* wgsl */ `
 alias PtRadiance = vec4f;
 ${PT_PARAMS_WGSL}
@@ -73,7 +90,9 @@ const PT_SUN_VISIBLE: bool = ${o.sunVisible};
 const PT_ORIGIN: f32 = 0.03125;
 const PT_FLOAT_SCALE: f32 = 0.0000152587890625;
 const PT_INT_SCALE: f32 = 256.0;
-
+${tex ? `const PT_TEX_CONE: bool = ${o.textureLod === 'cone'};
+const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
+` : ''}
 fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
     let ofs = vec3i(PT_INT_SCALE * n);
     let pi = bitcast<vec3f>(bitcast<vec3i>(p) + select(ofs, -ofs, p < vec3f(0.0)));
@@ -175,15 +194,24 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     var etaScale = 1.0;
     var prevP = origin;
     var prevPdf = 0.0;
-
+${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
+` : ''}
     loop {
         let hit = rtClosest(ray, RT_MASK_ALL);
         if (hit.t < 0.0) {
             radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
             break;
         }
-        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL);
-        let mat = rtMaterial(hit.material);
+${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME);
+        let coneW = rtConeAt(cone, hit.t);
+        let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
+        let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);
+        var shadingN = surf.shadingNormal;
+        if (mat.normalTexture != RT_TEXTURE_NONE) {
+            let nr = rtTexRecord(mat.normalTexture);
+            shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, rtTexSampleRecord(nr, surf.uv, rtTexLodOf(nr, fp)).xyz);
+        }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL);
+        let mat = rtMaterial(hit.material);`}
 
         if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
             var w = 1.0;
@@ -206,7 +234,7 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
         let vertex = depth;
         depth += 1u;
 
-        let frame = ptFrameFromNormal(surf.shadingNormal);
+        let frame = ptFrameFromNormal(${shadingNormal});
         let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && !ptBsdfIsDelta(bp)) {
             radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex);
@@ -220,7 +248,8 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
         }
         beta = beta * s.f * (abs(s.wi.z) / s.pdf);
         specularBounce = (s.flags & PT_FLAG_DELTA) != 0u;
-        if ((s.flags & PT_FLAG_TRANSMISSION) != 0u) {
+${tex ? `        cone = RtCone(coneW, cone.spread + select(PT_CONE_DIFFUSE_SPREAD, 0.0, specularBounce));
+` : ''}        if ((s.flags & PT_FLAG_TRANSMISSION) != 0u) {
             etaScale = etaScale * s.etap * s.etap;
         }
         prevPdf = s.pdf;

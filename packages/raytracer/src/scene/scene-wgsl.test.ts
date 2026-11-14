@@ -135,3 +135,50 @@ describe('scene copy WGSL', () => {
     expect(rtSceneWgsl({ group: 0, firstBinding: 4 })).toContain('@group(0) @binding(5)');
   });
 });
+
+describe('scene copy WGSL: textures (P1.4c)', () => {
+  const layout = { normals: true, uvs: true, positions: true };
+  const bucket = (srgb: boolean) => ({ width: 64, height: 64, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), wrap: 'repeat' as const, layers: 3, mipLevels: 7 });
+  const textures = { buckets: [bucket(true), bucket(false), bucket(false), bucket(true)] };
+  const withTextures = (caps = allFeatures, extra: Partial<RtModuleOptions> = {}) => rtModuleWgsl(caps, { triangleLeaves: 'indexed', scene: { slot, layout, textures }, ...extra });
+
+  it('adds the arrays, samplers and lookups after the two buffers, and nothing at all without textures', () => {
+    const code = withTextures();
+    expect(balanced(code)).toBe(true);
+    expect(code).not.toMatch(/^\s*#(if|elif|else|endif)\b/m);
+    for (let i = 0; i < 4; i++) {
+      expect(code).toContain(`@group(2) @binding(${2 + i}) var rtTex${i}: texture_2d_array<f32>;`);
+      expect(code).toContain(`@group(2) @binding(${6 + i}) var rtSmp${i}: sampler;`);
+    }
+    for (const fn of ['rtTexSample', 'rtTexSampleRecord', 'rtTexLodOf', 'rtApplyMaterialTextures', 'rtApplyNormalMap']) expect(code).toContain(`fn ${fn}(`);
+    expect(code).toContain('uvDensity: f32');
+    expect(code).toContain('tangent: vec4f');
+    const plain = rtModuleWgsl(allFeatures, { triangleLeaves: 'indexed', scene: { slot, layout } });
+    expect(plain).not.toMatch(/rtTex|uvDensity|RT_SURF_TEXFRAME|rtApplyMaterialTextures/);
+  });
+
+  it('reads the texture records where the header puts them (words 14 and 15 = row 3, z and w)', () => {
+    expect([SCENE_HEADER.textureBase, SCENE_HEADER.textureCount]).toEqual([14, 15]);
+    expect(withTextures()).toContain('rtSceneTable[rtSceneTable[3].z + slot]');
+  });
+
+  it('declares no reserved word and no duplicate name, and stays under the cap with the walk and the lights', () => {
+    const code = withTextures();
+    expect([...declaredIdentifiers(code)].filter((n) => RESERVED.has(n))).toEqual([]);
+    const names = declared(code);
+    expect(names.filter((n, i) => names.indexOf(n) !== i)).toEqual([]);
+    expect(code.length).toBeLessThan(KERNEL_BYTE_LIMIT - 2_000);
+  });
+
+  it('needs materials, uvs and positions', () => {
+    expect(() => rtSceneWgsl({ group: 0, firstBinding: 0, materials: false, textures })).toThrow(/materials/);
+    expect(() => rtModuleWgsl(allFeatures, { scene: { slot, layout: { normals: true, uvs: false, positions: true }, textures } })).toThrow(/uvs and positions/);
+    expect(() => rtModuleWgsl(allFeatures, { scene: { slot, layout: { normals: true, uvs: true, positions: false }, textures } })).toThrow(/uvs and positions/);
+  });
+
+  it('the surface carries the frame only when asked for at compile time', () => {
+    const withFrame = withTextures();
+    expect(withFrame).toContain('const RT_SURF_TEXFRAME');
+    expect(withFrame).toContain('let needVertices = (want & (RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_POSITION | RT_SURF_TEXFRAME)) != 0u;');
+  });
+});

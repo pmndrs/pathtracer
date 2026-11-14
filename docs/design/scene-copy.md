@@ -6,9 +6,10 @@ P1.4b). Code: `packages/raytracer/src/scene/`. Bench scenes convert with `bench/
 
 ## Buffers
 
-Two storage buffers, 0 textures:
+Two storage buffers, plus one `texture_2d_array` and one sampler per texture bucket when the scene has textures (see Textures):
 - `rtSceneTable` (`array<vec4u>`): header (4 vec4u), instance records (8 vec4u: surface record + light-map words),
-  mesh records (1 vec4u), materials (8 vec4u = 128 B, default record last), lights (6 vec4u = 96 B).
+  mesh records (1 vec4u), materials (8 vec4u = 128 B, default record last), lights (6 vec4u = 96 B), texture slots
+  (1 vec4u each, only with textures; header words 14 and 15 are their base and count, 0 otherwise).
 - `rtSceneData` (`array<u32>`): indices, vertex attributes (f32 bits), light maps for mixed instances.
 
 A kernel with the walk uses 5–6 storage buffers, leaving 2–3 for IO under the 8-buffer fallback (spec §3). The scene
@@ -38,6 +39,31 @@ rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout, surface?, ma
 lists match), so the P2 BSDF adapter (P2.2) is one line. Roughness is perceptual; GGX alpha = roughness². Ids past the
 table, including `RT_NO_MATERIAL`, read the default record. Precision is mixed on purpose (V32).
 
+## Textures (P1.4c, first slice)
+
+Code: `packages/raytracer/src/scene/texture.ts` (build + CPU twins), `gpu.ts` (`uploadSceneTextures`), `scene-wgsl.ts` (`rtTexturesWgsl`).
+Input: `SceneCopyInput.textures` (RGBA8, row 0 = top, `colorSpace: 'srgb' | 'linear'`, `wrap: 'repeat' | 'clamp' | 'mirror'`); a material
+names them by index in `baseColorTexture` / `roughnessMetalTexture` / `normalTexture` / `emissionTexture` (the u16 slots). The builder
+checks that a slot exists and that colour fields (base colour, emission) point at `srgb` textures and data fields (metallic-roughness,
+normal) at `linear` ones. UVs are the mesh's (`SceneCopyMesh.uvs`, glTF TEXCOORD_0: origin top-left, v down; `rtSurface` already
+exposed them). Adding textures forces vertex positions into the surface data (the texture frame needs the triangle edges).
+
+**Layout: size buckets of `texture_2d_array`.** A texture is resampled (tent filter) to a power-of-two size (nearest in log space,
+at most `maxSize` = 4096), given a full mip chain on the CPU (2x2 box, in linear light for sRGB), and stored as one layer of the
+array shared by all textures of the same (width, height, colour space, wrap). One array is one texture binding and one sampler, so a
+scene costs `buckets` of the 16 sampled textures and 16 samplers a stage may bind (default cap 8; the cheapest same-space pair is
+merged when it needs more, 256 layers per array). Formats: `rgba8unorm-srgb` for colour (the hardware decodes before filtering: filtering in
+linear light, as pbrt-v4 and Mitsuba), `rgba8unorm` for data. The slot record is `(bucket, layer, width | height << 16, mip levels)`;
+`rtTexSample(slot, uv, lod)` switches on the bucket (`textureSampleLevel`, explicit LOD, so no uniformity rules) and costs about 160 B of
+WGSL per bucket plus 2.9 KB once. Mip level is chosen by the integrator (`rtTexLodOf(record, uvFootprint)`).
+
+Shader API (only emitted when the module has `scene.textures`): `rtTexSample`, `rtTexSampleRecord`, `rtTexRecord`, `rtTexLodOf`,
+`rtApplyMaterialTextures(m, uv, footprint)` (glTF semantics: base colour rgb x factor, opacity x alpha, roughness x G, metalness x B,
+emission x rgb), `rtApplyNormalMap(n, tangent, texel)`, and `rtSurface` with `RT_SURF_TEXFRAME` returns `uvDensity` (sqrt(uv area / world
+area), uv units per metre, for the ray-cone LOD) and `tangent` (world dp/du, w = bitangent handedness; glTF green = image up = decreasing v).
+A textured emitter is not a light-table entry (NEE needs a constant radiance): BSDF sampling finds it with weight 1 (V52).
+Bit-for-bit untextured scenes: no header word, table section, binding or WGSL changes.
+
 ## Lights (96 B)
 
 Emissive triangles in world space (instance transforms applied; the emitting normal is the authored front side, safe
@@ -65,6 +91,12 @@ The `scene-copy` page (468,702 checks on the M5) compares every material, light,
 the GPU against the twins bit for bit; `rtSurface` interpolation agrees within 2.3e-7 relative and the leftover `u`
 within 1.2e-7.
 
+Textures: 32 unit tests (`texture.test.ts`: sRGB, bucket sizes, packing and merging, mips, wrap modes, trilinear twin, cone LOD, texture frame, normal map)
+plus scene-copy and WGSL tests. The `texture-check` page (3,000 cases) compares `rtTexSample` against the twin over 4 arrays (non-power-of-two
+source, clamp / mirror / repeat, uvs from -1.5 to 2.5): max 6.3e-3 absolute (fixed-point filter weights), `rtTexLodOf` 9e-7, the glTF material
+semantics 1.4e-2 on emission scaled by 3, `rtApplyNormalMap` 5e-7; end to end under a delta sun every pixel has a closed form (base colour 3.3e-4,
+normal maps 1e-7 including a rotated instance, emission 3e-3 on the dim blue channel, metallic-roughness 2e-7). `node bench/runner/run.ts --page texture-check`.
+
 ## Open choices (defaults hold until measured)
 
 1. **Light selection weights for sun and environment.** Settled (D22): default `pbrt`, pbrt-v4's rule. Each infinite
@@ -79,3 +111,23 @@ within 1.2e-7.
 6. **Default conductor eta/k** is a copper-like placeholder, used only when `conductorEtaK` is set without values.
 7. **Mixed-instance light maps** cost one word per triangle; a sorted range list could replace them if a scene has huge
    mixed instances with few lights.
+8. **Texture storage: size buckets (shipped) vs one fixed-size array vs atlas vs bindless.** Everything below works on every WebGPU device
+   except bindless, which is textures-only, Chrome-behind-a-flag and not on macOS (V1).
+   - *Size buckets* (now): one array per (size, colour space, wrap). Pro: no wasted texels beyond the pad to a power of two, no bleeding,
+     hardware wrap and filtering, mips cut the cache footprint of minified lookups, any texture size mix. Con: up to 8 bindings and a switch
+     in the shader (about 160 B of WGSL and a divergent branch when a warp mixes buckets); a scene with many sizes merges buckets and pads.
+   - *One fixed-size array* (say 1024x1024, every texture resampled): one binding, no switch. Con: 4x memory for a 512 texture, loses detail
+     above the size, and sRGB/data still need two arrays. Cheapest code; worst memory.
+   - *Atlas*: one texture, no layers. Con: bleeding across tiles (needs gutters), wrap must be done in the shader (so no hardware repeat),
+     mips cross tiles. Not recommended.
+   - *Bindless*: no pad, no switch, no merge. Con: not available on macOS; needs `chromium-experimental-sampling-resource-table`.
+   Suggestion: keep size buckets; add bindless as Tier 3 behind the same slot API (P1.4c2). Settle with: Sponza-with-textures (P1.4c3) and a
+   Bistro-class scene, same camera, spp, seed: ms per spp (quiet pass), texture bytes, and the image difference (must be bit-identical except
+   for resampled non-power-of-two sources); buckets vs one fixed array (a setting) vs bindless on the 3060.
+9. **Texture LOD for diffuse bounces.** Default `textureLod: 0` (the reference setting, Mitsuba's behaviour). `'cone'` keeps the specular
+   chain's cone and widens it by 0.5 rad at a non-delta bounce, with the starting spread scaled by max(1/8, 1/sqrt(spp)) (pbrt-v4's rule).
+   Measured on `tex-checker-hf` against Mitsuba 4096 spp (relMSE, lower is better): at 16 spp lod 0 1.08e-2, cone auto 4.89e-3, cone full pixel
+   3.85e-2; 64 spp 2.04e-3 vs 1.33e-3; 256 spp 4.74e-4 vs 3.72e-4. A full-pixel cone blurs (a plateau at 3.75e-2 at any spp: the pixel box
+   then averages a pre-blurred texture); the pbrt scale removes that. Means agree to 0.02%. Open: the 0.5 rad diffuse spread and the
+   curvature term are not tuned. Settle: a GI-heavy textured scene (a corridor of textured walls) at equal spp, lod 0 vs cone, diffuse spread
+   0 / 0.25 / 0.5 / 1.

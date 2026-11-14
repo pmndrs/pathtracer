@@ -31,6 +31,8 @@ export interface SceneDesc {
   film: FilmDesc;
   integrator: IntegratorDesc;
   materials: Record<string, MaterialDesc>;
+  /** Procedural textures by name (generated in code by `bench/scenes/textures.ts`; nothing is downloaded). Materials reference them by name. */
+  textures?: Record<string, TextureDesc>;
   meshes: MeshDesc[];
   lights?: LightDesc[];
   environment?: EnvironmentDesc;
@@ -65,9 +67,46 @@ export interface IntegratorDesc {
   rrStartDepth?: number;
 }
 
+/**
+ * A procedural RGBA8 texture, row 0 = top, uv (0, 0) = its top-left texel (glTF convention). `srgb` textures hold colours (base colour,
+ * emission); `linear` ones hold data (metallic-roughness, normal). All sizes are powers of two in the reference scenes so every renderer
+ * reads the same texels (ours would resample others, see raytracer `scene/texture.ts`).
+ */
+export type TextureDesc = (
+  /** `cells` x `cells` checker of colours `a` and `b` (0-255 sRGB codes); `marker` paints the top-left cell of each tile `markerColor` so the orientation is visible. */
+  | { generator: 'checker'; cells: number; a: readonly [number, number, number]; b: readonly [number, number, number]; marker?: readonly [number, number, number] }
+  /** One colour everywhere (0-255 codes; a `linear` texture holds raw bytes). */
+  | { generator: 'solid'; color: readonly [number, number, number, number?] }
+  /** Tangent-space normal map: a sine bump pattern `periods` times across, slope `amplitude` (tan of the maximum tilt). */
+  | { generator: 'bumps'; periods: number; amplitude: number }
+  /** Metallic-roughness (glTF: G = roughness, B = metalness): vertical stripes, `periods` of them, alternating (roughness, metalness) `a` and `b` (0-1). */
+  | { generator: 'stripes-mr'; periods: number; a: readonly [number, number]; b: readonly [number, number] }
+) & {
+  width: number;
+  height: number;
+  colorSpace: 'srgb' | 'linear';
+  /** Default `repeat`. */
+  wrap?: 'repeat' | 'clamp' | 'mirror';
+};
+
 export type MaterialDesc =
-  /** Lambertian. */
-  | { type: 'diffuse'; reflectance: Rgb }
+  /** Lambertian. `reflectanceTexture` (a `textures` key, sRGB) multiplies `reflectance`. */
+  | { type: 'diffuse'; reflectance: Rgb; reflectanceTexture?: string }
+  /**
+   * glTF-style metallic-roughness (ours only: pbrt-v4 and Mitsuba cannot express it exactly; exporters throw). Textures multiply the factors
+   * (base colour rgb, roughness from G and metalness from B of `metallicRoughnessTexture`, `emissive` rgb); `normalTexture` is tangent space.
+   */
+  | {
+      type: 'pbr';
+      baseColor: Rgb;
+      roughness: number;
+      metalness: number;
+      emissive?: Rgb;
+      baseColorTexture?: string;
+      metallicRoughnessTexture?: string;
+      normalTexture?: string;
+      emissiveTexture?: string;
+    }
   /** GGX conductor. `roughness` is perceptual; alpha = roughness² (conventions.roughnessToAlpha). */
   | { type: 'conductor'; eta: Rgb; k: Rgb; roughness: number }
   /** GGX dielectric (smooth when roughness = 0). Interior is vacuum-free: no absorption. */
@@ -92,6 +131,11 @@ export interface MeshDesc {
   emission?: Rgb;
   /** Emit from both faces (default false: front face only, as pbrt `diffuse` area light with twosided false). */
   twoSided?: boolean;
+  /**
+   * Give the tessellation uvs (`quad`: u along local +X, v along +Z, both 0..1 across the quad; `sphere`: u around +Y from +X toward +Z, v from the
+   * north pole down; seams are un-welded so no texel smears), times `scale`. Needed by any material that uses a texture.
+   */
+  uv?: { scale?: readonly [number, number] };
 }
 
 export type LightDesc =

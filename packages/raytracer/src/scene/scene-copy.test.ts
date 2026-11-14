@@ -320,3 +320,71 @@ describe('scene copy: inputs and fingerprint', () => {
     expect(readLightIndexOfHit(copy, 0, 1)).toBe(0);
   });
 });
+
+describe('scene copy: textures (P1.4c)', () => {
+  const tex = (w: number, h: number, colorSpace: 'srgb' | 'linear', rgba: [number, number, number, number] = [200, 100, 50, 255]) => ({ width: w, height: h, colorSpace, data: Uint8Array.from({ length: w * h * 4 }, (_, i) => rgba[i & 3] as number), label: `${colorSpace}${w}` });
+  const textured = (): SceneCopyInput => {
+    const base = fixture();
+    return {
+      ...base,
+      materials: [{ baseColor: [0.5, 0.5, 0.5], baseColorTexture: 0, roughnessMetalTexture: 1, normalTexture: 1, emissionTexture: 2 }, ...(base.materials as []).slice(1)],
+      textures: [tex(16, 16, 'srgb'), tex(32, 32, 'linear'), tex(16, 16, 'srgb')],
+    };
+  };
+
+  it('without textures nothing changes: header words 14 and 15 are 0, no texture section, same table length and fingerprint as before', () => {
+    const copy = buildSceneCopy(fixture());
+    expect(copy.textures).toBeNull();
+    expect(copy.textureLayout).toBeNull();
+    expect(copy.table[SCENE_HEADER.textureBase]).toBe(0);
+    expect(copy.table[SCENE_HEADER.textureCount]).toBe(0);
+    expect(copy.table.length).toBe(copy.sections.vec4s * 4);
+    expect(copy.sections.vec4s).toBe(copy.sections.lights + copy.lights.length * 6);
+  });
+
+  it('writes the slot records after the lights and points the header at them', () => {
+    const copy = buildSceneCopy(textured());
+    expect(copy.table[SCENE_HEADER.textureCount]).toBe(3);
+    const base = copy.table[SCENE_HEADER.textureBase] as number;
+    expect(base).toBe(copy.sections.lights + copy.lights.length * 6);
+    expect(copy.sections.vec4s).toBe(base + 3);
+    expect(copy.textureLayout!.buckets.map((b) => `${b.width}/${b.colorSpace}/${b.layers}`)).toEqual(['16/srgb/2', '32/linear/1']);
+    // slot 0 and 2 share the 16x16 sRGB array (layers 0, 1); slot 1 is the 32x32 linear one.
+    const record = (slot: number) => Array.from(copy.table.subarray((base + slot) * 4, (base + slot) * 4 + 4));
+    expect(record(0)).toEqual([0, 0, 16 | (16 << 16), 5]);
+    expect(record(1)).toEqual([1, 0, 32 | (32 << 16), 6]);
+    expect(record(2)).toEqual([0, 1, 16 | (16 << 16), 5]);
+  });
+
+  it('forces vertex positions into the surface data (the texture frame needs the edges)', () => {
+    const plain = buildSceneCopy(fixture());
+    expect(plain.layout.positions).toBe(false);
+    const copy = buildSceneCopy(textured());
+    expect(copy.layout.positions).toBe(true);
+    expect(copy.layout.uvs).toBe(true);
+  });
+
+  it('a textured emitter is not a light: NEE never sees constant radiance for a varying emitter', () => {
+    const base = fixture();
+    const reference = buildSceneCopy(base);
+    const lit = buildSceneCopy({ ...base, materials: [base.materials[0]!, { emissionColor: [2, 4, 6], emissionTexture: 0 }, base.materials[2]!], textures: [tex(16, 16, 'srgb')] });
+    // Material 1 lights instance 0 (dense, 2 triangles) and the strip's emissive triangles; with a texture they are BSDF-found only.
+    expect(lit.triangleLightCount).toBeLessThan(reference.triangleLightCount);
+    expect(reference.triangleLightCount - lit.triangleLightCount).toBe(2 + 2);
+  });
+
+  it('rejects a slot with no texture and a texture of the wrong colour space', () => {
+    expect(() => buildSceneCopy({ ...textured(), textures: [tex(16, 16, 'srgb')] })).toThrow(/there are 1 textures/);
+    expect(() => buildSceneCopy({ ...textured(), textures: [tex(16, 16, 'linear'), tex(32, 32, 'linear'), tex(16, 16, 'srgb')] })).toThrow(/baseColorTexture.*linear; this field needs srgb/);
+    expect(() => buildSceneCopy({ ...textured(), textures: [tex(16, 16, 'srgb'), tex(32, 32, 'srgb'), tex(16, 16, 'srgb')] })).toThrow(/roughnessMetalTexture.*needs linear/);
+  });
+
+  it('textured scenes fingerprint their texels', () => {
+    const a = buildSceneCopy(textured());
+    const input = textured();
+    input.textures = [tex(16, 16, 'srgb', [201, 100, 50, 255]), input.textures![1]!, input.textures![2]!];
+    expect(buildSceneCopy(input).fingerprint).not.toBe(a.fingerprint);
+    expect(buildSceneCopy(textured()).fingerprint).toBe(a.fingerprint);
+    expect(a.fingerprint).not.toBe(buildSceneCopy(fixture()).fingerprint);
+  });
+});

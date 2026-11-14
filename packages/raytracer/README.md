@@ -15,7 +15,7 @@ material/light scene copy, L3. Design notes: [docs/design/trace-core.md](../../d
 |---|---|
 | `Ray` | `{ origin, tMin, direction (unit), tMax }`, 32 B (`RAY_BYTES`), bvh's `BvhRay` |
 | `Hit` | `{ t (< 0 miss), instance, triangle, frontFace, barycentrics (v1, v2), material, normal }`, 40 B (`HIT_BYTES`); compact record 24 B (`HIT_COMPACT_BYTES`) without material and normal |
-| `RayCone` | `{ width, spread }`, 8 B. Carried through L1 only; nothing consumes it yet |
+| `RayCone` | `{ width, spread }`, 8 B. Carried through L1; the megakernel's texture LOD (`textureLod: 'cone'`) consumes it |
 | `BVH_LAYOUT_VERSION` | 2. `assertBvhLayout()` runs before any walk is generated |
 
 ### Two ways to trace
@@ -91,6 +91,26 @@ Adds `rtMaterial(id) -> RtMaterial` (128 B OpenPBR-subset records, `material.ts`
 `lights.ts`) and `rtSurface` over the copy's data.
 Bench scenes: `bench/scenes/to-scene-copy.ts`. Layout and WGSL: `scene/constants.ts`, `scene/scene-wgsl.ts`.
 
+#### Material textures (P1.4c)
+
+```ts
+const copy = buildSceneCopy({
+  meshes /* with uvs: glTF TEXCOORD_0, origin top-left */, instances,
+  textures: [{ width: 1024, height: 1024, data /* RGBA8, row 0 = top */, colorSpace: 'srgb', wrap: 'repeat' }, /* ... */],
+  materials: [{ baseColorTexture: 0, roughnessMetalTexture: 1, normalTexture: 2, emissionTexture: 3, baseColor: [1, 1, 1] }],
+});
+const buffers = uploadSceneCopy(device, copy);          // + one texture_2d_array and sampler per size bucket (buffers.textures)
+rtSceneCopyLayoutEntries(0, copy.textureLayout);        // bind group layout: table, data, textures, samplers
+rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout, textures: copy.textureLayout } });
+```
+
+Adds `rtTexSample(slot, uv, lod)`, `rtTexLodOf(record, uvFootprint)`, `rtApplyMaterialTextures(m, uv, footprint)` (glTF semantics),
+`rtApplyNormalMap(n, tangent, texel)` and `RT_SURF_TEXFRAME` (`uvDensity`, `tangent`) to `rtSurface`. It works on every WebGPU device (size buckets
+of texture arrays, CPU mips, a trilinear sampler per array; at most 8 arrays by default); bindless is a later Tier 3 option behind the same slots.
+Textures are sRGB for colours and linear for data (checked against the material field). A textured emitter is not in the light table.
+CPU twins and the layout in `scene/texture.ts` (`buildSceneTextures`, `sampleSceneTexture`, `textureLod`, `coneUvFootprint`,
+`triangleTextureFrame`, `applyNormalMap`). Design and the open storage choice: [docs/design/scene-copy.md](../../docs/design/scene-copy.md).
+
 ### L2 shading (P1.3): `rtShade`
 
 ```ts
@@ -115,5 +135,6 @@ success and throws the translated text on failure. `rtWgslSourceMapV3(map)` make
 
 ### Budgets
 
-Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), scene copy 2 (surface, materials and lights together), batch IO 2-6. Generated
+Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), scene copy 2 (surface, materials and lights together), batch IO 2-6.
+Textures add no storage buffers: one sampled texture and one sampler per size bucket (at most 8 by default of the 16 a stage may bind). Generated
 kernels stay under 50 KB (largest today ~45 KB, unit-tested for every setting combination).

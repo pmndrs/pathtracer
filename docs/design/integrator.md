@@ -83,6 +83,26 @@ pixel; solid-angle pdf `Y·sinθ_row·norm/sinθ`, `norm = W·H/(S·2π²)`. Esc
 f32 CDFs: a single alias table over 131k pixels was rejected because the pixel index would use 17 of the 24 bits of `u` and
 leave ~7 for the alias coin (distorted probabilities). The light-selection power uses the sin θ-weighted mean radiance.
 
+## Material textures (P1.4c)
+
+Compiled only when the scene has textures (`PtMegakernelOptions.textures = copy.textureLayout`; the untextured kernel text and every image
+are unchanged: cornell, env-sphere and sponza-white PFMs are `cmp`-identical at 64 spp). Texture arrays and samplers sit in group 1 after the
+two scene buffers (`rtSceneCopyLayoutEntries(0, layout)`; `uploadSceneCopy` creates them; `setScene` checks kernel and scene agree).
+
+Per hit: `rtSurface(.., POSITION | SHADING_NORMAL | UV | TEXFRAME)`, the ray cone's width at the hit, the footprint
+`width * uvDensity / max(|n . d|, 1e-3)` (uv units), then `rtApplyMaterialTextures` (base colour, alpha into `opacity`, roughness from G,
+metalness from B, emission, all times the factors) and, with a normal texture, `rtApplyNormalMap` around the interpolated shading normal; the
+frame, NEE and BSDF sampling use that normal, the geometric normal still offsets rays. Settings: `textureLod: 0` (default, base level, the
+reference setting) or `'cone'`; `PtLimits.textureConeScale` (default 1; adapter `pt_texture_cone_scale=auto|N`, `auto` = pbrt-v4's
+max(1/8, 1/sqrt(spp))). Ray cone: width 0 and spread = pixel angle x scale at the camera, `width += spread * t` at a hit, a delta bounce keeps the
+spread, a non-delta bounce adds `PT_CONE_DIFFUSE_SPREAD` = 0.5 rad. Bench args `pt_texture_lod=0|cone`.
+
+Agreement (1024 spp, M5, `tex-checker`, a sRGB checker with an orientation marker on a quad and a sphere, delta sun + uniform sky, maxDepth 3):
+relMSE 4.5e-5 vs Mitsuba 4096 spp (pbrt-vs-Mitsuba floor 4.8e-5), 7.9e-5 vs pbrt, relBias 0.00% / -0.04%, block means 0.06% max;
+`pt_texture_lod=cone` with the auto scale 3.7e-5. `tex-checker-hf` (1024 px, up to ~70 texels per pixel): lod 0 1.3e-4 vs Mitsuba (2.8e-4 vs pbrt, whose
+bilinear filter picks its own mip level; floor 2.0e-4); LOD A/B in scene-copy.md open choice 9. Timing, best effort (load 3-12, not a result):
+0.47 ms/spp for both settings at 320x240.
+
 ## Size
 
 **40.4 KB minified** (43.2 KB with an HDR env map; unit-test caps 41.5 / 44.5 KB), under the 50 KB Windows-DXC class. Three steps
@@ -95,6 +115,10 @@ leave ~7 for the alias coin (distorted probabilities). The light-selection power
 3. `shortenNames` (`rtShortenWgsl`): top-level struct/fn/const/alias/var names become `A`..`Zz` by use count (not `override`s,
    bindings, `ptMain`, or a name also used as member/parameter/local): -8.3 KB. Line numbers are unchanged by this step;
    pruning shifts lines after a dropped declaration.
+
+**With textures (P1.4c):** +2.9 KB for the lookups, the glTF material semantics, the normal map and the texture frame in `rtSurface`, +160 B per
+texture array: 43.7 KB with one array, 44.8 KB with eight, 46.5 KB with an environment map and one array (unit-test caps 45.5 / 47.5 KB).
+The untextured kernel is unchanged (40.4 KB, 40.75 KB with uvs in the layout).
 
 **Reading compiler errors (P2.10b).** The size steps keep a source map, like a TS build: `ptMegakernelBuild(caps, options)` returns
 `{ code, map }` (`map.lines`: compiled line -> readable line; `map.names`: short -> original name; `map.sources`: the readable text:

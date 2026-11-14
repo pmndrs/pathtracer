@@ -15,7 +15,7 @@
  */
 import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
-import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout } from '@pmndrs/raytracer';
+import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
@@ -40,6 +40,8 @@ export interface PtLimits {
   maxDepth: number;
   /** Russian roulette from this scattering vertex (1 = first surface hit); omitted or 0 = off. */
   rrStartDepth?: number;
+  /** `textureLod: 'cone'` only: multiplies the pixel angle the ray cone starts with. Default 1; pbrt-v4's rule is `max(1/8, 1/sqrt(spp))`. */
+  textureConeScale?: number;
 }
 
 export interface PtMegakernelOptions {
@@ -48,6 +50,8 @@ export interface PtMegakernelOptions {
   /** Surface layout of the scene copy (`copy.layout`). */
   layout: SurfaceLayout;
   integrator?: PtIntegratorOptions;
+  /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
+  textures?: TextureLayout | null;
   /**
    * Drop the indentation of every line and the spaces around `{ } ( ) , ;` (every line break stays, so compiler line numbers
    * are kept). Default true: it is 17% of the text (63.3 KB -> 52.7 KB). Comments must already be gone (they are).
@@ -82,22 +86,23 @@ export interface PtImage {
 export const minifyWgsl = rtMinifyWgsl;
 
 /** The kernel's source and the map that reads its compiler messages (`rtMapCompilationInfo`). `create` compiles `code`. */
-export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
-  const integrator = resolveIntegratorOptions(options.integrator);
+export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
+  const integratorOptions: PtIntegratorOptions = { ...options.integrator, ...(options.textures ? { textures: true } : {}) };
+  const integrator = resolveIntegratorOptions(integratorOptions);
   const raytracer = rtModuleWgsl(caps, {
     ...options.format,
     rayMasks: false,
     traceSlot: { group: 0, firstBinding: 0 },
-    scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout },
+    scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}) },
   });
-  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(options.integrator ?? {})), ptBsdfAdapterWgsl(), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(options.integrator ?? {})].join('\n');
+  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(options.integrator ?? {})), ptBsdfAdapterWgsl(), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(integratorOptions)].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };
 }
 
 /** The kernel's source for these options (what `create` compiles). Exported for size checks and the tests. */
-export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify' | 'prune' | 'shortenNames'>): string {
+export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): string {
   return ptMegakernelBuild(caps, options).code;
 }
 
@@ -141,7 +146,7 @@ export class PtMegakernel {
     const { code, map } = ptMegakernelBuild(caps, options);
     const layouts = [
       device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) }),
-      device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries() }),
+      device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures) }),
       device.createBindGroupLayout({
         label: `${label} io`,
         entries: [
@@ -156,6 +161,7 @@ export class PtMegakernel {
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
+    if (!!this.options.textures !== !!scene.textures) throw new Error(`PtMegakernel.setScene: the kernel was built ${this.options.textures ? 'with' : 'without'} textures but the scene copy has ${scene.textures ? 'some' : 'none'}`);
     this.walkGroup = this.device.createBindGroup({ label: 'pt walk', layout: this.walkLayout, entries: rtSceneBindGroupEntries(trace) });
     this.sceneGroup = this.device.createBindGroup({ label: 'pt scene', layout: this.sceneLayout, entries: rtSceneCopyBindGroupEntries(scene) });
   }
@@ -196,6 +202,7 @@ export class PtMegakernel {
     const u = new Uint32Array(buffer);
     const f = new Float32Array(buffer);
     u.set([this.width, this.height, sampleIndex >>> 0, this.seed, this.limits.maxDepth >>> 0, (this.limits.rrStartDepth ?? 0) >>> 0, 0, 0]);
+    f[6] = this.limits.textureConeScale ?? 1;
     f.set([...basis.origin, 0, ...basis.right, 0, ...basis.up, 0, ...basis.forward, 0], 8);
     return buffer;
   }

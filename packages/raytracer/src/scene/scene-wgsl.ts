@@ -19,11 +19,17 @@
  *     fn rtLightPmfOfHit(instance, triangle) -> f32   the pmf of that light (0 for a plain triangle): the MIS term for a BSDF-sampled hit
  *     fn rtSceneInfo() -> RtSceneInfo                 counts, total power, scene radius
  *     (with `sampling: true`) rtSampleLightLi(index, p, u) and the sun / environment helpers: see light-sample.ts
+ *     (with `textures`, texture.ts)
+ *       fn rtTexSample(slot, uv, lod) -> vec4f                  trilinear lookup, linear-light rgb (sRGB decoded before filtering) + alpha
+ *       fn rtTexLodOf(record, uvFootprint) -> f32               level for a filter width in uv units (twin: textureLod)
+ *       fn rtApplyMaterialTextures(m, uv, uvFootprint) -> RtMaterial   glTF semantics: baseColor * rgb, opacity * a, roughness * g, metalness * b, emission * rgb
+ *       fn rtApplyNormalMap(n, tangent, texel) -> vec3f         tangent-space normal map (glTF: +Y up) around the shading normal
  */
 import { INSTANCE_LIGHT, LIGHT_FLAG, LIGHT_KIND, LIGHT_MAP_MODE, LIGHT_RECORD_VEC4S, SCENE_HEADER_VEC4S, SCENE_NONE } from './constants.ts';
 import { MATERIAL_FLAG, MATERIAL_RECORD_VEC4S } from './material.ts';
 import { rtLightSampleWgsl } from './light-sample.ts';
 import { SURFACE_TABLE } from '../trace/constants.ts';
+import type { TextureLayout } from './texture.ts';
 
 export interface SceneWgslOptions {
   group: number;
@@ -34,6 +40,8 @@ export interface SceneWgslOptions {
   lights?: boolean;
   /** Also emit the light point sampling (`light-sample.ts`: `rtSampleLightLi` and friends). Needs `lights`. Default false (kernel size). */
   sampling?: boolean;
+  /** Emit the texture arrays and lookups (needs `materials`). Bindings follow the two buffers: textures, then samplers (`rtSceneCopyLayoutEntries`). */
+  textures?: TextureLayout | null;
 }
 
 const hex = (value: number): string => `0x${value.toString(16)}u`;
@@ -364,11 +372,85 @@ fn rtLightPmfOfHit(instance: u32, triangle: u32) -> f32 {
 `;
 }
 
+/** The texture arrays, their samplers and the lookups. One `texture_2d_array` + sampler pair per bucket; `rtTexSample` switches on the slot's bucket. */
+export function rtTexturesWgsl(o: { group: number; firstBinding: number; layout: TextureLayout }): string {
+  const n = o.layout.buckets.length;
+  const decls: string[] = [];
+  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${o.firstBinding + 2 + i}) var rtTex${i}: texture_2d_array<f32>;`);
+  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${o.firstBinding + 2 + n + i}) var rtSmp${i}: sampler;`);
+  const cases = Array.from({ length: n }, (_, i) => `        case ${i}u: {\n            return textureSampleLevel(rtTex${i}, rtSmp${i}, uv, layer, lod);\n        }`).join('\n');
+  return /* wgsl */ `
+${decls.join('\n')}
+
+fn rtTexRecord(slot: u32) -> vec4u {
+    return rtSceneTable[rtSceneTable[3].z + slot];
+}
+
+fn rtTexSampleRecord(r: vec4u, uv: vec2f, lod: f32) -> vec4f {
+    let layer = i32(r.y);
+    switch (r.x) {
+${cases}
+        default: {
+            return vec4f(1.0);
+        }
+    }
+}
+
+fn rtTexSample(slot: u32, uv: vec2f, lod: f32) -> vec4f {
+    return rtTexSampleRecord(rtTexRecord(slot), uv, lod);
+}
+
+fn rtTexLodOf(r: vec4u, footprint: f32) -> f32 {
+    let texels = footprint * sqrt(f32((r.z & 0xffffu) * (r.z >> 16u)));
+    return max(log2(max(texels, 1.0e-8)), 0.0);
+}
+
+fn rtApplyMaterialTextures(m: RtMaterial, uv: vec2f, footprint: f32) -> RtMaterial {
+    var o = m;
+    if (m.baseColorTexture != RT_TEXTURE_NONE) {
+        let r = rtTexRecord(m.baseColorTexture);
+        let t = rtTexSampleRecord(r, uv, rtTexLodOf(r, footprint));
+        o.baseColor = m.baseColor * t.rgb;
+        o.opacity = m.opacity * t.a;
+    }
+    if (m.roughnessMetalTexture != RT_TEXTURE_NONE) {
+        let r = rtTexRecord(m.roughnessMetalTexture);
+        let t = rtTexSampleRecord(r, uv, rtTexLodOf(r, footprint));
+        o.specularRoughness = m.specularRoughness * t.g;
+        o.metalness = m.metalness * t.b;
+    }
+    if (m.emissionTexture != RT_TEXTURE_NONE) {
+        let r = rtTexRecord(m.emissionTexture);
+        let t = rtTexSampleRecord(r, uv, rtTexLodOf(r, footprint));
+        o.emissionColor = m.emissionColor * t.rgb;
+    }
+    return o;
+}
+
+fn rtApplyNormalMap(n: vec3f, tangent: vec4f, texel: vec3f) -> vec3f {
+    let m = texel * 2.0 - 1.0;
+    let ml = dot(m, m);
+    let d = tangent.xyz - n * dot(n, tangent.xyz);
+    let dl = dot(d, d);
+    if (ml < 1.0e-12 || dl < 1.0e-12) {
+        return n;
+    }
+    let t = d * inverseSqrt(dl);
+    let b = cross(n, t) * tangent.w;
+    return normalize(t * m.x + b * m.y + n * m.z);
+}
+`;
+}
+
 /** The scene module's WGSL, without `rtSurface` (modules.ts adds it with `rtSurfaceWgsl`). */
 export function rtSceneWgsl(o: SceneWgslOptions): string {
   let source = rtSceneBindingsWgsl(o);
   if (o.materials ?? true) source += rtMaterialWgsl();
   if (o.lights ?? true) source += rtLightsWgsl();
   if ((o.lights ?? true) && o.sampling) source += rtLightSampleWgsl();
+  if (o.textures) {
+    if (!(o.materials ?? true)) throw new Error('rtSceneWgsl: textures need materials');
+    source += rtTexturesWgsl({ group: o.group, firstBinding: o.firstBinding, layout: o.textures });
+  }
   return source;
 }

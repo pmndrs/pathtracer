@@ -9,6 +9,7 @@
  *     meshes        meshCount x 1 vec4u              (indexOffset, vertexOffset, flags, triangleCount)
  *     materials     (materialCount + 1) x 8 vec4u    128 B each; the last record is the default material
  *     lights        lightCount x 6 vec4u             96 B each; emissive triangles, then the sun, then the environment
+ *     textures      textureCount x 1 vec4u           (bucket, layer, width | height << 16, mip levels); absent without textures (texture.ts)
  *
  * Data (`SceneCopy.data`, bound as `rtSceneData`), in u32 words: triangle vertex indices (mesh-local, original triangle
  * order), then vertex attributes (f32 bit patterns, interleaved as `SurfaceTable.vertices`), then the light maps of
@@ -58,6 +59,10 @@ export const SCENE_HEADER = {
   totalPower: 12,
   /** f32: radius of the scene's bounding sphere, used for the power of the sun and the environment. */
   sceneRadius: 13,
+  /** First texture slot record, in vec4u units (0 and unused without textures; texture.ts). */
+  textureBase: 14,
+  /** Texture slots in the table. */
+  textureCount: 15,
 } as const;
 
 export const SCENE_FLAG = {

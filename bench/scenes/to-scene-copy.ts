@@ -8,6 +8,9 @@
  *  - `dielectric`: transmissionWeight 1, specularWeight 1, ior, roughness, no base layer (baseWeight 0) and no absorption
  *    (`transmissionDepth` 0);
  *  - `black`: baseWeight 0 and specularWeight 0: scatters nothing.
+ *  - `pbr`: glTF metallic-roughness factors (baseColor, perceptual roughness, metalness, emissive) plus texture slots; a `diffuse` with a
+ *    `reflectanceTexture` takes the slot as its base colour texture.
+ * `SceneDesc.textures` become the scene copy's textures (procedural, `textures.ts`, slot = key order); `MeshDesc.uv` meshes carry uvs.
  * A mesh's `emission` is not a material property in the bench schema, so each distinct (material, emission, twoSided) triple
  * becomes its own scene-copy material; `materialNames` says which is which.
  *
@@ -19,6 +22,7 @@ import type { SceneCopyInput, SceneCopyInstance, SceneCopyMesh, RtMaterialInput,
 import { buildSceneCopy, envMapMean, type SceneCopy } from '@pmndrs/raytracer';
 import { compose, tessellate, type TriangleMesh } from './geometry.ts';
 import type { EnvironmentDesc, GeometryDesc, MaterialDesc, MeshDesc, Rgb, SceneDesc } from './schema.ts';
+import { generateTexture } from './textures.ts';
 
 /** Instance masks (same values as bench/pages/trace-scenes.ts): rays with `MASK_NO_EMITTERS` skip emitters. */
 export const INSTANCE_MASK_EMITTER = 0x02;
@@ -49,10 +53,25 @@ export interface DescSceneCopyInput extends SceneCopyInput {
 }
 
 /** The scene-copy material of one bench material (no emission). Exported so tests can check the mapping. */
-export function materialFromDesc(desc: MaterialDesc): RtMaterialInput {
+export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => number = (name) => {
+  throw new RangeError(`texture '${name}' is not defined`);
+}): RtMaterialInput {
   switch (desc.type) {
     case 'diffuse':
-      return { baseColor: [...desc.reflectance], baseWeight: 1, metalness: 0, specularWeight: 0, specularRoughness: 1 };
+      return { baseColor: [...desc.reflectance], baseWeight: 1, metalness: 0, specularWeight: 0, specularRoughness: 1, ...(desc.reflectanceTexture ? { baseColorTexture: texture(desc.reflectanceTexture) } : {}) };
+    case 'pbr':
+      return {
+        baseColor: [...desc.baseColor],
+        baseWeight: 1,
+        metalness: desc.metalness,
+        specularRoughness: desc.roughness,
+        specularWeight: 1,
+        emissionColor: [...(desc.emissive ?? [0, 0, 0])],
+        ...(desc.baseColorTexture ? { baseColorTexture: texture(desc.baseColorTexture) } : {}),
+        ...(desc.metallicRoughnessTexture ? { roughnessMetalTexture: texture(desc.metallicRoughnessTexture) } : {}),
+        ...(desc.normalTexture ? { normalTexture: texture(desc.normalTexture) } : {}),
+        ...(desc.emissiveTexture ? { emissionTexture: texture(desc.emissiveTexture) } : {}),
+      };
     case 'conductor':
       return { conductorEtaK: true, conductorEta: [...desc.eta], conductorK: [...desc.k], metalness: 1, baseWeight: 1, specularRoughness: desc.roughness, specularWeight: 1 };
     case 'dielectric':
@@ -60,6 +79,13 @@ export function materialFromDesc(desc: MaterialDesc): RtMaterialInput {
     case 'black':
       return { baseColor: [0, 0, 0], baseWeight: 0, specularWeight: 0 };
   }
+}
+
+/** Does the material read any texture (so its meshes need uvs)? */
+export function materialUsesTexture(desc: MaterialDesc): boolean {
+  if (desc.type === 'diffuse') return !!desc.reflectanceTexture;
+  if (desc.type === 'pbr') return !!(desc.baseColorTexture || desc.metallicRoughnessTexture || desc.normalTexture || desc.emissiveTexture);
+  return false;
 }
 
 function environmentFromDesc(env: EnvironmentDesc | undefined, options: DescToSceneCopyOptions): SceneCopyInput['environment'] {
@@ -80,17 +106,24 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
   const materialNames: string[] = [];
   const meshNames: string[] = [];
   const known = new Map<string, number>();
+  const textureNames = Object.keys(scene.textures ?? {});
+  const textureSlot = (name: string): number => {
+    const slot = textureNames.indexOf(name);
+    if (slot < 0) throw new RangeError(`scene '${scene.name}': unknown texture '${name}'`);
+    return slot;
+  };
 
   const materialIndex = (mesh: MeshDesc): number => {
     const base = scene.materials[mesh.material];
     if (!base) throw new RangeError(`scene '${scene.name}': mesh '${mesh.name}' uses unknown material '${mesh.material}'`);
+    if (materialUsesTexture(base) && !mesh.uv) throw new RangeError(`scene '${scene.name}': mesh '${mesh.name}' uses textured material '${mesh.material}' but has no \`uv\``);
     const emission = mesh.emission;
     const key = emission ? `${mesh.material}+emission(${emission.join(',')})${mesh.twoSided ? '+twoSided' : ''}` : mesh.material;
     let index = known.get(key);
     if (index === undefined) {
       index = materials.length;
       known.set(key, index);
-      materials.push(emission ? { ...materialFromDesc(base), emissionColor: [...emission], emissionTwoSided: !!mesh.twoSided } : materialFromDesc(base));
+      materials.push(emission ? { ...materialFromDesc(base, textureSlot), emissionColor: [...emission], emissionTwoSided: !!mesh.twoSided } : materialFromDesc(base, textureSlot));
       materialNames.push(key);
     }
     return index;
@@ -105,8 +138,8 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
           : (() => {
               throw new Error(`scene '${scene.name}': mesh '${desc.name}' is file geometry '${geometry.path}'; pass resolveFile`);
             })()
-        : tessellate(geometry);
-    meshes.push({ positions: local.positions, indices: local.indices, normals: local.normals });
+        : tessellate(geometry, desc.uv ? { uv: desc.uv } : {});
+    meshes.push({ positions: local.positions, indices: local.indices, normals: local.normals, ...(local.uvs ? { uvs: local.uvs } : {}) });
     meshNames.push(desc.name);
     instances.push({
       meshIndex: i,
@@ -121,7 +154,8 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
   if (directional.length > 1) throw new RangeError(`scene '${scene.name}': ${directional.length} directional lights; the scene copy holds one sun`);
   const sun = directional[0] ? { direction: [...directional[0].direction] as [number, number, number], irradiance: [...directional[0].irradiance] as [number, number, number], angularRadius: directional[0].angularRadius ?? 0 } : null;
 
-  return { meshes, instances, materials, materialNames, meshNames, sun, environment: environmentFromDesc(scene.environment, options), options: options.copy };
+  const textures = textureNames.map((name) => ({ ...generateTexture((scene.textures as NonNullable<SceneDesc['textures']>)[name] as NonNullable<SceneDesc['textures']>[string]), label: name }));
+  return { meshes, instances, materials, materialNames, meshNames, ...(textures.length > 0 ? { textures } : {}), sun, environment: environmentFromDesc(scene.environment, options), options: options.copy };
 }
 
 /** `sceneDescToCopyInput` + `buildSceneCopy`. */

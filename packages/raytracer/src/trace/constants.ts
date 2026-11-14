@@ -26,6 +26,11 @@ export const SURFACE = {
   UV: 8,
   /** Material id (index into our own table). */
   MATERIAL: 16,
+  /**
+   * Texture frame (P1.4c): `uvDensity` (sqrt(uv area / world area), for ray-cone level of detail) and `tangent` (world dp/du, xyz unit, w =
+   * bitangent handedness). Opt-in: not part of ALL, and only compiled when the scene has textures (needs positions and uvs in the surface data).
+   */
+  TEXTURE_FRAME: 32,
   ALL: 31,
 } as const;
 

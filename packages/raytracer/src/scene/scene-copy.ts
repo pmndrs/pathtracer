@@ -31,6 +31,7 @@ import {
   SCENE_HEADER,
   SCENE_HEADER_VEC4S,
   SCENE_NONE,
+  TEXTURE_SLOT_NONE,
 } from './constants.ts';
 import {
   buildAliasTable,
@@ -52,6 +53,7 @@ import {
 } from './lights.ts';
 import { buildEnvMapTable, envMapMean } from './env-map.ts';
 import { MATERIAL_RECORD_VEC4S, MATERIAL_RECORD_WORDS, createMaterial, defaultMaterial, f32Bits, packMaterialTable, unpackMaterial, type RtMaterial, type RtMaterialInput } from './material.ts';
+import { TEXTURE_RECORD_VEC4S, buildSceneTextures, packTextureSlot, textureLayoutOf, type SceneTextures, type TextureColorSpace, type TextureInput, type TextureLayout, type TextureOptions } from './texture.ts';
 
 export interface SceneCopyMesh extends SurfaceMeshInput {
   /** bvh's per-triangle materials (by original triangle number; 0xffff = none, then the instance's applies). */
@@ -77,6 +79,8 @@ export interface SceneCopyOptions {
   envPowerScale?: number;
   /** Which weights the light alias table is built from (P1.4f): `pbrt` (default, D22), `power`, `kind`, `{ capped: share }`. Changes noise only. */
   lightSelection?: LightSelection;
+  /** Texture storage options (size cap, rounding, arrays, mips; texture.ts). */
+  textures?: TextureOptions;
 }
 
 export interface SceneCopyInput {
@@ -87,6 +91,12 @@ export interface SceneCopyInput {
   sun?: SunInput | null;
   environment?: EnvironmentInput | null;
   options?: SceneCopyOptions;
+  /**
+   * Material textures (P1.4c). Materials reference them by index (`baseColorTexture`, `roughnessMetalTexture`, `normalTexture`,
+   * `emissionTexture`), uvs come from the meshes (`SceneCopyMesh.uvs`, glTF TEXCOORD_0: origin top-left, v down). Adding textures
+   * forces vertex positions into the surface data (the texture frame and ray-cone level of detail need the triangle's edges).
+   */
+  textures?: readonly TextureInput[];
 }
 
 export interface SceneBounds {
@@ -123,6 +133,10 @@ export interface SceneCopy {
   storageBuffers: number;
   /** Content hash (hex) of everything the shaders read; equal scene copies give equal fingerprints. */
   fingerprint: string;
+  /** The built texture arrays (CPU mips), null without textures. Upload with `uploadSceneCopy`. */
+  textures: SceneTextures | null;
+  /** Shader-side description of `textures` (module and bind group layout options), null without textures. */
+  textureLayout: TextureLayout | null;
 }
 
 /** Adapted from webgpu-ddgi `scene-fingerprint.ts` (MIT, same author): two 32-bit multiply-xorshift lanes over u32 words. */
@@ -199,6 +213,25 @@ function sceneBounds(meshes: readonly SceneCopyMesh[], instances: readonly Scene
   return { min, max, center, radius: 0.5 * Math.hypot((max[0] as number) - (min[0] as number), (max[1] as number) - (min[1] as number), (max[2] as number) - (min[2] as number)) };
 }
 
+/** Every texture slot a material names must exist, and its colour space must match what the field means (colour fields are sRGB, data fields linear). */
+function checkMaterialTextures(materials: readonly RtMaterial[], textures: readonly TextureInput[]): void {
+  const fields: Array<[keyof RtMaterial, TextureColorSpace]> = [
+    ['baseColorTexture', 'srgb'],
+    ['emissionTexture', 'srgb'],
+    ['roughnessMetalTexture', 'linear'],
+    ['normalTexture', 'linear'],
+  ];
+  materials.forEach((material, index) => {
+    for (const [field, space] of fields) {
+      const slot = material[field] as number;
+      if (slot === TEXTURE_SLOT_NONE) continue;
+      const texture = textures[slot];
+      if (!texture) throw new RangeError(`scene copy: material ${index} ${field} = ${slot}, but there are ${textures.length} textures`);
+      if (texture.colorSpace !== space) throw new RangeError(`scene copy: material ${index} ${field} uses texture ${slot}${texture.label ? ` (${texture.label})` : ''}, which is ${texture.colorSpace}; this field needs ${space}`);
+    }
+  });
+}
+
 /** Builds the scene copy. A full rebuild: incremental updates are a follow-up. */
 export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
   const { meshes, instances } = input;
@@ -217,8 +250,13 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
   const materials = requested.map((_, i) => unpackMaterial(materialWords, i * MATERIAL_RECORD_WORDS));
   const decodedDefault = unpackMaterial(materialWords, requested.length * MATERIAL_RECORD_WORDS);
 
+  // Textures: built first because they change the surface layout (positions) and are checked against the materials.
+  const textureInputs = input.textures ?? [];
+  const textures = textureInputs.length > 0 ? buildSceneTextures(textureInputs, options.textures) : null;
+  checkMaterialTextures(materials, textureInputs);
+
   // Surface section: the slice-1 builder, re-laid under the bigger header.
-  const surface = buildSurfaceTable(meshes, instances, options.surface);
+  const surface = buildSurfaceTable(meshes, instances, textures ? { ...options.surface, positions: true } : options.surface);
   const bounds = sceneBounds(meshes, instances);
 
   // Lights.
@@ -248,7 +286,8 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
   const meshBase = (surface.table[1] as number) - SURFACE_TABLE.HEADER_VEC4S + SCENE_HEADER_VEC4S;
   const materialBase = SCENE_HEADER_VEC4S + surfaceBodyVec4s;
   const lightBase = materialBase + (materials.length + 1) * MATERIAL_RECORD_VEC4S;
-  const totalVec4s = lightBase + lights.length * LIGHT_RECORD_VEC4S;
+  const textureBase = lightBase + lights.length * LIGHT_RECORD_VEC4S;
+  const totalVec4s = textureBase + (textures ? textures.slots.length * TEXTURE_RECORD_VEC4S : 0);
   const table = new Uint32Array(Math.max(totalVec4s, 1) * 4);
   table.set(surface.table.subarray(SURFACE_TABLE.HEADER_VEC4S * 4), SCENE_HEADER_VEC4S * 4);
 
@@ -290,6 +329,8 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
   table.set(materialWords, materialBase * 4);
   lights.forEach((light, i) => packLight(light, alias.pmf[i] as number, alias.prob[i] as number, alias.alias[i] as number, table, (lightBase + i * LIGHT_RECORD_VEC4S) * 4));
 
+  textures?.slots.forEach((slot, i) => packTextureSlot(slot, table, (textureBase + i * TEXTURE_RECORD_VEC4S) * 4));
+
   // Header.
   const h = (word: number, value: number) => {
     table[word] = value >>> 0;
@@ -308,6 +349,10 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
   h(SCENE_HEADER.flags, surface.layout.positions ? SCENE_FLAG.positions : 0);
   h(SCENE_HEADER.totalPower, f32Bits(totalPower));
   h(SCENE_HEADER.sceneRadius, f32Bits(bounds.radius));
+  if (textures) {
+    h(SCENE_HEADER.textureBase, textureBase);
+    h(SCENE_HEADER.textureCount, textures.slots.length);
+  }
 
   const surfaceView: SurfaceTable = {
     ...surface,
@@ -318,7 +363,10 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     byteLength: table.byteLength + data.byteLength,
   };
 
-  const fingerprint = new ContentHasher().word(SCENE_COPY_VERSION).words(table).words(data).digest();
+  const hasher = new ContentHasher().word(SCENE_COPY_VERSION).words(table).words(data);
+  // Without textures nothing more is hashed, so untextured fingerprints are unchanged.
+  if (textures) for (const bucket of textures.buckets) hasher.word(bucket.width).word(bucket.height).word(bucket.layers).words(new Uint32Array(bucket.mips[0]!.buffer, bucket.mips[0]!.byteOffset, bucket.mips[0]!.byteLength >> 2));
+  const fingerprint = hasher.digest();
   return {
     table,
     data,
@@ -337,6 +385,8 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     byteLength: table.byteLength + data.byteLength,
     storageBuffers: SCENE_COPY_STORAGE_BUFFERS,
     fingerprint,
+    textures,
+    textureLayout: textures ? textureLayoutOf(textures) : null,
   };
 }
 
