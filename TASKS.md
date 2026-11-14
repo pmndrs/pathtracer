@@ -64,7 +64,7 @@ suggestion, pros/cons and the A/B that would settle it.
 ## N — Neural radiance cache (research track)
 
 Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Reference implementation: VkNRC (Vulkan, NV cooperative matrix;
-**no licence: read and compare only**, `research/sources/native/vknrc`). Backends A/B'd: WGSL f32 / f16 / subgroup-matrix,
+**no licence: we follow its design, own code, D23**; read-only clone `research/sources/native/vknrc`). Backends A/B'd: WGSL f32 / f16 / subgroup-matrix,
 ORT-Web, WebNN.
 
 | ID | Task | Owner | Status | Notes |
@@ -79,7 +79,8 @@ ORT-Web, WebNN.
 | N4 | Encodings: frequency + one-blob vs multiresolution hash grid, A/B on `mlp-fit` | — | ⬜ | both stay settings |
 | N5 | ORT-Web and WebNN arms: inference + training-step-as-graph (fwd + bwd + Adam exported as one ONNX / WebNN graph, weights in and out) | — | ⬜ | comparison rows in N2 only |
 | N6 | `nrc` demo page: diffuse wavefront PT on sponza-white over trace core, spread termination, sparse training paths (per subgroup, as VkNRC) with self-training tail written by the inference pass, 4 × 16k indirect train steps, at full and ratio-2 resolution | — | ⬜ | VkNRC config first, then one change at a time (DIVERGES). Equal-time relMSE/FLIP vs Mitsuba, bias, still-camera stability |
-| N6.1 | VkNRC native on the RTX 3060L (Vulkan, NV coop matrix) as the native timing baseline, built under `.cache/native/` | maintainer (Windows) | ⬜ | needs the maintainer's OK (exception to "never build clones"); timings only, nothing redistributed |
+| N6.1 | VkNRC native on the RTX 3060L as the native timing baseline (W10): build under `.cache/native/`, local patches for per-pass timestamps, fixed camera, PFM dump | maintainer (Windows) | ⬜ | D22. Linux build verified 2026-11-14 (no GPU to run); patches never committed |
+| N6.2 | OBJ exporter for sponza-white (VkNRC input), and a "VkNRC lighting" setting on the `nrc` page (white sky 10, no sun) for like-for-like images | — | ⬜ | nrc.md §9 |
 | N7 | Non-neural hash cache (SHaRC-like, `@pmndrs/gi`) as the equal-time competitor to N6 | — | ⬜ | needs gi on the trace core (P4) or a bench-local copy |
 | N8 | `bench/results/NRC.md`: per-vendor "what subgroup-matrix buys" table + viewer report | — | ⬜ | public use needs the maintainer (D8) |
 
@@ -87,8 +88,8 @@ ORT-Web, WebNN.
 
 - **NRC: where does the MLP engine live?** Suggestion: private workspace package `packages/mlp` (WGSL prefix `nn*`),
   demo as bench pages until N6; a production cache follows D3 into `@pmndrs/gi`. Details, pros/cons and the deciding
-  test in [docs/design/nrc.md](docs/design/nrc.md) §8 (also: VkNRC licence request, building VkNRC natively (N6.1), gpuweb
-  evidence, Windows Vulkan flag).
+  test in [docs/design/nrc.md](docs/design/nrc.md) §8 (also: gpuweb evidence, Windows Vulkan flag;
+  VkNRC licence and native build settled by D22/D23).
 
 - **Capsaicin: a third reference renderer, or a cross-check only?** Suggestion: cross-check and native timing baseline on
   the RTX 3060, for opaque scenes only. Keep pbrt + Mitsuba as the references (D15).

@@ -19,7 +19,7 @@ PDF before quoting, **[U]** unknown, needs a test.
 Sources we may use: the paper and talks (D10: NVIDIA papers are fine), and **tiny-cuda-nn** (NVlabs, **BSD-3-Clause
 [V 2026-11-14, LICENSE.txt]**: may be ported with attribution in THIRD_PARTY.md). Off limits: the NRC SDK and RTXGI code
 (NVIDIA RTX SDK licence, D10), including `research/sources/native/rtxgi`. instant-ngp is under a non-commercial NVIDIA
-licence: ideas only. VkNRC has no licence: read and compare only (§1b).
+licence: ideas only. VkNRC has no licence: we follow its design and write our own code (§1b, D23).
 
 How it works [M unless marked]:
 
@@ -47,16 +47,21 @@ Read the PDF before quoting any of these numbers (N0.1). The research notes flag
 ## 1b. Reference implementation: VkNRC (the one we port the design of)
 
 [AdamYuan/VkNRC](https://github.com/AdamYuan/VkNRC), commit `a667859` (2024-09-10), cloned read-only at
-`research/sources/native/vknrc`. A complete NRC in Vulkan: hardware ray queries, a V-buffer for primaries, a
+`research/sources/native/vknrc` (the native build lives in `.cache/native/vknrc`, §9). A complete NRC in Vulkan: hardware ray queries, a V-buffer for primaries, a
 Cook-Torrance path tracer, and a hand-written fully-fused MLP on `VK_NV_cooperative_matrix` (its README says the KHR
 extension was "too limited", and that its backward pass beats tiny-cuda-nn's). Its history shows the path we plan to
 take: an MLP test harness with a CPU (Eigen) oracle and a "learning an image" test came first, then forward,
 backward and Adam, then the integrator.
 
-**Licence: none.** No LICENSE file and no licence text anywhere in the tree [V 2026-11-14]. Under our rules that means
-**read, cite and compare only; no code is copied or translated** (same as mutracer). The design below is re-derived
-from the paper and tiny-cuda-nn (BSD-3); VkNRC is the worked example we check our understanding against. If we want
-more than that, the author has to add a licence (§8).
+**Licence: none.** No LICENSE file and no licence text anywhere in the tree [V 2026-11-14]; the README only describes
+the project. The maintainer's call (D22, D23), since this track is an experiment to find out whether a web NRC is
+possible at all:
+- **We follow its design closely**: kernel layout, record formats, pass graph, constants and the order it was built
+  and tested in. VkNRC is credited as the design reference.
+- **The code is ours.** No VkNRC source text is pasted or translated line by line into this repo. In practice that
+  costs little: GLSL with NV cooperative matrices becomes WGSL with subgroup-matrix tiles, no per-element tile access
+  and no float atomics, so the kernels are a rewrite either way (table below).
+- **We build and run it natively** as the baseline (§9).
 
 What VkNRC does, all [V from its source]. These are its choices, not necessarily the paper's:
 
@@ -242,14 +247,35 @@ works on `wgsl-f16` at the upscaler's resolution, and the write-up says so.
   - Settles it: whether a second consumer (Denoiser, gi) wants the MLP engine after N2.
 - **Public evidence for gpuweb.** If N2/N3 show a clear win, the numbers fit gpuweb issue #4195 (subgroup matrix). That is
   outward-facing; nothing gets posted without your go (D8).
-- **VkNRC has no licence.** Suggestion: keep it read-only (as now) and, if a code-level port would save real time,
-  ask the author to add an MIT licence. That is outward-facing, so it needs your go.
-  - Pro (asking): their kernel layout and backward pass are tested; a port with attribution would be faster than a
-    re-derivation.
-  - Con: it may not come; our design must not wait for it. The paper + tiny-cuda-nn route is complete without it.
-- **Run VkNRC natively as a baseline?** It needs Vulkan, ray queries and the NV cooperative-matrix extension, so in
-  practice an NVIDIA GPU: the RTX 3060 laptop. Building it under `.cache/native/` and comparing its NRC time per frame
-  with ours on the same machine would give the "native vs web" ratio. Our rules say clones are never built; this would
-  be an explicit exception, like pbrt-v4 and Mitsuba. Suggestion: yes, as a W-task, timings only, nothing redistributed.
+- ~~VkNRC licence / native build~~: settled 2026-11-14 (D22, D23): build it natively, follow its design, own code.
 - **Windows Vulkan backend.** If tensor cores are only reachable through Dawn's Vulkan backend behind a flag, is a
   flag-only result acceptable for the demo? Suggestion: yes, reported as such.
+
+## 9. Native baseline: VkNRC on the RTX 3060 (N6.1, D22)
+
+What runs where: VkNRC needs `VK_NV_cooperative_matrix`, `VK_EXT_shader_atomic_float` and ray queries, so it only runs
+on NVIDIA. The RTX 3060 laptop is the machine (Windows W10). It does **not** run on the Mac.
+
+**Build.** Verified 2026-11-14 on Linux (Ubuntu 24.04, GCC 13.3, CMake 3.28, Ninja, glslc/shaderc 2023.8): a fresh
+clone of `a667859` under `.cache/native/vknrc`, `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`, then
+`cmake --build build` builds all 13 shaders and the executable in about 50 s once the packages in the CLAUDE.md trap are
+installed. Not run (no GPU in that session). On Windows follow its own CI (`.github/workflows/windows-msvc.yml`):
+Vulkan SDK, Visual Studio 2022, x64 Release.
+
+**Run.** `VkNRC <scene.obj>`. It loads one OBJ, normalises it to [-1, 1], has a constant white sky (radiance 10) and no
+sun, and offers a split screen (left/right: none, NRC, cache only) with an accumulate toggle. The only number it shows is
+FPS.
+
+**Local patches needed for a baseline** (kept in `.cache`, never committed, D22):
+1. GPU timestamps around each pass (path tracer, inference, each training step, optimiser), written to CSV, so we
+   compare pass by pass rather than FPS.
+2. A fixed camera pose and frame count from the command line, and an exit after N frames.
+3. A dump of the accumulated image as PFM, so the viewer compares it with our `nrc` page and the references.
+
+**Scene.** Our scenes are not OBJ. Add an OBJ exporter for sponza-white (positions and normals, one grey material), and
+note that VkNRC's lighting (white sky, no sun, Cook-Torrance) differs from the sponza-white reference (sun + sky,
+Lambert). For a like-for-like comparison our `nrc` page gets a "VkNRC lighting" setting; the references stay ours.
+
+**What we compare.** Same machine, same resolution, same net and batch sizes:
+ms per pass (VkNRC native vs our `wgsl-f16` and `wgsl-sgm`), and the images after the same number of frames. The
+paired ratio "web / native" per pass is the headline of the track's write-up (N8).

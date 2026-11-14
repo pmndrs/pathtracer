@@ -43,7 +43,8 @@ simplification.
 - **NRD**: never open its code or any port of it (Denoiser clean-room rules,
   `~/Developer/Denoiser/docs/research/rt-denoiser/RULES.md`). Native NRD runs only via the Denoiser Windows harness;
   we consume its output images.
-- GPL / non-commercial (rindr): ideas only. No licence file: read only.
+- GPL / non-commercial (rindr): ideas only. No licence file: read only. Exception: VkNRC may be built natively and its
+  design followed closely for research track N (D22, D23); its source text still never enters this repo.
 - Third-party clones in `research/sources/` are read-only. Never build or run them. Native tools we build (pbrt-v4,
   Mitsuba) get their own checkout under `.cache/native/` (git-ignored).
 
@@ -156,6 +157,10 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   be a multiple of the max subgroup size. WGSL has no float atomics, so batched gradient sums need partials plus a
   reduction dispatch (docs/design/nrc.md §2).
 - tiny-cuda-nn is BSD-3 (portable with attribution); the NRC SDK and RTXGI are RTX SDK licence (no code); instant-ngp is
-  non-commercial (ideas only). VkNRC (the NRC reference we follow) has no licence: read and compare only.
+  non-commercial (ideas only). VkNRC (the NRC reference we follow) has no licence: follow its design, never paste its code (D23).
 - VkNRC's MLP leans on three things WGSL lacks: per-element access to matrix tiles (ReLU), NaN as a mask (ReLU
   derivative) and f32 `atomicAdd` (weight gradients). Each needs a workgroup-memory pass or a reduction dispatch here.
+- VkNRC builds on Linux (Ubuntu 24.04, GCC 13, CMake 3.28, glslc 2023.8) after `apt-get install libvulkan-dev glslc
+  libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev`; the build in a fresh clone under
+  `.cache/native/vknrc` takes ~50 s. It runs only on NVIDIA (requires `VK_NV_cooperative_matrix`, float atomics, ray
+  query), loads one OBJ (normalised to [-1, 1]) and shows only FPS: timing it needs a local timestamp patch.

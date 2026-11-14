@@ -22,7 +22,7 @@
 | native/rtxpt | https://github.com/NVIDIA-RTX/RTXPT | 303b408 | NVIDIA RTX SDKs License | RTX path tracing SDK reference |
 | native/sharc | https://github.com/NVIDIA-RTX/SHARC | 4e21b58 | NVIDIA RTX SDKs License | spatial hash radiance cache |
 | native/tinybvh | https://github.com/jbikker/tinybvh | c9be310 | MIT | our bvh upstream demos |
-| native/vknrc | https://github.com/AdamYuan/VkNRC | a667859 (2024-09-10) | **NONE (no LICENSE file, no licence text) - READ ONLY, FLAG** | Vulkan NRC: hand-written fully-fused MLP on VK_NV_cooperative_matrix, ray-query PT; reference for docs/design/nrc.md (read/compare, never copy) |
+| native/vknrc | https://github.com/AdamYuan/VkNRC | a667859 (2024-09-10) | **NONE (no LICENSE file, no licence text) - READ ONLY, FLAG** | Vulkan NRC: hand-written fully-fused MLP on VK_NV_cooperative_matrix, ray-query PT; design reference for docs/design/nrc.md (D23: follow the design, never paste code); native build only under `.cache/native/vknrc` (D22) |
 | native/tungsten | https://github.com/tunabrain/tungsten | 88ea020 | BSD-like (Bitterli) | Bitterli renderer, scene format |
 | web/mutracer | https://github.com/pissang/mutracer | 06088ce | MIT (note: some chunks adapted from MIT ray-tracing-renderer/GLSL-PathTracer; see LICENSES/) | near-competitor WebGPU PT; read/cite/benchmark only, do not copy |
 | web/three-gpu-pathtracer | https://github.com/gkjohnson/three-gpu-pathtracer | 4a32415 | MIT | upstream WebGPUPathTracer (wavefront+megakernel), v0.0.28+ |
