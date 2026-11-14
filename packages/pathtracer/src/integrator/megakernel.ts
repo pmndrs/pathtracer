@@ -13,7 +13,7 @@
  * is never rewritten before the pass that read it ran, as long as no more than `PT_PARAM_SLOTS` passes are outstanding.
  * Accumulation is f32 `array<vec4f>` (sum of radiance, w = samples); `readImage` divides. Nothing here reads back unless you call it.
  */
-import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtSceneBindGroupEntries, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
+import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtPruneWgsl, rtSceneBindGroupEntries, rtShortenWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
 import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
@@ -52,6 +52,18 @@ export interface PtMegakernelOptions {
    * are kept). Default true: it is 17% of the text (63.3 KB -> 52.7 KB). Comments must already be gone (they are).
    */
   minify?: boolean;
+  /**
+   * Drop top-level declarations `ptMain` and the bindings cannot reach (`rtPruneWgsl`: bvh closest-point queries, unused light and
+   * cone helpers, ...). Default true; the text shrinks by about 4.7 KB and every result is bit-identical. Dropped lines shift
+   * compiler line numbers after them, so set false when reading a compiler message against the unpruned source.
+   */
+  prune?: boolean;
+  /**
+   * Rename top-level functions, structs and constants to 1-2 letter names (`rtShortenWgsl`; entry point, bindings and overrides
+   * keep theirs). Default true; saves about 8 KB, results bit-identical. Compiler messages then show short names, and
+   * `ptMegakernelWgsl(..., { shortenNames: false })` gives the readable source (same line numbers).
+   */
+  shortenNames?: boolean;
   label?: string;
 }
 
@@ -69,7 +81,7 @@ export function minifyWgsl(code: string): string {
 }
 
 /** The kernel's source for these options (what `create` compiles). Exported for size checks and the tests. */
-export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify'>): string {
+export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'minify' | 'prune' | 'shortenNames'>): string {
   const integrator = resolveIntegratorOptions(options.integrator);
   const raytracer = rtModuleWgsl(caps, {
     ...options.format,
@@ -77,9 +89,11 @@ export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 
     traceSlot: { group: 0, firstBinding: 0 },
     scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout },
   });
-  const ours = [rtLightSampleWgsl(), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(options.integrator ?? {})), ptBsdfAdapterWgsl(), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(options.integrator ?? {})].join('\n');
+  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(options.integrator ?? {})), ptBsdfAdapterWgsl(), ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(options.integrator ?? {})].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
-  const code = `${raytracer}\n${ours}`;
+  const joined = `${raytracer}\n${ours}`;
+  const pruned = (options.prune ?? true) ? rtPruneWgsl(joined).code : joined;
+  const code = (options.shortenNames ?? true) ? rtShortenWgsl(pruned, ['ptMain']).code : pruned;
   return (options.minify ?? true) ? minifyWgsl(code) : code;
 }
 

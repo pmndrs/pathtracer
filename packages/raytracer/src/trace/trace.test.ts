@@ -10,6 +10,8 @@ import {
   TRACER_GPU_LAYOUT_VERSION,
   traceModuleWgsl,
 } from '@pmndrs/bvh';
+import { RESERVED } from '../wgsl-names.testutil.ts';
+import { rtPruneWgsl, rtShortenWgsl } from './modules.ts';
 import { buildCaps } from '../caps/index.ts';
 import { BVH_LAYOUT_VERSION, BVH_MAX_MATERIAL, HIT_BYTES, HIT_COMPACT_BYTES, RAY_BYTES, RAY_CONE_BYTES } from '../contract/ray.ts';
 import {
@@ -371,5 +373,65 @@ describe('layout version check', () => {
     const { assertBvhLayout } = await import('./modules.ts');
     expect(() => assertBvhLayout(BVH_LAYOUT_VERSION)).not.toThrow();
     expect(() => assertBvhLayout(BVH_LAYOUT_VERSION + 1)).toThrow(/layout v/);
+  });
+});
+
+describe('rtPruneWgsl / rtShortenWgsl (P2.10)', () => {
+  const src = [
+    'enable f16;',
+    'struct Used { a: f32, }',
+    'struct Dead { b: f32, }',
+    'const KEEP: f32 = 1.0;',
+    'const DEAD: f32 = 2.0;',
+    'fn helperUsed(x: f32) -> f32 {',
+    '  let longLocalName = x * KEEP;',
+    '  return longLocalName;',
+    '}',
+    'fn helperDead() -> f32 { return DEAD; }',
+    'fn onlyFromDead() -> f32 { return helperDead(); }',
+    '@group(0) @binding(0) var<storage, read_write> outBuf: array<f32>;',
+    '@compute @workgroup_size(1)',
+    'fn mainEntry() {',
+    '  var u: Used;',
+    '  u.a = helperUsed(1.0);',
+    '  outBuf[0] = u.a;',
+    '}',
+  ].join('\n');
+
+  it('prunes what no entry point or binding reaches, keeps entries, bindings and the lone attribute line', () => {
+    const { code, dropped } = rtPruneWgsl(src);
+    expect(dropped.sort()).toEqual(['DEAD', 'Dead', 'helperDead', 'onlyFromDead']);
+    expect(code).toContain('@compute @workgroup_size(1)\nfn mainEntry');
+    expect(code).toContain('outBuf');
+    expect(code).toContain('enable f16;');
+    expect(code).not.toContain('helperDead');
+  });
+
+  it('shortens top-level names consistently and leaves entries, bindings, members and locals alone', () => {
+    const { code, names } = rtShortenWgsl(rtPruneWgsl(src).code, ['mainEntry']);
+    expect(names.has('helperUsed')).toBe(true);
+    expect(names.has('mainEntry')).toBe(false);
+    expect(names.has('outBuf')).toBe(false);
+    expect(code).toContain('outBuf');
+    expect(code).toContain('mainEntry');
+    expect(code).toContain('u.a');
+    expect(code).toContain('longLocalName');
+    expect(code).not.toContain('helperUsed');
+    expect(code.split('\n').length).toBe(rtPruneWgsl(src).code.split('\n').length);
+    for (const n of names.values()) expect(n.length).toBeLessThan(4);
+  });
+
+  it('does not rename a top-level name that is also a member, a parameter or a local elsewhere', () => {
+    const clash = 'const Shared: f32 = 1.0;\nstruct S { Shared: f32, }\nfn f(Shared2: f32) -> f32 { return Shared2; }\nfn g() -> f32 { var s: S; return s.Shared + Shared; }';
+    expect(rtShortenWgsl(clash).names.has('Shared')).toBe(false);
+  });
+
+  it('never picks a name already in the source or a WGSL reserved word', () => {
+    const many = Array.from({ length: 80 }, (_, i) => `fn someLongFunctionName${i}() -> f32 { return A + ${i}.0; }`).join('\n');
+    const { code, names } = rtShortenWgsl(`const A: f32 = 1.0;\n${many}`);
+    expect([...names.values()]).not.toContain('A');
+    expect(new Set(names.values()).size).toBe(names.size);
+    for (const n of names.values()) expect(RESERVED.has(n)).toBe(false);
+    expect(code).toContain('const A');
   });
 });

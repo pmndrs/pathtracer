@@ -50,10 +50,20 @@ export interface RtSunLight {
   power: number;
 }
 
-/** A constant-radiance environment. `mapSlot` reserves the place of a later environment map (SCENE_NONE = no map). */
+/**
+ * The environment: constant `radiance`, or an equirect map (`mapSlot` 0, env-map.ts; SCENE_NONE = none). With a map,
+ * `radiance` is the solid-angle-weighted mean of the map (the constant that carries the same power: light selection and the
+ * constant-radiance fallback use it) and the map's data sits at `mapBase` in the scene copy's `data` buffer.
+ */
 export interface RtEnvironmentLight {
   kind: 'environment';
   radiance: Rgb3;
+  /** Word index of the map in `data`, and its size; 0 without a map. */
+  mapBase: number;
+  mapWidth: number;
+  mapHeight: number;
+  /** f32 pdf normaliser of the map's sampling density. */
+  pdfNorm: number;
   scale: number;
   /** Radians about +Y; used with a map. */
   rotationY: number;
@@ -70,7 +80,10 @@ export interface SunInput {
   angularRadius?: number;
 }
 export interface EnvironmentInput {
-  radiance: readonly [number, number, number];
+  /** Constant radiance. With a `map` it defaults to the map's mean. */
+  radiance?: readonly [number, number, number];
+  /** An equirect HDR map (`buildSceneCopy` copies it into the scene copy; env-map.ts). */
+  map?: { width: number; height: number; channels: number; data: ArrayLike<number> };
   scale?: number;
   rotationY?: number;
   mapSlot?: number;
@@ -125,6 +138,64 @@ export function buildAliasTable(weights: ArrayLike<number>): AliasTable {
   const pmf = new Float32Array(n);
   for (let i = 0; i < n; i++) pmf[i] = uniform ? 1 / n : (weights[i] as number) / total;
   return { prob: Float32Array.from(prob), alias, pmf, total: uniform ? 0 : total };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Light selection strategies (P1.4f): which weights go into the alias table. Selection only moves noise, never the mean.
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * How NEE picks a light:
+ *  - `power`: probability proportional to power (the default; sun and environment power use the bounding-sphere conventions above);
+ *  - `kind`: each kind that has power (emissive triangles, sun, environment) gets an equal share, and within a kind the
+ *    share follows power (so triangles stay area/radiance weighted);
+ *  - `{ capped: c }`: power-proportional, except the infinite lights (sun + environment together) are capped at share `c`
+ *    (their weights are scaled down when their power share exceeds `c`; never scaled up). With no area power they take everything.
+ * A light with no power gets weight 0 under every strategy.
+ */
+export type LightSelection = 'power' | 'kind' | { capped: number };
+
+/** Parses the bench/page spelling: `power`, `kind`, `cap:0.25`. */
+export function parseLightSelection(text: string): LightSelection {
+  if (text === 'power' || text === 'kind') return text;
+  const m = /^cap:(\d*\.?\d+)$/.exec(text);
+  if (m) return { capped: Number(m[1]) };
+  throw new RangeError(`light selection '${text}': expected power, kind or cap:<share>`);
+}
+
+export function lightSelectionName(selection: LightSelection): string {
+  return typeof selection === 'string' ? selection : `cap:${selection.capped}`;
+}
+
+/** Selection probabilities (sum to 1 when any light has power, else all 0) of each light under `selection`. The alias table is built from these. */
+export function lightSelectionWeights(lights: readonly RtLight[], selection: LightSelection = 'power'): number[] {
+  const power = lights.map((l) => (l.power > 0 ? l.power : 0));
+  const total = power.reduce((a, b) => a + b, 0);
+  if (!(total > 0)) return power;
+  const group = (pred: (l: RtLight) => boolean) => power.reduce((a, p, i) => a + (pred(lights[i] as RtLight) ? p : 0), 0);
+  const scaleGroup = (pred: (l: RtLight) => boolean, share: number, groupTotal: number) =>
+    power.map((p, i) => (pred(lights[i] as RtLight) && groupTotal > 0 ? (p / groupTotal) * share : 0));
+  if (selection === 'power') return power.map((p) => p / total);
+  if (selection === 'kind') {
+    const kinds = ['triangle', 'sun', 'environment'] as const;
+    const present = kinds.filter((k) => group((l) => l.kind === k) > 0);
+    const out = new Array<number>(lights.length).fill(0);
+    for (const k of present) {
+      const w = scaleGroup((l) => l.kind === k, 1 / present.length, group((l) => l.kind === k));
+      w.forEach((x, i) => (out[i] = (out[i] as number) + x));
+    }
+    return out;
+  }
+  const cap = selection.capped;
+  if (!(cap >= 0 && cap <= 1)) throw new RangeError(`light selection: cap ${cap} must be in [0, 1]`);
+  const infinite = (l: RtLight) => l.kind !== 'triangle';
+  const pInf = group(infinite);
+  const pArea = total - pInf;
+  const share = pInf / total;
+  if (pArea <= 0 || pInf <= 0 || share <= cap) return power.map((p) => p / total);
+  const a = scaleGroup((l) => !infinite(l), 1 - cap, pArea);
+  const b = scaleGroup(infinite, cap, pInf);
+  return a.map((x, i) => x + (b[i] as number));
 }
 
 export interface LightSample {
@@ -301,16 +372,21 @@ export function makeSun(input: SunInput, sceneRadius: number, powerScale = 1): R
   };
 }
 
-export function makeEnvironment(input: EnvironmentInput, sceneRadius: number, powerScale = 1): RtEnvironmentLight {
+export function makeEnvironment(input: EnvironmentInput, sceneRadius: number, powerScale = 1, map?: { base: number; width: number; height: number; pdfNorm: number; mean: Rgb3 }): RtEnvironmentLight {
   const f = Math.fround;
   const scale = input.scale ?? 1;
-  const radiance: Rgb3 = [f(input.radiance[0]), f(input.radiance[1]), f(input.radiance[2])];
+  const given = input.radiance ?? map?.mean ?? [0, 0, 0];
+  const radiance: Rgb3 = [f(given[0]), f(given[1]), f(given[2])];
   return {
     kind: 'environment',
     radiance,
+    mapBase: map ? map.base : 0,
+    mapWidth: map ? map.width : 0,
+    mapHeight: map ? map.height : 0,
+    pdfNorm: map ? f(map.pdfNorm) : 0,
     scale: f(scale),
     rotationY: f(input.rotationY ?? 0),
-    mapSlot: input.mapSlot ?? SCENE_NONE,
+    mapSlot: map ? 0 : (input.mapSlot ?? SCENE_NONE),
     power: luminance(radiance) * scale * 4 * Math.PI * Math.PI * sceneRadius * sceneRadius * powerScale,
   };
 }
@@ -352,6 +428,9 @@ export function packLight(light: RtLight, pmf: number, aliasProb: number, alias:
     w(LIGHT_WORD.envScale, f32Bits(light.scale));
     w(LIGHT_WORD.envRotation, f32Bits(light.rotationY));
     w(LIGHT_WORD.envMapSlot, light.mapSlot);
+    w(LIGHT_WORD.envMapBase, light.mapBase);
+    w(LIGHT_WORD.envMapSize, (light.mapWidth | (light.mapHeight << 16)) >>> 0);
+    w(LIGHT_WORD.envPdfNorm, f32Bits(light.pdfNorm));
     put3(LIGHT_WORD.radiance, light.radiance);
     w(LIGHT_WORD.instance, SCENE_NONE);
     w(LIGHT_WORD.triangle, SCENE_NONE);
@@ -400,7 +479,22 @@ export function unpackLight(words: ArrayLike<number>, wordOffset = 0): UnpackedL
     };
   }
   if (kind === LIGHT_KIND.environment) {
-    return { ...common, light: { kind: 'environment', radiance: f3(LIGHT_WORD.radiance), scale: f(LIGHT_WORD.envScale), rotationY: f(LIGHT_WORD.envRotation), mapSlot: w(LIGHT_WORD.envMapSlot), power: 0 } };
+    const size = w(LIGHT_WORD.envMapSize);
+    return {
+      ...common,
+      light: {
+        kind: 'environment',
+        radiance: f3(LIGHT_WORD.radiance),
+        mapBase: w(LIGHT_WORD.envMapBase),
+        mapWidth: size & 0xffff,
+        mapHeight: size >>> 16,
+        pdfNorm: f(LIGHT_WORD.envPdfNorm),
+        scale: f(LIGHT_WORD.envScale),
+        rotationY: f(LIGHT_WORD.envRotation),
+        mapSlot: w(LIGHT_WORD.envMapSlot),
+        power: 0,
+      },
+    };
   }
   throw new RangeError(`light record: unknown kind ${kind}`);
 }

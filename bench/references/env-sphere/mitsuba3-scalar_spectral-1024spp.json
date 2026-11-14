@@ -3,8 +3,8 @@
   "renderer": "mitsuba3-scalar_spectral",
   "version": "mitsuba 3.9.1",
   "spp": 1024,
-  "seconds": 20.69,
-  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-l8uCqq/scene.xml bench/references/env-sphere/mitsuba3-scalar_spectral-1024spp.pfm scalar_spectral 1024",
+  "seconds": 19.07,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-EkAR0a/scene.xml bench/references/env-sphere/mitsuba3-scalar_spectral-1024spp.pfm scalar_spectral 1024",
   "settings": {
     "maxDepth": 16,
     "rrStartDepth": null,
@@ -19,15 +19,17 @@
     "max_depth": 17,
     "sampler": "multijitter",
     "filter": "box 0.5",
-    "renderSeconds": 20.524404048919678,
+    "renderSeconds": 18.927135229110718,
     "spectral": true
   },
-  "approximations": [],
+  "approximations": [
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere)."
+  ],
   "host": {
     "hostname": "Denniss-MacBook-Pro.local",
     "platform": "darwin 25.6.0",
     "cpus": 18,
     "cpuModel": "Apple M5 Pro"
   },
-  "date": "2026-11-13T04:45:24.405Z"
+  "date": "2026-11-14T07:12:19.477Z"
 }

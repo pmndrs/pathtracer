@@ -48,9 +48,9 @@ scramble, so the first 2^m samples of every pair are a (0,m,2)-net. `pcg` is the
 
 ## Settings
 
-Pipeline constants: `sampler` (owen-sobol | pcg), `nee`, `envSampling` (uniform | none), `sunVisible`, `vndf`,
-`transport`. Per dispatch: size, sample index, seed, `maxDepth`, `rrStartDepth`, camera. Bench page args: `pt_sampler`,
-`pt_nee`, `pt_env`, `pt_sun_visible`, `pt_positions`, `pt_vndf`, `pt_transport`, `pt_maxdepth`, `pt_rr`, `pt_seed`,
+Pipeline constants: `sampler` (owen-sobol | pcg), `nee`, `envSampling` (uniform | importance | none), `envMap` (compile
+the environment-map code), `sunVisible`, `vndf`, `transport`. Kernel text (host options, not pipeline constants): `minify`, `prune`, `shortenNames` (all default true; page args `pt_prune=0`, `pt_shorten=0`). Per dispatch: size, sample index, seed, `maxDepth`, `rrStartDepth`, camera. Bench page args: `pt_sampler`,
+`pt_nee`, `pt_env` (uniform|importance|none; the adapter's default is importance for an `hdri` scene, uniform otherwise), `pt_sun_visible`, `pt_positions`, `pt_vndf`, `pt_transport`, `pt_maxdepth`, `pt_rr`, `pt_seed`,
 `pt_passes`, `pt_sun_radius` (radians, 0 = delta sun) (`matrix.ts --extra k=v,...`).
 
 ## Agreement (1024 spp, M5; timings best effort)
@@ -62,6 +62,7 @@ Pipeline constants: `sampler` (owen-sobol | pcg), `nee`, `envSampling` (uniform 
 | furnace-conductor | 2.42e-5 | 7.99e-6 | 3.15e-5 | 0.69285 vs pbrt 0.69286; Mitsuba 0.69040 (its Smith G) |
 | quad-light | 4.72e-5 | 4.79e-5 | 1.84e-6 | closed form over the plane to 9e-5 |
 | cornell | 7.25e-5 | 4.82e-4 | 4.39e-4 | the 0.69% vs pbrt is pbrt's spectral uplift; Mitsuba RGB agrees with us |
+| env-sphere | 6.98e-5 | 6.90e-4 | 6.52e-4 | HDR map, luminance importance sampling + MIS (P2.8, `reports/pt-envmap`); relBias +0.01% / -0.38% (Mitsuba after its envmap row fix V50; it read -0.14% before); the -0.38% is pbrt's spectral uplift of the clay/copper (+1.4% / +1.65% there), not the map (P2.8a item 4); at the pbrt floor; uniform sphere sampling 4.61e-4 (6.6x worse at 1024 spp, 23x at 16 spp), same means |
 | sponza-white | 8.11e-3 | 8.28e-3 | 4.09e-3 | at the noise floor (reference noise ~2e-3 + ours; 1/spp slope holds); relBias -0.13% vs Mitsuba; delta sun and positions=ray identical (P2.9, `reports/pt-sponza*`) |
 
 0 non-finite pixels. GPU twins (`pt-check`): sampler bit-identical, adapter 0 mismatches, light sampling max rel 1.3e-5,
@@ -72,22 +73,56 @@ Settings A/B at 1024 spp (relMSE vs Mitsuba): Owen-Sobol beats PCG 2.6–2.8× o
 floor (zero variance); `positions=ray` and `vndf=cap` identical on Tier 0; `rrStartDepth=4` on Cornell: same mean,
 3.9 s vs 14.2 s, relMSE 1.13e-4 vs 7.25e-5.
 
+## Environment map (P1.4d, P2.8)
+
+Equirect map in the scene copy `data` buffer (layout and the exact pdf in `packages/raytracer/src/scene/env-map.ts`, DIVERGES V48).
+Lookup is bilinear (u wraps, v clamps); `rotationYDeg` turns the map about +Y. Importance density is per pixel `Y(L)·sin θ`:
+`u.y` picks a row (marginal CDF, binary search), `u.x` the column (conditional CDF), the leftovers place the point inside the
+pixel; solid-angle pdf `Y·sinθ_row·norm/sinθ`, `norm = W·H/(S·2π²)`. Escaped rays take the MIS weight
+`ptMis(prevPdf, pmf·pdf_env)`. `envSampling: 'uniform'` with a map is the baseline (uniform sphere sampling, the same lookup).
+f32 CDFs: a single alias table over 131k pixels was rejected because the pixel index would use 17 of the 24 bits of `u` and
+leave ~7 for the alias coin (distorted probabilities). The light-selection power uses the sin θ-weighted mean radiance.
+
 ## Size
 
-52.7 KB minified (55.0 KB indentation-stripped), over the ~50 KB target: bvh walk + `rtVisible`/`rtClosest` 21.1 KB,
-scene copy 10.5 KB (surface 3.5, materials + lights 7.0), light sampling 3.4, BSDF 10.8, integrator 5.8, sampler 1.3,
-Owen-Sobol 1.1, adapter 0.9. `rayMasks: false`. ~250 ms compile on the Mac; DXC unmeasured (P2.10). A unit test caps it
-at 54 KB.
+**40.4 KB minified** (43.2 KB with an HDR env map; unit-test caps 41.5 / 44.5 KB), under the 50 KB Windows-DXC class. Three steps
+(P2.10), all text-only and bit-identical in every image (PFMs `cmp`-equal on Tier 0 and sponza-white at 256 spp):
+
+1. Indentation and spaces around `{}(),;` dropped (`minify`, line breaks kept): 63.3 -> 53.5 KB.
+2. `prune` (`rtPruneWgsl`): top-level declarations that `ptMain` and the `@group` bindings cannot reach are dropped: -4.7 KB
+   (bvh `bvhClosestPointToTriangle`/`OnEdges`, `rtVisibleSegment`, cone helpers, `rtLightPmfOfHit`, `ptBsdfPdf`, unused consts).
+   Needs no scene knowledge; a scene-specialised kernel (drop absent light kinds / lobes) would cut more but recompiles per scene.
+3. `shortenNames` (`rtShortenWgsl`): top-level struct/fn/const/alias/var names become `A`..`Zz` by use count (not `override`s,
+   bindings, `ptMain`, or a name also used as member/parameter/local): -8.3 KB. Line numbers are unchanged by this step; a
+   compiler message shows the short names (`shortenNames: false` for readable text), and pruning shifts lines after a dropped
+   declaration (`prune: false` keeps them).
+
+Where the bytes are (pruned, readable names): bvh walk and helpers 14.1 KB (`bvhWalkClosest` 3.3, `bvhWalkAny` 2.9, watertight 1.3,
+node/triangle/instance loads 2.5), BSDF 9.8 (`ptBsdfSample` 2.9, `ptBsdfEval` 1.6, `ptBsdfFromMaterial` 0.7), integrator 5.0
+(`ptPath` 2.7, `ptSampleLd` 1.2), scene copy 7.7 (`rtSurface` 1.9, `rtMaterialAt` 1.8, `RtMaterial` 0.7), light sampling 3.5,
+sampler 1.3, Owen-Sobol 1.1, adapter 0.9. An `hdri` scene adds the map lookup, pdf and CDF sampling (+2.8 KB shortened).
+`rayMasks: false`. ~250 ms compile on the Mac; DXC unmeasured (P2.10). Print the table: `node bench/size-breakdown.ts [--env]`.
 
 ## Open choices (defaults hold until measured)
 
-1. **Kernel size over 50 KB.** Keep; measure DXC compile on the 3060 first (W10). Cuts touch other owners' code (bvh
-   walk, scene decode); possible trims: lean material decode (~1.8 KB), light-record decode, closest/any specialisation.
-   No speed/quality effect from text cuts. Settle: `compile_ms` on Windows.
-2. **`envSampling` default: uniform + MIS or none (pbrt).** Keep uniform until a sun-plus-sky scene shows the cost.
+1. **Kernel size.** Done: 40.4 KB (43.2 KB with a map) by pruning and short names (see Size). Remaining ideas, not needed for the
+   cap: lean material decode (~1.8 KB), light-record decode, bvh closest/any specialisation. Settle: `compile_ms` on Windows
+   (prune and no-prune, `pt_prune=0`, are the A/B).
+2. **`envSampling` default: uniform + MIS or none (pbrt); with a map: importance (adapter default).** Map: importance beats
+   uniform 6.1x relMSE at equal spp (+12% time per sample on env-sphere); CDF vs alias tables is open (P2.8a). Keep uniform until a sun-plus-sky scene shows the cost.
    `none`: zero variance on a uniform sky and cheaper NEE; uniform wastes alias picks next to other lights. Setting
    exists. Settle: P2.12 at equal spp and equal time.
-3. **Light selection weights** (P1.4f): run now; quality only.
+3. **Light selection weights** (P1.4f, measured; default `power` until decided). Setting `lightSelection` / `pt_light_selection`:
+   `power` (pbrt `PowerLightSampler`-like), `kind` (equal share per kind present), `cap:0.25` / `cap:0.5` (power, sun + env
+   capped at that share). Noise only (means within 0.02%). relMSE at 1024 spp, 3 seeds: Cornell, quad-light, env-sphere
+   identical (one light kind); sponza-white power 8.12e-3, kind 9.33e-3, caps = power (no area lights); `lights-mix` (sun+sky key
+   over two lamps) power 2.10e-5, kind 1.67e-5, cap:0.25 2.44e-5, cap:0.5 1.29e-5; `lights-mix-lamps` (lamps key) power 8.69e-5, kind
+   1.30e-4, cap:0.25 6.14e-5, cap:0.5 = power. Suggest `cap:0.5`: never worse than `power` at 256 and 1024 spp in any scene
+   measured (at 64 spp `lights-mix` reads 9% worse, 1.59e-3 vs 1.46e-3: a few bright first-hit samples; identical unless infinite lights hold > 50% of the power, then up to 1.6x lower relMSE) and costs nothing at run time.
+   Cons: `cap:0.25` helps the lamp-key scene but hurts the sun-key one, so the cap is a heuristic with a scene-dependent
+   optimum; only two synthetic scenes mix kinds, and no pbrt/Mitsuba reference exists for them (own 2 x 32768 spp). `kind` loses
+   whenever one kind is weak (Sponza, lamps). A real fix is contribution-aware selection (per-shading-point, i.e. light BVH or
+   ReSTIR-style), out of scope here. Settle: a Tier 1 scene with real mixed lights.
 4. **Triangle lights: uniform area or spherical triangle.** Keep uniform (matches Mitsuba). Spherical is less noisy close
    to big lights, more ALU. Can be a module constant. Settle: close-up large quad light, relMSE at equal spp.
 5. **RR outside reference mode.** Suggest `rrStartDepth` 4 (Cornell 3.6× faster at 1.6× relMSE). Setting exists.

@@ -109,7 +109,7 @@ describe('scene copy WGSL', () => {
     expect(fieldsOf(code, 'RtLight')).toEqual(['kind', 'position', 'edge1', 'edge2', 'normal', 'area', 'pmf', 'radiance', 'material', 'instance', 'triangle', 'twoSided']);
     expect(fieldsOf(code, 'RtLightSample')).toEqual(['index', 'pmf', 'u']);
     expect(fieldsOf(code, 'RtSun')).toEqual(['index', 'direction', 'angularRadius', 'cosAngularRadius', 'solidAngle', 'irradiance', 'pmf']);
-    expect(fieldsOf(code, 'RtEnvironment')).toEqual(['index', 'radiance', 'scale', 'rotationY', 'mapSlot', 'pmf']);
+    expect(fieldsOf(code, 'RtEnvironment')).toEqual(['index', 'radiance', 'scale', 'rotationY', 'mapSlot', 'mapBase', 'mapW', 'mapH', 'pdfNorm', 'pmf']);
   });
 
   it('header words the shader reads by position are where the TypeScript header puts them', () => {

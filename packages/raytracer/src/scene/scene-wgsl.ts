@@ -12,7 +12,7 @@
  *     fn rtLightCount() -> u32
  *     fn rtLight(index: u32) -> RtLight               emissive triangle record (kind RT_LIGHT_TRIANGLE); sun/env fields are zero
  *     fn rtSun() -> RtSun, rtHasSun() -> bool         the directional light (rtSun().index == RT_NONE when absent)
- *     fn rtEnvironment() -> RtEnvironment, rtHasEnvironment()
+ *     fn rtEnvironment() -> RtEnvironment, rtHasEnvironment()   (mapW / mapH / mapBase / pdfNorm: the equirect map, mapW 0 = none; env-map.ts)
  *     fn rtSampleLight(u: f32) -> RtLightSample       alias-table pick over power: { index, pmf, u (the leftover, rescaled) }
  *     fn rtLightPmf(index: u32) -> f32                probability rtSampleLight picks `index`
  *     fn rtLightIndexOfHit(instance, triangle) -> u32 light index of an emissive triangle hit, RT_NONE otherwise
@@ -221,6 +221,10 @@ struct RtEnvironment {
     scale: f32,
     rotationY: f32,
     mapSlot: u32,
+    mapBase: u32,
+    mapW: u32,
+    mapH: u32,
+    pdfNorm: f32,
     pmf: f32,
 }
 
@@ -311,6 +315,10 @@ fn rtEnvironment() -> RtEnvironment {
     e.scale = bitcast<f32>(r1.x);
     e.rotationY = bitcast<f32>(r1.y);
     e.mapSlot = r3.w;
+    e.mapBase = r2.x;
+    e.mapW = r2.y & 0xffffu;
+    e.mapH = r2.y >> 16u;
+    e.pdfNorm = bitcast<f32>(r2.z);
     e.pmf = bitcast<f32>(r2.w);
     return e;
 }

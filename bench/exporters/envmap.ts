@@ -40,6 +40,27 @@ export function sampleEquirect(img: Image, d: readonly [number, number, number],
   return [out[0] * scale, out[1] * scale, out[2] * scale];
 }
 
+/**
+ * Mitsuba 3's `envmap` maps v in [0, 1] onto texel coordinate v * (H - 1) (rows sit at v = j / (H - 1), poles included),
+ * while u keeps the usual (u * W - 0.5). Fed an equirect as is, its lookup is shifted by (0.5 - v) texels vertically
+ * (+0.5 at the zenith, 0 at the equator, -0.5 at the nadir): on env-sphere that moves the sun 0.15 degrees and reads
+ * +0.39% / +0.28% / +0.12% (R/G/B) of the true irradiance on a flat plane (V50). Resample the rows to v = j / (H - 1),
+ * through our own bilinear lookup (clamped at the poles, texel-centre columns are already right), so Mitsuba's lookup
+ * returns the schema's `hdri` values; the residual is the linear re-interpolation between the new rows.
+ */
+export function equirectForMitsuba(img: Image): Image {
+  const { width: w, height: h, channels: c } = img;
+  const data = new Float32Array(w * h * c);
+  for (let j = 0; j < h; j++) {
+    const fy = h > 1 ? (j * h) / (h - 1) - 0.5 : 0; // our row coordinate for v = j / (H - 1)
+    const y0 = Math.floor(fy);
+    const t = fy - y0;
+    const ya = Math.min(h - 1, Math.max(0, y0)), yb = Math.min(h - 1, Math.max(0, y0 + 1));
+    for (let i = 0; i < w * c; i++) data[j * w * c + i] = (1 - t) * img.data[ya * w * c + i]! + t * img.data[yb * w * c + i]!;
+  }
+  return { width: w, height: h, channels: c, data };
+}
+
 /** pbrt-v4 EqualAreaSquareToSphere (Clarberg), port of src/pbrt/util/math.cpp. */
 export function equalAreaSquareToSphere(px: number, py: number): [number, number, number] {
   const u = 2 * px - 1, v = 2 * py - 1;

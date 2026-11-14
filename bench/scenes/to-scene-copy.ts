@@ -16,7 +16,7 @@
  * resolved by the caller (`resolveFile`); the bench's async glb loaders live elsewhere.
  */
 import type { SceneCopyInput, SceneCopyInstance, SceneCopyMesh, RtMaterialInput, SceneCopyOptions } from '@pmndrs/raytracer';
-import { buildSceneCopy, type SceneCopy } from '@pmndrs/raytracer';
+import { buildSceneCopy, envMapMean, type SceneCopy } from '@pmndrs/raytracer';
 import { compose, tessellate, type TriangleMesh } from './geometry.ts';
 import type { EnvironmentDesc, GeometryDesc, MaterialDesc, MeshDesc, Rgb, SceneDesc } from './schema.ts';
 
@@ -27,7 +27,12 @@ export const INSTANCE_MASK_PLAIN = 0x01;
 export interface DescToSceneCopyOptions {
   /** Loads `file` geometry (glb/gltf/ply/obj) as object-space triangles. Without it, a `file` mesh throws. */
   resolveFile?: (geometry: Extract<GeometryDesc, { type: 'file' }>, mesh: MeshDesc) => TriangleMesh;
-  /** Constant radiance used as the environment entry for an `hdri` environment (the map itself is not copied yet). Default: black. */
+  /**
+   * The decoded `hdri` image (row 0 = +Y, see schema.ts): copied into the scene copy as the environment map, and its solid-angle
+   * mean fills the constant-radiance entry. Without it an `hdri` environment is constant `hdriRadiance` (default black).
+   */
+  hdriMap?: { width: number; height: number; channels: number; data: ArrayLike<number> };
+  /** Constant radiance of an `hdri` environment when there is no `hdriMap` (or to override its mean). Default: black. */
   hdriRadiance?: Rgb;
   /** Passed to `buildSceneCopy`. */
   copy?: SceneCopyOptions;
@@ -60,8 +65,12 @@ export function materialFromDesc(desc: MaterialDesc): RtMaterialInput {
 function environmentFromDesc(env: EnvironmentDesc | undefined, options: DescToSceneCopyOptions): SceneCopyInput['environment'] {
   if (!env) return null;
   if (env.type === 'uniform') return { radiance: [...env.radiance] };
-  // hdri: reserve a map slot, constant radiance only until the map copy exists.
-  return { radiance: [...(options.hdriRadiance ?? [0, 0, 0])], scale: env.scale, rotationY: (env.rotationYDeg * Math.PI) / 180, mapSlot: 0 };
+  const rotationY = (env.rotationYDeg * Math.PI) / 180;
+  if (options.hdriMap) {
+    const mean = envMapMean(options.hdriMap);
+    return { radiance: [...(options.hdriRadiance ?? mean)] as Rgb, scale: env.scale, rotationY, map: options.hdriMap };
+  }
+  return { radiance: [...(options.hdriRadiance ?? [0, 0, 0])], scale: env.scale, rotationY };
 }
 
 export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyOptions = {}): DescSceneCopyInput {

@@ -2,7 +2,7 @@
 
 _Last updated 2026-11-14._
 
-**Phase:** the phases are agreed (PHASES.md, decisions D1–D21) and three run at once. P0 is done except its timing gate (a quiet-machine rerun of the competitor table, queued in the quiet pass). P1 (trace core) is built except moving reflections onto it, which is its gate. P2 (our own path tracer) matches pbrt-v4 and Mitsuba on the small test scenes and on Sponza.
+**Phase:** the phases are agreed (PHASES.md, decisions D1–D21) and three run at once. P0 has passed its gate on the Mac (quiet-machine competitor table, 2026-11-14); the RTX 3060 half waits on Windows. P1 (trace core) is built except moving reflections onto it, which is its gate. P2 (our own path tracer) matches pbrt-v4 and Mitsuba on all Tier 0 scenes (now including the HDR environment map) and on Sponza.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -44,6 +44,8 @@ _Last updated 2026-11-14._
 **Next**
 - P2: the HDR sky scene in our path tracer; the light-picking A/B; reflections onto the core (P1.5).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
-- Wide BVH in the bvh repo: built and correct on its own branch; waiting for quiet-pass timings.
+- Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 
-**Waiting on the maintainer:** the quiet pass (docs/QUIET-PASS.md) when convenient; nothing blocks building meanwhile.
+**Speed vs the web competitors (quiet M5, 2026-11-14):** our megakernel is fastest on Sponza (about 1.4x mutracer to equal error) and second on Cornell (mutracer 1.5x faster). Report: bench/results/quiet-pass/20261114-1419/REPORT.md.
+
+**Waiting on the maintainer:** the wide-BVH default (see the report); nothing blocks building meanwhile.

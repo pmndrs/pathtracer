@@ -2,7 +2,7 @@ import { buildTraceScene, createCpuTracer, createMeshBvhBuilder } from '@pmndrs/
 import { describe, expect, it } from 'vitest';
 import { SURFACE, SURFACE_TABLE, buildSurfaceTable, readSurfaceFromTable, referenceSurface, type SurfaceHitInput } from '../trace/index.ts';
 import { INSTANCE_LIGHT, LIGHT_MAP_MODE, SCENE_COPY_STORAGE_BUFFERS, SCENE_HEADER, SCENE_HEADER_VEC4S, SCENE_NONE } from './constants.ts';
-import { aliasProbabilityOf, trianglePower, type RtSunLight, type RtTriangleLight } from './lights.ts';
+import { aliasProbabilityOf, lightSelectionWeights, trianglePower, type RtSunLight, type RtTriangleLight } from './lights.ts';
 import { createMaterial, luminance, unpackMaterial, MATERIAL_RECORD_WORDS } from './material.ts';
 import { ContentHasher, buildSceneCopy, readLight, readLightIndexOfHit, readLightPmfOfHit, readMaterial, referenceTriangleArea, type SceneCopyInput } from './scene-copy.ts';
 
@@ -144,6 +144,20 @@ describe('scene copy: sections, header, lights', () => {
       expect(aliasProbabilityOf({ prob: Float32Array.of(...copy.lights.map((_, j) => readLight(copy, j).aliasProb)), alias: Uint32Array.of(...copy.lights.map((_, j) => readLight(copy, j).alias)) }, i)).toBeCloseTo(light.power / total, 6);
     });
     expect(sum).toBeCloseTo(1, 6);
+  });
+
+  it('lightSelection changes the stored probabilities (and only those): pmf = the strategy weights, total power stays the real total', () => {
+    const base = fixture();
+    for (const selection of ['kind', { capped: 0.25 }] as const) {
+      const other = buildSceneCopy({ ...base, options: { ...base.options, lightSelection: selection } });
+      const w = lightSelectionWeights(other.lights, selection);
+      other.lights.forEach((_, i) => expect(readLight(other, i).pmf).toBe(f32(w[i]!)));
+      expect(other.totalPower).toBeCloseTo(copy.totalPower, 6);
+    }
+    const kind = buildSceneCopy({ ...base, options: { ...base.options, lightSelection: 'kind' } });
+    // Triangles, sun and environment each take a third.
+    expect(readLight(kind, copy.sunLight).pmf).toBeCloseTo(1 / 3, 6);
+    expect(readLight(kind, copy.environmentLight).pmf).toBeCloseTo(1 / 3, 6);
   });
 
   it('light records read back what the builder made', () => {

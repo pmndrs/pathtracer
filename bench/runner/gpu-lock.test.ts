@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { acquireGpuLock, ownerPid, ticketPid } from './gpu-lock.ts';
+import { acquireGpuLock, OWNERLESS_STALE_MS, ownerPid, ticketPid } from './gpu-lock.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -55,5 +55,28 @@ describe('gpu lock', () => {
     writeFileSync(join(dirsForLock.lockDir, 'owner'), 'ghost pid 2147483646\n'); // no such process
     const release = await acquireGpuLock({ who: 'live', ...dirsForLock, pollMs: 10 });
     release();
+  });
+
+  it('takes over an old lock directory that has no owner file', async () => {
+    const dirsForLock = sandbox();
+    mkdirSync(dirsForLock.lockDir, { recursive: true });
+    const old = (Date.now() - OWNERLESS_STALE_MS - 5_000) / 1000;
+    utimesSync(dirsForLock.lockDir, old, old);
+    const release = await acquireGpuLock({ who: 'live', ...dirsForLock, pollMs: 10 });
+    release();
+  });
+
+  it('waits on a fresh lock directory that has no owner file yet', async () => {
+    const dirsForLock = sandbox();
+    mkdirSync(dirsForLock.lockDir, { recursive: true });
+    let held = false;
+    const pending = acquireGpuLock({ who: 'live', ...dirsForLock, pollMs: 10 }).then((release) => {
+      held = true;
+      return release;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(held).toBe(false);
+    rmSync(dirsForLock.lockDir, { recursive: true, force: true });
+    (await pending)();
   });
 });

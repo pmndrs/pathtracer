@@ -3,12 +3,17 @@ import { LIGHT_RECORD_BYTES, LIGHT_RECORD_VEC4S, SCENE_NONE } from './constants.
 import {
   aliasProbabilityOf,
   buildAliasTable,
+  lightSelectionName,
+  lightSelectionWeights,
   makeEnvironment,
+  parseLightSelection,
   makeSun,
   packLight,
   sampleAlias,
   trianglePower,
   unpackLight,
+  type LightSelection,
+  type RtLight,
   type RtTriangleLight,
 } from './lights.ts';
 
@@ -170,3 +175,64 @@ describe('power', () => {
   });
 });
 
+
+describe('light selection strategies (P1.4f)', () => {
+  const tri = (power: number): RtTriangleLight => ({ kind: 'triangle', instance: 0, triangle: 0, material: 0, p0: [0, 0, 0], edge1: [1, 0, 0], edge2: [0, 1, 0], normal: [0, 0, 1], area: 0.5, radiance: [1, 1, 1], twoSided: false, power });
+  const sun = (power: number) => ({ ...makeSun({ direction: [0, -1, 0], irradiance: [1, 1, 1] }, 1), power });
+  const env = (power: number) => ({ ...makeEnvironment({ radiance: [1, 1, 1] }, 1), power });
+  const scenes: Record<string, RtLight[]> = {
+    'area only': [tri(2), tri(6)],
+    'area + sun + env': [tri(1), tri(3), sun(100), env(900)],
+    'sun + env only': [sun(5), env(15)],
+    'infinite below cap': [tri(100), tri(300), sun(1), env(2)],
+    'with a zero-power light': [tri(0), tri(4), sun(0), env(10)],
+    'env only': [env(7)],
+    'many triangles + env': [...Array.from({ length: 50 }, (_, i) => tri(1 + i)), env(1e6)],
+  };
+  const strategies: LightSelection[] = ['power', 'kind', { capped: 0.25 }, { capped: 0.5 }];
+  for (const [name, lights] of Object.entries(scenes)) {
+    for (const strategy of strategies) {
+      it(`${name} / ${lightSelectionName(strategy)}: pmf sums to 1, every powered light has pmf > 0, the table realises it`, () => {
+        const w = lightSelectionWeights(lights, strategy);
+        expect(w.length).toBe(lights.length);
+        expect(w.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12);
+        const table = buildAliasTable(w);
+        let sum = 0;
+        lights.forEach((l, i) => {
+          sum += table.pmf[i]!;
+          if (l.power > 0) expect(table.pmf[i]!).toBeGreaterThan(0);
+          else expect(table.pmf[i]).toBe(0);
+          expect(aliasProbabilityOf(table, i)).toBeCloseTo(w[i]!, 6);
+        });
+        expect(sum).toBeCloseTo(1, 6);
+      });
+    }
+  }
+
+  it('power is proportional to power; kind splits equally between kinds; cap limits the infinite share', () => {
+    const lights: RtLight[] = [tri(1), tri(3), sun(100), env(900)];
+    const p = lightSelectionWeights(lights, 'power');
+    expect(p[0]).toBeCloseTo(1 / 1004, 12);
+    expect(p[3]).toBeCloseTo(900 / 1004, 12);
+    const k = lightSelectionWeights(lights, 'kind');
+    expect(k[0]! + k[1]!).toBeCloseTo(1 / 3, 12);
+    expect(k[0]! / k[1]!).toBeCloseTo(1 / 3, 12);
+    expect(k[2]).toBeCloseTo(1 / 3, 12);
+    expect(k[3]).toBeCloseTo(1 / 3, 12);
+    const c = lightSelectionWeights(lights, { capped: 0.25 });
+    expect(c[2]! + c[3]!).toBeCloseTo(0.25, 12);
+    expect(c[3]! / c[2]!).toBeCloseTo(9, 9);
+    expect(c[0]! / c[1]!).toBeCloseTo(1 / 3, 12);
+    // Below the cap nothing changes; no area lights: the infinite lights keep everything.
+    expect(lightSelectionWeights([tri(100), env(1)], { capped: 0.25 })).toEqual(lightSelectionWeights([tri(100), env(1)], 'power'));
+    expect(lightSelectionWeights([sun(1), env(3)], { capped: 0.25 })[1]).toBeCloseTo(0.75, 12);
+  });
+
+  it('parses the page spelling', () => {
+    expect(parseLightSelection('power')).toBe('power');
+    expect(parseLightSelection('kind')).toBe('kind');
+    expect(parseLightSelection('cap:0.25')).toEqual({ capped: 0.25 });
+    expect(() => parseLightSelection('nope')).toThrow(RangeError);
+    expect(() => lightSelectionWeights([tri(1)], { capped: 2 })).toThrow(RangeError);
+  });
+});

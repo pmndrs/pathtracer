@@ -19,8 +19,13 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   sampler?: PtSamplerKind;
   /** Next-event estimation + MIS. Default true. False = BSDF sampling only (debug; delta suns contribute nothing). */
   nee?: boolean;
-  /** `'uniform'` (sphere; NEE with MIS) or `'none'` (pbrt's `allowIncompletePDF` for a uniform sky: BSDF sampling only for it). Default 'uniform'. */
-  envSampling?: 'uniform' | 'none';
+  /**
+   * `'uniform'` (sphere; NEE with MIS), `'importance'` (an environment map sampled by its luminance; needs `envMap`, otherwise the
+   * same as uniform) or `'none'` (pbrt's `allowIncompletePDF` for a uniform sky: BSDF sampling only for it). Default 'uniform'.
+   */
+  envSampling?: 'uniform' | 'importance' | 'none';
+  /** The scene has an equirect environment map: compile its lookup, pdf and sampling (kernel size +). Default false (constant radiance only). */
+  envMap?: boolean;
   /** A sun with an angular radius is visible to camera and specular paths (default false: the references' sun is a delta light and invisible). */
   sunVisible?: boolean;
 }
@@ -28,12 +33,13 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
 export interface ResolvedIntegratorOptions {
   sampler: PtSamplerKind;
   nee: boolean;
-  envSampling: 'uniform' | 'none';
+  envSampling: 'uniform' | 'importance' | 'none';
+  envMap: boolean;
   sunVisible: boolean;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', sunVisible: o.sunVisible ?? false };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false };
 }
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
@@ -62,7 +68,7 @@ ${PT_PARAMS_WGSL}
 
 const PT_FAR: f32 = 1.0e30;
 const PT_NEE: bool = ${o.nee};
-const PT_ENV_SAMPLING: bool = ${o.envSampling === 'uniform'};
+const PT_ENV_SAMPLING: bool = ${o.envSampling !== 'none'};
 const PT_SUN_VISIBLE: bool = ${o.sunVisible};
 const PT_ORIGIN: f32 = 0.03125;
 const PT_FLOAT_SCALE: f32 = 0.0000152587890625;
@@ -135,9 +141,9 @@ fn ptEscaped(dir: vec3f, direct: bool, prevPdf: f32) -> vec3f {
         let e = rtEnvironment();
         var w = 1.0;
         if (!direct && PT_NEE && PT_ENV_SAMPLING) {
-            w = ptMis(prevPdf, e.pmf * RT_ENV_UNIFORM_PDF);
+            w = ptMis(prevPdf, e.pmf * rtEnvironmentPdf(e, dir));
         }
-        le += rtEnvironmentRadiance(e) * w;
+        le += rtEnvironmentLe(e, dir) * w;
     }
     if (rtHasSun()) {
         let s = rtSun();

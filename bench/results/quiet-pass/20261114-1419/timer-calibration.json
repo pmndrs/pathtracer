@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "runId": "20261114T051900Z-timer-calibration",
+  "startedAt": "2026-11-14T05:19:00.964Z",
+  "commit": "7056f80",
+  "page": "timer-calibration",
+  "gpuRequested": "apple",
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/157.0.8103.52 headless",
+  "ok": true,
+  "totalMs": 3137,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 4 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {},
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 2594,
+      "result": {
+        "renderer": "timer-calibration",
+        "config": {
+          "samples": 100,
+          "groups": 256,
+          "workloads": [
+            0,
+            256,
+            65536
+          ]
+        },
+        "metrics": {
+          "ts_supported": 1,
+          "ts_quantized": 0,
+          "ts_step_ns": 1,
+          "ts_distinct_durations": 175,
+          "ts_zero_interval_share": 0,
+          "ts_min_nonzero_ns": 3708,
+          "gpu_ns_median_empty": 3959,
+          "gpu_ns_median_light": 26000,
+          "gpu_ns_median_heavy": 2872312.5,
+          "wall_ms": 299,
+          "performance_now_step_us": 99.99999403953552
+        },
+        "valid": true,
+        "notes": {
+          "quantized": false,
+          "advice": "Timestamps are fine-grained.",
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 2.8173828125,
+        "loadSource": "loadavg",
+        "gpuProcs": 0,
+        "backgroundApps": [
+          "Claude"
+        ],
+        "loaded": false,
+        "waitedMs": 32,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": "/Users/dex/Developer/pathtracer/bench/results/quiet-timer-calibration.csv"
+}

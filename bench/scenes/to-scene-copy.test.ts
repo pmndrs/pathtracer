@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readLight, readLightIndexOfHit, readMaterial, SCENE_NONE, type RtSunLight, type RtTriangleLight } from '@pmndrs/raytracer';
+import { ENV_TEXEL_WORDS, envMapMean, readLight, readLightIndexOfHit, readMaterial, SCENE_NONE, type RtEnvironmentLight, type RtSunLight, type RtTriangleLight } from '@pmndrs/raytracer';
+import { ENV_HEIGHT, ENV_WIDTH, generateSkyImage } from './tier0/env-sky.ts';
+import { envSphere } from './tier0/env-sphere.ts';
 import { meshToWorld, surfaceArea, tessellateQuad } from './geometry.ts';
 import { sponzaWhite } from './tier2/sponza-white.ts';
 import { cornell, quadLight, tier0Scenes } from './tier0/index.ts';
@@ -59,9 +61,24 @@ describe('SceneDesc -> scene copy', () => {
     [0.2, 0.924, 1.102].forEach((v, k) => expect(Math.abs(m.conductorEta[k]! - v) / v).toBeLessThan(2 ** -11));
     [3.912, 2.452, 2.142].forEach((v, k) => expect(Math.abs(m.conductorK[k]! - v) / v).toBeLessThan(2 ** -11));
     expect(m.specularRoughness).toBeCloseTo(0.3, 4);
-    // hdri: the map slot is reserved, the constant radiance is the (black) default.
+    // hdri without a decoded map: no map, constant radiance is the (black) default.
     const env = copy.lights[copy.environmentLight]!;
-    expect(env).toMatchObject({ kind: 'environment', mapSlot: 0, radiance: [0, 0, 0] });
+    expect(env).toMatchObject({ kind: 'environment', mapSlot: SCENE_NONE, mapWidth: 0, radiance: [0, 0, 0] });
+  });
+
+  it('env-sphere with its map: the map is copied, radiance = solid-angle mean of the PFM, mapW/H in the record', () => {
+    const sky = generateSkyImage();
+    const map = { width: ENV_WIDTH, height: ENV_HEIGHT, channels: 3, data: sky };
+    const { copy } = buildSceneCopyFromDesc(envSphere, { hdriMap: map });
+    const env = copy.lights[copy.environmentLight] as RtEnvironmentLight;
+    expect(env).toMatchObject({ kind: 'environment', mapSlot: 0, mapWidth: ENV_WIDTH, mapHeight: ENV_HEIGHT });
+    const mean = envMapMean(map);
+    mean.forEach((v, k) => expect(Math.abs(env.radiance[k]! - v) / v).toBeLessThan(1e-6));
+    expect(copy.lights).toHaveLength(1);
+    expect(copy.totalPower).toBeGreaterThan(0);
+    const packed = readLight(copy, copy.environmentLight).light as RtEnvironmentLight;
+    expect(packed).toMatchObject({ mapBase: env.mapBase, mapWidth: ENV_WIDTH, mapHeight: ENV_HEIGHT, pdfNorm: env.pdfNorm });
+    expect(copy.data.length).toBeGreaterThanOrEqual(env.mapBase + ENV_HEIGHT + ENV_WIDTH * ENV_HEIGHT * ENV_TEXEL_WORDS);
   });
 
   it('cornell light: 0.13 x 0.105 m facing down, power pi * area * Y(L), the only light', () => {

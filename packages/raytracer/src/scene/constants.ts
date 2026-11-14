@@ -97,7 +97,7 @@ export const LIGHT_RECORD_BYTES = 96;
  *     0 w    kind (LIGHT_KIND)
  *     1 xyz  triangle: world edge1 = p1 - p0   sun: (angular radius, cos radius, solid angle)   environment: (scale, rotation about Y, 0)
  *     1 w    triangle: area (m^2)   sun, environment: 0
- *     2 xyz  triangle: world edge2 = p2 - p0   sun, environment: 0
+ *     2 xyz  triangle: world edge2 = p2 - p0   sun: 0   environment: (map base word in `data`, width | height << 16, pdf normaliser f32); 0 without a map
  *     2 w    selection probability (f32), power / totalPower
  *     3 xyz  triangle: unit normal of the emitting (authored front) side   sun, environment: 0
  *     3 w    triangle: material id   sun: SCENE_NONE   environment: environment map slot or SCENE_NONE
@@ -123,6 +123,10 @@ export const LIGHT_WORD = {
   normal: 12,
   material: 15,
   envMapSlot: 15,
+  /** Environment map (see env-map.ts): word index in `data` of its first word, width | height << 16, and the f32 pdf normaliser. */
+  envMapBase: 8,
+  envMapSize: 9,
+  envPdfNorm: 10,
   radiance: 16,
   instance: 19,
   triangle: 20,

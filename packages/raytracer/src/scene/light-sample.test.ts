@@ -304,7 +304,7 @@ describe('sun cone sampling', () => {
 });
 
 describe('environment sampling (uniform sphere)', () => {
-  const env: RtEnvironmentLight = { kind: 'environment', radiance: [1, 0.5, 0.25], scale: 2, rotationY: 0, mapSlot: 0xffffffff, power: 0 };
+  const env: RtEnvironmentLight = { kind: 'environment', radiance: [1, 0.5, 0.25], scale: 2, rotationY: 0, mapSlot: 0xffffffff, mapBase: 0, mapWidth: 0, mapHeight: 0, pdfNorm: 0, power: 0 };
 
   it('has pdf 1/(4 pi), radiance scaled, and integrates the radiance over the sphere to 4 pi L', () => {
     const pts = stratified(1 << 14, 17);

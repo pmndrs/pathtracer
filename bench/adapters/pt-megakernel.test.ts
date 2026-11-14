@@ -15,15 +15,15 @@ describe('pt-megakernel adapter', () => {
   });
 
   it('config records every setting that changes the image', () => {
-    expect(adapter.info.config).toMatchObject({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', sunVisible: false, positions: 'barycentric', vndf: 'standard', transport: 'radiance', seed: 0 });
+    expect(adapter.info.config).toMatchObject({ sampler: 'owen-sobol', nee: true, envSampling: 'auto', sunVisible: false, positions: 'barycentric', vndf: 'standard', transport: 'radiance', seed: 0 });
     const custom = new PtMegakernelAdapter({ sampler: 'pcg', nee: false, positions: 'ray', maxDepth: 3 });
     expect(custom.info.config).toMatchObject({ sampler: 'pcg', nee: false, positions: 'ray', maxDepth: 3 });
   });
 
-  it('renders every scene except env-sphere (no environment map yet); Sponza comes from the web glb export', () => {
+  it('renders every scene: env-sphere through its HDR map, Sponza from the web glb export', () => {
     const skipped = allScenes.filter((scene) => unsupportedReason(adapter.features, scene) !== null).map((scene) => scene.name);
-    expect(skipped.sort()).toEqual(['env-sphere']);
-    expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toMatch(/hdri/);
+    expect(skipped).toEqual([]);
+    expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toBeNull();
   });
 });

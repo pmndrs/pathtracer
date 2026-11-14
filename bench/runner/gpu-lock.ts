@@ -6,8 +6,20 @@
  * cannot run after SIGKILL), and the ticket name is `<ms>-<pid>` like the script's.
  */
 
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+/** An empty lock directory older than this is treated as stale. */
+export const OWNERLESS_STALE_MS = 30_000;
+
+/** Milliseconds since the lock directory was created (0 if it is gone). */
+function ownerlessFor(lockDir: string): number {
+  try {
+    return Date.now() - statSync(lockDir).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 export interface GpuLockOptions {
   who: string;
@@ -109,6 +121,12 @@ export async function acquireGpuLock(options: GpuLockOptions): Promise<() => voi
           }
           const pid = ownerPid(owner);
           if (pid !== null && !alive(pid)) {
+            rmSync(lockDir, { recursive: true, force: true });
+            continue;
+          }
+          // A lock directory with no owner file for longer than an owner takes to write one is stale too
+          // (someone deleted the owner file by hand); without this the wait never ends.
+          if (owner === '' && ownerlessFor(lockDir) > OWNERLESS_STALE_MS) {
             rmSync(lockDir, { recursive: true, force: true });
             continue;
           }

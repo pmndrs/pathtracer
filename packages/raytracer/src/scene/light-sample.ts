@@ -19,6 +19,8 @@
  * Carlo estimates against closed forms, the `pt-check` page compares the GPU against it.
  */
 import type { RtEnvironmentLight, RtLight, RtSunLight, RtTriangleLight, Vec3Tuple } from './lights.ts';
+import { ENV_TEXEL_WORDS } from './env-map.ts';
+import { LUMA } from './constants.ts';
 
 export type Rgb = [number, number, number];
 
@@ -194,7 +196,154 @@ const f32 = (v: number): string => {
  *     fn rtSunContains(s: RtSun, dir: vec3f) -> bool, rtSunRadiance(s) -> vec3f, rtSunPdf(s, dir) -> f32
  *     fn rtEnvironmentRadiance(e) -> vec3f, RT_ENV_UNIFORM_PDF
  */
-export function rtLightSampleWgsl(): string {
+
+export interface LightSampleWgslOptions {
+  /** Compile the environment-map lookup / pdf / sampling (a scene with an `hdri` environment). Default false: the constant radiance only. */
+  envMap?: boolean;
+  /** With `envMap`: sample the map by its luminance (`true`) or uniformly over the sphere (`false`, the A/B baseline). Default true. */
+  envImportance?: boolean;
+}
+
+/** WGSL of the environment map (needs `envMap`): bilinear lookup, solid-angle pdf and importance sampling; twins in env-map.ts. */
+export function rtEnvMapWgsl(importance: boolean): string {
+  return /* wgsl */ `
+const RT_INV_TWO_PI: f32 = ${f32(1 / (2 * Math.PI))};
+const RT_INV_PI: f32 = ${f32(1 / Math.PI)};
+const RT_PI: f32 = ${f32(Math.PI)};
+const RT_ENV_IMPORTANCE: bool = ${importance};
+
+fn rtEnvToMap(e: RtEnvironment, d: vec3f) -> vec3f {
+    let c = cos(e.rotationY);
+    let s = sin(e.rotationY);
+    return vec3f(c * d.x - s * d.z, d.y, s * d.x + c * d.z);
+}
+
+fn rtEnvFromMap(e: RtEnvironment, m: vec3f) -> vec3f {
+    let c = cos(e.rotationY);
+    let s = sin(e.rotationY);
+    return vec3f(c * m.x + s * m.z, m.y, -s * m.x + c * m.z);
+}
+
+fn rtEnvUv(m: vec3f) -> vec2f {
+    let u = atan2(m.x, -m.z) * RT_INV_TWO_PI;
+    return vec2f(u - floor(u), acos(clamp(m.y, -1.0, 1.0)) * RT_INV_PI);
+}
+
+fn rtEnvTexel(e: RtEnvironment, i: u32, j: u32) -> vec3f {
+    let at = e.mapBase + e.mapH + (j * e.mapW + i) * ${ENV_TEXEL_WORDS}u;
+    return vec3f(bitcast<f32>(rtSceneData[at]), bitcast<f32>(rtSceneData[at + 1u]), bitcast<f32>(rtSceneData[at + 2u]));
+}
+
+fn rtEnvMapLookup(e: RtEnvironment, d: vec3f) -> vec3f {
+    let uv = rtEnvUv(rtEnvToMap(e, d));
+    let fx = uv.x * f32(e.mapW) - 0.5;
+    let fy = uv.y * f32(e.mapH) - 0.5;
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let tx = fx - x0;
+    let ty = fy - y0;
+    let w = i32(e.mapW);
+    let xa = u32(((i32(x0) % w) + w) % w);
+    let xb = u32(((i32(x0) + 1) % w + w) % w);
+    let ya = u32(clamp(i32(y0), 0, i32(e.mapH) - 1));
+    let yb = u32(clamp(i32(y0) + 1, 0, i32(e.mapH) - 1));
+    return mix(mix(rtEnvTexel(e, xa, ya), rtEnvTexel(e, xb, ya), tx), mix(rtEnvTexel(e, xa, yb), rtEnvTexel(e, xb, yb), tx), ty);
+}
+
+fn rtEnvPixelPdf(e: RtEnvironment, i: u32, j: u32, sinTheta: f32) -> f32 {
+    if (!(sinTheta > 1.0e-12)) {
+        return 0.0;
+    }
+    let l = dot(rtEnvTexel(e, i, j), vec3f(${LUMA.map(f32).join(', ')}));
+    return l * sin(RT_PI * (f32(j) + 0.5) / f32(e.mapH)) * e.pdfNorm / sinTheta;
+}
+
+fn rtEnvMapPdf(e: RtEnvironment, d: vec3f) -> f32 {
+    let m = rtEnvToMap(e, d);
+    let uv = rtEnvUv(m);
+    let i = min(u32(uv.x * f32(e.mapW)), e.mapW - 1u);
+    let j = min(u32(uv.y * f32(e.mapH)), e.mapH - 1u);
+    return rtEnvPixelPdf(e, i, j, sqrt(max(0.0, 1.0 - m.y * m.y)));
+}
+
+fn rtEnvSearch(base: u32, stride: u32, n: u32, u: f32) -> u32 {
+    var lo = 0u;
+    var hi = n - 1u;
+    while (lo < hi) {
+        let mid = (lo + hi) >> 1u;
+        if (bitcast<f32>(rtSceneData[base + mid * stride]) > u) {
+            hi = mid;
+        } else {
+            lo = mid + 1u;
+        }
+    }
+    return lo;
+}
+
+fn rtEnvCdfFrac(base: u32, stride: u32, k: u32, u: f32) -> f32 {
+    let lo = select(0.0, bitcast<f32>(rtSceneData[base + (k - 1u) * stride]), k > 0u);
+    let hi = bitcast<f32>(rtSceneData[base + k * stride]);
+    return select(0.5, clamp((u - lo) / (hi - lo), 0.0, 0.99999994), hi > lo);
+}
+
+fn rtSampleEnvMap(e: RtEnvironment, u: vec2f) -> RtLightLi {
+    let j = rtEnvSearch(e.mapBase, 1u, e.mapH, u.y);
+    let dv = rtEnvCdfFrac(e.mapBase, 1u, j, u.y);
+    let rowBase = e.mapBase + e.mapH + j * e.mapW * ${ENV_TEXEL_WORDS}u + 3u;
+    let i = rtEnvSearch(rowBase, ${ENV_TEXEL_WORDS}u, e.mapW, u.x);
+    let du = rtEnvCdfFrac(rowBase, ${ENV_TEXEL_WORDS}u, i, u.x);
+    let phi = RT_TWO_PI * (f32(i) + du) / f32(e.mapW);
+    let theta = RT_PI * (f32(j) + dv) / f32(e.mapH);
+    let st = sin(theta);
+    let wi = rtEnvFromMap(e, vec3f(st * sin(phi), cos(theta), -st * cos(phi)));
+    return RtLightLi(wi, 3.0e38, vec3f(0.0), rtEnvPixelPdf(e, i, j, st), vec3f(0.0), false, rtEnvMapLookup(e, wi) * e.scale, true);
+}
+
+fn rtEnvironmentLe(e: RtEnvironment, dir: vec3f) -> vec3f {
+    if (e.mapW == 0u) {
+        return rtEnvironmentRadiance(e);
+    }
+    return rtEnvMapLookup(e, dir) * e.scale;
+}
+
+fn rtEnvironmentPdf(e: RtEnvironment, dir: vec3f) -> f32 {
+    if (RT_ENV_IMPORTANCE && e.mapW > 0u) {
+        return rtEnvMapPdf(e, dir);
+    }
+    return RT_ENV_UNIFORM_PDF;
+}
+
+fn rtSampleEnvironmentLi(e: RtEnvironment, u: vec2f) -> RtLightLi {
+    if (RT_ENV_IMPORTANCE && e.mapW > 0u) {
+        return rtSampleEnvMap(e, u);
+    }
+    let z = 1.0 - 2.0 * u.x;
+    let r = sqrt(max(0.0, 1.0 - z * z));
+    let phi = RT_TWO_PI * u.y;
+    let wi = vec3f(r * cos(phi), r * sin(phi), z);
+    return RtLightLi(wi, 3.0e38, vec3f(0.0), RT_ENV_UNIFORM_PDF, vec3f(0.0), false, rtEnvironmentLe(e, wi), true);
+}
+`;
+}
+
+const ENV_CONSTANT_WGSL = /* wgsl */ `
+fn rtEnvironmentLe(e: RtEnvironment, dir: vec3f) -> vec3f {
+    return rtEnvironmentRadiance(e);
+}
+
+fn rtEnvironmentPdf(e: RtEnvironment, dir: vec3f) -> f32 {
+    return RT_ENV_UNIFORM_PDF;
+}
+
+fn rtSampleEnvironmentLi(e: RtEnvironment, u: vec2f) -> RtLightLi {
+    let z = 1.0 - 2.0 * u.x;
+    let r = sqrt(max(0.0, 1.0 - z * z));
+    let phi = RT_TWO_PI * u.y;
+    return RtLightLi(vec3f(r * cos(phi), r * sin(phi), z), 3.0e38, vec3f(0.0), RT_ENV_UNIFORM_PDF, vec3f(0.0), false, rtEnvironmentRadiance(e), true);
+}
+`;
+
+export function rtLightSampleWgsl(options: LightSampleWgslOptions = {}): string {
   return /* wgsl */ `
 const RT_TWO_PI: f32 = ${f32(2 * Math.PI)};
 const RT_ENV_UNIFORM_PDF: f32 = ${f32(ENV_UNIFORM_PDF)};
@@ -303,13 +452,6 @@ fn rtEnvironmentRadiance(e: RtEnvironment) -> vec3f {
     return e.radiance * e.scale;
 }
 
-fn rtSampleEnvironmentLi(e: RtEnvironment, u: vec2f) -> RtLightLi {
-    let z = 1.0 - 2.0 * u.x;
-    let r = sqrt(max(0.0, 1.0 - z * z));
-    let phi = RT_TWO_PI * u.y;
-    return RtLightLi(vec3f(r * cos(phi), r * sin(phi), z), 3.0e38, vec3f(0.0), RT_ENV_UNIFORM_PDF, vec3f(0.0), false, rtEnvironmentRadiance(e), true);
-}
-
 fn rtSampleLightLi(index: u32, p: vec3f, u: vec2f) -> RtLightLi {
     let l = rtLight(index);
     if (l.kind == RT_LIGHT_TRIANGLE) {
@@ -320,5 +462,5 @@ fn rtSampleLightLi(index: u32, p: vec3f, u: vec2f) -> RtLightLi {
     }
     return rtSampleEnvironmentLi(rtEnvironment(), u);
 }
-`;
+` + (options.envMap ? rtEnvMapWgsl(options.envImportance ?? true) : ENV_CONSTANT_WGSL);
 }

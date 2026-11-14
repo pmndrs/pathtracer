@@ -13,7 +13,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', sunVisible: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -61,7 +61,7 @@ describe('integrator WGSL', () => {
   });
 
   it('every `pt`/`rt` function the integrator calls is declared in the kernel', () => {
-    const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false });
+    const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
     const names = new Set(declared(code));
     const called = new Set([...ptIntegratorWgsl().matchAll(/\b((?:pt|rt)[A-Z]\w*)\(/g)].map((m) => m[1] as string));
     called.delete('PtRadiance');
@@ -71,7 +71,7 @@ describe('integrator WGSL', () => {
   });
 
   it('puts the bindings where the host expects them: walk group 0, scene group 1, io group 2', () => {
-    const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false });
+    const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
     expect(code).toMatch(/@group\(0\) @binding\(0\)/);
     expect(code).toMatch(/@group\(1\) @binding\(0\) var<storage, read> rtSceneTable/);
     expect(code).toMatch(/@group\(1\) @binding\(1\) var<storage, read> rtSceneData/);
@@ -90,9 +90,34 @@ describe('integrator WGSL', () => {
     const minified = ptMegakernelWgsl(caps, { format: {}, layout }).length;
     const plain = ptMegakernelWgsl(caps, { format: {}, layout, minify: false }).length;
     expect(minified).toBeLessThan(plain);
-    // Hard ceiling so the size cannot creep: the bvh walk is ~22 KB of this and is not ours to cut.
-    expect(minified).toBeLessThan(54_000);
-    expect(plain).toBeLessThan(66_000);
+    // Hard ceiling so the size cannot creep (P2.10: 40.4 KB with pruning + short names; the bvh walk is ~14 KB of it and is not
+    // ours to cut). Windows DXC compile time grows with size: the kernel stays under the 50 KB class.
+    expect(minified).toBeLessThan(41_500);
+    expect(plain).toBeLessThan(51_000);
+    // The A/B baselines (everything on the page, long names) stay available and are the pre-P2.10 sizes.
+    const raw = ptMegakernelWgsl(caps, { format: {}, layout, prune: false, shortenNames: false }).length;
+    expect(raw).toBeGreaterThan(52_000);
+    expect(raw).toBeLessThan(54_000);
+  });
+
+  it('an environment-map scene adds the map code (about 2.8 KB minified) and stays under 44.5 KB; uniform sampling of a map is the A/B baseline', () => {
+    const none = ptMegakernelWgsl(caps, { format: {}, layout }).length;
+    const map = ptMegakernelWgsl(caps, { format: {}, layout, integrator: { envMap: true, envSampling: 'importance' } });
+    const readable = (integrator: object) => ptMegakernelWgsl(caps, { format: {}, layout, integrator, shortenNames: false });
+    expect(map.length).toBeGreaterThan(none + 2_000);
+    expect(map.length).toBeLessThan(44_500);
+    expect(readable({ envMap: true, envSampling: 'importance' })).toContain('RT_ENV_IMPORTANCE: bool = true');
+    expect(readable({ envMap: true, envSampling: 'uniform' })).toContain('RT_ENV_IMPORTANCE: bool = false');
+    expect(readable({})).not.toContain('rtEnvMapLookup');
+  });
+
+  it('pruning and short names keep the entry point and the bindings, and drop the bvh closest-point queries', () => {
+    const code = ptMegakernelWgsl(caps, { format: {}, layout });
+    expect(code).toContain('fn ptMain(');
+    expect(code).toMatch(/@group\(2\)\s*@binding\(1\)\s*var<storage,\s*read_write>\s*ptAccum/);
+    expect(ptMegakernelWgsl(caps, { format: {}, layout, shortenNames: false })).toContain('fn rtClosest');
+    expect(ptMegakernelWgsl(caps, { format: {}, layout, prune: false, shortenNames: false })).toContain('bvhClosestPointToTriangle');
+    expect(ptMegakernelWgsl(caps, { format: {}, layout, shortenNames: false })).not.toContain('bvhClosestPointToTriangle');
   });
 
   it('minify keeps the line count (compiler line numbers stay valid)', () => {

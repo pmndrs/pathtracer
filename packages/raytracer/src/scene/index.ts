@@ -5,3 +5,4 @@ export * from './scene-copy.ts';
 export * from './scene-wgsl.ts';
 export * from './gpu.ts';
 export * from './light-sample.ts';
+export * from './env-map.ts';

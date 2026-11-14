@@ -34,6 +34,8 @@ import {
 } from './constants.ts';
 import {
   buildAliasTable,
+  lightSelectionWeights,
+  type LightSelection,
   buildTriangleLights,
   makeEnvironment,
   makeSun,
@@ -42,10 +44,12 @@ import {
   worldTriangle,
   type AliasTable,
   type EnvironmentInput,
+  type RtEnvironmentLight,
   type RtLight,
   type SunInput,
   type UnpackedLight,
 } from './lights.ts';
+import { buildEnvMapTable, envMapMean } from './env-map.ts';
 import { MATERIAL_RECORD_VEC4S, MATERIAL_RECORD_WORDS, createMaterial, defaultMaterial, f32Bits, packMaterialTable, unpackMaterial, type RtMaterial, type RtMaterialInput } from './material.ts';
 
 export interface SceneCopyMesh extends SurfaceMeshInput {
@@ -70,6 +74,8 @@ export interface SceneCopyOptions {
   sunPowerScale?: number;
   /** Multiplies the environment's power in the light-selection weights. Default 1. */
   envPowerScale?: number;
+  /** Which weights the light alias table is built from (P1.4f A/B): `power` (default), `kind`, `{ capped: share }`. Changes noise only. */
+  lightSelection?: LightSelection;
 }
 
 export interface SceneCopyInput {
@@ -224,11 +230,17 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     sunLight = lights.length;
     lights.push(makeSun(input.sun, bounds.radius, options.sunPowerScale ?? 1));
   }
+  // Environment map: its words go after the light maps in `data`; the base is known once the light maps are laid out.
+  const envMapTable = input.environment?.map ? buildEnvMapTable(input.environment.map) : null;
+  const envMapMeanRadiance = input.environment?.map ? envMapMean(input.environment.map) : null;
+  const envLightAt = lights.length;
   if (input.environment) {
     environmentLight = lights.length;
-    lights.push(makeEnvironment(input.environment, bounds.radius, options.envPowerScale ?? 1));
+    lights.push(makeEnvironment(input.environment, bounds.radius, options.envPowerScale ?? 1, envMapTable && envMapMeanRadiance ? { base: 0, width: envMapTable.width, height: envMapTable.height, pdfNorm: envMapTable.pdfNorm, mean: envMapMeanRadiance } : undefined));
   }
-  const alias = buildAliasTable(lights.map((l) => l.power));
+  const alias = buildAliasTable(lightSelectionWeights(lights, options.lightSelection ?? 'power'));
+  // The real total power, whatever the selection weights are (the alias table's own total is 1 for a non-power selection).
+  const totalPower = lights.reduce((sum, l) => sum + l.power, 0);
 
   // Layout.
   const surfaceBodyVec4s = surface.table.length / 4 - SURFACE_TABLE.HEADER_VEC4S;
@@ -266,10 +278,13 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     table[meta + INSTANCE_LIGHT.metaLightBase] = entry ? entry.base : SCENE_NONE;
     table[(record + INSTANCE_LIGHT.spareVec4) * 4 + INSTANCE_LIGHT.mapBaseWord] = entry ? entry.map : 0;
   }
-  const data = new Uint32Array(Math.max(indexWords + vertexWords + mapWords.length, 1));
+  const envMapBase = indexWords + vertexWords + mapWords.length;
+  if (envMapTable) (lights[envLightAt] as RtEnvironmentLight).mapBase = envMapBase;
+  const data = new Uint32Array(Math.max(envMapBase + (envMapTable ? envMapTable.words.length : 0), 1));
   data.set(surface.indices, 0);
   data.set(new Uint32Array(surface.vertices.buffer, surface.vertices.byteOffset, vertexWords), indexWords);
   data.set(mapWords, mapBaseOfData);
+  if (envMapTable) data.set(envMapTable.words, envMapBase);
 
   table.set(materialWords, materialBase * 4);
   lights.forEach((light, i) => packLight(light, alias.pmf[i] as number, alias.prob[i] as number, alias.alias[i] as number, table, (lightBase + i * LIGHT_RECORD_VEC4S) * 4));
@@ -290,7 +305,7 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
   h(SCENE_HEADER.sunLight, sunLight);
   h(SCENE_HEADER.envLight, environmentLight);
   h(SCENE_HEADER.flags, surface.layout.positions ? SCENE_FLAG.positions : 0);
-  h(SCENE_HEADER.totalPower, f32Bits(alias.total));
+  h(SCENE_HEADER.totalPower, f32Bits(totalPower));
   h(SCENE_HEADER.sceneRadius, f32Bits(bounds.radius));
 
   const surfaceView: SurfaceTable = {
@@ -315,7 +330,7 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     sunLight,
     environmentLight,
     alias,
-    totalPower: alias.total,
+    totalPower,
     bounds,
     sections: { meshes: meshBase, materials: materialBase, lights: lightBase, vec4s: totalVec4s },
     byteLength: table.byteLength + data.byteLength,

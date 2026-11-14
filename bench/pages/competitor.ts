@@ -6,8 +6,8 @@
  * Args: renderer=<tgpt-wavefront|tgpt-megakernel|mutracer>  scene=<any bench scene name>  spp=N  snapshots=a,b,c
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
- *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg  pt_nee=0|1  pt_env=uniform|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
- *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
+ *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg  pt_nee=0|1  pt_env=uniform|importance|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
+ *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=power|kind|cap:0.25  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
  * `skipped=1` and upload nothing.
@@ -15,6 +15,7 @@
 import { drainDevice, getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { createAdapter, unsupportedReason } from '../adapters/registry.ts';
+import { parseLightSelection } from '@pmndrs/raytracer';
 import { getScene } from '../scenes/index.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -63,7 +64,7 @@ try {
   const pt = {
     ...(args['pt_sampler'] ? { sampler: args['pt_sampler'] as 'owen-sobol' | 'pcg' } : {}),
     ...(args['pt_nee'] ? { nee: args['pt_nee'] !== '0' } : {}),
-    ...(args['pt_env'] ? { envSampling: args['pt_env'] as 'uniform' | 'none' } : {}),
+    ...(args['pt_env'] ? { envSampling: args['pt_env'] as 'uniform' | 'importance' | 'none' } : {}),
     ...(args['pt_sun_visible'] ? { sunVisible: args['pt_sun_visible'] === '1' } : {}),
     ...(args['pt_sun_radius'] !== undefined ? { sunAngularRadius: numberArg(args, 'pt_sun_radius', 0) } : {}),
     ...(args['pt_positions'] ? { positions: args['pt_positions'] as 'barycentric' | 'ray' } : {}),
@@ -71,7 +72,10 @@ try {
     ...(args['pt_transport'] ? { transport: args['pt_transport'] as 'radiance' | 'importance' } : {}),
     ...(args['pt_maxdepth'] ? { maxDepth: numberArg(args, 'pt_maxdepth', 1) } : {}),
     ...(args['pt_rr'] ? { rrStartDepth: numberArg(args, 'pt_rr', 0) } : {}),
+    ...(args['pt_light_selection'] ? { lightSelection: parseLightSelection(args['pt_light_selection']) } : {}),
     ...(args['pt_seed'] ? { seed: numberArg(args, 'pt_seed', 0) } : {}),
+    ...(args['pt_prune'] ? { prune: args['pt_prune'] !== '0' } : {}),
+    ...(args['pt_shorten'] ? { shortenNames: args['pt_shorten'] !== '0' } : {}),
     ...(args['pt_passes'] ? { passesPerSubmit: numberArg(args, 'pt_passes', 8) } : {}),
   };
   const adapter = await createAdapter(rendererId, { frameBudget, bounces, emitters, mutracer, pt });

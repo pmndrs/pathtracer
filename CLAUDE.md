@@ -158,8 +158,9 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Sponza has duplicate triangles (same 3 vertices). Rays through them hit both; GPU and CPU (or two trees) legitimately
   name different ones (`primary_tie` in trace-core). They also double-count in area/power sums (P1.10).
 - Denoiser's `tools/gpu-lock.sh` (used by bvh sessions) never clears a lock directory whose owner died; our node
-  runner (`bench/runner/gpu-lock.ts`) does. After killing a runner, check `/tmp/rt-gpu.lock/owner` and remove it if
-  that pid is gone, or every shell-locked job waits forever.
+  runner (`bench/runner/gpu-lock.ts`) does. After killing a runner, check `/tmp/rt-gpu.lock/owner` and, if that pid is
+  gone, remove the whole directory (`rmdir`/`rm -r`), never only the `owner` file: an empty lock directory reads as
+  "unknown owner" and blocks shell callers forever (our runner clears one after 30 s).
 - Short GPU passes (~5 ms) on a Mac in use read up to ~2.4x slow in bursts (other apps' GPU work lands inside the pass,
   correlated across kernels). Time with many interleaved repeats and take a low percentile (trace-timing uses p10 of 30).
 - pbrt-v4's VNDF sampler picks its tangent by `wh.z < 0.99999`; GPU `normalize()` rounding flips that basis near the
@@ -201,5 +202,37 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   `shade: true` already appends `rtLightSampleWgsl`; appending it again declares it twice.
 - pt's material adapter thresholds metalness at 0.5 and makes non-metals pure Lambert (no dielectric lobe): compare
   `rtShade` FULL with pt only on diffuse or eta/k conductor materials.
+- Mitsuba 3's `envmap` looks rows up at `v * (H - 1)` (not `v * H - 0.5`): a `0.5 - v` texel vertical shift, +0.4% on a
+  sun-lit plane. The exporter pre-warps the rows (`equirectForMitsuba`, V50); any new `hdri` Mitsuba reference needs it.
+  To separate lookup from shading bias, render a diffuse plane under the map (no occluders): radiance = rho/pi * the
+  cosine integral of the bilinear map, a CPU quadrature to 1e-5 (single bounce, so `direct` with emitter-only / BSDF-only
+  sampling in Mitsuba tells lookup from sampling). A per-pixel background comparison cannot see a sun outside the view.
 - Binding one buffer as read-only and read-write storage in the same compute pass fails validation: give dummy
   bindings their own buffers.
+- Timing short GPU passes (P1.6a): time N back-to-back dispatches in one command buffer (>= 0.5 s, timestamps around the
+  whole batch) instead of single ~4 ms passes; the old p10-of-30 read ~2x slow and p90/p10 1.2-3 on a quiet M5 Pro (clock
+  ramp), the batch reads max/min ~1.001. `trace-timing pageAb=<key>=<A>,<B>` interleaves two variants ABBA in one page.
+- Queue at most one ~0.5 s timing sample at a time (`await queue.onSubmittedWorkDone()` between): many queued batches
+  ended in Metal "GPU Timeout Error" and a lost device. A runner run also waits on the shared GPU lock behind another
+  agent's page, which can stretch a loop of runs by minutes.
+- Environment map (P1.4d): an alias table over all pixels of a 512x256 map fails in f32 (a 17-bit index leaves ~7 bits for the
+  alias coin, so the sampled probabilities deviate from the table); use row-marginal + conditional CDFs (u.y rows, u.x columns).
+  A stratified-grid test of a sin θ-weighted sampler needs many strata in the row dimension (4096) or its quadrature error is 1%.
+- The bench adapters run in the page: they fetch assets as `/bench/assets/<path>` (the Vite server serves the repo root); never
+  `readFileSync` an environment PFM there. `pt-megakernel` records `envSampling: 'auto'` in its config (importance with a map).
+- `matrix.ts` queues on the shared GPU lock: another agent's long `trace-timing` run made a 2.6 s render take 4 minutes of wall
+  time. Check `/tmp/rt-gpu.lock/owner` first; the wait is not a hang.
+- A Python-style multi-replace of WGSL template text in `light-sample.ts` can hit the same function name twice (the constant and
+  the map variant of `rtSampleEnvironmentLi`): anchor replacements on unique text and run `pnpm typecheck` after each.
+- Light selection (P1.4f): `lightSelection` only changes the alias-table weights (`lightSelectionWeights`, lights.ts); the real total power
+  stays in `copy.totalPower` (the table's own `total` is 1 for a non-power strategy). Cornell, quad-light, env-sphere and Sponza have
+  one light kind or no area light, so strategies tie or `cap` equals `power` there: use the `lights-mix` / `lights-mix-lamps` scenes
+  (`bench/scenes/ab/`, no pbrt/Mitsuba reference: compare to our own 2 x 32768 spp renders; the 1024 spp cells take 0.1-0.3 s).
+- Never `pkill -f` another job's name from an agent shell (auto-mode blocks it, and it could hit other agents' runs). A background
+  sweep started with `nohup sh script &` can only be waited for; plan sweeps short (3 seeds x 4 strategies x 4 scenes took ~50 min
+  with Sponza at 51 s per 1024 spp cell).
+- Megakernel text (P2.10): `ptMegakernelWgsl` prunes unreachable top-level declarations and renames top-level names to 1-2
+  letters by default (40.4 KB, 43.2 KB with a map). Compiler messages then name `C5`, not `ptParams`: use `shortenNames: false`
+  (and `prune: false` so line numbers match too). Tests that look for a name or constant in the kernel text must pass
+  `shortenNames: false`. `rtShortenWgsl` skips any name also used as a member, parameter or local; keep new WGSL names unique
+  per top-level scope. `node bench/size-breakdown.ts [--env]` prints where the bytes go.

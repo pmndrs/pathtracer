@@ -13,7 +13,7 @@
  */
 import type { MaterialDesc } from '../scenes/schema.ts';
 import { encodePly, flipMesh } from './ply.ts';
-import { loadEnvImage } from './envmap.ts';
+import { equirectForMitsuba, loadEnvImage } from './envmap.ts';
 import { writePFM } from '../metrics/pfm.ts';
 import { num, roughnessToAlpha, worldMeshes } from './common.ts';
 import type { Exporter, ExportedFile } from './types.ts';
@@ -81,8 +81,9 @@ export const toMitsuba: Exporter = (scene, opts) => {
   if (env?.type === 'uniform') {
     x.push(`  <emitter type="constant">${rgb('radiance', env.radiance)}</emitter>`);
   } else if (env?.type === 'hdri') {
-    const img = loadEnvImage(opts.assetsDir, env.path);
+    const img = equirectForMitsuba(loadEnvImage(opts.assetsDir, env.path));
     files.push({ path: 'env.pfm', data: Buffer.from(writePFM(img)) });
+    approximations.push('mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere).');
     x.push(`  <emitter type="envmap">`);
     x.push(`    <string name="filename" value="env.pfm"/>`);
     x.push(`    <float name="scale" value="${num(env.scale)}"/>`);

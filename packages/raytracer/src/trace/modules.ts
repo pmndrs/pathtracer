@@ -103,6 +103,102 @@ export function rtMinifyWgsl(code: string): string {
   return code.replace(/^[ \t]+/gm, '').replace(/[ \t]*([{}(),;])[ \t]*/g, '$1');
 }
 
+/**
+ * Drops top-level `struct`/`fn`/`const`/`alias`/`override`/`var` declarations no entry point or binding reaches (a call-graph walk by
+ * identifier). Line breaks of what stays are untouched, but a dropped declaration removes its lines, so error line numbers after
+ * it shift: run it on the source you compile, not on a copy used to read compiler messages (or keep `prune: false`).
+ * Entry points are declarations preceded by `@compute`/`@vertex`/`@fragment`; every `@group` binding is kept (the pipeline layout
+ * names it). Needs comment-free, preprocessed, NOT yet minified source (declarations start in column 0). Returns the kept
+ * source and the dropped names.
+ */
+export function rtPruneWgsl(code: string): { code: string; dropped: string[] } {
+  const declRe = /^(?:@[^\n]*?\s)?(?:struct|fn|const|alias|override|var(?:<[^>]*>)?)\s+([A-Za-z_]\w*)/;
+  const lines = code.split('\n');
+  const chunks: { name: string; lines: string[]; root: boolean }[] = [{ name: '', lines: [], root: true }];
+  for (const line of lines) {
+    const m = declRe.exec(line);
+    if (m) {
+      // A lone attribute line (`@compute @workgroup_size(..)`) belongs to the declaration after it.
+      const prev = chunks[chunks.length - 1] as { name: string; lines: string[]; root: boolean };
+      let carry: string[] = [];
+      const last = prev.lines[prev.lines.length - 1];
+      if (prev.lines.length > 0 && last !== undefined && /^@(compute|vertex|fragment)\b/.test(last) && !declRe.test(last)) carry = [prev.lines.pop() as string];
+      chunks.push({ name: m[1] as string, lines: [...carry, line], root: false });
+    } else (chunks[chunks.length - 1] as { lines: string[] }).lines.push(line);
+  }
+  for (const c of chunks) if (c.name) c.root = /^@(group|compute|vertex|fragment)\b/.test(c.lines[0] as string);
+  const byName = new Map(chunks.filter((c) => c.name).map((c) => [c.name, c]));
+  const seen = new Set<string>();
+  const stack = chunks.filter((c) => c.root).map((c) => c);
+  const visit = (c: { name: string; lines: string[] }): void => {
+    for (const id of c.lines.join('\n').match(/[A-Za-z_]\w*/g) ?? []) {
+      const d = byName.get(id);
+      if (d && !seen.has(id)) { seen.add(id); stack.push(d); }
+    }
+  };
+  while (stack.length) visit(stack.pop() as { name: string; lines: string[] });
+  const dropped: string[] = [];
+  const out: string[] = [];
+  for (const c of chunks) {
+    if (!c.root && !seen.has(c.name)) dropped.push(c.name);
+    else out.push(...c.lines);
+  }
+  return { code: out.join('\n'), dropped };
+}
+
+/**
+ * Renames top-level `struct`/`fn`/`const`/`alias`/`var` names to short ones (`A`, `B`, ..., `Aa`, ...), most-used first, in every
+ * place the name appears. Line breaks and everything else stay, so error line numbers still match, but compiler messages show the
+ * short names: use `names` (old -> new) to read them, or do not shorten while debugging. Saves ~8 KB of the 50 KB megakernel (the
+ * names are long: `rtSampleEnvironmentLi`).
+ *
+ * Never renamed: names in `keep` (entry points the host looks up), `override`s (set by name through pipeline constants), `@group`
+ * bindings (readable in tests and tools), and any name also used as a struct member (`.name`), a field or parameter (`name:`), or a
+ * `let`/`var`/`const` local. Fresh names avoid every identifier already in the source. Needs comment-free, preprocessed,
+ * not yet minified source (declarations start in column 0).
+ */
+export function rtShortenWgsl(code: string, keep: readonly string[] = []): { code: string; names: Map<string, string> } {
+  const declRe = /^(@[^\n]*?\s)?(?:(struct|fn|const|alias|override|var(?:<[^>]*>)?)\s+)([A-Za-z_]\w*)/gm;
+  const cand = new Map<string, number>(); // name -> position of its declaring identifier
+  const blocked = new Set<string>(keep);
+  for (const m of code.matchAll(declRe)) {
+    const name = m[3] as string;
+    const pos = (m.index as number) + m[0].length - name.length;
+    if (m[2] === 'override' || /^@group\b/.test(m[1] ?? '')) blocked.add(name);
+    if (cand.has(name)) blocked.add(name);
+    cand.set(name, pos);
+  }
+  const declPositions = new Set(cand.values());
+  const count = new Map<string, number>();
+  const used = new Set<string>();
+  for (const m of code.matchAll(/[A-Za-z_]\w*/g)) {
+    const id = m[0];
+    used.add(id);
+    if (!cand.has(id)) continue;
+    count.set(id, (count.get(id) ?? 0) + 1);
+    const at = m.index as number;
+    if (declPositions.has(at)) continue;
+    const before = code.slice(Math.max(0, at - 6), at);
+    const after = code.slice(at + id.length, at + id.length + 3);
+    if (before.endsWith('.') || /^\s*:/.test(after) || /(?:let|var|const)\s+$/.test(before) || /(?:let|var|const)\s*<[^>]*>\s+$/.test(before)) blocked.add(id);
+  }
+  const order = [...count.keys()].filter((n) => !blocked.has(n)).sort((a, b) => (count.get(b) as number) * b.length - (count.get(a) as number) * a.length || (a < b ? -1 : 1));
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const fresh = function* (): Generator<string> {
+    for (const c of letters.slice(0, 26)) yield c;
+    for (const a of letters.slice(0, 26)) for (const b of letters) yield a + b;
+    for (const a of letters.slice(0, 26)) for (const b of letters) for (const c of letters) yield a + b + c;
+  }();
+  const names = new Map<string, string>();
+  for (const old of order) {
+    let next = fresh.next().value as string;
+    while (used.has(next)) next = fresh.next().value as string;
+    if (next.length >= old.length) continue;
+    names.set(old, next);
+  }
+  return { code: code.replace(/[A-Za-z_]\w*/g, (id) => names.get(id) ?? id), names };
+}
+
 function surfaceLayoutOf(options: RtModuleOptions): SurfaceLayout | null {
   if (options.scene && (options.scene.surface ?? true)) return options.scene.layout;
   return null;

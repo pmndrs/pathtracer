@@ -3,20 +3,22 @@
  * and `baseline.ts` treat it like the competitors.
  *
  * Scene: `SceneDesc` -> `sceneDescToCopyInput` (bench/scenes/to-scene-copy.ts) -> bvh `buildTraceScene` + the scene copy
- * (`buildSceneCopy`, barycentric positions). One instance per mesh, all static. `file` geometry and `hdri` environments are
- * `file` geometry is loaded from the shared web export (`fetchSceneGlb`, the same glb the web competitors read; baked world-space
- * triangles, all primitives merged into one mesh). `hdri` environments are not supported yet (P1.4d): `unsupportedReason` skips them.
+ * (`buildSceneCopy`, barycentric positions). One instance per mesh, all static. `file` geometry is loaded from the shared web
+ * export (`fetchSceneGlb`, the same glb the web competitors read; baked world-space triangles, all primitives merged into one
+ * mesh). An `hdri` environment is fetched as a PFM from `/bench/assets/<path>` and copied into the scene copy (P1.4d); it is
+ * importance-sampled by luminance unless `envSampling` says otherwise (`pt_env=uniform` is the A/B baseline).
  *
  * Timing: wall clock around the dispatches, `onSubmittedWorkDone` at the end of the timed region, readback excluded (snapshot
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
-import { detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, type SceneCopyBuffers } from '@pmndrs/raytracer';
+import { detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
 import { PtMegakernel, type PtImage, type PtIntegratorOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import type { SceneDesc } from '../../scenes/schema.ts';
 import { sceneDescToCopyInput } from '../../scenes/to-scene-copy.ts';
+import { readPFM } from '../../metrics/pfm.ts';
 import { fetchSceneGlb, readGlbMeshes } from '../shared/glb.ts';
 import type { GpuContext } from '../shared/gpu.ts';
 
@@ -30,10 +32,15 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   rrStartDepth?: number;
   /** Sun angular radius override in radians (0 = delta light, as pbrt and Mitsuba); the scene's own otherwise. A/B for V35. */
   sunAngularRadius?: number;
+  /** Light-selection weights for NEE (P1.4f): `power` (default), `kind`, `{ capped: share }`. Noise only. */
+  lightSelection?: LightSelection;
   /** Scrambling seed base. */
   seed?: number;
   /** Sample passes per submit. Default 8. */
   passesPerSubmit?: number;
+  /** Kernel text options (P2.10): drop unreachable declarations / shorten top-level names. Default true; false is the A/B baseline. */
+  prune?: boolean;
+  shortenNames?: boolean;
 }
 
 /** Concatenates glb primitives (already world space) into one triangle mesh. */
@@ -69,12 +76,12 @@ export class PtMegakernelAdapter implements RendererAdapter {
     materials: ['diffuse', 'conductor', 'dielectric', 'black'],
     emissiveMeshes: true,
     directionalLight: true,
-    environment: ['uniform'],
+    environment: ['uniform', 'hdri'],
     fileGeometry: true,
     rawOutput: true,
     notes:
       'Megakernel, NEE (one shadow ray) + power-heuristic MIS, Owen-Sobol, f32 accumulation. A sun with an angular radius is sampled as a cone (the references use a delta light). ' +
-      'File geometry (Sponza) comes from the shared web glb export. No environment maps yet.',
+      'File geometry (Sponza) comes from the shared web glb export. HDR environment maps (equirect PFM): bilinear lookup, luminance importance sampling with MIS.',
   };
 
   gpuContext: GpuContext | null = null;
@@ -97,7 +104,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
       config: {
         sampler: settings.sampler ?? 'owen-sobol',
         nee: settings.nee ?? true,
-        envSampling: settings.envSampling ?? 'uniform',
+        envSampling: settings.envSampling ?? 'auto',
         sunVisible: settings.sunVisible ?? false,
         positions: settings.positions ?? 'barycentric',
         ...(settings.sunAngularRadius !== undefined ? { sunAngularRadius: settings.sunAngularRadius } : {}),
@@ -106,8 +113,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.maxDepth !== undefined ? { maxDepth: settings.maxDepth } : {}),
         ...(settings.rrStartDepth !== undefined ? { rrStartDepth: settings.rrStartDepth } : {}),
         seed: settings.seed ?? 0,
+        lightSelection: lightSelectionName(settings.lightSelection ?? 'power'),
       },
     };
+  }
+
+  /** The environment sampling in force: the setting, else importance for a map and uniform otherwise. */
+  private envSampling(hasMap: boolean): NonNullable<PtAdapterSettings['envSampling']> {
+    return this.settings.envSampling ?? (hasMap ? 'importance' : 'uniform');
   }
 
   async load(scene: SceneDesc): Promise<{ loadMs: number; compileMs?: number }> {
@@ -130,7 +143,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
       const merged = mergeMeshes(readGlbMeshes(glb));
       resolveFile = () => merged;
     }
-    const input = sceneDescToCopyInput(scene, resolveFile ? { resolveFile } : {});
+    let hdriMap: Image | undefined;
+    if (scene.environment?.type === 'hdri') {
+      const url = `/bench/assets/${scene.environment.path}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`environment ${scene.environment.path}: HTTP ${response.status}. Run: node bench/scenes/tier0/generate-assets.ts`);
+      hdriMap = readPFM(await response.arrayBuffer());
+    }
+    const input = sceneDescToCopyInput(scene, { ...(resolveFile ? { resolveFile } : {}), ...(hdriMap ? { hdriMap } : {}) });
     if (input.sun && this.settings.sunAngularRadius !== undefined) input.sun = { ...input.sun, angularRadius: this.settings.sunAngularRadius };
     const builder = createMeshBvhBuilder();
     const data = await buildTraceScene(
@@ -140,18 +160,18 @@ export class PtMegakernelAdapter implements RendererAdapter {
     );
     builder.dispose();
     this.trace = uploadTraceScene(device, data, scene.name);
-    const copy = buildSceneCopy({ ...input, options: { ...input.options, surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
+    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
     this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene` });
     const loadMs = performance.now() - t0;
 
     const t1 = performance.now();
-    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, integrator: this.settings, label: 'pt-megakernel' });
+    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, integrator: { ...this.settings, envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
     this.kernel.setLimits({ maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth });
     this.kernel.setSeed(this.settings.seed ?? 0);
-    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, scene_copy_bytes: copy.byteLength };
+    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0 };
     return { loadMs, compileMs: performance.now() - t1 };
   }
 

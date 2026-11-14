@@ -54,7 +54,12 @@ Renderer keys: `pbrt` (pbrt-v4-cpu), `mitsuba` (llvm_ad_rgb), `mitsuba-scalar` (
 - **Pixel filter.** `box` radius 0.5 in both.
 - **Roughness.** alpha = roughness²; pbrt `remaproughness false`; Mitsuba `distribution ggx`, `alpha`.
 - **Environment.** pbrt-v4 only reads square equal-area octahedral images (and looks up nearest); the exporter resamples
-  the equirect PFM into 512x512 octahedral in world coordinates. Mitsuba reads the equirect PFM directly (bilinear).
+  the equirect PFM into 512x512 octahedral in world coordinates. Mitsuba reads an equirect PFM (bilinear) but looks rows up
+  at `v * (H - 1)` instead of `v * H - 0.5` (a vertical shift of `0.5 - v` texels: +0.5 at the zenith, 0 at the equator), so the
+  exporter resamples the rows to `v = j / (H - 1)` first (`equirectForMitsuba`, DIVERGES V50). Unfixed it read a sun-lit plane
+  +0.39% bright. Checked on a diffuse plane under the env-sphere sky: analytic irradiance (CPU quadrature of the bilinear map) vs
+  ours 3e-6, Mitsuba 1e-5, pbrt -0.05% R/-0.06% G (the octahedral map itself is exact to 3e-5; the rest is pbrt's spectral round trip).
+  Rotation: Mitsuba's `rotate y` equals our `rotationYDeg` convention to 3e-6 (probed).
 - **Samplers.** pbrt `zsobol`, Mitsuba `multijitter` (both unbiased; differences are noise, not bias).
 
 ## Systematic differences to expect
@@ -62,7 +67,11 @@ Renderer keys: `pbrt` (pbrt-v4-cpu), `mitsuba` (llvm_ad_rgb), `mitsuba-scalar` (
 - pbrt-v4 spectral uplift of saturated RGB reflectances (red/green walls, copper) differs slightly from Mitsuba's RGB
   mode; pbrt can output tiny negative values on saturated colours (spectral -> sensor -> sRGB). `scalar_spectral`
   Mitsuba is the cross-check for this.
-- Nearest vs bilinear environment lookup (sun hot spot is 5 degrees wide; effect is sub-percent).
+- Nearest vs bilinear environment lookup (sun hot spot is 5 degrees wide; effect is sub-percent). pbrt's octahedral point
+  sampling also turns the sky/ground horizon step (rows 42-49 of env-sphere) into a staircase: per-row differences of +-5-16%
+  there that average out (pbrt/ours is -0.03% over the sky above the horizon band).
+- env-sphere pbrt vs Mitsuba/ours: clay +1.4%, copper +1.65% brighter in pbrt (spectral uplift of saturated reflectances, as
+  Cornell's 0.69%), ground -0.17%, sky -0.03%: the whole-image -0.38% is that, not the map.
 
 ## Measured (Apple M-series, 18 threads; see agreement.md for the full tables)
 
@@ -72,7 +81,7 @@ cornell (512x512) 1077 s / 533 s. Mitsuba scalar_spectral cross-checks: 1024 spp
 
 - Furnaces: diffuse reads 0.50000 (expected 0.5) and dielectric 0.9999 (expected 1) in both renderers; quad-light matches
   the closed-form irradiance image to 1e-4 in both.
-- Mitsuba (RGB) vs pbrt relMSE: furnaces 2e-8 .. 3e-5, quad-light 1.8e-6, cornell 4.4e-4, env-sphere 6.4e-4.
+- Mitsuba (RGB) vs pbrt relMSE: furnaces 2e-8 .. 3e-5, quad-light 1.8e-6, cornell 4.4e-4, env-sphere 6.5e-4 (6.4e-4 before the Mitsuba envmap row fix).
 
 **sponza-white** (Tier 2, 1280x720, 262,266 triangles, maxDepth 8, RR from vertex 4, sun + uniform sky, image mean 0.246):
 pbrt-v4 4096 spp 3431 s (57 min) / Mitsuba llvm_ad_rgb 4096 spp 1456 s (24 min), rendered one after the other. Agreement at
