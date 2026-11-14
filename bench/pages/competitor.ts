@@ -7,7 +7,7 @@
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
  *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg  pt_nee=0|1  pt_env=uniform|importance|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
- *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=power|kind|cap:0.25  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
+ *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
  * `skipped=1` and upload nothing.

@@ -144,23 +144,30 @@ export function buildAliasTable(weights: ArrayLike<number>): AliasTable {
 // Light selection strategies (P1.4f): which weights go into the alias table. Selection only moves noise, never the mean.
 // ---------------------------------------------------------------------------------------------------------------
 
+/** The default light selection: pbrt-v4's rule (D22). */
+export const DEFAULT_LIGHT_SELECTION: LightSelection = 'pbrt';
+
 /**
  * How NEE picks a light:
- *  - `power`: probability proportional to power (the default; sun and environment power use the bounding-sphere conventions above);
+ *  - `pbrt` (the default, D22): pbrt-v4's default `bvh` light sampler without the tree. Each infinite light (sun,
+ *    environment) gets an equal share 1/(nInfinite + 1), and the area lights together get the remaining 1/(nInfinite + 1),
+ *    split by power (pbrt splits it with its light BVH; power is our stand-in until we have one). With no area power the
+ *    infinite lights share everything. Mitsuba 3 does the same in spirit: each emitter has sampling_weight 1;
+ *  - `power`: probability proportional to power (sun and environment power use the bounding-sphere conventions above);
  *  - `kind`: each kind that has power (emissive triangles, sun, environment) gets an equal share, and within a kind the
  *    share follows power (so triangles stay area/radiance weighted);
  *  - `{ capped: c }`: power-proportional, except the infinite lights (sun + environment together) are capped at share `c`
  *    (their weights are scaled down when their power share exceeds `c`; never scaled up). With no area power they take everything.
  * A light with no power gets weight 0 under every strategy.
  */
-export type LightSelection = 'power' | 'kind' | { capped: number };
+export type LightSelection = 'pbrt' | 'power' | 'kind' | { capped: number };
 
-/** Parses the bench/page spelling: `power`, `kind`, `cap:0.25`. */
+/** Parses the bench/page spelling: `pbrt`, `power`, `kind`, `cap:0.25`. */
 export function parseLightSelection(text: string): LightSelection {
-  if (text === 'power' || text === 'kind') return text;
+  if (text === 'pbrt' || text === 'power' || text === 'kind') return text;
   const m = /^cap:(\d*\.?\d+)$/.exec(text);
   if (m) return { capped: Number(m[1]) };
-  throw new RangeError(`light selection '${text}': expected power, kind or cap:<share>`);
+  throw new RangeError(`light selection '${text}': expected pbrt, power, kind or cap:<share>`);
 }
 
 export function lightSelectionName(selection: LightSelection): string {
@@ -168,7 +175,7 @@ export function lightSelectionName(selection: LightSelection): string {
 }
 
 /** Selection probabilities (sum to 1 when any light has power, else all 0) of each light under `selection`. The alias table is built from these. */
-export function lightSelectionWeights(lights: readonly RtLight[], selection: LightSelection = 'power'): number[] {
+export function lightSelectionWeights(lights: readonly RtLight[], selection: LightSelection = DEFAULT_LIGHT_SELECTION): number[] {
   const power = lights.map((l) => (l.power > 0 ? l.power : 0));
   const total = power.reduce((a, b) => a + b, 0);
   if (!(total > 0)) return power;
@@ -176,6 +183,16 @@ export function lightSelectionWeights(lights: readonly RtLight[], selection: Lig
   const scaleGroup = (pred: (l: RtLight) => boolean, share: number, groupTotal: number) =>
     power.map((p, i) => (pred(lights[i] as RtLight) && groupTotal > 0 ? (p / groupTotal) * share : 0));
   if (selection === 'power') return power.map((p) => p / total);
+  if (selection === 'pbrt') {
+    const isInfinite = (l: RtLight) => l.kind !== 'triangle';
+    const nInfinite = lights.filter((l, i) => isInfinite(l) && (power[i] as number) > 0).length;
+    const pArea = group((l) => !isInfinite(l));
+    const slots = nInfinite + (pArea > 0 ? 1 : 0);
+    return power.map((p, i) => {
+      if (!(p > 0)) return 0;
+      return isInfinite(lights[i] as RtLight) ? 1 / slots : p / pArea / slots;
+    });
+  }
   if (selection === 'kind') {
     const kinds = ['triangle', 'sun', 'environment'] as const;
     const present = kinds.filter((k) => group((l) => l.kind === k) > 0);

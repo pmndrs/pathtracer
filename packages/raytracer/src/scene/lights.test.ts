@@ -189,7 +189,7 @@ describe('light selection strategies (P1.4f)', () => {
     'env only': [env(7)],
     'many triangles + env': [...Array.from({ length: 50 }, (_, i) => tri(1 + i)), env(1e6)],
   };
-  const strategies: LightSelection[] = ['power', 'kind', { capped: 0.25 }, { capped: 0.5 }];
+  const strategies: LightSelection[] = ['pbrt', 'power', 'kind', { capped: 0.25 }, { capped: 0.5 }];
   for (const [name, lights] of Object.entries(scenes)) {
     for (const strategy of strategies) {
       it(`${name} / ${lightSelectionName(strategy)}: pmf sums to 1, every powered light has pmf > 0, the table realises it`, () => {
@@ -228,7 +228,23 @@ describe('light selection strategies (P1.4f)', () => {
     expect(lightSelectionWeights([sun(1), env(3)], { capped: 0.25 })[1]).toBeCloseTo(0.75, 12);
   });
 
+  it('pbrt gives each infinite light 1/(nInfinite + 1) and the area lights the rest by power (pbrt-v4 bvh sampler)', () => {
+    const w = lightSelectionWeights([tri(1), tri(3), sun(100), env(900)], 'pbrt');
+    expect(w[2]).toBeCloseTo(1 / 3, 12);
+    expect(w[3]).toBeCloseTo(1 / 3, 12);
+    expect(w[0]! + w[1]!).toBeCloseTo(1 / 3, 12);
+    expect(w[1]! / w[0]!).toBeCloseTo(3, 12);
+    // Only infinite lights: uniform between them, whatever their power. Only area lights: the same as power.
+    expect(lightSelectionWeights([sun(1), env(1000)], 'pbrt')).toEqual([0.5, 0.5]);
+    expect(lightSelectionWeights([tri(1), tri(3)], 'pbrt')).toEqual(lightSelectionWeights([tri(1), tri(3)], 'power'));
+    // A powerless light gets nothing and does not take a slot.
+    expect(lightSelectionWeights([tri(1), sun(0), env(5)], 'pbrt')).toEqual([0.5, 0, 0.5]);
+    // It is the default.
+    expect(lightSelectionWeights([tri(1), env(5)])).toEqual(lightSelectionWeights([tri(1), env(5)], 'pbrt'));
+  });
+
   it('parses the page spelling', () => {
+    expect(parseLightSelection('pbrt')).toBe('pbrt');
     expect(parseLightSelection('power')).toBe('power');
     expect(parseLightSelection('kind')).toBe('kind');
     expect(parseLightSelection('cap:0.25')).toEqual({ capped: 0.25 });

@@ -67,8 +67,9 @@ within 1.2e-7.
 
 ## Open choices (defaults hold until measured)
 
-1. **Light selection weights for sun and environment.** Default pbrt-style power, scales as settings. Risk: a sun or sky
-   takes most picks next to small emitters (noisy NEE indoors). Quality only, no speed cost. Measured (P1.4f, `lightSelection`): see docs/design/integrator.md open choice 3; suggestion `cap:0.5`, default `power` until decided.
+1. **Light selection weights for sun and environment.** Settled (D22): default `pbrt`, pbrt-v4's rule. Each infinite
+   light gets 1/(nInfinite+1), and the area lights share the rest by power. `power`, `kind` and `cap:c` stay as settings.
+   Numbers: docs/design/integrator.md open choice 3.
 2. **Material precision** (f16 eta/k, unorm16 weights). Keep: errors far under the reference noise floor. Settle: the
    P2 furnace and copper tests; if bias shows, move eta/k to f32 (record grows to 160 B).
 3. **One table + one data buffer vs a buffer per section.** Keep 2 bindings (saves 3). Cost: one 128 MiB binding holds

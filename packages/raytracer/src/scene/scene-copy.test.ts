@@ -133,22 +133,23 @@ describe('scene copy: sections, header, lights', () => {
     expect(copy.bounds.radius).toBeGreaterThan(4);
   });
 
-  it('light selection probabilities are power / total, sum to 1, and the alias table realises them', () => {
+  it('light selection probabilities follow the default strategy (pbrt), sum to 1, and the alias table realises them', () => {
     const total = copy.lights.reduce((s, l) => s + l.power, 0);
     expect(copy.totalPower).toBeCloseTo(total, 6);
+    const w = lightSelectionWeights(copy.lights, 'pbrt');
     let sum = 0;
-    copy.lights.forEach((light, i) => {
+    copy.lights.forEach((_light, i) => {
       const read = readLight(copy, i);
       sum += read.pmf;
-      expect(read.pmf).toBe(f32(light.power / total));
-      expect(aliasProbabilityOf({ prob: Float32Array.of(...copy.lights.map((_, j) => readLight(copy, j).aliasProb)), alias: Uint32Array.of(...copy.lights.map((_, j) => readLight(copy, j).alias)) }, i)).toBeCloseTo(light.power / total, 6);
+      expect(read.pmf).toBe(f32(w[i]!));
+      expect(aliasProbabilityOf({ prob: Float32Array.of(...copy.lights.map((_, j) => readLight(copy, j).aliasProb)), alias: Uint32Array.of(...copy.lights.map((_, j) => readLight(copy, j).alias)) }, i)).toBeCloseTo(w[i]!, 6);
     });
     expect(sum).toBeCloseTo(1, 6);
   });
 
   it('lightSelection changes the stored probabilities (and only those): pmf = the strategy weights, total power stays the real total', () => {
     const base = fixture();
-    for (const selection of ['kind', { capped: 0.25 }] as const) {
+    for (const selection of ['power', 'kind', { capped: 0.25 }] as const) {
       const other = buildSceneCopy({ ...base, options: { ...base.options, lightSelection: selection } });
       const w = lightSelectionWeights(other.lights, selection);
       other.lights.forEach((_, i) => expect(readLight(other, i).pmf).toBe(f32(w[i]!)));

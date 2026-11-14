@@ -35,6 +35,7 @@ import {
 import {
   buildAliasTable,
   lightSelectionWeights,
+  DEFAULT_LIGHT_SELECTION,
   type LightSelection,
   buildTriangleLights,
   makeEnvironment,
@@ -74,7 +75,7 @@ export interface SceneCopyOptions {
   sunPowerScale?: number;
   /** Multiplies the environment's power in the light-selection weights. Default 1. */
   envPowerScale?: number;
-  /** Which weights the light alias table is built from (P1.4f A/B): `power` (default), `kind`, `{ capped: share }`. Changes noise only. */
+  /** Which weights the light alias table is built from (P1.4f): `pbrt` (default, D22), `power`, `kind`, `{ capped: share }`. Changes noise only. */
   lightSelection?: LightSelection;
 }
 
@@ -238,7 +239,7 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     environmentLight = lights.length;
     lights.push(makeEnvironment(input.environment, bounds.radius, options.envPowerScale ?? 1, envMapTable && envMapMeanRadiance ? { base: 0, width: envMapTable.width, height: envMapTable.height, pdfNorm: envMapTable.pdfNorm, mean: envMapMeanRadiance } : undefined));
   }
-  const alias = buildAliasTable(lightSelectionWeights(lights, options.lightSelection ?? 'power'));
+  const alias = buildAliasTable(lightSelectionWeights(lights, options.lightSelection ?? DEFAULT_LIGHT_SELECTION));
   // The real total power, whatever the selection weights are (the alias table's own total is 1 for a non-power selection).
   const totalPower = lights.reduce((sum, l) => sum + l.power, 0);
 

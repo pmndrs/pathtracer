@@ -112,17 +112,13 @@ sampler 1.3, Owen-Sobol 1.1, adapter 0.9. An `hdri` scene adds the map lookup, p
    uniform 6.1x relMSE at equal spp (+12% time per sample on env-sphere); CDF vs alias tables is open (P2.8a). Keep uniform until a sun-plus-sky scene shows the cost.
    `none`: zero variance on a uniform sky and cheaper NEE; uniform wastes alias picks next to other lights. Setting
    exists. Settle: P2.12 at equal spp and equal time.
-3. **Light selection weights** (P1.4f, measured; default `power` until decided). Setting `lightSelection` / `pt_light_selection`:
-   `power` (pbrt `PowerLightSampler`-like), `kind` (equal share per kind present), `cap:0.25` / `cap:0.5` (power, sun + env
-   capped at that share). Noise only (means within 0.02%). relMSE at 1024 spp, 3 seeds: Cornell, quad-light, env-sphere
-   identical (one light kind); sponza-white power 8.12e-3, kind 9.33e-3, caps = power (no area lights); `lights-mix` (sun+sky key
-   over two lamps) power 2.10e-5, kind 1.67e-5, cap:0.25 2.44e-5, cap:0.5 1.29e-5; `lights-mix-lamps` (lamps key) power 8.69e-5, kind
-   1.30e-4, cap:0.25 6.14e-5, cap:0.5 = power. Suggest `cap:0.5`: never worse than `power` at 256 and 1024 spp in any scene
-   measured (at 64 spp `lights-mix` reads 9% worse, 1.59e-3 vs 1.46e-3: a few bright first-hit samples; identical unless infinite lights hold > 50% of the power, then up to 1.6x lower relMSE) and costs nothing at run time.
-   Cons: `cap:0.25` helps the lamp-key scene but hurts the sun-key one, so the cap is a heuristic with a scene-dependent
-   optimum; only two synthetic scenes mix kinds, and no pbrt/Mitsuba reference exists for them (own 2 x 32768 spp). `kind` loses
-   whenever one kind is weak (Sponza, lamps). A real fix is contribution-aware selection (per-shading-point, i.e. light BVH or
-   ReSTIR-style), out of scope here. Settle: a Tier 1 scene with real mixed lights.
+3. **Light selection weights** (P1.4f): **settled, default `pbrt` (D22)**, pbrt-v4's default rule. Each infinite light
+   (sun, environment) gets 1/(nInfinite+1), and the area lights share the rest by power, where pbrt uses its light BVH. Mitsuba's
+   uniform emitter weights are the same idea. Other settings via `lightSelection` / `pt_light_selection`: `power`, `kind`,
+   `cap:0.25` / `cap:0.5`. Noise only (means within 0.03%). relMSE at 1024 spp, 3 seeds (pbrt / power / cap:0.5): Cornell,
+   quad-light, env-sphere identical; sponza-white 9.33e-3 / 8.12e-3 / 8.12e-3; `lights-mix` (sun+sky key) 1.67e-5 / 2.10e-5 /
+   1.29e-5; `lights-mix-lamps` 1.30e-4 / 8.69e-5 / 8.69e-5. `cap:0.5` measured best overall but is our own heuristic; the
+   maintainer chose the common rule. Revisit with a light BVH (spatial importance for the area share) or ReSTIR DI (P4).
 4. **Triangle lights: uniform area or spherical triangle.** Keep uniform (matches Mitsuba). Spherical is less noisy close
    to big lights, more ALU. Can be a module constant. Settle: close-up large quad light, relMSE at equal spp.
 5. **RR outside reference mode.** Suggest `rrStartDepth` 4 (Cornell 3.6× faster at 1.6× relMSE). Setting exists.

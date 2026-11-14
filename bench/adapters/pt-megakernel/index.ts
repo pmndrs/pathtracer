@@ -12,7 +12,7 @@
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
-import { detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
+import { detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
 import { PtMegakernel, type PtImage, type PtIntegratorOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
@@ -113,7 +113,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.maxDepth !== undefined ? { maxDepth: settings.maxDepth } : {}),
         ...(settings.rrStartDepth !== undefined ? { rrStartDepth: settings.rrStartDepth } : {}),
         seed: settings.seed ?? 0,
-        lightSelection: lightSelectionName(settings.lightSelection ?? 'power'),
+        lightSelection: lightSelectionName(settings.lightSelection ?? DEFAULT_LIGHT_SELECTION),
       },
     };
   }
