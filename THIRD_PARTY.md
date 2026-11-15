@@ -26,6 +26,7 @@ the time of this check, not necessarily the commit each file was ported from.
 | `bench/runner/clock-note.ts` (+ test) | `~/Developer/webgpu-ddgi/tools/gpu/clock-note.ts`, via `~/Developer/bvh/tests/gpu/clock-note.ts` | MIT | ddgi `9dddefe`, bvh `498a6c1` | `PT_` env names, live sampler, our CSV row builder |
 | `bench/runner/contract.ts` | shape follows `~/Developer/bvh/tests/gpu/contract.ts` | MIT | bvh `498a6c1` | reduced to what the bench needs |
 | `bench/runner/page-client.ts` | shape follows `~/Developer/bvh/tests/gpu/client.ts` | MIT | bvh `498a6c1` | |
+| `packages/raytracer/src/scene/scene-copy.ts`, `constants.ts`, `gpu.ts` | layout ideas from `~/Developer/webgpu-ddgi/packages/ddgi-core/src/platform/scene/` (table + header + fixed records, none sentinel); `ContentHasher` adapted from its `scene-fingerprint.ts` | MIT | ddgi working tree 2026-11-14 | V29, V30; records and light table are new |
 | `bench/runner/gpu-lock.ts` (+ test) | same protocol as `~/Developer/Denoiser/tools/gpu-lock.sh` (a shell script, reimplemented in TypeScript) | MIT | Denoiser `7014384` | takes over locks of dead owners (V5) |
 | `bench/metrics/flip.ts` | `~/Developer/Denoiser/examples/realtime-denoiser/src/flip.ts` (our own implementation), written after NVIDIA's FLIP reference | MIT (ours), reference BSD-3, see 1.2 | Denoiser `7014384` | LDR-FLIP only; reference is `github.com/NVlabs/flip` |
 
@@ -48,7 +49,32 @@ mirrors the `@pmndrs/bvh` GPU layout v2 (`~/Developer/bvh/src/trace/layout.ts`).
 - Licence text: [licenses/NVlabs-FLIP-BSD-3-Clause.txt](licenses/NVlabs-FLIP-BSD-3-Clause.txt), verbatim from the pinned commit.
 - Not used: the reference's PyTorch/C++/CUDA code. The clone and the pip venv live in `.cache/flip-validation/` (git-ignored) and are only used to produce validation outputs.
 
-### 1.3 Clean-room status
+### 1.3 pbrt-v4, Apache-2.0
+
+| Our file | Source | Licence | Notes |
+|---|---|---|---|
+| `packages/pathtracer/src/bsdf/bsdf.ts`, `bsdf-wgsl.ts` | pbrt-v4 <https://github.com/mmp/pbrt-v4>, commit `b0bdf461`: `src/pbrt/bxdfs.h`, `bxdfs.cpp`, `util/scattering.h` | Apache-2.0, Copyright (c) 1998-2020 Matt Pharr, Wenzel Jakob, Greg Humphreys | Diffuse, conductor and dielectric BxDFs, Trowbridge-Reitz, FrDielectric, FrComplex, Refract, ported to TS and WGSL and restructured (DIVERGES V28). Licence text: [licenses/pbrt-v4-Apache-2.0.txt](licenses/pbrt-v4-Apache-2.0.txt) |
+| `packages/pathtracer/src/bsdf/layered.ts`, `layered-wgsl.ts` (P2.21) | pbrt-v4, same commit: `src/pbrt/bxdfs.h` (`LayeredBxDF::f`, `Sample_f`, `PDF`, `CoatedDiffuseBxDF`), `bxdfs.cpp` (`DielectricBxDF` with `BxDFReflTransFlags`) | Apache-2.0, same copyright | `layering: 'stochastic'`: the random walk specialised to dielectric-over-diffuse, twoSided, no medium; per-channel Fresnel scale for OpenPBR `specular_weight/color`; PCG hash RNG instead of pbrt's `RNG` (DIVERGES V58). `CoatedConductorBxDF` (P2.23): the same walk with a `ConductorBxDF` bottom (delta-bottom rules, eta and k divided by the interface eta, DIVERGES V73). Read from `.cache/native/pbrt-v4`. The albedo layering is ours, from the OpenPBR specification (Apache-2.0, text only, no code) and Karis 2013 / Weidlich-Wilkie 2007 (formulas), DIVERGES V57 |
+
+Also from pbrt-v4, re-implemented in WGSL (not copied): the integrator structure (`PathIntegrator::Li` / `SampleLd`:
+emission before the depth check, `etaScale`, the RR formula), `SampleUniformTriangle`, the power heuristic
+(`packages/pathtracer/src/integrator/`, `packages/raytracer/src/scene/light-sample.ts`).
+
+Papers (formulas only, our code): Wächter and Binder, "A Fast and Robust Method for Avoiding Self-Intersection" (Ray
+Tracing Gems ch. 6; written from the paper's description, no book text or code, D16); Burley, "Practical Hash-based
+Owen Scrambling", JCGT 2020; Jarzynski and Olano, "Hash Functions for GPU Rendering", JCGT 2020 (PCG debug sampler); Heitz, "Sampling the GGX Distribution of Visible Normals", JCGT 2018 (standard VNDF,
+as pbrt-v4 implements it); Dupuy and Benyoub, "Sampling Visible GGX Normals with Spherical Caps", HPG 2023
+(`vndf: 'cap'`); Duff et al., "Building an Orthonormal Basis, Revisited", JCGT 2017 (`ptFrameFromNormal`).
+Mitsuba 3 code was not read for the BSDFs.
+
+### 1.5 ltc-sheen (Zeltner, Burley, Chiang) and glTF-Sample-Renderer, Apache-2.0
+
+| Our file | Source | Licence | Notes |
+|---|---|---|---|
+| `packages/pathtracer/src/bsdf/fuzz-table.ts`, `fuzz.ts`, `fuzz-wgsl.ts` (P2.25) | <https://github.com/tizian/ltc-sheen>: `fitting/python/data/ltc_table_sheen_volume.cpp` (the 32 x 32 LTC table, copied as numbers) and `pbrt-v3/src/materials/sheenltc.cpp` (table lookup, LTC evaluation and sampling, re-written in TypeScript/WGSL) | Apache-2.0, Copyright Tizian Zeltner, Brent Burley, Matt Jen-Yuan Chiang | The fuzz BRDF OpenPBR 1.1.2 recommends (spec, Fuzz section). |
+| `packages/pathtracer/src/bsdf/thinfilm.ts`, `thinfilm-wgsl.ts` (P2.27) | <https://github.com/KhronosGroup/glTF-Sample-Renderer> `source/Renderer/shaders/iridescence.glsl` (`evalIridescence`, `evalSensitivity`, the Gaussian fit constants of the CIE 1931 curves in Fourier space), after Belcour and Barla, "A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence", SIGGRAPH 2017 | Apache-2.0, Copyright the Khronos Group | Re-written in TypeScript/WGSL; DIVERGES V82 lists the changes (white balance, thickness units). |
+
+### 1.4 Clean-room status
 
 - NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC, NRD): nothing ported. NRD code never opened.
 - mutracer: nothing ported (see section 2).
@@ -66,6 +92,7 @@ in our packages. Versions, hashes and adapter ids are kept in [bench/adapters/CO
 | `three` / `@types/three` | 0.187.0 | MIT | dependency of the above |
 | `@meimu/mutracer` (github.com/pissang/mutracer, Yi Shen) | 0.3.1 | MIT | `bench/adapters/mutracer` (we never copy its code, CLAUDE.md) |
 | `oidn-webgpu` | pulled by mutracer | Apache-2.0 | not loaded: we never attach a denoiser |
+| `jpeg-js` (Eugene Ware; baseline/progressive decoder derived from pdf.js, Apache-2.0) | 0.4.4 | BSD-3-Clause | `bench/scenes/image-decode.ts` (JPEG textures of glTF models, Node only; PNG is our own decoder) |
 
 Tooling (dev only, not shipped): vite, vitest, typescript, eslint, `@webgpu/types` (all MIT/Apache-2.0/BSD under their own
 packages; see `pnpm-lock.yaml` for versions). Native reference renderers pbrt-v4 (BSD-2-Clause) and Mitsuba 3 (BSD-3-Clause)
@@ -81,6 +108,42 @@ are built under `.cache/native/` (git-ignored) and only their rendered images ar
 Attribution line for Sponza (required by the manifest): "Sponza by Crytek (2016), via Khronos glTF-Sample-Assets".
 The Cryengine licence text is fetched with the asset (`downloads/sponza/LicenseRef-CRYENGINE-Agreement.txt`); read it before
 any redistribution of rendered images that show the model (reference renders are git-ignored today).
+
+### 3.1 Tier 1 models (glTF-Sample-Assets, P2.18)
+
+Eighteen purpose-built test models from Khronos glTF-Sample-Assets, commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb`
+(docs/design/tier1.md section 1.1), used by the Tier 1 coverage matrix and the golden material tables
+(`bench/scenes/tier1/golden/`, which hold only OpenPBR parameters derived from the models' material lists, no geometry or textures).
+Downloaded by `bench/assets/fetch.ts` into `bench/assets/downloads/tier1/<Name>/` (git-ignored, **not committed**), sha256 pinned in
+[bench/assets/MANIFEST.json](bench/assets/MANIFEST.json) (ids `tier1-<Name>`), each with its `LICENSE.md` and `metadata.json`. Total download
+24.05 MB. CC-BY-4.0 (<https://creativecommons.org/licenses/by/4.0/>) requires attribution, given here and in each manifest entry
+(`licence.attribution`); CC0-1.0 models need none but are credited anyway. Licences exclude logos and trademarks (the Khronos marks in
+`DiffuseTransmissionTest` are not reproduced). The models are used unmodified; renders of them are derived works, so keep this attribution with any
+published image.
+
+| Model | Licence | Attribution | Download |
+|---|---|---|---|
+| `MetalRoughSpheresNoTextures` | CC0-1.0 | Metal-Rough Spheres (textureless) by Krill Gavrilov (2019, Public); CAD Model generated by Draw Harness script using Open CASCADE Technology (2019, Public) | 0.29 MB |
+| `MetalRoughSpheres` | CC-BY-4.0 | Metal-Rough Spheres by Ed Mackey (2017, Analytical Graphics, Inc.) | 11.22 MB |
+| `TransmissionThinwallTestGrid` | CC0-1.0 | TransmissionThinwallTestGrid by Eric Chadwick (2023, Public) | 1.19 MB |
+| `TransmissionRoughnessTest` | CC-BY-4.0 | Transmission Roughness Test by Ed Mackey (2021, Analytical Graphics, Inc.) | 0.40 MB |
+| `TransmissionTest` | CC0-1.0 | Transmission Test by Adobe (2020, Public) | 1.48 MB |
+| `AttenuationTest` | CC-BY-4.0 | Attenuation Test by Ed Mackey (2021, Analytical Graphics, Inc.) | 0.06 MB |
+| `IORTestGrid` | CC0-1.0 | IORTestGrid by Eric Chadwick (2023, Public) | 2.63 MB |
+| `SpecularTest` | CC-BY-4.0 | Specular Test by Ed Mackey (2021, Analytical Graphics, Inc.) | 0.22 MB |
+| `ClearCoatTest` | CC-BY-4.0 | KHR_materials_clearcoat Test by Ed Mackey (2020, Analytical Graphics, Inc.) | 0.26 MB |
+| `SheenTestGrid` | CC0-1.0 | SheenTestGrid by Eric Chadwick (2023, Public) | 1.84 MB |
+| `IridescenceDielectricSpheres` | CC0-1.0 | Iridescence Dielectric Spheres by Khronos (2019, Public) | 0.37 MB |
+| `IridescenceMetallicSpheres` | CC0-1.0 | Iridescence Metallic Spheres by UX3D (2022, UX3D) | 0.35 MB |
+| `AnisotropyStrengthTest` | CC0-1.0 | Anisotropy Strength Test by Ed Mackey (2023, Public) | 0.10 MB |
+| `AnisotropyRotationTest` | CC-BY-4.0 | Anisotropy Rotation Test by Ed Mackey (2023, Analytical Graphics, Inc.) | 0.83 MB |
+| `AnisotropyDiscTest` | CC0-1.0 | Anisotropy Disc Test by Eric Chadwick (2023, Public) | 0.24 MB |
+| `EmissiveStrengthTest` | CC-BY-4.0 | Emissive Strength Test by Ed Mackey (2022, AGI) | 0.01 MB |
+| `DispersionTest` | CC-BY-4.0 | Dispersion Test by Ed Mackey (2023, AGI) | 2.31 MB |
+| `DiffuseTransmissionTest` | CC-BY-4.0 | DiffuseTransmissionTest by Eric Chadwick (2025, Darmstadt Graphics Group GmbH); Non-copyrightable logo (2015, Khronos Group); Non-copyrightable logo (2017, Khronos Group) | 0.24 MB |
+
+Not downloaded: textures other than `guides.png` of the two iridescence models (see the manifest names: "other textures not downloaded"),
+READMEs, screenshots. `DragonAttenuation`/`DragonDispersion` (Stanford licence) are not fetched.
 
 Generated assets (`bench/assets/generated/`, env maps and noise made by our own scripts) are ours.
 

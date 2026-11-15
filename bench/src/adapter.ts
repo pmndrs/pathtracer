@@ -4,7 +4,7 @@
  * runs the exporter and reads the PFM back). Results are always linear HDR float32, row 0 = top, so the metrics and
  * the A/B viewer never care where an image came from.
  */
-import type { SceneDesc } from '../scenes/schema.ts';
+import type { MaterialDesc, SceneDesc } from '../scenes/schema.ts';
 
 export type Backend = 'webgpu' | 'webgl2' | 'cpu-native' | 'gpu-native';
 
@@ -22,10 +22,19 @@ export interface RendererInfo {
 
 /** Which parts of the scene schema the renderer can represent exactly. Unsupported scenes are skipped, not faked. */
 export interface FeatureSupport {
-  materials: ReadonlyArray<'diffuse' | 'conductor' | 'dielectric' | 'black'>;
+  materials: ReadonlyArray<'diffuse' | 'conductor' | 'dielectric' | 'black' | 'pbr' | 'openpbr'>;
+  /** Renders `SceneDesc.textures` (image-textured materials). Absent = false: textured scenes are skipped. */
+  textures?: boolean;
   emissiveMeshes: boolean;
   directionalLight: boolean;
   environment: ReadonlyArray<'uniform' | 'hdri'>;
+  /**
+   * Per-material check beyond the `materials` type list (e.g. an `openpbr` material that uses a lobe the renderer does not implement):
+   * a reason string skips the scene, null accepts it.
+   */
+  materialUnsupported?: (material: MaterialDesc) => string | null;
+  /** Can load `file` mesh geometry (Sponza). Absent = true. */
+  fileGeometry?: boolean;
   /** Can the renderer be told to disable its denoiser / tonemapper / own jitter? Required for raw comparisons. */
   rawOutput: boolean;
   notes?: string;

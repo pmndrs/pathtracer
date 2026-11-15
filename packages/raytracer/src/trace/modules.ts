@@ -13,6 +13,12 @@ import type { Defines } from '../caps/wgsl.ts';
 import { DEFAULT_BATCH_WORKGROUP_SIZE, STORAGE_BUFFER_BUDGET, type BatchWorkgroupSize } from './constants.ts';
 import { surfaceVertexOffsets, type SurfaceLayout } from './surface-table.ts';
 import { RT_CORE_WGSL, rtBatchArgsWgsl, rtBatchWgsl, rtSurfaceWgsl } from './wgsl-source.ts';
+import { DEFAULT_SCENE_PACKING, SCENE_HEADER_VEC4S, sceneCopyStorageBuffers, type SceneCopyPacking } from '../scene/constants.ts';
+import { rtPackSceneAccess, rtSceneWgsl } from '../scene/scene-wgsl.ts';
+import type { TextureLayout } from '../scene/texture.ts';
+import { rtShadeWgsl } from '../shade/shade-wgsl.ts';
+import type { RtShadeOptions } from '../shade/shade.ts';
+import { rtComposeSourceMaps, rtWgslIdentityMap, type RtWgslBuild } from './wgsl-source-map.ts';
 
 export type { AnyHitOrder, BindingSlot, ModuleBindingEntry };
 
@@ -38,8 +44,28 @@ export function sceneFormatOf(buffers: SceneFormat): Required<SceneFormat> {
 export interface RtModuleOptions extends SceneFormat {
   /** Where bvh's walk bindings land. Default group 0, binding 0. */
   traceSlot?: BindingSlot;
-  /** Include `rtSurface`. Its three bindings land at `slot`; `layout` is `SurfaceTable.layout`. Default: no surface. */
-  surface?: { slot: BindingSlot; layout: SurfaceLayout } | false;
+  /**
+   * Include the scene copy (D4): `rtSurface` (unless `surface: false`), `rtMaterial` and the light functions, over the scene
+   * copy's two bindings at `slot` (`rtSceneEntries`). `layout` is `SceneCopy.layout`. Default: no scene, no `rtSurface`.
+   */
+  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean; /** Material textures (P1.4c): `SceneCopy.textureLayout`. Adds `rtTexSample`, `rtApplyMaterialTextures`, `rtApplyNormalMap` and the `RT_SURF_TEXFRAME` surface data; needs materials, uvs and positions in the layout. */ textures?: TextureLayout | null; /** `split` (two bindings, default `DEFAULT_SCENE_PACKING`) or `packed` (one: `rtScene`, P3.11); upload with the same `uploadSceneCopy({ packing })`. */ packing?: SceneCopyPacking } | false;
+  /**
+   * Add L2 `rtShade` (P1.3, `shade/`): one-bounce shading with a hook for the indirect term. Needs `scene` with surface, materials and lights;
+   * it adds the light point sampling (`rtSampleLightLi`, as `scene.sampling`), so do not append `rtLightSampleWgsl()` yourself. `true` = defaults.
+   */
+  shade?: RtShadeOptions | boolean;
+  /**
+   * Remove `//` and block comments from the generated text (line breaks stay, so compiler line numbers still match). The bvh
+   * walk is 40 KB of mostly comments; with the scene copy the module would pass the ~50 KB kernel cap without this.
+   * Default: true.
+   */
+  stripComments?: boolean;
+  /**
+   * Also drop the indentation and the spaces around `{ } ( ) , ;` (line breaks stay). About 17% of the text, applied last, to the
+   * finished module only (append your own code through `rtMinifyWgsl` if you want it small too). Default false.
+   * With `shade` and indexed leaves the module is 50.2 KB, over the ~50 KB kernel cap: turn this on (about 42.2 KB).
+   */
+  minify?: boolean;
   /** Instance masks against ray masks (bvh's `rayMasks`). Default true. */
   rayMasks?: boolean;
   /** bvh's `bvhTrianglePasses`; default every triangle blocks, `null` to declare it yourself. */
@@ -69,40 +95,210 @@ function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string 
   });
 }
 
+/** Removes `//` line comments and block comments, keeping every line break (WGSL has no string literals, so no `//` is ever text). */
+export function stripWgslComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, '')).replace(/[ \t]*\/\/[^\n]*/g, '');
+}
+
+/** Indentation and the spaces around `{ } ( ) , ;` removed; line breaks kept. Only safe on comment-free, preprocessed source (no `#` lines). */
+export function rtMinifyWgsl(code: string): string {
+  return code.replace(/^[ \t]+/gm, '').replace(/[ \t]*([{}(),;])[ \t]*/g, '$1');
+}
+
+/**
+ * Drops top-level `struct`/`fn`/`const`/`alias`/`override`/`var` declarations no entry point or binding reaches (a call-graph walk by
+ * identifier). Line breaks of what stays are untouched, but a dropped declaration removes its lines, so error line numbers after
+ * it shift: run it on the source you compile, not on a copy used to read compiler messages (or keep `prune: false`).
+ * Entry points are declarations preceded by `@compute`/`@vertex`/`@fragment`; every `@group` binding is kept (the pipeline layout
+ * names it). Needs comment-free, preprocessed, NOT yet minified source (declarations start in column 0). Returns the kept
+ * source, the dropped names and `lineMap` (output line -> input line, 0-based; see `RtWgslSourceMap`).
+ */
+export function rtPruneWgsl(code: string): { code: string; dropped: string[]; lineMap: Int32Array } {
+  const declRe = /^(?:@[^\n]*?\s)?(?:struct|fn|const|alias|override|var(?:<[^>]*>)?)\s+([A-Za-z_]\w*)/;
+  const lines = code.split('\n');
+  type Chunk = { name: string; lines: string[]; src: number[]; root: boolean };
+  const chunks: Chunk[] = [{ name: '', lines: [], src: [], root: true }];
+  lines.forEach((line, at) => {
+    const m = declRe.exec(line);
+    if (m) {
+      // A lone attribute line (`@compute @workgroup_size(..)`) belongs to the declaration after it.
+      const prev = chunks[chunks.length - 1] as Chunk;
+      let carry: string[] = [];
+      let carrySrc: number[] = [];
+      const last = prev.lines[prev.lines.length - 1];
+      if (prev.lines.length > 0 && last !== undefined && /^@(compute|vertex|fragment)\b/.test(last) && !declRe.test(last)) {
+        carry = [prev.lines.pop() as string];
+        carrySrc = [prev.src.pop() as number];
+      }
+      chunks.push({ name: m[1] as string, lines: [...carry, line], src: [...carrySrc, at], root: false });
+    } else {
+      const c = chunks[chunks.length - 1] as Chunk;
+      c.lines.push(line);
+      c.src.push(at);
+    }
+  });
+  for (const c of chunks) if (c.name) c.root = /^@(group|compute|vertex|fragment)\b/.test(c.lines[0] as string);
+  const byName = new Map(chunks.filter((c) => c.name).map((c) => [c.name, c]));
+  const seen = new Set<string>();
+  const stack = chunks.filter((c) => c.root).map((c) => c);
+  const visit = (c: { name: string; lines: string[] }): void => {
+    for (const id of c.lines.join('\n').match(/[A-Za-z_]\w*/g) ?? []) {
+      const d = byName.get(id);
+      if (d && !seen.has(id)) { seen.add(id); stack.push(d); }
+    }
+  };
+  while (stack.length) visit(stack.pop() as { name: string; lines: string[] });
+  const dropped: string[] = [];
+  const out: string[] = [];
+  const srcOf: number[] = [];
+  for (const c of chunks) {
+    if (!c.root && !seen.has(c.name)) dropped.push(c.name);
+    else { out.push(...c.lines); srcOf.push(...c.src); }
+  }
+  return { code: out.join('\n'), dropped, lineMap: Int32Array.from(srcOf) };
+}
+
+/**
+ * Renames top-level `struct`/`fn`/`const`/`alias`/`var` names to short ones (`A`, `B`, ..., `Aa`, ...), most-used first, in every
+ * place the name appears. Line breaks and everything else stay, so error line numbers still match, but compiler messages show the
+ * short names: use `names` (old -> new) to read them, or do not shorten while debugging. Saves ~8 KB of the 50 KB megakernel (the
+ * names are long: `rtSampleEnvironmentLi`).
+ *
+ * Never renamed: names in `keep` (entry points the host looks up), `override`s (set by name through pipeline constants), `@group`
+ * bindings (readable in tests and tools), and any name also used as a struct member (`.name`), a field or parameter (`name:`), or a
+ * `let`/`var`/`const` local. Fresh names avoid every identifier already in the source. Needs comment-free, preprocessed,
+ * not yet minified source (declarations start in column 0).
+ */
+export function rtShortenWgsl(code: string, keep: readonly string[] = []): { code: string; names: Map<string, string> } {
+  const declRe = /^(@[^\n]*?\s)?(?:(struct|fn|const|alias|override|var(?:<[^>]*>)?)\s+)([A-Za-z_]\w*)/gm;
+  const cand = new Map<string, number>(); // name -> position of its declaring identifier
+  const blocked = new Set<string>(keep);
+  for (const m of code.matchAll(declRe)) {
+    const name = m[3] as string;
+    const pos = (m.index as number) + m[0].length - name.length;
+    if (m[2] === 'override' || /^@group\b/.test(m[1] ?? '')) blocked.add(name);
+    if (cand.has(name)) blocked.add(name);
+    cand.set(name, pos);
+  }
+  const declPositions = new Set(cand.values());
+  const count = new Map<string, number>();
+  const used = new Set<string>();
+  for (const m of code.matchAll(/[A-Za-z_]\w*/g)) {
+    const id = m[0];
+    used.add(id);
+    if (!cand.has(id)) continue;
+    count.set(id, (count.get(id) ?? 0) + 1);
+    const at = m.index as number;
+    if (declPositions.has(at)) continue;
+    const before = code.slice(Math.max(0, at - 6), at);
+    const after = code.slice(at + id.length, at + id.length + 3);
+    if (before.endsWith('.') || /^\s*:/.test(after) || /(?:let|var|const)\s+$/.test(before) || /(?:let|var|const)\s*<[^>]*>\s+$/.test(before)) blocked.add(id);
+  }
+  const order = [...count.keys()].filter((n) => !blocked.has(n)).sort((a, b) => (count.get(b) as number) * b.length - (count.get(a) as number) * a.length || (a < b ? -1 : 1));
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const fresh = function* (): Generator<string> {
+    for (const c of letters.slice(0, 26)) yield c;
+    for (const a of letters.slice(0, 26)) for (const b of letters) yield a + b;
+    for (const a of letters.slice(0, 26)) for (const b of letters) for (const c of letters) yield a + b + c;
+  }();
+  const names = new Map<string, string>();
+  for (const old of order) {
+    let next = fresh.next().value as string;
+    while (used.has(next)) next = fresh.next().value as string;
+    if (next.length >= old.length) continue;
+    names.set(old, next);
+  }
+  return { code: code.replace(/[A-Za-z_]\w*/g, (id) => names.get(id) ?? id), names };
+}
+
+export interface RtWgslTransformOptions {
+  /** `rtPruneWgsl`. Default true. */
+  prune?: boolean;
+  /** `rtShortenWgsl`. Default true. */
+  shorten?: boolean;
+  /** `rtMinifyWgsl`. Default true. */
+  minify?: boolean;
+  /** Names `rtShortenWgsl` must keep (entry points the host looks up). */
+  keep?: readonly string[];
+}
+
+/**
+ * The size pipeline in one call: prune, shorten, minify (each optional), with the source map that undoes it. `code` is the
+ * readable, comment-free, preprocessed text (any `enable` lines first); the map's source is that text. Each stage composes its line
+ * map onto the previous one. Read compiler messages with `rtMapCompilationInfo(info, map)`.
+ */
+export function rtTransformWgsl(code: string, options: RtWgslTransformOptions = {}): RtWgslBuild & { dropped: string[] } {
+  let map = rtWgslIdentityMap(code);
+  let text = code;
+  let dropped: string[] = [];
+  if (options.prune ?? true) {
+    const pruned = rtPruneWgsl(text);
+    text = pruned.code;
+    dropped = pruned.dropped;
+    map = rtComposeSourceMaps(map, { lines: pruned.lineMap });
+  }
+  if (options.shorten ?? true) {
+    const shortened = rtShortenWgsl(text, options.keep ?? []);
+    text = shortened.code;
+    const names: Record<string, string> = {};
+    for (const [old, short] of shortened.names) names[short] = old;
+    map = rtComposeSourceMaps(map, { names });
+  }
+  if (options.minify ?? true) text = rtMinifyWgsl(text); // keeps every line break: the line map is unchanged
+  return { code: text, map, dropped };
+}
+
+function surfaceLayoutOf(options: RtModuleOptions): SurfaceLayout | null {
+  if (options.scene && (options.scene.surface ?? true)) return options.scene.layout;
+  return null;
+}
+
 function coreDefines(options: RtModuleOptions): Defines {
-  const layout = options.surface ? options.surface.layout : null;
+  const layout = surfaceLayoutOf(options);
   return {
     RT_RAY_MASKS: options.rayMasks ?? true,
-    RT_SURFACE: !!options.surface,
+    RT_SURFACE: !!layout,
     RT_SURFACE_NORMALS: !!layout?.normals,
     RT_SURFACE_UVS: !!layout?.uvs,
     RT_SURFACE_POSITIONS: !!layout?.positions,
+    RT_SURFACE_TEXFRAME: !!layout && !!options.scene && !!options.scene.textures,
   };
 }
 
 function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): string {
   let source = `${bvhWalk(options)}\n${RT_CORE_WGSL}`;
-  if (options.surface) {
-    const offsets = surfaceVertexOffsets(options.surface.layout);
-    source += rtSurfaceWgsl({
-      group: options.surface.slot.group,
-      firstBinding: options.surface.slot.firstBinding,
-      vertexStride: Math.max(offsets.stride, 1),
-      normalOffset: offsets.normal,
-      uvOffset: offsets.uv,
-      positionOffset: offsets.position,
-    });
+  const layout = surfaceLayoutOf(options);
+  if (options.scene) {
+    const { slot } = options.scene;
+    const shade = !!options.shade;
+    if (shade && (options.scene.surface === false || options.scene.materials === false || options.scene.lights === false)) {
+      throw new Error('rtModuleWgsl: shade needs scene surface, materials and lights');
+    }
+    source += rtSceneWgsl({ group: slot.group, firstBinding: slot.firstBinding, materials: options.scene.materials, lights: options.scene.lights, sampling: options.scene.sampling || shade, textures: options.scene.textures, packing: options.scene.packing });
+  } else if (options.shade) {
+    throw new Error('rtModuleWgsl: shade needs the scene copy (scene option)');
   }
+  if (options.scene && options.scene.textures && !(layout && layout.uvs && layout.positions)) throw new Error('rtModuleWgsl: scene textures need a surface layout with uvs and positions');
+  if (layout) {
+    const offsets = surfaceVertexOffsets(layout);
+    const base = { vertexStride: Math.max(offsets.stride, 1), normalOffset: offsets.normal, uvOffset: offsets.uv, positionOffset: offsets.position, tangentOffset: offsets.tangent, tangents: !!layout.tangents };
+    source += rtSurfaceWgsl({ ...base, headerVec4s: SCENE_HEADER_VEC4S });
+  }
+  if (options.shade) source += rtShadeWgsl(options.shade === true ? {} : options.shade);
+  // The surface and shade text is written against the split bindings: point it at the packed buffer (the scene part already is).
+  if (options.scene && (options.scene.packing ?? DEFAULT_SCENE_PACKING) === 'packed') source = rtPackSceneAccess(source);
   return source;
 }
 
 /**
  * The inline module: paste it into your own compute shader and call `rtVisible`, `rtClosest`, `rtClosestCone` and (with
- * `surface`) `rtSurface`. Bindings: bvh's walk at `traceSlot` (3, or 4 for indexed leaves), then the surface's 3.
+ * `scene`) `rtSurface`, the materials and the lights, and (with `shade`) `rtShade`. Bindings: bvh's walk at `traceSlot` (3, or 4 for indexed leaves), then the scene copy's 2.
  */
 export function rtModuleWgsl(caps: Caps, options: RtModuleOptions = {}): string {
   const traceSlot = options.traceSlot ?? { group: 0, firstBinding: 0 };
-  return buildWgsl(inlineSource({ ...options, traceSlot }), caps, coreDefines(options));
+  const source = inlineSource({ ...options, traceSlot });
+  const code = buildWgsl((options.stripComments ?? true) ? stripWgslComments(source) : source, caps, coreDefines(options));
+  return options.minify ? rtMinifyWgsl(code) : code;
 }
 
 /** Bind group layout entries (without binding numbers) for the walk, as bvh's `traceModuleEntries`. */
@@ -110,16 +306,16 @@ export function rtWalkEntries(options: SceneFormat = {}): readonly ModuleBinding
   return traceModuleEntries({ triangleLeaves: sceneFormatOf(options).triangleLeaves });
 }
 
-/** The three `rtSurface` bindings, in order: table, indices, vertices. */
-export function rtSurfaceEntries(): readonly ModuleBindingEntry[] {
+/** The scene copy's bindings, in order: table, data (one binding, the packed buffer, with `packing: 'packed'`). */
+export function rtSceneEntries(packing: SceneCopyPacking = DEFAULT_SCENE_PACKING): readonly ModuleBindingEntry[] {
   const entry: ModuleBindingEntry = { visibility: 0x4 /* GPUShaderStage.COMPUTE */, buffer: { type: 'read-only-storage' } };
-  return [entry, entry, entry];
+  return packing === 'packed' ? [entry] : [entry, entry];
 }
 
 /** Storage buffers the module adds to a kernel (spec section 3 binding budget). */
 export function rtModuleStorageBuffers(options: RtModuleOptions = {}): number {
   const walk = sceneFormatOf(options).triangleLeaves === 'indexed' ? STORAGE_BUFFER_BUDGET.walkIndexed : STORAGE_BUFFER_BUDGET.walk;
-  return walk + (options.surface ? STORAGE_BUFFER_BUDGET.surface : 0);
+  return walk + (options.scene ? sceneCopyStorageBuffers(options.scene.packing) : 0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -177,7 +373,7 @@ export function resolveBatchOptions(options: BatchKernelOptions): ResolvedBatchO
 /** The batch kernel (entry point `rtBatch`): scene in group 0 at binding 0, batch IO in group 1. */
 export function rtBatchKernelWgsl(caps: Caps, options: BatchKernelOptions): string {
   const resolved = resolveBatchOptions(options);
-  const moduleOptions = { ...options, traceSlot: { group: 0, firstBinding: 0 }, rayMasks: resolved.rayMasks, surface: false as const };
+  const moduleOptions = { ...options, traceSlot: { group: 0, firstBinding: 0 }, rayMasks: resolved.rayMasks };
   const source = `${inlineSource(moduleOptions)}\n${rtBatchWgsl({ workgroupSize: resolved.workgroupSize, maxWorkgroupsPerDimension: resolved.maxWorkgroupsPerDimension })}`;
   return buildWgsl(source, caps, {
     ...coreDefines(moduleOptions),

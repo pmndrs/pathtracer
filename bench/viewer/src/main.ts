@@ -12,6 +12,7 @@ import { readPFM } from '../../metrics/pfm.ts';
 import type { Image } from '../../src/adapter.ts';
 import { GLView, LAYOUT, type ViewState } from './renderer.ts';
 import { showReport, type ReportPick } from './report.ts';
+import { COVERAGE_URL, showCoverage } from './coverage.ts';
 import type { FromWorker, ToWorker } from './worker.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -487,6 +488,19 @@ async function fillStart() {
   } catch { el.innerHTML = '<p class="muted">(file index only exists on the dev server)</p>'; }
 }
 
+/** The Coverage tab: the Tier 1 feature matrix; a cell opens its comparison, and "back" returns to the viewer's report screen (the matrix again). */
+async function openCoverage(url: string) {
+  for (let i = 0; i < 3; i++) if (loaded[i]) clearSlot(i);
+  document.body.dataset.screen = 'report';
+  $('start').hidden = true;
+  $('report').hidden = false;
+  $('back').hidden = true;
+  $('metrics').hidden = true;
+  $('legend').hidden = true;
+  try { await showCoverage($('report'), url, (p) => { void openPick(p); }); } catch (e) { $('report').textContent = `coverage failed: ${(e as Error).message} (run node bench/adapters/tier1-matrix.ts --report <name>)`; }
+}
+$('cov-btn').addEventListener('click', () => { void openCoverage(COVERAGE_URL); });
+
 async function boot() {
   const q = new URLSearchParams(location.search);
   const li = LAYOUT_KEYS.indexOf(q.get('layout') as never); if (li >= 0) st.layout = li;
@@ -494,6 +508,11 @@ async function boot() {
   const ti = TONEMAP_KEYS.indexOf(q.get('tm') as never); if (ti >= 0) setTonemap(ti);
   if (q.has('ev')) setEV(Number(q.get('ev')));
   else setEV(0);
+  const cov = q.get('coverage');
+  if (cov !== null) {
+    await openCoverage(cov || COVERAGE_URL);
+    return;
+  }
   const rep = q.get('report');
   if (rep) {
     document.body.dataset.screen = 'report';

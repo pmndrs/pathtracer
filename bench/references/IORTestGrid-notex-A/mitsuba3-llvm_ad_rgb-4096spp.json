@@ -1,0 +1,39 @@
+{
+  "scene": "IORTestGrid-notex-A",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 237.98,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-LHtHCf/scene.xml bench/references/IORTestGrid-notex-A/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 640,
+      "height": 768,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 17,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 237.8050308227539,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: envmap rows resampled to v = j / (H - 1) because Mitsuba looks the map up at v * (H - 1) (corner-aligned rows; unfixed it reads the sun 0.15 degrees off and +0.4% bright on env-sphere).",
+    "mitsuba: material 'm6_IOR2.42_Black_R0_M0_T0_S1': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm7_IOR1.76_Black_R0_M0_T0_S1': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm8_IOR1.5_Black_R0_M0_T0_S1': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent",
+    "mitsuba: material 'm9_IOR1.33_Black_R0_M0_T0_S1': dielectric over diffuse is roughplastic with nonlinear true (closed-form internal scattering); pbrt coateddiffuse is the stochastic layered reference and differs by a few percent"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T10:50:37.475Z"
+}

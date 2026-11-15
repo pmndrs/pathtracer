@@ -4,7 +4,7 @@
  * caller's encoder or pass; nothing is read back and nothing is written from the CPU once a batch shape has been seen
  * (params uniforms and bind groups are cached per shape).
  *
- * Also here: the GPU helpers the inline path needs (scene and surface bindings), so a caller writing their own kernel
+ * Also here: the GPU helpers the inline path needs (scene bindings), so a caller writing their own kernel
  * with `rtModuleWgsl` binds exactly what the batch kernel binds.
  */
 import { traceSourceFormats, type TraceSceneBuffers } from '@pmndrs/bvh';
@@ -14,7 +14,6 @@ import {
   rtBatchArgsKernelWgsl,
   rtBatchEntries,
   rtBatchKernelWgsl,
-  rtSurfaceEntries,
   rtWalkEntries,
   resolveBatchOptions,
   sceneFormatOf,
@@ -24,7 +23,7 @@ import {
   type SceneFormat,
 } from './modules.ts';
 import { BATCH_PARAMS_BYTES, dispatchGrid, packBatchParams, resultBytes } from './records.ts';
-import type { SurfaceTable } from './surface-table.ts';
+import { rtCreateComputePipelineAsync } from './wgsl-source-map.ts';
 
 // GPUBufferUsage bits, spelled out so this module loads in Node (tests) where the WebGPU globals do not exist.
 const STORAGE = 0x80; // GPUBufferUsage.STORAGE
@@ -45,43 +44,6 @@ export function rtSceneBindGroupEntries(scene: TraceSceneBuffers, firstBinding =
     buffers.push(scene.positions);
   }
   return buffers.map((buffer, i) => ({ binding: firstBinding + i, resource: { buffer } }));
-}
-
-/** `rtSurface`'s three buffers on the GPU. */
-export interface SurfaceBuffers {
-  readonly table: GPUBuffer;
-  readonly indices: GPUBuffer;
-  readonly vertices: GPUBuffer;
-  readonly layout: SurfaceTable['layout'];
-  readonly byteLength: number;
-  destroy(): void;
-}
-
-export function uploadSurfaceTable(device: GPUDevice, table: SurfaceTable, label = 'rt surface'): SurfaceBuffers {
-  const make = (name: string, data: Uint32Array | Float32Array) => {
-    const buffer = device.createBuffer({ label: `${label} ${name}`, size: Math.max(16, Math.ceil(data.byteLength / 16) * 16), usage: STORAGE | COPY_DST });
-    device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
-    return buffer;
-  };
-  const buffers = { table: make('table', table.table), indices: make('indices', table.indices), vertices: make('vertices', table.vertices) };
-  return {
-    ...buffers,
-    layout: table.layout,
-    byteLength: table.byteLength,
-    destroy() {
-      buffers.table.destroy();
-      buffers.indices.destroy();
-      buffers.vertices.destroy();
-    },
-  };
-}
-
-export function rtSurfaceBindGroupEntries(surface: SurfaceBuffers, firstBinding = 0): GPUBindGroupEntry[] {
-  return [surface.table, surface.indices, surface.vertices].map((buffer, i) => ({ binding: firstBinding + i, resource: { buffer } }));
-}
-
-export function rtSurfaceLayoutEntries(firstBinding = 0): GPUBindGroupLayoutEntry[] {
-  return withBindings(rtSurfaceEntries(), firstBinding);
 }
 
 /** A GPU-side ray count (indirect dispatch). The batch traces `min(buffer[word], capacity)` rays. */
@@ -178,19 +140,11 @@ export class RtBatchTracer {
     const sceneLayout = device.createBindGroupLayout({ label: `${label} scene`, entries: withBindings(rtWalkEntries(format)) });
     const ioLayout = device.createBindGroupLayout({ label: `${label} io`, entries: rtBatchEntries(resolved) });
     const code = rtBatchKernelWgsl(caps, { ...options, ...resolved });
-    const pipeline = await device.createComputePipelineAsync({
-      label,
-      layout: device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, ioLayout] }),
-      compute: { module: device.createShaderModule({ label, code }), entryPoint: 'rtBatch' },
-    });
+    const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, ioLayout] }), code, entryPoint: 'rtBatch' });
     let argsPipeline: GPUComputePipeline | null = null;
     if (resolved.indirect) {
       const argsCode = rtBatchArgsKernelWgsl(caps, resolved);
-      argsPipeline = await device.createComputePipelineAsync({
-        label: `${label} args`,
-        layout: 'auto',
-        compute: { module: device.createShaderModule({ label: `${label} args`, code: argsCode }), entryPoint: 'rtBatchArgs' },
-      });
+      argsPipeline = await rtCreateComputePipelineAsync(device, { label: `${label} args`, layout: 'auto', code: argsCode, entryPoint: 'rtBatchArgs' });
     }
     return new RtBatchTracer(device, resolved, format, label, pipeline, sceneLayout, ioLayout, argsPipeline);
   }

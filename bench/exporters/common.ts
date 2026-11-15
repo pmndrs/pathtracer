@@ -1,4 +1,5 @@
 import type { CameraDesc, FilmDesc, MeshDesc, SceneDesc } from '../scenes/schema.ts';
+import { generateTexture } from '../scenes/textures.ts';
 import { meshToWorld, transformMesh } from '../scenes/geometry.ts';
 import { ASSETS_DIR, loadFileGeometry } from '../scenes/file-geometry.ts';
 import type { TriangleMesh } from '../scenes/geometry.ts';
@@ -44,4 +45,37 @@ export function worldMeshes(scene: SceneDesc, assetsDir: string = ASSETS_DIR): W
 /** Normal-incidence Fresnel reflectance of a conductor: ((n-1)^2+k^2)/((n+1)^2+k^2). */
 export function conductorF0(eta: number, k: number): number {
   return ((eta - 1) ** 2 + k * k) / ((eta + 1) ** 2 + k * k);
+}
+
+export interface UsedTexture {
+  name: string;
+  /** File written next to the scene (PNG). */
+  file: string;
+  width: number;
+  height: number;
+  data: Uint8Array;
+  colorSpace: 'srgb' | 'linear';
+  wrap: 'repeat' | 'clamp' | 'mirror';
+}
+
+/**
+ * The reflectance textures a native-renderer export needs (pbrt-v4, Mitsuba): only `diffuse.reflectanceTexture` is expressible there. A textured
+ * diffuse must have white `reflectance` (neither renderer multiplies an image texture by a colour without extra nodes); `pbr` materials and
+ * the other texture slots are ours only and throw, so a reference is never rendered for something it did not draw.
+ */
+export function usedTextures(scene: SceneDesc, renderer: string): Map<string, UsedTexture> {
+  const out = new Map<string, UsedTexture>();
+  for (const [materialName, m] of Object.entries(scene.materials)) {
+    if (m.type === 'pbr') throw new Error(`${renderer}: material '${materialName}' is type pbr (glTF metallic-roughness with textures), which only our renderer expresses exactly`);
+    if (m.type !== 'diffuse' || !m.reflectanceTexture) continue;
+    if (m.reflectance.some((c) => c !== 1)) throw new Error(`${renderer}: textured diffuse '${materialName}' needs reflectance [1, 1, 1] (the image is the whole reflectance)`);
+    const desc = scene.textures?.[m.reflectanceTexture];
+    if (!desc) throw new Error(`material '${materialName}': unknown texture '${m.reflectanceTexture}'`);
+    if (desc.colorSpace !== 'srgb') throw new Error(`texture '${m.reflectanceTexture}' is linear data; a reflectance texture is sRGB`);
+    if (!out.has(m.reflectanceTexture)) {
+      const t = generateTexture(desc);
+      out.set(m.reflectanceTexture, { name: m.reflectanceTexture, file: `tex-${m.reflectanceTexture.replace(/[^A-Za-z0-9_-]+/g, '_')}.png`, ...t });
+    }
+  }
+  return out;
 }

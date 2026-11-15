@@ -16,8 +16,8 @@
 | quad-light | mitsuba3-llvm_ad_rgb | 4096 | 24.53 | 0.20588 0.20588 0.20588 |
 | quad-light | mitsuba3-scalar_spectral | 1024 | 8.46 | 0.20587 0.20585 0.20585 |
 | quad-light | pbrt-v4-cpu | 4096 | 72.3 | 0.20588 0.20588 0.20588 |
-| env-sphere | mitsuba3-llvm_ad_rgb | 4096 | 74.66 | 0.43057 0.43737 0.57475 |
-| env-sphere | mitsuba3-scalar_spectral | 1024 | 20.69 | 0.42082 0.41696 0.55233 |
+| env-sphere | mitsuba3-llvm_ad_rgb | 4096 | 48.61 | 0.42964 0.43667 0.57432 |
+| env-sphere | mitsuba3-scalar_spectral | 1024 | 19.07 | 0.41994 0.41629 0.55192 |
 | env-sphere | pbrt-v4-cpu | 4096 | 265.57 | 0.43357 0.43644 0.57620 |
 | sponza-white | mitsuba3-llvm_ad_rgb | 4096 | 1455.89 | 0.24646 0.24077 0.23987 |
 | sponza-white | pbrt-v4-cpu | 4096 | 3430.59 | 0.24590 0.24024 0.23939 |
@@ -48,6 +48,6 @@
 | cornell | mitsuba3-scalar_spectral | 512 (ref 4096) | 0.000143 | 0.0100 | 0.00118 | 0.0000708 | 0.000025 -0.000023 0.000028 |
 | quad-light | mitsuba3-llvm_ad_rgb | 4096 (ref 4096) | 0.00000184 | 0.000539 | 0.000256 | 0.00000778 | 0.0000025 0.0000020 2.9e-7 |
 | quad-light | mitsuba3-scalar_spectral | 1024 (ref 4096) | 0.0000188 | 0.00156 | 0.000737 | -0.0000834 | -0.0000014 -0.000024 -0.000027 |
-| env-sphere | mitsuba3-llvm_ad_rgb | 4096 (ref 4096) | 0.000637 | 0.00599 | 0.00514 | -0.00243 | -0.0030 0.00094 -0.0014 |
-| env-sphere | mitsuba3-scalar_spectral | 1024 (ref 4096) | 0.0203 | 0.0360 | 0.0221 | -0.0388 | -0.013 -0.019 -0.024 |
+| env-sphere | mitsuba3-llvm_ad_rgb | 4096 (ref 4096) | 0.000652 | 0.00587 | 0.00500 | -0.00386 | -0.0039 0.00023 -0.0019 |
+| env-sphere | mitsuba3-scalar_spectral | 1024 (ref 4096) | 0.0204 | 0.0363 | 0.0223 | -0.0401 | -0.014 -0.020 -0.024 |
 | sponza-white | mitsuba3-llvm_ad_rgb | 4096 (ref 4096) | 0.00409 | 0.0411 | 0.00945 | 0.00216 | 0.00056 0.00053 0.00048 |

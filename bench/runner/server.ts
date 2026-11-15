@@ -8,14 +8,40 @@
  * through CDP `Runtime.evaluate`: a 30 MB Float32Array as JSON is slow and blows the message limit.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createServer, type ViteDevServer } from 'vite';
+import { createServer, searchForWorkspaceRoot, type ViteDevServer } from 'vite';
 import { UPLOAD_PATH, type UploadRecord } from './contract.ts';
 import { bytesToFloats, countNonFinite, encodePfm, expectedFloats } from './pfm.ts';
 
 export const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
+/**
+ * The checkout `@pmndrs/bvh` is linked from (`link:` in bench/package.json), or null for an installed copy. Vite serves it
+ * through `/@fs/`, which is only allowed inside `server.fs.allow`; without it the bvh build workers (loaded by URL
+ * from bvh's `dist/`) fail to load. For an npm install the package sits in node_modules (already inside the workspace
+ * root) and would also need `optimizeDeps.exclude: ['@pmndrs/bvh']` so the worker URL is not rewritten by pre-bundling.
+ */
+function linkedBvhRoot(): string | null {
+  try {
+    return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'bvh'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The checkout of the linked `denoiser` package (OIDN on WebGPU, `pt_denoise=oidn`, bench/adapters/shared/oidn.ts), or null when it is not linked.
+ * Vite needs it in `server.fs.allow`, and the OIDN weights (`<root>/tzas`) are served through `/@fs/`.
+ */
+function linkedDenoiserRoot(): string | null {
+  try {
+    return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', 'denoiser'));
+  } catch {
+    return null;
+  }
+}
+
 export const RESULTS_DIR = resolve(REPOSITORY_ROOT, 'bench', 'results');
 export const INCOMING_DIR = resolve(RESULTS_DIR, 'incoming');
 
@@ -91,12 +117,16 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
     appType: 'mpa',
     // Pages have no dependencies that need pre-bundling; skipping the scan keeps startup fast and quiet.
     optimizeDeps: { noDiscovery: true, include: [] },
+    // Where the page finds the OIDN `.tza` weights of the linked Denoiser checkout (undefined when it is not linked).
+    define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? `/@fs${linkedDenoiserRoot()}/tzas` : null) },
     server: {
       host: '127.0.0.1',
       port: 5291,
       strictPort: false,
       // The runner reloads pages itself; hot reload and file watching would only add noise (and watch research/).
       hmr: false,
+      // REFLECTIONS_REPO: a reflections checkout the `reflections-ab` page loads by path (P1.5; not a dependency).
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : []), ...(process.env.REFLECTIONS_REPO ? [process.env.REFLECTIONS_REPO] : [])] },
       watch: null,
     },
     plugins: [

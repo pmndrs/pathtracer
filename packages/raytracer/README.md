@@ -15,7 +15,7 @@ material/light scene copy, L3. Design notes: [docs/design/trace-core.md](../../d
 |---|---|
 | `Ray` | `{ origin, tMin, direction (unit), tMax }`, 32 B (`RAY_BYTES`), bvh's `BvhRay` |
 | `Hit` | `{ t (< 0 miss), instance, triangle, frontFace, barycentrics (v1, v2), material, normal }`, 40 B (`HIT_BYTES`); compact record 24 B (`HIT_COMPACT_BYTES`) without material and normal |
-| `RayCone` | `{ width, spread }`, 8 B. Carried through L1 only; nothing consumes it yet |
+| `RayCone` | `{ width, spread }`, 8 B. Carried through L1; the megakernel's texture LOD (`textureLod: 'cone'`) consumes it |
 | `BVH_LAYOUT_VERSION` | 2. `assertBvhLayout()` runs before any walk is generated |
 
 ### Two ways to trace
@@ -29,7 +29,7 @@ const format = sceneFormatOf(sceneTrees.traceBuffers); // nodeFormat, triangleLe
 const code = rtModuleWgsl(caps, {
   ...format,
   traceSlot: { group: 0, firstBinding: 0 },          // bvh walk: 3 bindings (4 for indexed leaves)
-  surface: { slot: { group: 2, firstBinding: 0 }, layout: table.layout }, // optional rtSurface: 3 bindings
+  scene: { slot: { group: 2, firstBinding: 0 }, layout: copy.layout },    // optional: rtSurface, materials, lights (2 bindings, see Scene copy)
 }) + myKernel;
 const sceneLayout = device.createBindGroupLayout({ entries: withBindings(rtWalkEntries(format)) });
 const sceneGroup = device.createBindGroup({ layout: sceneLayout, entries: rtSceneBindGroupEntries(sceneTrees.traceBuffers) });
@@ -52,8 +52,7 @@ fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface      // lazy decode
 
 `rtSurface` returns world position, geometric normal, front face, interpolated shading normal (flipped to the
 geometric side) and UV, and the material id (an index into your own table). Only what `want` asks for is loaded.
-Its data comes from `buildSurfaceTable(meshes, instances, options)` + `uploadSurfaceTable(device, table)`, a small
-stand-in until the scene copy (D4) lands.
+Its data lives in the scene copy (below); `scene: { ..., materials: false, lights: false }` gives `rtSurface` alone.
 
 **Batch** (queue ABI v0): a GPU ray buffer and a count in, one result per ray out.
 
@@ -77,7 +76,65 @@ Everything goes into the caller's encoder; uniforms and bind groups are cached p
 does no CPU writes and no readback. CPU helpers: `packRays`, `packRaysSoa`, `aosToSoa`, `packCones`, `readHits`,
 `readVisibility`, `dispatchGrid`.
 
+### Scene copy (P1.4, D4): materials, lights, surface data
+
+```ts
+import { buildSceneCopy, uploadSceneCopy, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtModuleWgsl } from '@pmndrs/raytracer';
+
+const copy = buildSceneCopy({ meshes, instances, materials, sun, environment });   // meshes/instances as for bvh's buildTraceScene
+const buffers = uploadSceneCopy(device, copy);                                     // 2 storage buffers: table, data
+const code = rtModuleWgsl(caps, { ...format, scene: { slot: { group: 2, firstBinding: 0 }, layout: copy.layout } });
+```
+
+Adds `rtMaterial(id) -> RtMaterial` (128 B OpenPBR-subset records, `material.ts`), `rtSampleLight(u)`, `rtLight(i)`, `rtSun()`,
+`rtEnvironment()`, `rtLightIndexOfHit(instance, triangle)`, `rtLightPmfOfHit(...)` (light table with an alias table over power,
+`lights.ts`) and `rtSurface` over the copy's data.
+Bench scenes: `bench/scenes/to-scene-copy.ts`. Layout and WGSL: `scene/constants.ts`, `scene/scene-wgsl.ts`.
+
+#### Material textures (P1.4c)
+
+```ts
+const copy = buildSceneCopy({
+  meshes /* with uvs: glTF TEXCOORD_0, origin top-left */, instances,
+  textures: [{ width: 1024, height: 1024, data /* RGBA8, row 0 = top */, colorSpace: 'srgb', wrap: 'repeat' }, /* ... */],
+  materials: [{ baseColorTexture: 0, roughnessMetalTexture: 1, normalTexture: 2, emissionTexture: 3, baseColor: [1, 1, 1] }],
+});
+const buffers = uploadSceneCopy(device, copy);          // + one texture_2d_array and sampler per size bucket (buffers.textures)
+rtSceneCopyLayoutEntries(0, copy.textureLayout);        // bind group layout: table, data, textures, samplers
+rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout, textures: copy.textureLayout } });
+```
+
+Adds `rtTexSample(slot, uv, lod)`, `rtTexLodOf(record, uvFootprint)`, `rtApplyMaterialTextures(m, uv, footprint)` (glTF semantics),
+`rtApplyNormalMap(n, tangent, texel)` and `RT_SURF_TEXFRAME` (`uvDensity`, `tangent`) to `rtSurface`. It works on every WebGPU device (size buckets
+of texture arrays, CPU mips, a trilinear sampler per array; at most 8 arrays by default); bindless is a later Tier 3 option behind the same slots.
+Textures are sRGB for colours and linear for data (checked against the material field). A textured emitter is not in the light table.
+CPU twins and the layout in `scene/texture.ts` (`buildSceneTextures`, `sampleSceneTexture`, `textureLod`, `coneUvFootprint`,
+`triangleTextureFrame`, `applyNormalMap`). Design and the open storage choice: [docs/design/scene-copy.md](../../docs/design/scene-copy.md).
+
+### L2 shading (P1.3): `rtShade`
+
+```ts
+const code = rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout }, shade: { cache: 'external' }, minify: true });
+// WGSL: let s = rtShade(hit, ray, RT_SHADE_LAMBERT, vec3f(u0, u1, u2), RT_MASK_ALL);  radiance = rtShadeTotal(s)
+```
+
+Emission + one next-event ray + an indirect hook (`rtShadeIndirect`, black by default), in modes `RT_SHADE_FLAT` (no rays), `RT_SHADE_LAMBERT`
+and `RT_SHADE_FULL` (builtin diffuse + GGX, or your own `rtShadeBsdf`). TypeScript twin `shade()`. Design, hooks, numbers and open
+choices: [docs/design/shade.md](../../docs/design/shade.md). The module with shade is 50.2 KB unminified: pass `minify: true`.
+
+### Size transforms and source maps (P2.10, P2.10b)
+
+`rtTransformWgsl(code, { prune, shorten, minify, keep })` -> `{ code, map, dropped }`: `rtPruneWgsl` (call-graph dead declarations),
+`rtShortenWgsl` (top-level names to 1-2 letters), `rtMinifyWgsl` (whitespace; line breaks kept). `map` is an `RtWgslSourceMap`
+(`lines`: compiled -> source line, `names`: short -> original, `sources`, `enableLines`). Read compiler output with
+`rtMapCompilationMessage(msg, map)` / `rtMapCompilationInfo(info, map)` (original line and names, `sourceLine` text),
+`rtFormatCompilationMessages`, `rtFormatSourceContext`; `rtCheckShaderModule(module, map, label)` throws the translated text;
+`rtCreateComputePipelineAsync(device, { code, map, layout, entryPoint, sourceMap? })` creates the module and pipeline, does nothing extra on
+success and throws the translated text on failure. `rtWgslSourceMapV3(map)` makes a Source Map v3 (line level). Composition:
+`rtComposeSourceMaps`, `rtComposeLineMaps`. `rtPruneWgsl` now also returns `lineMap`.
+
 ### Budgets
 
-Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), `rtSurface` 3, batch IO 2-6. Generated
+Storage buffers per kernel (`rtModuleStorageBuffers`): walk 3 (4 indexed), scene copy 2 (surface, materials and lights together), batch IO 2-6.
+Textures add no storage buffers: one sampled texture and one sampler per size bucket (at most 8 by default of the 16 a stage may bind). Generated
 kernels stay under 50 KB (largest today ~45 KB, unit-tested for every setting combination).

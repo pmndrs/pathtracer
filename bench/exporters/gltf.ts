@@ -5,6 +5,7 @@
  */
 import type { MaterialDesc, SceneDesc } from '../scenes/schema.ts';
 import { conductorF0, worldMeshes } from './common.ts';
+import { openPbrToGltfMaterial } from './gltf-openpbr.ts';
 import type { Exporter } from './types.ts';
 import { lookAtCameraToWorld } from '../scenes/geometry.ts';
 
@@ -12,6 +13,8 @@ interface GltfMaterial {
   name: string;
   pbrMetallicRoughness: { baseColorFactor: number[]; metallicFactor: number; roughnessFactor: number };
   emissiveFactor?: number[];
+  alphaMode?: 'MASK' | 'BLEND';
+  alphaCutoff?: number;
   doubleSided?: boolean;
   extensions?: Record<string, unknown>;
 }
@@ -40,12 +43,31 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
     switch (m.type) {
       case 'diffuse':
         g.pbrMetallicRoughness.baseColorFactor = [...m.reflectance, 1];
+        if (m.reflectanceTexture) approx.add('diffuse: reflectanceTexture is dropped (the web renderers skip textured scenes).');
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         approx.add('diffuse: baseColor = reflectance, metallic 0, roughness 1, KHR_materials_specular specularFactor 0 to remove the default 4% dielectric lobe (a viewer without that extension adds a weak specular lobe).');
+        break;
+      case 'pbr':
+        g.pbrMetallicRoughness.baseColorFactor = [...m.baseColor, 1];
+        g.pbrMetallicRoughness.metallicFactor = m.metalness;
+        g.pbrMetallicRoughness.roughnessFactor = m.roughness;
+        if (m.emissive) g.emissiveFactor = [...m.emissive];
+        approx.add('pbr: the glb carries the factors only; texture references are dropped (the web renderers skip textured scenes).');
         break;
       case 'black':
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         break;
+      case 'openpbr': {
+        const { material, notes } = openPbrToGltfMaterial(m);
+        g.pbrMetallicRoughness = material.pbrMetallicRoughness;
+        if (material.emissiveFactor) g.emissiveFactor = material.emissiveFactor;
+        if (material.alphaMode) g.alphaMode = material.alphaMode;
+        if (material.alphaCutoff !== undefined) g.alphaCutoff = material.alphaCutoff;
+        Object.assign(ext, material.extensions ?? {});
+        approx.add('openpbr: written as core metallic-roughness + the KHR_materials_* extensions the material uses (inverse of gltfMaterialToOpenPbr, bench/exporters/gltf-openpbr.ts); the consumer decides which extensions it honours.');
+        for (const n of notes) approx.add(`openpbr: ${n}`);
+        break;
+      }
       case 'conductor': {
         g.pbrMetallicRoughness.baseColorFactor = [conductorF0(m.eta[0], m.k[0]), conductorF0(m.eta[1], m.k[1]), conductorF0(m.eta[2], m.k[2]), 1];
         g.pbrMetallicRoughness.metallicFactor = 1;
@@ -110,8 +132,22 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
     const pa = accessors.push({ bufferView: pv, componentType: 5126, count: pos.length / 3, type: 'VEC3', min, max }) - 1;
     const na = accessors.push({ bufferView: nv, componentType: 5126, count: pos.length / 3, type: 'VEC3' }) - 1;
     const ia = accessors.push({ bufferView: iv, componentType: 5125, count: w.mesh.indices.length, type: 'SCALAR' }) - 1;
+    const attributes: Record<string, number> = { POSITION: pa, NORMAL: na };
+    const uvs = w.mesh.uvs;
+    if (uvs) {
+      // TEXCOORD_0 as float VEC2, glTF uv convention (origin top-left): our own web adapter reads it back (readGlbMeshes); the texture images travel beside the glb (export-scenes.ts)
+      const uv = addView(Buffer.from(uvs.buffer, uvs.byteOffset, uvs.byteLength), 34962);
+      attributes['TEXCOORD_0'] = accessors.push({ bufferView: uv, componentType: 5126, count: uvs.length / 2, type: 'VEC2' }) - 1;
+      approx.add('uvs: TEXCOORD_0 is written for meshes whose material reads a texture; the glb carries no texture references or images (our web adapter reads the images from the sidecar files).');
+    }
+    const tangents = w.mesh.tangents;
+    if (tangents) {
+      // TANGENT (xyzw, the loader's world-space glTF tangent) for anisotropic meshes (P2.26); our web adapter reads it back (readGlbMeshes)
+      const tv = addView(Buffer.from(tangents.buffer, tangents.byteOffset, tangents.byteLength), 34962);
+      attributes['TANGENT'] = accessors.push({ bufferView: tv, componentType: 5126, count: tangents.length / 4, type: 'VEC4' }) - 1;
+    }
     const mat = makeMaterial(w.desc.material, m, w.desc.emission, w.desc.twoSided);
-    gltfMeshes.push({ name: w.desc.name, primitives: [{ attributes: { POSITION: pa, NORMAL: na }, indices: ia, material: mat }] });
+    gltfMeshes.push({ name: w.desc.name, primitives: [{ attributes, indices: ia, material: mat }] });
     nodes.push({ name: w.desc.name, mesh: gltfMeshes.length - 1 });
   }
 

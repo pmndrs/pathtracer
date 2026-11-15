@@ -1,0 +1,61 @@
+{
+  "scene": "IORTestGrid-notex",
+  "renderer": "pbrt-v4-cpu",
+  "version": "pbrt-v4 b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f (+bench no-RR patch)",
+  "spp": 4096,
+  "seconds": 346.62,
+  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/IORTestGrid-notex/pbrt-v4-cpu-4096spp.pfm .cache/native/work-zsuJaZ/scene.pbrt",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 640,
+      "height": 768,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "rr": false,
+    "sampler": "zsobol",
+    "filter": "box 0.5",
+    "sensor": "cie1931 iso100 (passthrough)",
+    "spectral": true
+  },
+  "approximations": [
+    "pbrt: equirect env resampled to a 512x512 equal-area octahedral image (pbrt-v4 only accepts that layout); scale and rotationYDeg baked in; pbrt looks up nearest-pixel while Mitsuba interpolates bilinearly.",
+    "coverage: pbrt: material 'm1_IOR1.0_Black_R0_M0_T0_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm1_IOR1.0_Black_R0_M0_T0_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.0000 (OpenPBR scales F at both ends)",
+    "coverage: pbrt: material 'm2_IOR1.33_Black_R0_M0_T0_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm2_IOR1.33_Black_R0_M0_T0_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.1524 (OpenPBR scales F at both ends)",
+    "pbrt: material 'm2_IOR1.33_Black_R0_M0_T0_S0.25': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "coverage: pbrt: material 'm3_IOR1.5_Black_R0_M0_T0_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm3_IOR1.5_Black_R0_M0_T0_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.2222 (OpenPBR scales F at both ends)",
+    "pbrt: material 'm3_IOR1.5_Black_R0_M0_T0_S0.25': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "coverage: pbrt: material 'm4_IOR1.76_Black_R0_M0_T0_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm4_IOR1.76_Black_R0_M0_T0_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.3193 (OpenPBR scales F at both ends)",
+    "pbrt: material 'm4_IOR1.76_Black_R0_M0_T0_S0.25': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "coverage: pbrt: material 'm5_IOR2.42_Black_R0_M0_T0_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm5_IOR2.42_Black_R0_M0_T0_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.5240 (OpenPBR scales F at both ends)",
+    "pbrt: material 'm5_IOR2.42_Black_R0_M0_T0_S0.25': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "pbrt: material 'm6_IOR2.42_Black_R0_M0_T0_S1': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "pbrt: material 'm7_IOR1.76_Black_R0_M0_T0_S1': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "pbrt: material 'm8_IOR1.5_Black_R0_M0_T0_S1': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "pbrt: material 'm9_IOR1.33_Black_R0_M0_T0_S1': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "coverage: pbrt: material 'm12_IOR2.42_White_R0_M0_T1_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm12_IOR2.42_White_R0_M0_T1_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.5240 (OpenPBR scales F at both ends)",
+    "coverage: pbrt: material 'm13_IOR1.76_White_R0_M0_T1_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm13_IOR1.76_White_R0_M0_T1_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.3193 (OpenPBR scales F at both ends)",
+    "coverage: pbrt: material 'm14_IOR1.5_White_R0_M0_T1_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm14_IOR1.5_White_R0_M0_T1_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.2222 (OpenPBR scales F at both ends)",
+    "coverage: pbrt: material 'm15_IOR1.33_White_R0_M0_T1_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm15_IOR1.33_White_R0_M0_T1_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.1524 (OpenPBR scales F at both ends)",
+    "coverage: pbrt: material 'm16_IOR1.0_White_R0_M0_T1_S0.25': class C: specular weight < 1 or specular colour != 1: glTF scales F0 only, OpenPBR scales F at both ends, no reference expresses either; dropped or approximated",
+    "coverage: pbrt: material 'm16_IOR1.0_White_R0_M0_T1_S0.25': specular_weight/specular_color scale F0 only through an IOR of 1.0000 (OpenPBR scales F at both ends)"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T10:16:19.577Z"
+}

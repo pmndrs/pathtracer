@@ -1,8 +1,14 @@
 # Status
 
-_Last updated 2026-11-13._
+_Last updated 2026-11-15._
 
-**Phase:** P0 (foundations), most of the way there. The first baseline table ran, but its timings were taken under heavy machine load and don't count. What's left: a quiet-machine rerun of that table, and the Windows branch.
+**Phase:** P0 passed its gate on the Mac (the RTX 3060 half waits on Windows). P1 (trace core) met its gate: reflections runs
+on it (P1.5, merged here; the reflections branch waits for reflections' own review). P2 (reference path tracer) passed the
+Tier 1 class A gate (D23, all 7 scenes) and has OIDN on final frames (bench); left are the siblings' switch-over and the
+layering default (D24 fix built, P2.32b, default pending the quiet pass). P3 (speed) is mostly built: a wavefront scheduler
+beside the megakernel (per pixel equal; refill, samples in flight, early-out), alpha MASK in both, visibility-buffer
+primaries, ray-class material LOD, scene-copy packing, cache hooks / counters / AOVs. Every new path is a setting; defaults
+wait for a quiet rerun (the 2026-11-15 pass ran loaded after a reboot, ratios held) and the 3060 (W10 compile time, P3 gate).
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
@@ -28,19 +34,36 @@ _Last updated 2026-11-13._
   - NVIDIA's blue-noise textures can't be used (non-commercial licence), so we generate our own.
   - Native wide-BVH traversal is 6.3× ahead of our current BVH, not 3.5×.
 
-- **Trace core started (P1).** `@pmndrs/raytracer` can now trace rays on the GPU: a visibility test, a closest-hit
-  trace and a surface lookup, both callable from WGSL and as a batch over a ray buffer. All 590k test rays agree with
-  the bvh repo's CPU version (the few differences are float-precision ties at edges, counted and explained). Speed not
-  measured yet: the machine was loaded.
+- **Trace core (P1).** `@pmndrs/raytracer` traces rays on the GPU: a visibility test, a closest-hit trace and a surface
+  lookup, from WGSL or as a batch over a ray buffer. All 590k test rays agree with bvh's CPU version (the remaining
+  differences are explained float ties; primary rays must match exactly). It now carries the scene's materials and
+  lights on the GPU (the "scene copy"), with power-based light picking. One-bounce shading for the sibling repos
+  (`rtShade`) is built and checked. Reflections now runs on it, on a reflections branch (P1.5): same hits, same trace cost
+  within the noise, and hit lighting by `rtShade` matches our path tracer's first bounce. Left for the P1 gate: the quiet
+  timing run, the maintainer's call on reflections' default hit shading, and merging that branch.
+- **Our path tracer (P2).** `@pmndrs/pathtracer` renders the test scenes and converges to the references: the furnace
+  tests hit their exact values, the single-light scene matches its closed form, and Cornell sits within the references'
+  own disagreement. Sponza agrees too (means within 0.13% of both references, error at the reference noise floor). The Tier 1 class A gate (D23) passes on all seven scenes (P2.32).
+  Materials so far: diffuse, metal and glass (smooth and rough), ported from pbrt-v4. Not yet: the HDR sky scene. Speed is not measured properly yet (best effort on the M5: Cornell 512² about 14 ms
+  per sample, Sponza 1280×720 about 51 ms).
+- **Quiet pass.** Timing that decides defaults or passes a gate is batched into one run the maintainer starts from a CLI
+  session with every app closed (docs/QUIET-PASS.md).
+
+- **Wavefront (P3.1, slice 1).** A second scheduler, `PtWavefront`, runs the same estimator as the megakernel over SoA path state with GPU-written indirect dispatch (camera / intersect / shade / shadow / args kernels, each under 50 KB even for the layered + fuzz + film combination that pushes the megakernel past it). It matches the megakernel per pixel on Tier 0, Sponza and 14 feature scenes (alpha MASK not yet). Provisional M5 timing: 1.6x faster on Cornell, 1.28x on Sponza, 1.4-1.7x slower on small films (quiet pass pending).
 
 - **Research track N: neural radiance cache on WebGPU (started 2026-11-14).** A small trainable network in WGSL
-  (`packages/mlp`) matches its CPU reference on a software GPU; a subgroup-matrix version is written but has never run
-  on real hardware. No timings yet. Owner from now: the local Mac agent; handoff in `docs/design/nrc-HANDOFF.md`.
+  (`packages/mlp`) matches its CPU reference on the M5 Pro in f32 and f16, and the subgroup-matrix (tensor-tile) version
+  compiles natively in Chrome 157 and matches too. First timings (not a quiet pass): subgroup-matrix inference is 7.5-11x
+  faster than our plain f16 kernel (8.5 ms per million queries, about 17 ms at 1080p); training is now the larger cost.
+  Plan and progress: `docs/design/nrc-plan.md`.
 
 **Next**
-- Track N on the Mac: the checklist in `docs/design/nrc-HANDOFF.md` (probe, correctness, timings, live demo).
-- Quiet-machine rerun of the baseline with ABBA across renderers (the first one ran while other jobs loaded the Mac); see `bench/results/BASELINE-P0.md`.
+- P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
+- Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
+- Track N: faster portable kernels and subgroup-matrix training, then the NRC demo on the path tracer (`docs/design/nrc-plan.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
-- **Wide-BVH experiment** in the bvh repo: running now on its own branch in the bvh repo.
+- Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 
-**Waiting on the maintainer:** nothing right now.
+**Speed vs the web competitors (quiet M5, 2026-11-14):** our megakernel is fastest on Sponza (about 1.4x mutracer to equal error) and second on Cornell (mutracer 1.5x faster). Report: bench/results/quiet-pass/20261114-1419/REPORT.md.
+
+**Waiting on the maintainer:** the wide-BVH default; the Tier 1 gate (class A only, or class B too); the default layering (OpenPBR albedo, albedo + internal reflection, or the pbrt walk). Nothing blocks building meanwhile.

@@ -1,0 +1,37 @@
+{
+  "scene": "tex-mask",
+  "renderer": "pbrt-v4-cpu",
+  "version": "pbrt-v4 b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f (+bench no-RR patch)",
+  "spp": 4096,
+  "seconds": 41.67,
+  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/tex-mask/pbrt-v4-cpu-4096spp.pfm .cache/native/work-1Evz2i/scene.pbrt",
+  "settings": {
+    "maxDepth": 3,
+    "rrStartDepth": null,
+    "film": {
+      "width": 320,
+      "height": 240,
+      "filter": "box"
+    },
+    "integrator": "path",
+    "rr": false,
+    "sampler": "zsobol",
+    "filter": "box 0.5",
+    "sensor": "cie1931 iso100 (passthrough)",
+    "spectral": true
+  },
+  "approximations": [
+    "pbrt: directional light angularRadius is ignored (pbrt distant lights are delta lights); `L` is used as irradiance.",
+    "pbrt: material 'screen': alpha_mode mask: cut out where opacity 1 x base colour alpha (texture) < cutoff 0.5",
+    "coverage: pbrt: material 'screen': specular_weight/specular_color scale F0 only through an IOR of 1.0000 (OpenPBR scales F at both ends)",
+    "pbrt: material 'screen': base colour texture 'screen' (128x128, sRGB, wrap repeat): imagemap bilinear, which still selects a mip level from the scaled camera ray differentials",
+    "pbrt: material 'screen': alpha mask: hard cutoff at 0.5 on the bilinear alpha through a gain-1000 alpha texture (stochastic only inside a band of 0.0010 alpha units)"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T11:42:22.965Z"
+}

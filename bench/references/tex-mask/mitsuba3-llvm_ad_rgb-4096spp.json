@@ -1,0 +1,41 @@
+{
+  "scene": "tex-mask",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 20.1,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-ewBzcF/scene.xml bench/references/tex-mask/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 3,
+    "rrStartDepth": null,
+    "film": {
+      "width": 320,
+      "height": 240,
+      "filter": "box"
+    },
+    "integrator": "volpath",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 4,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 19.940395832061768,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: alpha-masked shapes use the `volpath` integrator (its emitter sampling passes shadow rays through a mask BSDF per point; `path` would treat the cut-out part as an occluder).",
+    "mitsuba: absorption-only interior media use the `volpath` integrator (same max_depth and rr_depth rules as `path`); homogeneous medium with sigma_t = -ln(T)/depth per RGB channel (written as scale = max sigma and rgb = sigma / max sigma, because an `rgb` medium value must lie in [0, 1]), albedo 0.",
+    "mitsuba: directional light angularRadius is ignored (delta direction).",
+    "mitsuba: material 'screen': alpha_mode mask: cut out where opacity 1 x base colour alpha (texture) < cutoff 0.5",
+    "coverage: mitsuba: material 'screen': specular_weight/specular_color scale F0 only through an IOR of 1.0000 (OpenPBR scales F at both ends)",
+    "mitsuba: material 'screen': base colour texture 'screen' (128x128, sRGB, wrap repeat): bitmap bilinear, level 0 only",
+    "mitsuba: material 'screen': alpha mask: Mitsuba's mask BSDF is a stochastic opacity, so it reads a 0/255 bitmap of (opacity x alpha >= 0.5) evaluated 8x finer than the texture with the same bilinear interpolation (contour exact to 0.063 texel); the shape needs volpath for shadow rays to pass through"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T11:42:43.114Z"
+}

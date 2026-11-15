@@ -14,11 +14,11 @@ Mac session") and TASKS N0.2/N1.1/N2/N3/N10; the "Verified vs not" table below i
 | Piece | Where | State |
 |---|---|---|
 | Spec + plan | `docs/design/nrc.md` | Paper numbers marked [M] are from memory: check them against `research/papers/gi/nrc-*.pdf` (N0.1) |
-| Divergence register | `docs/design/nrc-diverges.md` | 30 rows, each with a follow-up; DIVERGES V28–V31 point here |
+| Divergence register | `docs/design/nrc-diverges.md` | 30 rows, each with a follow-up; DIVERGES V101–V104 point here |
 | Subgroup-matrix status + wishlist | `docs/design/subgroup-matrix-feedback.md` | **Draft. Never post anything to gpuweb or anywhere else without the maintainer (N9, D8).** |
 | MLP engine | `packages/mlp` (`@pathtracer/mlp`, private, WGSL prefix `nn`) | see below |
 | Bench pages | `bench/pages/mlp-{check,fit,timing,sgm-probe,live}.ts`, shared `mlp-common.ts`, `mlp-image.ts` | all run on SwiftShader; none has run on a real GPU |
-| VkNRC reference | read-only clone `research/sources/native/vknrc` (re-clone from MANIFEST); native build only under `.cache/native/` | no licence: follow its design, never paste its code (D23); native build allowed (D22) |
+| VkNRC reference | read-only clone `research/sources/native/vknrc` (re-clone from MANIFEST); native build only under `.cache/native/` | no licence: follow its design, never paste its code (D28); native build allowed (D27) |
 
 Engine (`packages/mlp/src`): `config.ts` (VkNRC-shaped defaults: 64 → 5×64 → 3, ReLU, no bias, Adam 0.002), `encoding.ts`
 (triangle-wave frequency + quartic one-blob, CPU and WGSL), `oracle.ts` (f64 forward/backward/Adam/EMA), `wgsl.ts`
@@ -75,13 +75,13 @@ changed.
    follow-ups for it are rows N-D4/D5/D8/D11 and N-I1–I8 in nrc-diverges.md. N6.2 adds the OBJ export and a
    "VkNRC lighting" setting.
 4. **N0.1** paper check whenever convenient (closes every [M]).
-5. Windows (maintainer's laptop): N0.3, N6.1 / W10 (VkNRC native on the RTX 3060; Linux build recipe in CLAUDE.md
+5. Windows (maintainer's laptop): N0.3, N6.1 / W11 (VkNRC native on the RTX 3060; Linux build recipe in CLAUDE.md
    Traps), N2 on NVIDIA. The 3060 is the likeliest place subgroup matrices show a large win.
 
 ## Rules that are easy to miss
 
-- D23: VkNRC has no licence. Read it, follow its design, never paste or line-translate its code into the repo.
-- D22: building VkNRC natively is allowed under `.cache/native/` only; its local patches are never committed.
+- D28: VkNRC has no licence. Read it, follow its design, never paste or line-translate its code into the repo.
+- D27: building VkNRC natively is allowed under `.cache/native/` only; its local patches are never committed.
 - N9 / D8: the subgroup-matrix feedback stays a draft until the maintainer says otherwise.
 - `nn*` is the WGSL prefix for `packages/mlp`; keep generated kernels under ~50 KB (Windows DXC).
 - Every new departure from the paper, VkNRC or the Denoiser gets a row in nrc-diverges.md with a follow-up.

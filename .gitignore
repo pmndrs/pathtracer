@@ -20,3 +20,6 @@ bench/results/reports/
 
 # Raw float32 blue noise (rebuilt by pnpm bluenoise:generate); the 16-bit PNGs + manifest are committed
 packages/raytracer/assets/bluenoise/*.f32
+
+# Raw bvh quiet-pass JSON (the rows live in bvh's trace.csv on its branch; the summary is committed here)
+bench/results/quiet-pass/*/bvh/*.json

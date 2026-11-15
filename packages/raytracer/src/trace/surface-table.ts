@@ -2,7 +2,7 @@
  * The data `rtSurface` needs beyond what bvh's hit carries: per-instance transforms, and per-mesh indices and vertex
  * attributes (shading normals, UVs, optionally positions), packed into three storage buffers.
  *
- * This is a deliberately small stand-in for the material/light scene copy (D4, later): only what lazy surface decode
+ * This is the surface section of the scene copy (D4; `scene/scene-copy.ts` embeds it): only what lazy surface decode
  * needs, keyed by the instance index bvh reports. Everything here runs in Node, so packing is unit-tested without a GPU.
  *
  * Buffers (bindings in order):
@@ -24,6 +24,8 @@ export interface SurfaceMeshInput {
   normals?: ArrayLike<number> | null;
   /** `u, v` per vertex. Optional. */
   uvs?: ArrayLike<number> | null;
+  /** `x, y, z, w` per vertex, object space (glTF `TANGENT`: the direction of increasing u, w = bitangent sign). Optional; only stored when the layout asks (P2.26). */
+  tangents?: ArrayLike<number> | null;
 }
 
 /** The part of bvh's `TraceSceneInstance` the table needs. `objectToWorld` is column-major 4x4. */
@@ -38,6 +40,8 @@ export interface SurfaceLayout {
   uvs: boolean;
   /** Vertex positions are in the table, so `rtSurface` computes the world position from barycentrics instead of from the ray. */
   positions: boolean;
+  /** Per-vertex tangents (xyzw, 16 B per vertex more) for anisotropic materials (P2.26): `RT_SURF_TANGENT`. Absent = false: such a layout keeps its stride and text. */
+  tangents?: boolean;
 }
 
 export interface SurfaceTableOptions {
@@ -47,6 +51,8 @@ export interface SurfaceTableOptions {
   uvs?: boolean;
   /** Store vertex positions (12 B per vertex more) for barycentric world positions. Default false: position = origin + t * direction. */
   positions?: boolean;
+  /** Store vertex tangents (16 B per vertex more). Default: true when any mesh has them (only glTF scenes with anisotropic materials do). */
+  tangents?: boolean;
 }
 
 export interface SurfaceTable {
@@ -54,22 +60,25 @@ export interface SurfaceTable {
   /** Floats per vertex in `vertices`. */
   vertexStride: number;
   /** Float offsets inside a vertex. */
-  offsets: { normal: number; uv: number; position: number };
+  offsets: { normal: number; uv: number; position: number; tangent: number };
   /** `array<vec4u>` words. */
   table: Uint32Array;
   indices: Uint32Array;
   vertices: Float32Array;
   /** Instance slots in the table (largest instance index + 1). */
   instanceSlots: number;
+  /** vec4u units before the first instance record: 1 for this stand-in's table, 4 for the scene copy's (`SCENE_HEADER_VEC4S`). Default 1. */
+  headerVec4s?: number;
   meshCount: number;
   byteLength: number;
 }
 
-export function surfaceVertexOffsets(layout: SurfaceLayout): { stride: number; normal: number; uv: number; position: number } {
+export function surfaceVertexOffsets(layout: SurfaceLayout): { stride: number; normal: number; uv: number; position: number; tangent: number } {
   const normal = 0;
   const uv = layout.normals ? 3 : 0;
   const position = uv + (layout.uvs ? 2 : 0);
-  return { stride: position + (layout.positions ? 3 : 0), normal, uv, position };
+  const tangent = position + (layout.positions ? 3 : 0);
+  return { stride: tangent + (layout.tangents ? 4 : 0), normal, uv, position, tangent };
 }
 
 const f32Bits = new Float32Array(1);
@@ -114,6 +123,7 @@ export function buildSurfaceTable(
     normals: options.normals ?? meshes.some((mesh) => !!mesh.normals),
     uvs: options.uvs ?? meshes.some((mesh) => !!mesh.uvs),
     positions: options.positions ?? false,
+    ...((options.tangents ?? meshes.some((mesh) => !!mesh.tangents)) ? { tangents: true } : {}),
   };
   const offsets = surfaceVertexOffsets(layout);
   const stride = offsets.stride;
@@ -137,11 +147,13 @@ export function buildSurfaceTable(
     let flags = 0;
     if (layout.normals && mesh.normals) flags |= MESH_FLAG.HAS_NORMALS;
     if (layout.uvs && mesh.uvs) flags |= MESH_FLAG.HAS_UVS;
+    if (layout.tangents && mesh.tangents) flags |= MESH_FLAG.HAS_TANGENTS;
     for (let v = 0; v < vertexTotal; v++) {
       const base = (vertexCursor + v) * stride;
       if (layout.normals && mesh.normals) for (let k = 0; k < 3; k++) vertices[base + offsets.normal + k] = mesh.normals[v * 3 + k] as number;
       if (layout.uvs && mesh.uvs) for (let k = 0; k < 2; k++) vertices[base + offsets.uv + k] = mesh.uvs[v * 2 + k] as number;
       if (layout.positions) for (let k = 0; k < 3; k++) vertices[base + offsets.position + k] = mesh.positions[v * 3 + k] as number;
+      if (layout.tangents && mesh.tangents) for (let k = 0; k < 4; k++) vertices[base + offsets.tangent + k] = mesh.tangents[v * 4 + k] as number;
     }
     meshRecords.push([indexCursor, vertexCursor, flags, triangles]);
     indexCursor += triangles * 3;
@@ -185,7 +197,7 @@ export function buildSurfaceTable(
   return {
     layout,
     vertexStride: stride,
-    offsets: { normal: offsets.normal, uv: offsets.uv, position: offsets.position },
+    offsets: { normal: offsets.normal, uv: offsets.uv, position: offsets.position, tangent: offsets.tangent },
     table,
     indices,
     vertices,
@@ -225,6 +237,8 @@ export interface DecodedSurface {
   shadingNormal: Vec3;
   uv: [number, number];
   material: number;
+  /** Only with `SURFACE.TANGENT` on a layout with tangents: interpolated vertex tangent, world space, unit xyz (0, 0, 0 when the mesh has none or it degenerates), w = interpolated bitangent sign. */
+  tangent?: [number, number, number, number];
 }
 
 const f32Read = new Float32Array(1);
@@ -253,13 +267,13 @@ export function readSurfaceFromTable(table: SurfaceTable, hit: SurfaceHitInput, 
   if (hit.t < 0) return out;
   const rayPosition: Vec3 = [ray.origin[0] + ray.direction[0] * hit.t, ray.origin[1] + ray.direction[1] * hit.t, ray.origin[2] + ray.direction[2] * hit.t];
   if (want & SURFACE.POSITION && !table.layout.positions) out.position = rayPosition;
-  const needsVertices = (want & (SURFACE.SHADING_NORMAL | SURFACE.UV)) !== 0 || (!!(want & SURFACE.POSITION) && table.layout.positions);
+  const needsVertices = (want & (SURFACE.SHADING_NORMAL | SURFACE.UV | SURFACE.TANGENT)) !== 0 || (!!(want & SURFACE.POSITION) && table.layout.positions);
   if (!needsVertices || hit.instance >= table.instanceSlots) {
     if (want & SURFACE.POSITION && table.layout.positions) out.position = rayPosition;
     return out;
   }
   const words = table.table;
-  const record = (SURFACE_TABLE.HEADER_VEC4S + hit.instance * SURFACE_TABLE.INSTANCE_VEC4S) * 4;
+  const record = ((table.headerVec4s ?? SURFACE_TABLE.HEADER_VEC4S) + hit.instance * SURFACE_TABLE.INSTANCE_VEC4S) * 4;
   const f = (index: number) => floatFrom(words[index] as number);
   const meshIndex = words[record + SURFACE_TABLE.INSTANCE_META * 4] as number;
   const meshRecord = ((words[1] as number) + meshIndex) * 4;
@@ -283,6 +297,16 @@ export function readSurfaceFromTable(table: SurfaceTable, hit: SurfaceHitInput, 
   if (want & SURFACE.UV && table.layout.uvs && flags & MESH_FLAG.HAS_UVS) {
     const uv = mix(table.offsets.uv, 2);
     out.uv = [uv[0] as number, uv[1] as number];
+  }
+  if (want & SURFACE.TANGENT && table.layout.tangents) {
+    out.tangent = [0, 0, 0, 1];
+    if (flags & MESH_FLAG.HAS_TANGENTS) {
+      const t = mix(table.offsets.tangent, 4);
+      const row = (r: number) => record + (SURFACE_TABLE.INSTANCE_O2W + r) * 4;
+      const world = [0, 1, 2].map((r) => f(row(r)) * (t[0] as number) + f(row(r) + 1) * (t[1] as number) + f(row(r) + 2) * (t[2] as number)) as Vec3;
+      const unit = normalized(world);
+      if (unit) out.tangent = [unit[0], unit[1], unit[2], (t[3] as number) < 0 ? -1 : 1];
+    }
   }
   if (want & SURFACE.SHADING_NORMAL && table.layout.normals && flags & MESH_FLAG.HAS_NORMALS) {
     const n = mix(table.offsets.normal, 3);
@@ -328,6 +352,12 @@ export function referenceSurface(
   if (mesh.uvs) {
     const uv = mixed(mesh.uvs, 2);
     out.uv = [uv[0] as number, uv[1] as number];
+  }
+  if (mesh.tangents) {
+    const t = mixed(mesh.tangents, 4);
+    const world = [0, 1, 2].map((r) => (m[r] as number) * (t[0] as number) + (m[4 + r] as number) * (t[1] as number) + (m[8 + r] as number) * (t[2] as number)) as Vec3;
+    const unit = normalized(world);
+    out.tangent = unit ? [unit[0], unit[1], unit[2], (t[3] as number) < 0 ? -1 : 1] : [0, 0, 0, 1];
   }
   if (mesh.normals) {
     const n = mixed(mesh.normals, 3);

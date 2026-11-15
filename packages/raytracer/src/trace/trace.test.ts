@@ -10,6 +10,8 @@ import {
   TRACER_GPU_LAYOUT_VERSION,
   traceModuleWgsl,
 } from '@pmndrs/bvh';
+import { RESERVED } from '../wgsl-names.testutil.ts';
+import { rtPruneWgsl, rtShortenWgsl } from './modules.ts';
 import { buildCaps } from '../caps/index.ts';
 import { BVH_LAYOUT_VERSION, BVH_MAX_MATERIAL, HIT_BYTES, HIT_COMPACT_BYTES, RAY_BYTES, RAY_CONE_BYTES } from '../contract/ray.ts';
 import {
@@ -152,12 +154,12 @@ describe('generated WGSL', () => {
       for (const uvs of [false, true])
         for (const positions of [false, true])
           for (const triangleLeaves of ['records', 'indexed'] as const) {
-            const surface = { slot: { group: 2, firstBinding: 0 }, layout: { normals, uvs, positions } };
-            const code = rtModuleWgsl(allFeatures, { triangleLeaves, surface });
+            const scene = { slot: { group: 2, firstBinding: 0 }, layout: { normals, uvs, positions }, materials: false, lights: false };
+            const code = rtModuleWgsl(allFeatures, { triangleLeaves, scene });
             expect(code.length).toBeLessThan(KERNEL_BYTE_LIMIT);
             for (const fn of ['rtVisible', 'rtVisibleSegment', 'rtClosest', 'rtClosestCone', 'rtSurface', 'rtSegment', 'rtConePropagate']) expect(code).toContain(`fn ${fn}(`);
             expect(code).not.toMatch(/^\s*#(if|elif|else|endif)\b/m);
-            expect(bindingsOf(code, 2)).toEqual([0, 1, 2]);
+            expect(bindingsOf(code, 2)).toEqual([0, 1]);
           }
     const plain = rtModuleWgsl(noFeatures);
     expect(plain).not.toContain('fn rtSurface(');
@@ -167,8 +169,8 @@ describe('generated WGSL', () => {
 
   it('declares nothing outside the rt prefix beyond what the bvh walk declares', () => {
     const walk = declaredNames(traceModuleWgsl({}));
-    const surface = { slot: { group: 2, firstBinding: 0 }, layout: { normals: true, uvs: true, positions: true } };
-    const ours = new Set([...declaredNames(rtModuleWgsl(noFeatures, { surface })), ...declaredNames(rtBatchKernelWgsl(noFeatures, { mode: 'closest', cones: true, indirect: true, rayLayout: 'soa' })), ...declaredNames(rtBatchArgsKernelWgsl(noFeatures))]);
+    const scene = { slot: { group: 2, firstBinding: 0 }, layout: { normals: true, uvs: true, positions: true } };
+    const ours = new Set([...declaredNames(rtModuleWgsl(noFeatures, { scene })), ...declaredNames(rtBatchKernelWgsl(noFeatures, { mode: 'closest', cones: true, indirect: true, rayLayout: 'soa' })), ...declaredNames(rtBatchArgsKernelWgsl(noFeatures))]);
     const strays = [...ours].filter((name) => !walk.has(name) && !/^(rt|Rt|RT_)/.test(name));
     expect(strays).toEqual([]);
     expect(ours.has('rtVisible')).toBe(true);
@@ -219,9 +221,9 @@ describe('struct layouts against the TypeScript constants', () => {
     expect(() => resolveBatchOptions({ mode: 'visible', cones: true })).toThrow(RangeError);
   });
 
-  it('binding budget: walk 3 (4 indexed), surface 3', () => {
+  it('binding budget: walk 3 (4 indexed), scene copy 2', () => {
     expect(rtModuleStorageBuffers()).toBe(3);
-    expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', surface: { slot: { group: 1, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: false } } })).toBe(7);
+    expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', scene: { slot: { group: 1, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: false } } })).toBe(6);
   });
 });
 
@@ -371,5 +373,65 @@ describe('layout version check', () => {
     const { assertBvhLayout } = await import('./modules.ts');
     expect(() => assertBvhLayout(BVH_LAYOUT_VERSION)).not.toThrow();
     expect(() => assertBvhLayout(BVH_LAYOUT_VERSION + 1)).toThrow(/layout v/);
+  });
+});
+
+describe('rtPruneWgsl / rtShortenWgsl (P2.10)', () => {
+  const src = [
+    'enable f16;',
+    'struct Used { a: f32, }',
+    'struct Dead { b: f32, }',
+    'const KEEP: f32 = 1.0;',
+    'const DEAD: f32 = 2.0;',
+    'fn helperUsed(x: f32) -> f32 {',
+    '  let longLocalName = x * KEEP;',
+    '  return longLocalName;',
+    '}',
+    'fn helperDead() -> f32 { return DEAD; }',
+    'fn onlyFromDead() -> f32 { return helperDead(); }',
+    '@group(0) @binding(0) var<storage, read_write> outBuf: array<f32>;',
+    '@compute @workgroup_size(1)',
+    'fn mainEntry() {',
+    '  var u: Used;',
+    '  u.a = helperUsed(1.0);',
+    '  outBuf[0] = u.a;',
+    '}',
+  ].join('\n');
+
+  it('prunes what no entry point or binding reaches, keeps entries, bindings and the lone attribute line', () => {
+    const { code, dropped } = rtPruneWgsl(src);
+    expect(dropped.sort()).toEqual(['DEAD', 'Dead', 'helperDead', 'onlyFromDead']);
+    expect(code).toContain('@compute @workgroup_size(1)\nfn mainEntry');
+    expect(code).toContain('outBuf');
+    expect(code).toContain('enable f16;');
+    expect(code).not.toContain('helperDead');
+  });
+
+  it('shortens top-level names consistently and leaves entries, bindings, members and locals alone', () => {
+    const { code, names } = rtShortenWgsl(rtPruneWgsl(src).code, ['mainEntry']);
+    expect(names.has('helperUsed')).toBe(true);
+    expect(names.has('mainEntry')).toBe(false);
+    expect(names.has('outBuf')).toBe(false);
+    expect(code).toContain('outBuf');
+    expect(code).toContain('mainEntry');
+    expect(code).toContain('u.a');
+    expect(code).toContain('longLocalName');
+    expect(code).not.toContain('helperUsed');
+    expect(code.split('\n').length).toBe(rtPruneWgsl(src).code.split('\n').length);
+    for (const n of names.values()) expect(n.length).toBeLessThan(4);
+  });
+
+  it('does not rename a top-level name that is also a member, a parameter or a local elsewhere', () => {
+    const clash = 'const Shared: f32 = 1.0;\nstruct S { Shared: f32, }\nfn f(Shared2: f32) -> f32 { return Shared2; }\nfn g() -> f32 { var s: S; return s.Shared + Shared; }';
+    expect(rtShortenWgsl(clash).names.has('Shared')).toBe(false);
+  });
+
+  it('never picks a name already in the source or a WGSL reserved word', () => {
+    const many = Array.from({ length: 80 }, (_, i) => `fn someLongFunctionName${i}() -> f32 { return A + ${i}.0; }`).join('\n');
+    const { code, names } = rtShortenWgsl(`const A: f32 = 1.0;\n${many}`);
+    expect([...names.values()]).not.toContain('A');
+    expect(new Set(names.values()).size).toBe(names.size);
+    for (const n of names.values()) expect(RESERVED.has(n)).toBe(false);
+    expect(code).toContain('const A');
   });
 });

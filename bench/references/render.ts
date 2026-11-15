@@ -2,7 +2,7 @@
  * Render cached ground-truth references with native CPU renderers.
  *
  *   node bench/references/render.ts [--scenes a,b] [--renderers pbrt,mitsuba,mitsuba-spectral] [--spp N]
- *                                   [--spp-spectral N] [--spp-<renderer> N] [--force] [--detach]
+ *                                   [--spp-spectral N] [--spp-<renderer> N] [--force] [--detach] [--coverage]
  *
  * For each scene and renderer: export the scene (bench/exporters), run the tool, and write
  *   bench/references/<scene>/<renderer-id>-<spp>spp.pfm   (linear float32 RGB; git-ignored)
@@ -32,6 +32,8 @@ const NATIVE = join(REPO, '.cache', 'native');
 const PBRT = join(NATIVE, 'pbrt-v4', 'build', 'pbrt');
 const PYTHON = join(NATIVE, 'mitsuba-venv', 'bin', 'python');
 const MITSUBA_SCRIPT = join(HERE, 'mitsuba_render.py');
+/** `--coverage`: write the closest approximation (flagged in the sidecar's `approximations`) for `openpbr` materials no reference expresses. */
+const COVERAGE = process.argv.includes('--coverage');
 const ASSETS = join(REPO, 'bench', 'assets');
 
 export interface RendererSpec {
@@ -65,6 +67,8 @@ function run(cmd: string, args: string[], cwd: string): { seconds: number; stdou
   return { seconds, stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status ?? -1 };
 }
 
+const sceneText = (e: ExportResult): string => e.files.find((f) => f.path === e.sceneFile)?.data.toString() ?? '';
+
 function renderOne(scene: SceneDesc, spec: RendererSpec, spp: number, force: boolean): void {
   const pfm = referencePath(scene.name, spec.id, spp, 'pfm');
   const sidecar = referencePath(scene.name, spec.id, spp, 'json');
@@ -75,7 +79,7 @@ function renderOne(scene: SceneDesc, spec: RendererSpec, spp: number, force: boo
   mkdirSync(dirname(pfm), { recursive: true });
   const work = mkdtempSync(join(NATIVE, 'work-'));
   try {
-    const opts = { assetsDir: ASSETS, spp };
+    const opts = { assetsDir: ASSETS, spp, coverage: COVERAGE };
     const exported: ExportResult = spec.kind === 'pbrt' ? toPbrt(scene, opts) : toMitsuba(scene, opts);
     const sceneFile = writeExport(exported, work);
     let command: string[];
@@ -93,7 +97,7 @@ function renderOne(scene: SceneDesc, spec: RendererSpec, spp: number, force: boo
       if (r.status !== 0) throw new Error(`pbrt failed (${r.status}):\n${r.stderr}\n${r.stdout}`);
       seconds = r.seconds;
       version = `pbrt-v4 ${git(['rev-parse', 'HEAD'], join(NATIVE, 'pbrt-v4'))} (+bench no-RR patch)`;
-      Object.assign(settings, { integrator: 'path', rr: scene.integrator.rrStartDepth !== undefined, sampler: 'zsobol', filter: 'box 0.5', sensor: 'cie1931 iso100 (passthrough)', spectral: true });
+      Object.assign(settings, { integrator: sceneText(exported).includes('Integrator "volpath"') ? 'volpath' : 'path', rr: scene.integrator.rrStartDepth !== undefined, sampler: 'zsobol', filter: 'box 0.5', sensor: 'cie1931 iso100 (passthrough)', spectral: true });
     } else {
       command = [PYTHON, MITSUBA_SCRIPT, sceneFile, pfm, spec.variant!, String(spp)];
       const r = run(PYTHON, command.slice(1), work);
@@ -102,7 +106,7 @@ function renderOne(scene: SceneDesc, spec: RendererSpec, spp: number, force: boo
       seconds = r.seconds;
       version = `mitsuba ${info.mitsuba}`;
       Object.assign(settings, {
-        integrator: 'path', variant: spec.variant, rr: scene.integrator.rrStartDepth !== undefined,
+        integrator: sceneText(exported).includes('type="volpath"') ? 'volpath' : 'path', variant: spec.variant, rr: scene.integrator.rrStartDepth !== undefined,
         max_depth: scene.integrator.maxDepth + 1, sampler: 'multijitter', filter: 'box 0.5',
         renderSeconds: info.seconds, spectral: spec.variant!.includes('spectral'),
       });

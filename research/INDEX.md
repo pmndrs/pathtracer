@@ -17,6 +17,7 @@ unverified and the license register. The decisions drawn from it are in [../spec
 | 09 | Materials and transport | [09-materials-transport.md](notes/09-materials-transport.md) | Packed OpenPBR-subset uber BSDF, VNDF sampling, NEE+MIS; carry vec4 radiance now, spectral in v2 |
 | 10 | Benchmarks | [10-benchmarks.md](notes/10-benchmarks.md) | Compare in linear HDR; time-to-equal-quality is the headline metric; furnace tests gate merges; siblings supply ~70% of the harness |
 | 11 | AMD Capsaicin | [11-capsaicin.md](notes/11-capsaicin.md) | MIT, D3D12 DXR only. Reference PT is opaque glTF-PBR only (no glass, f16 EXR dump), good as a Windows GPU cross-check, not a third reference; GI-1.2 hash-grid cache + world ReSTIR are portable ideas with a permissive licence |
+| 12 | NVIDIA PT performance whitepaper (2026-06) | [12-nvidia-pt-performance.md](notes/12-nvidia-pt-performance.md) | Real-time "PT" is GI + specular with controlled bias: raster primaries, one shallow diffuse bounce + world cache, reduced materials past bounce 1, no naive RR. Qualitative; one measured table (SHaRC 1.17x, force-opaque cache rays 0.69 -> 0.31 ms) |
 
 Local material: ~50 shallow clones in `sources/` (5.5 GB, git-ignored, listed in [sources/MANIFEST.md](sources/MANIFEST.md))
 and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
@@ -117,3 +118,13 @@ and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
 - **Measurement setup:** clock locking and power measurement; RenderDoc/PIX/Nsight captures.
 - **Gaps in the siblings:** nothing has ever run on AMD, and the Denoiser and upscaler are validated only on Apple.
   Every sibling's pending Windows runbook (bvh defaults, downsampler parity, upscaler audit) feeds the same machine.
+
+## 7. Tier 1 sources (2026-11-14, for docs/design/tier1.md)
+
+| Source | Link | Used for |
+|---|---|---|
+| glTF-Sample-Assets at the pinned commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb` (still `main` HEAD on 2026-11-14) | https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models | Model choice; per-model `LICENSE.md`, `metadata.json`, `.gltf` material JSON read through the GitHub tree API and raw URLs (no model bytes kept) |
+| Khronos glTF extension READMEs (`KHR_materials_*`) | https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos | Parameter semantics, defaults, status (all ratified except `KHR_materials_diffuse_transmission`, Release Candidate; `KHR_materials_subsurface` Initial Draft); dispersion = 20 / Abbe number |
+| OpenPBR Surface v1.1.2 | https://academysoftwarefoundation.github.io/OpenPBR/ | Target model. **It has no glTF mapping section** (no "glTF" or "KHR" anywhere in the 1.1.2 text); the mapping in tier1.md is ours. Useful sections: Specular (anisotropy formula, `specular_weight`/`specular_color` on metals), Transmission (`transmission_depth` 0 = non-physical tint; lengths default to cm), Thin-walled mode, Thin film, Fuzz. The Khronos dispersion README states OpenPBR uses the same 20/Abbe transform |
+| pbrt-v4 `materials.cpp` (local clone) | research/sources/native/pbrt-v4 | Material list: interface, diffuse, coateddiffuse, coatedconductor, diffusetransmission, dielectric, thindielectric, hair, conductor, measured, subsurface, mix. No sheen, no thin film. `uroughness`/`vroughness` on conductor and dielectric |
+| Mitsuba 3 `src/bsdfs` (local clone) | research/sources/native/mitsuba3 | principled (Disney: sheen, clearcoat, anisotropic, spec_trans), principledthin, plastic/roughplastic, thindielectric, blendbsdf, mask, normalmap, bumpmap. No diffuse transmission, no thin film, `dielectric` IOR is a scalar (no dispersion) |

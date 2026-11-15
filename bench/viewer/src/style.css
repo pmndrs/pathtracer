@@ -98,3 +98,13 @@ body:not([data-screen="viewer"]) .lab { display: none; }
 #help dt { color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
 #help dd { margin: 0; }
 body[data-screen="report"] .seg, body[data-screen="report"] .ev, body[data-screen="report"] #tm, body[data-screen="start"] .seg, body[data-screen="start"] .ev, body[data-screen="start"] #tm { visibility: hidden; }
+
+.coverage td { padding: 4px 8px; }
+.coverage td:first-child { max-width: 360px; }
+.ccell { text-align: center; white-space: nowrap; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-width: 70px; }
+.ccell.full { color: var(--good); }
+.ccell.approx { color: var(--warn); }
+.ccell.missing { color: #d46a6a; }
+.ccell.no-scene { color: var(--muted); }
+.ccell.link { cursor: pointer; }
+.ccell.link:hover { border-color: #51565d; }

@@ -1,0 +1,11 @@
+{
+"header": {"model":"AnisotropyRotationTest","sourceSha256":"8f6a45e69b1304cde2eb55edfd700cb3e73692be38d6f0ae146c41029a907e90","extensionsUsed":["KHR_materials_anisotropy"],"materialCount":6,"classCounts":{"A":5,"B":1,"B'":0,"C":0}},
+"materials": [
+{"i":0,"name":"Aniso Tangents","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.4268691,"doubleSided":true,"specularIor":1.5,"specularRoughnessAnisotropy":0.961165},"textures":["baseColorTexture"]},
+{"i":1,"name":"Aniso Tan + Rotation","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.4268691,"doubleSided":true,"specularIor":1.5,"specularRoughnessAnisotropy":0.961165,"anisotropyRotation":0.5235988},"textures":["baseColorTexture"]},
+{"i":2,"name":"Aniso Tan + Texture","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.4268691,"doubleSided":true,"specularIor":1.5,"specularRoughnessAnisotropy":0.961165},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["baseColorTexture","anisotropyTexture"]},
+{"i":3,"name":"Aniso Tan + Rotation + Texture","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.4268691,"doubleSided":true,"specularIor":1.5,"specularRoughnessAnisotropy":0.961165,"anisotropyRotation":0.3490659},"notes":["anisotropyTexture (strength and direction) not mapped"],"textures":["baseColorTexture","anisotropyTexture"]},
+{"i":4,"name":"Simulation via normal","class":"A","openpbr":{"baseColor":[1,1,1],"baseMetalness":1,"specularRoughness":0.1,"doubleSided":true,"specularIor":1.5},"textures":["normalTexture","baseColorTexture"]},
+{"i":5,"name":"Label Mat","class":"B","openpbr":{"baseColor":[1,1,1],"baseMetalness":0,"specularRoughness":0.9,"specularIor":1.5},"textures":["baseColorTexture"]}
+]
+}

@@ -1,0 +1,829 @@
+{
+  "schema": 1,
+  "runId": "20261113T150005Z-trace-timing",
+  "startedAt": "2026-11-13T15:00:05.508Z",
+  "commit": "6ecd315-dirty",
+  "page": "trace-timing",
+  "gpuRequested": "apple",
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/157.0.8103.52 headless",
+  "ok": true,
+  "totalMs": 1040664,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 731 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "A",
+      "args": {
+        "scene": "sponza-white",
+        "rayLayout": "aos"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1635,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.373011,
+          "l1_primary_mrays_per_s": 111.87184139653735,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.449823,
+          "l1_bounce_mrays_per_s": 84.22416929140277,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.002203,
+          "l0_shadow_mrays_per_s": 95.3056401522495,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 10.699222,
+          "l0_ao_mrays_per_s": 98.00488297186467,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              10.185294,
+              9.470712,
+              9.065406,
+              9.825566,
+              8.495064,
+              11.593792,
+              9.373011,
+              10.609687,
+              8.517648,
+              8.482649,
+              9.246893,
+              8.906706,
+              9.50642,
+              11.633415,
+              9.223312
+            ],
+            "l1_bounce": [
+              13.652208,
+              11.543087,
+              14.438161,
+              10.924708,
+              13.608379,
+              12.449823,
+              13.046871,
+              13.562589,
+              8.758549,
+              11.504381,
+              9.910187,
+              12.914545,
+              12.317832,
+              12.326122,
+              13.680582
+            ],
+            "l0_shadow": [
+              10.220168,
+              14.404955,
+              8.585601,
+              10.962664,
+              12.375745,
+              10.202044,
+              8.425236,
+              14.340167,
+              11.681204,
+              10.744885,
+              11.254021,
+              10.893002,
+              11.00237,
+              11.005037,
+              11.002203
+            ],
+            "l0_ao": [
+              10.999246,
+              11.29556,
+              10.745094,
+              9.539252,
+              10.929748,
+              11.523422,
+              10.131507,
+              10.800424,
+              10.821381,
+              10.699222,
+              4.650174,
+              4.526266,
+              4.473394,
+              4.597969,
+              4.643966
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.35888671875,
+        "loadSource": "loadavg",
+        "gpuProcs": 7,
+        "loaded": true,
+        "waitedMs": 120031,
+        "reasons": [
+          "7 Chrome GPU processes > 2"
+        ]
+      }
+    },
+    {
+      "index": 2,
+      "variant": "B",
+      "args": {
+        "scene": "sponza-white",
+        "rayLayout": "soa"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1663,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "soa",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 8.972827,
+          "l1_primary_mrays_per_s": 116.86127460163891,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.430449,
+          "l1_bounce_mrays_per_s": 84.35544041892614,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.596084,
+          "l0_shadow_mrays_per_s": 90.42466405038115,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 9.99943,
+          "l0_ao_mrays_per_s": 104.86357722390176,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              8.153211,
+              9.106111,
+              9.044738,
+              8.670345,
+              8.980327,
+              7.87477,
+              8.849502,
+              9.668619,
+              9.944393,
+              8.352657,
+              10.216501,
+              8.788798,
+              9.33643,
+              8.972827,
+              8.555812
+            ],
+            "l1_bounce": [
+              12.195963,
+              11.610333,
+              13.873487,
+              12.839133,
+              14.555946,
+              13.103617,
+              12.922169,
+              11.54392,
+              11.68137,
+              11.527631,
+              13.781909,
+              12.430449,
+              12.346496,
+              11.50459,
+              13.967773
+            ],
+            "l0_shadow": [
+              12.310333,
+              12.040348,
+              14.290169,
+              11.766991,
+              7.784525,
+              11.607958,
+              11.596084,
+              11.151235,
+              8.202666,
+              11.155819,
+              12.217295,
+              9.954143,
+              14.076849,
+              7.843396,
+              11.132113
+            ],
+            "l0_ao": [
+              10.282455,
+              10.186253,
+              10.007556,
+              11.338598,
+              12.622855,
+              10.668057,
+              9.675284,
+              9.879022,
+              10.090592,
+              9.397302,
+              9.99943,
+              5.141311,
+              4.913575,
+              4.52239,
+              4.479185
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.13818359375,
+        "loadSource": "loadavg",
+        "gpuProcs": 7,
+        "loaded": true,
+        "waitedMs": 120033,
+        "reasons": [
+          "7 Chrome GPU processes > 2"
+        ]
+      }
+    },
+    {
+      "index": 3,
+      "variant": "B",
+      "args": {
+        "scene": "sponza-white",
+        "rayLayout": "soa"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1633,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "soa",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 8.964536,
+          "l1_primary_mrays_per_s": 116.96935569225222,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 13.590587,
+          "l1_bounce_mrays_per_s": 77.15457764995729,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 12.402326,
+          "l0_shadow_mrays_per_s": 84.54639879648381,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 4.47281,
+          "l0_ao_mrays_per_s": 234.43338751254805,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              9.26131,
+              9.057405,
+              8.505523,
+              8.944246,
+              9.344972,
+              8.962411,
+              9.115819,
+              8.789423,
+              9.275725,
+              8.831002,
+              9.263101,
+              8.77784,
+              9.239978,
+              8.842168,
+              8.964536
+            ],
+            "l1_bounce": [
+              13.488343,
+              14.295961,
+              13.694997,
+              13.304771,
+              13.772867,
+              13.296521,
+              13.731537,
+              13.135656,
+              13.714538,
+              13.150281,
+              13.829865,
+              13.214901,
+              13.927691,
+              13.044288,
+              13.590587
+            ],
+            "l0_shadow": [
+              13.127741,
+              12.105345,
+              13.007456,
+              12.402326,
+              13.216277,
+              12.238253,
+              13.159405,
+              12.25571,
+              13.347852,
+              12.050181,
+              13.256232,
+              13.426138,
+              11.349557,
+              11.290894,
+              11.477424
+            ],
+            "l0_ao": [
+              10.009139,
+              4.633676,
+              4.481186,
+              4.472644,
+              4.488017,
+              4.47106,
+              4.47281,
+              4.46981,
+              4.470227,
+              4.458478,
+              4.467187,
+              4.474851,
+              4.467728,
+              4.485559,
+              4.475394
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.62158203125,
+        "loadSource": "loadavg",
+        "gpuProcs": 7,
+        "loaded": true,
+        "waitedMs": 120028,
+        "reasons": [
+          "7 Chrome GPU processes > 2"
+        ]
+      }
+    },
+    {
+      "index": 4,
+      "variant": "A",
+      "args": {
+        "scene": "sponza-white",
+        "rayLayout": "aos"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1443,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.008784,
+          "l1_primary_mrays_per_s": 116.3948430776007,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 13.582921,
+          "l1_bounce_mrays_per_s": 77.19812255405151,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 12.546693,
+          "l0_shadow_mrays_per_s": 83.57357592155957,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 4.463477,
+          "l0_ao_mrays_per_s": 234.92358087652292,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              9.626204,
+              8.89554,
+              8.634598,
+              9.201481,
+              9.164733,
+              9.06753,
+              9.24956,
+              8.889207,
+              9.054489,
+              8.940204,
+              9.19398,
+              8.730759,
+              8.963243,
+              8.947829,
+              9.008784
+            ],
+            "l1_bounce": [
+              13.597295,
+              14.473283,
+              13.638958,
+              13.331144,
+              13.709205,
+              13.330645,
+              13.582921,
+              13.347353,
+              13.732995,
+              13.516009,
+              13.764618,
+              13.526882,
+              13.698371,
+              13.420222,
+              13.486593
+            ],
+            "l0_shadow": [
+              12.931669,
+              12.427075,
+              12.924795,
+              12.369954,
+              13.13399,
+              12.546693,
+              12.904253,
+              12.485905,
+              13.072703,
+              12.465365,
+              12.980166,
+              13.302021,
+              11.309767,
+              11.386222,
+              11.210232
+            ],
+            "l0_ao": [
+              9.860232,
+              5.57391,
+              4.469686,
+              4.463311,
+              4.473227,
+              4.468393,
+              4.458353,
+              4.460103,
+              4.458645,
+              4.461936,
+              4.469644,
+              4.468228,
+              4.463477,
+              4.458228,
+              4.457936
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 2.55078125,
+        "loadSource": "loadavg",
+        "gpuProcs": 7,
+        "loaded": true,
+        "waitedMs": 120037,
+        "reasons": [
+          "7 Chrome GPU processes > 2"
+        ]
+      }
+    },
+    {
+      "index": 5,
+      "variant": "A",
+      "args": {
+        "scene": "sponza-white",
+        "rayLayout": "aos"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1429,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.192356,
+          "l1_primary_mrays_per_s": 114.0704298223437,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 11.502215,
+          "l1_bounce_mrays_per_s": 91.16296295974298,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 10.920792,
+          "l0_shadow_mrays_per_s": 96.01611311707063,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 6.389444,
+          "l0_ao_mrays_per_s": 164.11068005291227,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              8.65443,
+              11.512131,
+              9.559833,
+              10.053386,
+              9.192356,
+              9.723447,
+              9.301932,
+              10.606144,
+              6.241828,
+              4.107999,
+              7.657449,
+              10.685765,
+              8.378447,
+              9.112402,
+              9.091278
+            ],
+            "l1_bounce": [
+              11.453509,
+              9.47263,
+              12.77097,
+              11.462175,
+              17.945487,
+              11.459134,
+              11.471217,
+              12.12601,
+              10.687889,
+              11.502215,
+              15.199906,
+              12.224671,
+              11.431135,
+              13.741453,
+              14.383789
+            ],
+            "l0_shadow": [
+              8.730925,
+              8.744091,
+              10.312371,
+              10.920792,
+              8.825211,
+              14.245338,
+              20.067567,
+              10.984247,
+              11.006119,
+              9.291308,
+              11.023411,
+              11.048617,
+              9.589623,
+              11.15486,
+              10.769883
+            ],
+            "l0_ao": [
+              10.670015,
+              10.909792,
+              11.078824,
+              6.389444,
+              10.092009,
+              11.103405,
+              9.804901,
+              9.599123,
+              4.5051,
+              4.497267,
+              4.507183,
+              4.520558,
+              4.503934,
+              4.502559,
+              4.489893
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 2.345703125,
+        "loadSource": "loadavg",
+        "gpuProcs": 7,
+        "loaded": true,
+        "waitedMs": 120034,
+        "reasons": [
+          "7 Chrome GPU processes > 2"
+        ]
+      }
+    },
+    {
+      "index": 6,
+      "variant": "B",
+      "args": {
+        "scene": "sponza-white",
+        "rayLayout": "soa"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1728,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "soa",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.096195,
+          "l1_primary_mrays_per_s": 115.27633257642344,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 13.716038,
+          "l1_bounce_mrays_per_s": 76.44889872716888,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.882274,
+          "l0_shadow_mrays_per_s": 88.24674468876916,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 4.796916,
+          "l0_ao_mrays_per_s": 218.59377983687847,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              9.392926,
+              7.252266,
+              4.807914,
+              8.60085,
+              10.574355,
+              10.34566,
+              8.251038,
+              8.745925,
+              9.504254,
+              8.571892,
+              8.983536,
+              9.161482,
+              9.096195,
+              15.687001,
+              9.23077
+            ],
+            "l1_bounce": [
+              14.288711,
+              19.500394,
+              14.865093,
+              12.437074,
+              12.821927,
+              14.48495,
+              13.716038,
+              14.346082,
+              13.641502,
+              7.851063,
+              13.913358,
+              12.968042,
+              8.915914,
+              11.82332,
+              13.75737
+            ],
+            "l0_shadow": [
+              6.977407,
+              14.637231,
+              11.089741,
+              13.132989,
+              12.908504,
+              9.346514,
+              11.594001,
+              13.016206,
+              11.535379,
+              14.133429,
+              9.110861,
+              14.395246,
+              11.862651,
+              12.421492,
+              11.882274
+            ],
+            "l0_ao": [
+              10.544816,
+              9.581999,
+              5.91793,
+              12.874422,
+              7.341552,
+              4.470185,
+              4.483226,
+              4.796916,
+              4.47506,
+              4.473018,
+              4.490893,
+              4.48281,
+              4.929866,
+              4.84762,
+              4.480726
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 2.9365234375,
+        "loadSource": "loadavg",
+        "gpuProcs": 7,
+        "loaded": true,
+        "waitedMs": 120035,
+        "reasons": [
+          "7 Chrome GPU processes > 2"
+        ]
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": "/Users/dex/Developer/pathtracer/bench/results/p1-quiet-trace-timing.csv"
+}

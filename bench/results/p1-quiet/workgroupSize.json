@@ -1,0 +1,817 @@
+{
+  "schema": 1,
+  "runId": "20261113T151832Z-trace-timing",
+  "startedAt": "2026-11-13T15:18:32.213Z",
+  "commit": "6ecd315-dirty",
+  "page": "trace-timing",
+  "gpuRequested": "apple",
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/157.0.8103.52 headless",
+  "ok": true,
+  "totalMs": 164472,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 11 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "A",
+      "args": {
+        "scene": "sponza-white",
+        "workgroupSize": "64"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1711,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 8.824086,
+          "l1_primary_mrays_per_s": 118.83111746644356,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.272167,
+          "l1_bounce_mrays_per_s": 85.4434265765777,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.535588,
+          "l0_shadow_mrays_per_s": 90.89887745644174,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 9.167398,
+          "l0_ao_mrays_per_s": 114.3809835680746,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              9.777278,
+              5.655405,
+              4.576345,
+              8.816379,
+              9.833025,
+              8.866292,
+              9.592165,
+              8.448567,
+              9.974725,
+              9.417925,
+              10.86617,
+              8.713969,
+              5.73065,
+              5.545912,
+              8.824086
+            ],
+            "l1_bounce": [
+              12.560026,
+              12.033141,
+              12.167633,
+              12.091387,
+              12.015975,
+              12.019101,
+              11.98231,
+              12.272167,
+              15.421017,
+              12.317415,
+              12.104178,
+              20.771233,
+              15.160574,
+              12.847549,
+              12.993122
+            ],
+            "l0_shadow": [
+              11.289019,
+              12.02939,
+              11.657204,
+              11.52913,
+              11.535588,
+              11.587625,
+              11.214065,
+              11.418512,
+              11.428928,
+              15.044831,
+              11.323434,
+              11.647539,
+              9.952726,
+              11.598584,
+              11.730326
+            ],
+            "l0_ao": [
+              8.549686,
+              5.203641,
+              10.69189,
+              6.095586,
+              10.167879,
+              9.687658,
+              11.779448,
+              9.167398,
+              11.032201,
+              7.952264,
+              4.941198,
+              11.598167,
+              5.919389,
+              10.464486,
+              5.754274
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.69775390625,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "loaded": false,
+        "waitedMs": 43,
+        "reasons": []
+      }
+    },
+    {
+      "index": 2,
+      "variant": "B",
+      "args": {
+        "scene": "sponza-white",
+        "workgroupSize": "128"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1604,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 128,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.899646,
+          "l1_primary_mrays_per_s": 105.92055513904234,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.916128,
+          "l1_bounce_mrays_per_s": 81.18346303164539,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.381639,
+          "l0_shadow_mrays_per_s": 92.12838326711996,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 10.025846,
+          "l0_ao_mrays_per_s": 104.5872837065321,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              24.38097,
+              10.827715,
+              9.487421,
+              9.218603,
+              10.835713,
+              8.817587,
+              9.899646,
+              10.055469,
+              10.862046,
+              9.238019,
+              9.126652,
+              9.704616,
+              10.61681,
+              9.040865,
+              11.959061
+            ],
+            "l1_bounce": [
+              11.96527,
+              14.476324,
+              12.060972,
+              12.144176,
+              13.775951,
+              12.628104,
+              13.621253,
+              12.194964,
+              12.132884,
+              8.532437,
+              15.373145,
+              12.952293,
+              13.004414,
+              14.157301,
+              12.916128
+            ],
+            "l0_shadow": [
+              7.142397,
+              10.662017,
+              9.615746,
+              10.674765,
+              8.862209,
+              11.604291,
+              12.971708,
+              11.006787,
+              12.068848,
+              12.567941,
+              8.802212,
+              11.621831,
+              11.381639,
+              11.410887,
+              11.547753
+            ],
+            "l0_ao": [
+              12.283751,
+              11.366722,
+              10.79555,
+              12.236503,
+              10.036345,
+              6.105336,
+              10.461237,
+              10.025846,
+              10.107508,
+              4.761917,
+              4.779709,
+              4.743252,
+              4.47581,
+              4.760792,
+              4.809415
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.69775390625,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "loaded": false,
+        "waitedMs": 31,
+        "reasons": []
+      }
+    },
+    {
+      "index": 3,
+      "variant": "B",
+      "args": {
+        "scene": "sponza-white",
+        "workgroupSize": "128"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1497,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 128,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.916338,
+          "l1_primary_mrays_per_s": 105.74226090316809,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.204191,
+          "l1_bounce_mrays_per_s": 85.91933705396778,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.484474,
+          "l0_shadow_mrays_per_s": 91.30344149849613,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 9.973418,
+          "l0_ao_mrays_per_s": 105.1370753737585,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              11.040287,
+              10.143619,
+              9.457401,
+              6.091179,
+              9.949878,
+              9.073502,
+              10.010916,
+              10.125328,
+              12.209816,
+              9.572645,
+              5.540914,
+              9.747721,
+              9.668057,
+              9.916338,
+              9.923379
+            ],
+            "l1_bounce": [
+              12.011408,
+              14.51996,
+              12.101905,
+              12.207816,
+              12.10632,
+              12.23819,
+              9.724847,
+              12.105363,
+              12.204191,
+              12.101113,
+              12.07428,
+              15.08031,
+              22.382393,
+              14.933525,
+              13.005113
+            ],
+            "l0_shadow": [
+              10.742175,
+              12.263438,
+              8.307577,
+              11.290316,
+              11.498473,
+              10.900043,
+              11.222986,
+              11.432852,
+              11.689965,
+              11.759671,
+              11.867122,
+              11.760754,
+              11.484474,
+              16.15151,
+              6.456329
+            ],
+            "l0_ao": [
+              11.284109,
+              10.769591,
+              10.103579,
+              10.146702,
+              10.826421,
+              6.66207,
+              10.668011,
+              10.381817,
+              9.493482,
+              9.620518,
+              9.521481,
+              9.46765,
+              9.517897,
+              9.973418,
+              6.010933
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.69775390625,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "loaded": false,
+        "waitedMs": 32,
+        "reasons": []
+      }
+    },
+    {
+      "index": 4,
+      "variant": "A",
+      "args": {
+        "scene": "sponza-white",
+        "workgroupSize": "64"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1534,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.56125,
+          "l1_primary_mrays_per_s": 109.66934239769904,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.225421,
+          "l1_bounce_mrays_per_s": 85.77013421460087,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.438761,
+          "l0_shadow_mrays_per_s": 91.66831967203441,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 10.621352,
+          "l0_ao_mrays_per_s": 98.72340169123478,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              9.542918,
+              5.797688,
+              11.123612,
+              9.90452,
+              8.861501,
+              8.161419,
+              14.456076,
+              6.121584,
+              10.870586,
+              9.963392,
+              10.534857,
+              7.899185,
+              9.56125,
+              9.894938,
+              8.801504
+            ],
+            "l1_bounce": [
+              13.886778,
+              12.128593,
+              12.152675,
+              12.225421,
+              12.129468,
+              11.908773,
+              12.155675,
+              12.175882,
+              12.968209,
+              16.201886,
+              12.866257,
+              12.867298,
+              11.392472,
+              12.998582,
+              12.731514
+            ],
+            "l0_shadow": [
+              9.062488,
+              7.338802,
+              11.873443,
+              13.439221,
+              10.818839,
+              11.223565,
+              11.438761,
+              11.504465,
+              11.561711,
+              11.54842,
+              11.546045,
+              11.367514,
+              11.472134,
+              11.242564,
+              6.781336
+            ],
+            "l0_ao": [
+              10.621352,
+              6.672676,
+              12.89913,
+              10.970706,
+              10.74072,
+              11.398054,
+              10.466611,
+              10.151588,
+              8.797421,
+              5.717734,
+              10.820256,
+              9.892938,
+              11.538462,
+              6.702549,
+              10.899251
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.5615234375,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "loaded": false,
+        "waitedMs": 34,
+        "reasons": []
+      }
+    },
+    {
+      "index": 5,
+      "variant": "A",
+      "args": {
+        "scene": "sponza-white",
+        "workgroupSize": "64"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1524,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 64,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.349846,
+          "l1_primary_mrays_per_s": 112.14901293561412,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.378369,
+          "l1_bounce_mrays_per_s": 84.71035238972112,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.789197,
+          "l0_shadow_mrays_per_s": 88.94346239188302,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 9.489671,
+          "l0_ao_mrays_per_s": 110.49655989127548,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              9.040907,
+              8.475024,
+              9.063072,
+              10.625019,
+              9.511962,
+              9.198771,
+              10.12584,
+              9.328764,
+              10.539732,
+              10.299496,
+              5.154353,
+              9.349846,
+              10.827423,
+              8.398404,
+              9.577748
+            ],
+            "l1_bounce": [
+              12.061597,
+              12.041973,
+              12.183381,
+              12.758013,
+              12.378369,
+              18.92722,
+              11.689579,
+              12.057931,
+              13.384558,
+              14.918173,
+              10.812632,
+              12.973125,
+              14.558987,
+              12.873172,
+              7.975013
+            ],
+            "l0_shadow": [
+              10.577355,
+              11.813237,
+              11.159027,
+              13.539798,
+              12.301957,
+              6.967158,
+              11.519839,
+              11.285186,
+              10.258915,
+              14.303377,
+              19.261741,
+              12.293624,
+              11.830194,
+              11.789197,
+              11.725035
+            ],
+            "l0_ao": [
+              12.707558,
+              12.264043,
+              11.455426,
+              9.489671,
+              5.923805,
+              13.065786,
+              9.513919,
+              9.552959,
+              9.54325,
+              4.472894,
+              4.480727,
+              4.472935,
+              4.479268,
+              4.493935,
+              4.476852
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.5615234375,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "loaded": false,
+        "waitedMs": 32,
+        "reasons": []
+      }
+    },
+    {
+      "index": 6,
+      "variant": "B",
+      "args": {
+        "scene": "sponza-white",
+        "workgroupSize": "128"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 1569,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-batch",
+        "config": {
+          "count": 1048576,
+          "workgroupSize": 128,
+          "rayLayout": "aos",
+          "hitRecord": "full",
+          "repeats": 15,
+          "warmup": 3,
+          "format": {
+            "nodeFormat": "quantized",
+            "triangleLeaves": "records",
+            "positionLayout": "vec4"
+          },
+          "aoDistance": 4.643980819757608
+        },
+        "metrics": {
+          "l1_primary_ms": 9.278492,
+          "l1_primary_mrays_per_s": 113.0114678117953,
+          "l1_primary_rays": 1048576,
+          "l1_bounce_ms": 12.138444,
+          "l1_bounce_mrays_per_s": 86.38471290059913,
+          "l1_bounce_rays": 1048576,
+          "l0_shadow_ms": 11.541806,
+          "l0_shadow_mrays_per_s": 90.84990685166602,
+          "l0_shadow_rays": 1048572,
+          "l0_ao_ms": 10.108037,
+          "l0_ao_mrays_per_s": 103.73685810607935,
+          "l0_ao_rays": 1048576
+        },
+        "valid": true,
+        "notes": {
+          "passMs": {
+            "l1_primary": [
+              10.069914,
+              8.798514,
+              10.908542,
+              9.902213,
+              8.93005,
+              9.278492,
+              9.319324,
+              9.474482,
+              9.134791,
+              9.702598,
+              9.008047,
+              9.230911,
+              9.272158,
+              4.612956,
+              10.213615
+            ],
+            "l1_bounce": [
+              12.141319,
+              12.162818,
+              11.976285,
+              12.094864,
+              12.121236,
+              12.138444,
+              11.888247,
+              12.214024,
+              12.117778,
+              12.22469,
+              11.844333,
+              12.250689,
+              11.899914,
+              15.443418,
+              14.182351
+            ],
+            "l0_shadow": [
+              15.186472,
+              11.517056,
+              10.954582,
+              12.118445,
+              10.962873,
+              11.541806,
+              11.233694,
+              11.557721,
+              11.700507,
+              11.660425,
+              11.380479,
+              11.402561,
+              11.62351,
+              11.48889,
+              11.658259
+            ],
+            "l0_ao": [
+              10.48027,
+              10.188825,
+              10.108037,
+              9.93542,
+              10.620764,
+              10.122327,
+              9.927379,
+              9.84955,
+              11.029579,
+              10.571017,
+              9.509815,
+              10.127036,
+              10.04729,
+              7.460868,
+              4.830029
+            ]
+          },
+          "hitRate": 0.9953861236572266,
+          "triangles": 262266,
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.5615234375,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "loaded": false,
+        "waitedMs": 32,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": "/Users/dex/Developer/pathtracer/bench/results/p1-quiet-trace-timing.csv"
+}

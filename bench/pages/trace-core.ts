@@ -38,7 +38,7 @@ import {
   RtBatchTracer,
   aosToSoa,
   normalMatrixRows,
-  buildSurfaceTable,
+  buildSceneCopy,
   detectCaps,
   packCones,
   readHits,
@@ -47,20 +47,22 @@ import {
   rtBatchArgsKernelWgsl,
   rtModuleWgsl,
   rtSceneBindGroupEntries,
-  rtSurfaceBindGroupEntries,
-  rtSurfaceLayoutEntries,
+  rtSceneCopyBindGroupEntries,
+  rtSceneCopyLayoutEntries,
+  type SceneCopyPacking,
   rtWalkEntries,
   unpackRay,
-  uploadSurfaceTable,
+  uploadSceneCopy,
   withBindings,
   type BatchKernelOptions,
   type Caps,
   type Hit,
   type Ray,
   type SceneFormat,
-  type SurfaceBuffers,
+  type SceneCopyBuffers,
   type SurfaceInstanceInput,
 } from '@pmndrs/raytracer';
+import { createBvhWorkerPool } from '@pmndrs/bvh/worker';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import {
@@ -107,6 +109,8 @@ interface Tally {
   closestMismatch: number;
   visibleMismatch: number;
   ties: number;
+  /** Primary rays only: a different triangle at the same t that shares a corner or plane with the oracle's (listed in notes). */
+  primaryTie: number;
   grazing: number;
   tPosition: number;
   slipsOnBoxEdge: number;
@@ -121,10 +125,12 @@ interface Tally {
   maxTRelative: number;
   maxSurfacePositionError: number;
   examples: string[];
+  /** Every primary-ray tie / grazing / tPosition, with its triangles (the primary set is strict: see compareClosest). */
+  primaryDetails: string[];
   /** Ray-set breakdown of the counted (not failed) categories. */
-  bySet: Record<string, { rays: number; ties: number; grazing: number; tPosition: number }>;
+  bySet: Record<string, { rays: number; ties: number; primaryTie: number; grazing: number; tPosition: number }>;
 }
-const newTally = (): Tally => ({ rays: 0, closestMismatch: 0, visibleMismatch: 0, ties: 0, grazing: 0, tPosition: 0, slipsOnBoxEdge: 0, slipsElsewhere: 0, escapes: 0, variantMismatch: 0, inlineMismatch: 0, surfaceMismatch: 0, coneMismatch: 0, hits: 0, blocked: 0, maxTRelative: 0, maxSurfacePositionError: 0, examples: [], bySet: {} });
+const newTally = (): Tally => ({ rays: 0, closestMismatch: 0, visibleMismatch: 0, ties: 0, primaryTie: 0, grazing: 0, tPosition: 0, slipsOnBoxEdge: 0, slipsElsewhere: 0, escapes: 0, variantMismatch: 0, inlineMismatch: 0, surfaceMismatch: 0, coneMismatch: 0, hits: 0, blocked: 0, maxTRelative: 0, maxSurfacePositionError: 0, examples: [], primaryDetails: [], bySet: {} });
 
 const noted = new WeakMap<Tally, Map<string, number>>();
 /** Keeps up to three examples per category. */
@@ -167,6 +173,9 @@ async function readBack(device: GPUDevice, buffers: GPUBuffer[]): Promise<ArrayB
 }
 
 /** The page's own kernel on the inline module: L1 with a cone, L0, and the full `rtSurface` per ray. */
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split). */
+let PACKING: SceneCopyPacking = 'split';
+
 const INLINE_KERNEL = /* wgsl */ `
 struct PageParams { count: u32, mask: u32, pad0: u32, pad1: u32, cone: vec4f }
 @group(1) @binding(0) var<storage, read> pageRays: array<RtRay>;
@@ -214,7 +223,7 @@ async function makeKernels(device: GPUDevice, caps: Caps, format: Format): Promi
   };
 
   const surfaceLayout = { normals: true, uvs: true, positions: true };
-  const code = rtModuleWgsl(caps, { ...base, surface: { slot: { group: 2, firstBinding: 0 }, layout: surfaceLayout } }) + INLINE_KERNEL;
+  const code = rtModuleWgsl(caps, { ...base, scene: { slot: { group: 2, firstBinding: 0 }, layout: surfaceLayout, materials: false, lights: false, packing: PACKING } }) + INLINE_KERNEL;
   const layouts = [
     device.createBindGroupLayout({ entries: withBindings(rtWalkEntries(base)) }),
     device.createBindGroupLayout({
@@ -224,7 +233,7 @@ async function makeKernels(device: GPUDevice, caps: Caps, format: Format): Promi
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
       ],
     }),
-    device.createBindGroupLayout({ entries: rtSurfaceLayoutEntries() }),
+    device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, undefined, PACKING) }),
   ];
   const pipeline = await device.createComputePipelineAsync({
     label: `${format.name} inline`,
@@ -250,7 +259,7 @@ interface GpuAnswers {
 }
 
 /** Runs every kernel on one ray set: one encoder, one submit, then the readbacks. */
-async function traceOnGpu(device: GPUDevice, kernels: Kernels | null, base: { closest: RtBatchTracer; visible: RtBatchTracer }, scene: TraceSceneBuffers, surface: SurfaceBuffers | null, set: RaySet): Promise<GpuAnswers> {
+async function traceOnGpu(device: GPUDevice, kernels: Kernels | null, base: { closest: RtBatchTracer; visible: RtBatchTracer }, scene: TraceSceneBuffers, surface: SceneCopyBuffers | null, set: RaySet): Promise<GpuAnswers> {
   const n = set.count;
   const rays = upload(device, set.packed);
   const soa = aosToSoa(set.packed);
@@ -302,7 +311,7 @@ async function traceOnGpu(device: GPUDevice, kernels: Kernels | null, base: { cl
           { binding: 2, resource: { buffer: params } },
         ],
       }),
-      device.createBindGroup({ layout: kernels.inline.layouts[2] as GPUBindGroupLayout, entries: rtSurfaceBindGroupEntries(surface) }),
+      device.createBindGroup({ layout: kernels.inline.layouts[2] as GPUBindGroupLayout, entries: rtSceneCopyBindGroupEntries(surface) }),
     ];
     const pass = encoder.beginComputePass({ label: 'trace-core inline' });
     pass.setPipeline(kernels.inline.pipeline);
@@ -353,6 +362,8 @@ interface EdgeIndex {
   kind(instance: number, triangle: number, u: number, v: number, direction: readonly number[]): EdgeKind;
   /** The two triangles of one instance share a corner (by position bits). */
   adjacent(instance: number, a: number, b: number): boolean;
+  /** How two triangles of one instance relate: corners they share (by position bits), and whether they lie in one plane. */
+  relation(instance: number, a: number, b: number): { sharedCorners: number; coplanar: boolean };
   /** How many object-space coordinates of the point lie on the mesh's bounding box (2 = on a box edge, 3 = a corner). */
   onBox(instance: number, triangle: number, u: number, v: number): number;
 }
@@ -432,6 +443,24 @@ function makeEdgeIndex(scene: TraceTestScene): EdgeIndex {
       const corners = new Set([0, 1, 2].map((k) => m.corner(a, k)));
       return [0, 1, 2].some((k) => corners.has(m.corner(b, k)));
     },
+    relation(instance, a, b) {
+      const record = recordOf(instance);
+      const m = record ? perMesh[record.meshIndex] : undefined;
+      if (!m) return { sharedCorners: 0, coplanar: false };
+      const corners = new Set([0, 1, 2].map((k) => m.corner(a, k)));
+      const sharedCorners = [0, 1, 2].filter((k) => corners.has(m.corner(b, k))).length;
+      // Coplanar: b's three vertices lie on a's plane, to 1e-6 of the mesh's extent (f32 positions, doubles here).
+      const pos = (t: number, k: number) => [0, 1, 2].map((c) => m.mesh.positions[(m.mesh.indices[t * 3 + k] as number) * 3 + c] as number);
+      const n = [m.normals[a * 3] as number, m.normals[a * 3 + 1] as number, m.normals[a * 3 + 2] as number];
+      const length = Math.hypot(n[0]!, n[1]!, n[2]!);
+      const p0 = pos(a, 0);
+      const extent = Math.max(...[0, 1, 2].map((c) => (m.hi[c] as number) - (m.lo[c] as number)), 1e-9);
+      const coplanar = length > 0 && [0, 1, 2].every((k) => {
+        const q = pos(b, k);
+        return Math.abs(((q[0]! - p0[0]!) * n[0]! + (q[1]! - p0[1]!) * n[1]! + (q[2]! - p0[2]!) * n[2]!) / length) <= 1e-6 * extent;
+      });
+      return { sharedCorners, coplanar };
+    },
     onBox(instance, triangle, u, v) {
       const record = recordOf(instance);
       const m = record ? perMesh[record.meshIndex] : undefined;
@@ -449,23 +478,23 @@ function makeEdgeIndex(scene: TraceTestScene): EdgeIndex {
   };
 }
 
-type Verdict = { verdict: 'match' | 'tie' | 'grazing' | 'tPosition' | 'mismatch'; why?: string; tRelative?: number; slip?: 'boxEdge' | 'other' };
+type Verdict = { verdict: 'match' | 'tie' | 'primaryTie' | 'grazing' | 'tPosition' | 'mismatch'; why?: string; tRelative?: number; slip?: 'boxEdge' | 'other' };
 
 function tClose(a: number, b: number, floor: number): number {
   return Math.abs(a - b) / Math.max(Math.abs(b), floor);
 }
 
 /** The GPU's closest hit against the oracle's. t is compared relative to max(t, T_FLOOR * scene scale). */
-function compareClosest(gpu: Hit, cpu: CpuHit | null, edges: EdgeIndex, tFloor: number, ray: Ray, allHits: () => ReturnType<AllHits>): Verdict {
+function compareClosest(gpu: Hit, cpu: CpuHit | null, edges: EdgeIndex, tFloor: number, ray: Ray, allHits: () => ReturnType<AllHits>, strict = false): Verdict {
   const gpuHit = gpu.t >= 0;
   const gpuEdge = gpuHit ? edges.kind(gpu.instance, gpu.triangle, gpu.barycentrics[0], gpu.barycentrics[1], ray.direction) : 'interior';
   const cpuEdge = cpu ? edges.kind(cpu.instanceIndex, cpu.triangleIndex, cpu.u, cpu.v, ray.direction) : 'interior';
   if (!cpu) {
     if (!gpuHit) return { verdict: 'match' };
-    return gpuEdge === 'tangent' ? { verdict: 'grazing' } : { verdict: 'mismatch', why: `gpu hit t=${gpu.t} inst=${gpu.instance} tri=${gpu.triangle} (${gpuEdge}), cpu missed` };
+    return gpuEdge === 'tangent' && !strict ? { verdict: 'grazing' } : { verdict: 'mismatch', why: `gpu hit t=${gpu.t} inst=${gpu.instance} tri=${gpu.triangle} (${gpuEdge}), cpu missed` };
   }
   if (!gpuHit) {
-    if (cpuEdge === 'tangent') return { verdict: 'grazing' };
+    if (cpuEdge === 'tangent' && !strict) return { verdict: 'grazing' };
     const box = edges.onBox(cpu.instanceIndex, cpu.triangleIndex, cpu.u, cpu.v);
     return { verdict: 'mismatch', slip: cpuEdge === 'crossing' ? (box >= 2 ? 'boxEdge' : 'other') : undefined, why: `gpu missed, cpu hit t=${cpu.t} inst=${cpu.instanceIndex} tri=${cpu.triangleIndex} bary ${cpu.u.toExponential(3)},${cpu.v.toExponential(3)} (${cpuEdge}${cpuEdge === 'crossing' ? `: watertight slip, ${box} coords on the mesh box` : ''})` };
   }
@@ -480,8 +509,18 @@ function compareClosest(gpu: Hit, cpu: CpuHit | null, edges: EdgeIndex, tFloor: 
   if (tRelative > T_RELATIVE && !positional) {
     // Grazing past a tangent edge onto something behind it, on either side.
     const nearer = gpu.t < cpu.t ? gpuEdge : cpuEdge;
-    if (!sameTriangle && nearer === 'tangent') return { verdict: 'grazing', tRelative };
+    if (!sameTriangle && nearer === 'tangent' && !strict) return { verdict: 'grazing', tRelative };
     return { verdict: 'mismatch', why: `t gpu ${gpu.t} cpu ${cpu.t} (rel ${tRelative.toExponential(2)}, cos ${cos.toFixed(3)}, tri gpu ${gpu.instance}/${gpu.triangle} cpu ${cpu.instanceIndex}/${cpu.triangleIndex})`, tRelative };
+  }
+  if (!sameTriangle && strict) {
+    // Primary rays: the instance and triangle must match (the f64 walk names the GPU's on bvh's own Sponza primary rays).
+    // The one allowed difference is a geometric tie: the same t (checked above) on two triangles of one instance that
+    // share a corner or lie in one plane at the hit (duplicate / overlapping faces: both answers are right).
+    if (gpu.instance === cpu.instanceIndex) {
+      const relation = edges.relation(gpu.instance, gpu.triangle, cpu.triangleIndex);
+      if (relation.sharedCorners > 0 || relation.coplanar) return { verdict: 'primaryTie', tRelative, why: `shared corners ${relation.sharedCorners}, coplanar ${relation.coplanar}` };
+    }
+    return { verdict: 'mismatch', why: `primary inst/tri gpu ${gpu.instance}/${gpu.triangle} bary ${gpu.barycentrics.map((x) => x.toExponential(3))} (${gpuEdge}) cpu ${cpu.instanceIndex}/${cpu.triangleIndex} bary ${cpu.u.toExponential(3)},${cpu.v.toExponential(3)} (${cpuEdge}) at t=${cpu.t}`, tRelative };
   }
   if (!sameTriangle) {
     if (cpuEdge !== 'interior' || gpuEdge !== 'interior') return { verdict: 'tie', tRelative };
@@ -541,12 +580,16 @@ function compareSet(tally: Tally, label: string, scene: TraceTestScene, set: Ray
       note(tally, 'escape', `${where}: escaped the closed box`);
     }
 
-    const result = compareClosest(gpuHit, cpuHit, oracle.edges, T_FLOOR * scene.scale, ray, () => oracle.allHits(ray, set.mask));
+    const result = compareClosest(gpuHit, cpuHit, oracle.edges, T_FLOOR * scene.scale, ray, () => oracle.allHits(ray, set.mask), set.name === 'primary');
     if (result.verdict === 'match' && result.tRelative !== undefined) tally.maxTRelative = Math.max(tally.maxTRelative, result.tRelative);
-    const perSet = (tally.bySet[set.name] ??= { rays: 0, ties: 0, grazing: 0, tPosition: 0 });
+    const perSet = (tally.bySet[set.name] ??= { rays: 0, ties: 0, primaryTie: 0, grazing: 0, tPosition: 0 });
     perSet.rays++;
-    if (result.verdict === 'tie' || result.verdict === 'grazing' || result.verdict === 'tPosition') perSet[result.verdict === 'tie' ? 'ties' : result.verdict]++;
+    if (result.verdict === 'tie' || result.verdict === 'primaryTie' || result.verdict === 'grazing' || result.verdict === 'tPosition') perSet[result.verdict === 'tie' ? 'ties' : result.verdict]++;
+    if (set.name === 'primary' && result.verdict !== 'match' && result.verdict !== 'mismatch') {
+      tally.primaryDetails.push(`${where} ${result.verdict} (${result.why ?? ''}): gpu ${gpuHit.instance}/${gpuHit.triangle} t=${gpuHit.t} bary ${gpuHit.barycentrics.map((x) => x.toExponential(3))} cpu ${cpuHit ? `${cpuHit.instanceIndex}/${cpuHit.triangleIndex} t=${cpuHit.t} bary ${cpuHit.u.toExponential(3)},${cpuHit.v.toExponential(3)}` : 'miss'} dir ${ray.direction.join(',')}`);
+    }
     if (result.verdict === 'tie') tally.ties++;
+    else if (result.verdict === 'primaryTie') tally.primaryTie++;
     else if (result.verdict === 'grazing') tally.grazing++;
     else if (result.verdict === 'tPosition') tally.tPosition++;
     else if (result.verdict === 'mismatch') {
@@ -695,6 +738,8 @@ let deviceErrors: string[] = [];
 
 try {
   const args = getArgs();
+  if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
   const sceneNames = (args.scenes ?? 'cornell,quad-light,edges,sponza-white').split(',').filter(Boolean);
   const perSet = numberArg(args, 'rays', 8192);
   const withSceneTrees = (args.sceneTrees ?? '1') !== '0';
@@ -706,7 +751,7 @@ try {
   const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter), { label: 'trace-core' });
   deviceErrors = watchDevice(device);
 
-  const builder = createMeshBvhBuilder({ worker: 'never' });
+  const builder = createMeshBvhBuilder();
   const tiny = await createTinyBvhBuilder();
   const kernelsByFormat = new Map<string, Kernels>();
   for (const format of FORMATS) kernelsByFormat.set(format.name, await makeKernels(device, caps, format));
@@ -715,18 +760,21 @@ try {
   const metrics: Record<string, number> = {};
   const failures: string[] = [];
   const perScene: Record<string, unknown> = {};
+  const workerNotes: Record<string, unknown> = {};
   const total = newTally();
   const addInto = (into: Tally, from: Tally) => {
     for (const key of Object.keys(from) as (keyof Tally)[]) {
       if (key === 'bySet') {
         for (const [name, entry] of Object.entries(from.bySet)) {
-          const target = (into.bySet[name] ??= { rays: 0, ties: 0, grazing: 0, tPosition: 0 });
+          const target = (into.bySet[name] ??= { rays: 0, ties: 0, primaryTie: 0, grazing: 0, tPosition: 0 });
           target.rays += entry.rays;
           target.ties += entry.ties;
+          target.primaryTie += entry.primaryTie;
           target.grazing += entry.grazing;
           target.tPosition += entry.tPosition;
         }
-      } else if (key === 'examples') into.examples.push(...from.examples.slice(0, Math.max(0, 40 - into.examples.length)));
+      } else if (key === 'primaryDetails') into.primaryDetails.push(...from.primaryDetails)
+      else if (key === 'examples') into.examples.push(...from.examples.slice(0, Math.max(0, 40 - into.examples.length)));
       else if (key === 'maxTRelative' || key === 'maxSurfacePositionError') into[key] = Math.max(into[key], from[key]);
       else into[key] += from[key];
     }
@@ -737,8 +785,8 @@ try {
     const stage = (what: string) => console.log(`[trace-core] ${name}: ${what} at ${((performance.now() - t0) / 1000).toFixed(1)} s`);
     const scene = await loadTraceScene(name);
     stage('loaded');
-    const table = buildSurfaceTable(scene.meshes, scene.instances as SurfaceInstanceInput[], { positions: true });
-    const surface = uploadSurfaceTable(device, table, `${name} surface`);
+    const copy = buildSceneCopy({ meshes: scene.meshes, instances: scene.instances as SurfaceInstanceInput[], materials: [], options: { surface: { positions: true } } });
+    const surface = uploadSceneCopy(device, copy, { label: `${name} scene`, packing: PACKING });
     const allHits = makeAllHits(scene, tiny);
     const edges = makeEdgeIndex(scene);
     let sets: RaySet[] | null = null;
@@ -766,7 +814,9 @@ try {
     if (withSceneTrees) {
       // Production path: SceneTrees' own trees (GPU first, tinybvh refinements), default formats.
       // GPU first trees are traced first (held refinements), then tinybvh's refined trees after the swap.
-      const trees = await SceneTrees.create(device, { label: `${name} SceneTrees`, holdRefinements: true, workers: { worker: 'never' }, warn: () => {} });
+      // Default worker mode ('auto'), but through our own pool so a silent fallback to inline builds shows its reason.
+      const pool = createBvhWorkerPool();
+      const trees = await SceneTrees.create(device, { label: `${name} SceneTrees`, holdRefinements: true, workers: pool, warn: () => {} });
       const handles = scene.meshes.map((mesh) => trees.addMesh(mesh));
       for (const instance of scene.instances) {
         trees.addInstance({ mesh: handles[instance.meshIndex] as number, objectToWorld: instance.objectToWorld, instanceIndex: instance.instanceIndex, mask: instance.mask, material: instance.material, static: instance.static });
@@ -790,7 +840,12 @@ try {
       };
       let refined = false;
       void trees.whenRefined().then(() => (refined = true));
-      await pump(() => trees.timeline.firstTreesMs !== null && !trees.building, 'its first trees');
+      // bvh: one update() before whenBuilt() starts the builds; one more places what they made.
+      frame();
+      await trees.whenBuilt();
+      frame();
+      await device.queue.onSubmittedWorkDone();
+      workerNotes[`${name} SceneTrees`] = { usesWorkers: trees.usesWorkers, poolUsesWorkers: pool.usesWorkers, inlineReason: pool.inlineReason };
       stage('SceneTrees first trees');
       const stages: { label: string; counts: unknown }[] = [];
       const runStage = async (label: string) => {
@@ -818,13 +873,14 @@ try {
       await pump(() => trees.counts.onGpuTrees === 0, 'every refinement placed');
       await runStage('SceneTrees-refined');
       trees.dispose();
+      pool.dispose();
     }
     surface.destroy();
     perScene[name] = sceneReport;
     await drainDevice(device);
   }
 
-  for (const key of ['rays', 'hits', 'blocked', 'closestMismatch', 'visibleMismatch', 'ties', 'grazing', 'tPosition', 'slipsOnBoxEdge', 'slipsElsewhere', 'escapes', 'variantMismatch', 'inlineMismatch', 'surfaceMismatch', 'coneMismatch'] as const) metrics[`${key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`] = total[key];
+  for (const key of ['rays', 'hits', 'blocked', 'closestMismatch', 'visibleMismatch', 'ties', 'primaryTie', 'grazing', 'tPosition', 'slipsOnBoxEdge', 'slipsElsewhere', 'escapes', 'variantMismatch', 'inlineMismatch', 'surfaceMismatch', 'coneMismatch'] as const) metrics[`${key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}`] = total[key];
   metrics.max_t_relative = total.maxTRelative;
   metrics.max_surface_position_error_rel = total.maxSurfacePositionError;
   const kernelBytes = Math.max(...[...kernelsByFormat.values()].flatMap((k) => [k.inline.bytes]), argsKernelBytes);
@@ -840,9 +896,9 @@ try {
     {
       scene: sceneNames.join('+'),
       renderer: 'rt-trace-core',
-      config: { perSet, formats: FORMATS.map((f) => f.name), sceneTrees: withSceneTrees, caps: { tier: caps.tier, subgroups: caps.subgroups } },
+      config: { packing: PACKING, perSet, formats: FORMATS.map((f) => f.name), sceneTrees: withSceneTrees, caps: { tier: caps.tier, subgroups: caps.subgroups } },
       metrics,
-      notes: { perScene, bySet: total.bySet, examples: total.examples },
+      notes: { primaryDetails: total.primaryDetails, workers: { oracleBuilderUsesWorker: builder.usesWorker, ...workerNotes }, perScene, bySet: total.bySet, examples: total.examples },
     },
     { adapter: adapterSummary, deviceErrors },
   );

@@ -1,0 +1,43 @@
+{
+  "scene": "AttenuationTest",
+  "renderer": "pbrt-v4-cpu",
+  "version": "pbrt-v4 b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f (+bench no-RR patch)",
+  "spp": 4096,
+  "seconds": 363.59,
+  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/AttenuationTest/pbrt-v4-cpu-4096spp.pfm .cache/native/work-89W8Zm/scene.pbrt",
+  "settings": {
+    "maxDepth": 16,
+    "rrStartDepth": null,
+    "film": {
+      "width": 600,
+      "height": 720,
+      "filter": "box"
+    },
+    "integrator": "volpath",
+    "rr": false,
+    "sampler": "zsobol",
+    "filter": "box 0.5",
+    "sensor": "cie1931 iso100 (passthrough)",
+    "spectral": true
+  },
+  "approximations": [
+    "pbrt: absorption-only interior media use `volpath` (patched no-RR, bench/references/pbrt-no-rr.patch) and RGB `sigma_a` that pbrt uplifts to unbounded spectra (a coloured sigma is slightly off per channel: measured by bench/references/openpbr-check.ts).",
+    "pbrt: equirect env resampled to a 512x512 equal-area octahedral image (pbrt-v4 only accepts that layout); scale and rotationYDeg baked in; pbrt looks up nearest-pixel while Mitsuba interpolates bilinearly.",
+    "pbrt: material 'm5_LabelMaterial': base colour texture 't0' (512x512, sRGB, wrap repeat): imagemap bilinear, which still selects a mip level from the scaled camera ray differentials",
+    "pbrt: material 'm5_LabelMaterial': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "pbrt: material 'm12_FlatBackdrop': base colour texture 't2' (256x256, sRGB, wrap repeat): imagemap bilinear, which still selects a mip level from the scaled camera ray differentials",
+    "pbrt: material 'm12_FlatBackdrop': dielectric over diffuse is pbrt's stochastic LayeredBxDF (maxdepth 64, nsamples 1); OpenPBR approximates the layering with albedo scaling",
+    "pbrt: material 'm13_R1_Sample_1.0': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "pbrt: material 'm14_R1_Sample_1.5': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "pbrt: material 'm15_R1_Sample_2.0': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "pbrt: material 'm16_R1_Sample_0.50': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only",
+    "pbrt: material 'm17_R1_Sample_0.25': transmission_color tint at depth 0 is not expressible (neither renderer tints a dielectric): exported untinted, compare white-base only"
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-14T12:19:29.148Z"
+}

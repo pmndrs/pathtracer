@@ -1,6 +1,7 @@
 /**
  * Minimal glTF 2.0 / GLB triangle reader for the bench (Node only). Reads POSITION + indices + node transforms and
- * nothing else: no materials, textures, alpha modes, skins, morph targets or sparse accessors. Triangles only
+ * nothing else: no materials, textures, alpha modes, skins or morph targets (the scene loader, `gltf-scene.ts`, reads those; accessor
+ * strides, normalized and sparse accessors come from `gltf-read.ts`). Triangles only
  * (primitive mode 4); other modes throw rather than silently dropping geometry.
  *
  * Output is what every renderer receives for a `file` mesh: world-space (node transforms baked), **un-welded**
@@ -13,16 +14,11 @@ import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { compose, cross3, determinant3, multiply, transformPoint } from './geometry.ts';
 import type { TriangleMesh } from './geometry.ts';
+import { localMatrix, readAccessor, rootNodes } from './gltf-read.ts';
+import type { GltfJson } from './gltf-read.ts';
 import type { Mat4, Vec3 } from './schema.ts';
 
-interface Accessor { bufferView?: number; byteOffset?: number; componentType: number; count: number; type: string; sparse?: unknown; normalized?: boolean }
-interface BufferView { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }
-interface Primitive { attributes: Record<string, number>; indices?: number; mode?: number }
-interface GltfNode { mesh?: number; children?: number[]; matrix?: number[]; translation?: number[]; rotation?: number[]; scale?: number[] }
-interface GltfJson {
-  accessors?: Accessor[]; bufferViews?: BufferView[]; buffers?: { uri?: string; byteLength: number }[];
-  meshes?: { primitives: Primitive[] }[]; nodes?: GltfNode[]; scenes?: { nodes?: number[] }[]; scene?: number;
-}
+export type { GltfJson } from './gltf-read.ts';
 
 export interface GltfLoadStats {
   /** Triangles in the file (before dropping degenerates). */
@@ -35,16 +31,6 @@ export interface GltfLoadStats {
 }
 
 export interface GltfLoadResult { mesh: TriangleMesh; stats: GltfLoadStats }
-
-const COMPONENT: Record<number, { bytes: number; read: (dv: DataView, o: number) => number }> = {
-  5120: { bytes: 1, read: (dv, o) => dv.getInt8(o) },
-  5121: { bytes: 1, read: (dv, o) => dv.getUint8(o) },
-  5122: { bytes: 2, read: (dv, o) => dv.getInt16(o, true) },
-  5123: { bytes: 2, read: (dv, o) => dv.getUint16(o, true) },
-  5125: { bytes: 4, read: (dv, o) => dv.getUint32(o, true) },
-  5126: { bytes: 4, read: (dv, o) => dv.getFloat32(o, true) },
-};
-const NCOMP: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
 
 /** Split a GLB container into its JSON and (optional) BIN chunks. */
 export function parseGlbContainer(buf: Buffer): { json: GltfJson; bin?: Buffer } {
@@ -64,47 +50,13 @@ export function parseGlbContainer(buf: Buffer): { json: GltfJson; bin?: Buffer }
   return { json, bin };
 }
 
-function localMatrix(n: GltfNode): Mat4 {
-  if (n.matrix) return n.matrix;
-  const t = n.translation ?? [0, 0, 0], q = n.rotation ?? [0, 0, 0, 1], s = n.scale ?? [1, 1, 1];
-  const [x, y, z, w] = q as [number, number, number, number];
-  const r = [
-    1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
-    2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
-    2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
-    0, 0, 0, 1,
-  ];
-  const trs = r.slice();
-  for (let c = 0; c < 3; c++) for (let k = 0; k < 3; k++) trs[c * 4 + k]! *= s[c]!;
-  trs[12] = t[0]!; trs[13] = t[1]!; trs[14] = t[2]!;
-  return trs;
-}
-
 /** Parse already-split glTF content. `buffers[i]` is the bytes of `json.buffers[i]`. */
-export function triangulateGltf(json: GltfJson, buffers: Buffer[]): GltfLoadResult {
-  const accessors = json.accessors ?? [], views = json.bufferViews ?? [], meshes = json.meshes ?? [], nodes = json.nodes ?? [];
+export function triangulateGltf(json: GltfJson, buffers: readonly Uint8Array[]): GltfLoadResult {
+  const meshes = json.meshes ?? [], nodes = json.nodes ?? [];
 
-  function readAccessor(index: number): number[] {
-    const a = accessors[index];
-    if (!a) throw new Error(`accessor ${index} missing`);
-    if (a.sparse) throw new Error('sparse accessors are not supported');
-    const comp = COMPONENT[a.componentType];
-    if (!comp) throw new Error(`unsupported componentType ${a.componentType}`);
-    const n = NCOMP[a.type];
-    if (!n) throw new Error(`unsupported accessor type ${a.type}`);
-    const out = new Array<number>(a.count * n).fill(0);
-    if (a.bufferView === undefined) return out; // spec: all zeros
-    const v = views[a.bufferView]!;
-    const buf = buffers[v.buffer];
-    if (!buf) throw new Error(`buffer ${v.buffer} missing`);
-    const stride = v.byteStride ?? n * comp.bytes;
-    const base = (v.byteOffset ?? 0) + (a.byteOffset ?? 0);
-    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-    for (let i = 0; i < a.count; i++) for (let k = 0; k < n; k++) out[i * n + k] = comp.read(dv, base + i * stride + k * comp.bytes);
-    return out;
-  }
+  const readAcc = (index: number): Float64Array => readAccessor(json, buffers, index);
 
-  const roots = json.scenes?.[json.scene ?? 0]?.nodes ?? (nodes.length ? nodes.map((_, i) => i).filter((i) => !nodes.some((n) => n.children?.includes(i))) : []);
+  const roots = rootNodes(json);
   const pos: number[] = [], nor: number[] = [];
   let fileTriangles = 0, degenerate = 0, primitives = 0;
   const min: [number, number, number] = [Infinity, Infinity, Infinity], max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
@@ -120,8 +72,8 @@ export function triangulateGltf(json: GltfJson, buffers: Buffer[]): GltfLoadResu
         const mode = prim.mode ?? 4;
         if (mode !== 4) throw new Error(`primitive mode ${mode} is not triangles (only mode 4 is supported)`);
         primitives++;
-        const p = readAccessor(prim.attributes['POSITION']!);
-        const idx = prim.indices !== undefined ? readAccessor(prim.indices) : Array.from({ length: p.length / 3 }, (_, i) => i);
+        const p = readAcc(prim.attributes['POSITION']!);
+        const idx = prim.indices !== undefined ? readAcc(prim.indices) : Array.from({ length: p.length / 3 }, (_, i) => i);
         for (let t = 0; t + 2 < idx.length; t += 3) {
           fileTriangles++;
           const order = mirror ? [0, 2, 1] : [0, 1, 2];
@@ -154,8 +106,8 @@ export function triangulateGltf(json: GltfJson, buffers: Buffer[]): GltfLoadResu
   };
 }
 
-/** Load a .glb or .gltf (with external .bin or data: URIs). `sha256` (hex of the main file) is verified when given. */
-export function loadGltfTriangles(path: string, opts: { sha256?: string } = {}): GltfLoadResult {
+/** Read a .glb or .gltf (with external .bin or data: URIs): its JSON and buffers. `sha256` (hex of the main file) is verified when given. */
+export function readGltfFile(path: string, opts: { sha256?: string } = {}): { json: GltfJson; buffers: Buffer[]; glbBin?: Buffer } {
   const file = readFileSync(path);
   if (opts.sha256) {
     const got = createHash('sha256').update(file).digest('hex');
@@ -173,5 +125,11 @@ export function loadGltfTriangles(path: string, opts: { sha256?: string } = {}):
     if (b.uri.startsWith('data:')) return Buffer.from(b.uri.slice(b.uri.indexOf(',') + 1), 'base64');
     return readFileSync(resolve(dirname(path), decodeURIComponent(b.uri)));
   });
+  return { json, buffers, ...(glbBin ? { glbBin } : {}) };
+}
+
+/** Load a .glb or .gltf (with external .bin or data: URIs). `sha256` (hex of the main file) is verified when given. */
+export function loadGltfTriangles(path: string, opts: { sha256?: string } = {}): GltfLoadResult {
+  const { json, buffers } = readGltfFile(path, opts);
   return triangulateGltf(json, buffers);
 }

@@ -50,6 +50,9 @@ importers:
       '@pmndrs/raytracer':
         specifier: workspace:*
         version: link:../packages/raytracer
+      jpeg-js:
+        specifier: 0.4.4
+        version: 0.4.4
     devDependencies:
       '@meimu/mutracer':
         specifier: 0.3.1
@@ -57,6 +60,9 @@ importers:
       '@types/three':
         specifier: 0.187.0
         version: 0.187.0
+      denoiser:
+        specifier: link:../../Denoiser/packages/denoiser
+        version: link:../../Denoiser/packages/denoiser
       three:
         specifier: 0.187.0
         version: 0.187.0
@@ -802,6 +808,9 @@ packages:
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
+
+  jpeg-js@0.4.4:
+    resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
 
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
@@ -1758,6 +1767,8 @@ snapshots:
       is-extglob: 2.1.1
 
   isexe@2.0.0: {}
+
+  jpeg-js@0.4.4: {}
 
   js-tokens@9.0.1: {}
 

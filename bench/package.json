@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@pmndrs/bvh": "link:../../bvh",
     "@pmndrs/pathtracer": "workspace:*",
     "@pmndrs/raytracer": "workspace:*",
-    "@pmndrs/bvh": "link:../../bvh",
-    "@pathtracer/mlp": "workspace:*"
+    "@pathtracer/mlp": "workspace:*",
+    "jpeg-js": "0.4.4"
   },
   "scripts": {
     "bench": "node runner/run.ts",
@@ -18,12 +19,12 @@
     "assets:generate": "node scenes/tier0/generate-assets.ts",
     "assets:fetch": "node assets/fetch.ts",
     "adapters:export": "node adapters/export-scenes.ts",
-    "competitors": "node adapters/matrix.ts",
-    "mlp:live": "vite .. --port 5293 --open /bench/pages/mlp-live.html"
+    "competitors": "node adapters/matrix.ts"
   },
   "devDependencies": {
     "@meimu/mutracer": "0.3.1",
     "@types/three": "0.187.0",
+    "denoiser": "link:../../Denoiser/packages/denoiser",
     "three": "0.187.0",
     "three-gpu-pathtracer": "0.0.28",
     "three-mesh-bvh": "0.9.18"

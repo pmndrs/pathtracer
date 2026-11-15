@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toGltf, toMitsuba, toPbrt } from './index.ts';
-import { equalAreaSquareToSphere, equirectToOctahedral, sampleEquirect } from './envmap.ts';
+import { equalAreaSquareToSphere, equirectForMitsuba, equirectToOctahedral, sampleEquirect } from './envmap.ts';
 import { shorterAxisFovDeg, xFovDeg } from './common.ts';
-import { generateSkyImage, ENV_WIDTH, ENV_HEIGHT, SUN_DIR, skyRadiance } from '../scenes/tier0/env-sky.ts';
+import { equirectDirection as equirectDirectionOf, generateSkyImage, ENV_WIDTH, ENV_HEIGHT, SUN_DIR, skyRadiance } from '../scenes/tier0/env-sky.ts';
 import { tier0Scenes, getTier0Scene } from '../scenes/tier0/index.ts';
 import { loadGltfTriangles } from '../scenes/gltf-loader.ts';
 
@@ -121,6 +121,27 @@ describe('octahedral env resampling', () => {
     const rotated = sampleEquirect(img, [SUN_DIR[0] * Math.cos(0.5) + SUN_DIR[2] * Math.sin(0.5), SUN_DIR[1], -SUN_DIR[0] * Math.sin(0.5) + SUN_DIR[2] * Math.cos(0.5)], (0.5 * 180) / Math.PI, 1);
     const plain = sampleEquirect(img, SUN_DIR, 0, 1);
     expect(rotated[0]).toBeCloseTo(plain[0], 3);
+  });
+});
+
+describe('Mitsuba envmap row convention', () => {
+  it("rows resampled to v = j / (H - 1) make Mitsuba's lookup (row coordinate v * (H - 1)) equal our bilinear (v * H - 0.5)", () => {
+    const img = { width: ENV_WIDTH, height: ENV_HEIGHT, channels: 3 as const, data: generateSkyImage() };
+    const warped = equirectForMitsuba(img);
+    const mitsubaRow = (v: number, i: number) => {
+      const fy = v * (ENV_HEIGHT - 1);
+      const y0 = Math.min(ENV_HEIGHT - 2, Math.floor(fy));
+      const t = fy - y0;
+      return (1 - t) * warped.data[(y0 * ENV_WIDTH + i) * 3 + 1]! + t * warped.data[((y0 + 1) * ENV_WIDTH + i) * 3 + 1]!;
+    };
+    // a smooth sky column at texel-centre u: far from the sun the re-interpolation error is tiny
+    const i = 400;
+    for (const v of [0.02, 0.3, 0.5, 0.7, 0.98]) {
+      const ours = sampleEquirect(img, equirectDirectionOf((i + 0.5) / ENV_WIDTH, v), 0, 1)[1];
+      expect(mitsubaRow(v, i)).toBeCloseTo(ours, 3);
+    }
+    // texel (i, 0) is the zenith row and stays unchanged
+    expect(warped.data[400 * 3]).toBeCloseTo(img.data[400 * 3]!, 6);
   });
 });
 

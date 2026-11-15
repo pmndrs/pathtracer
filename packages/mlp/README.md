@@ -2,7 +2,7 @@
 
 A small fully-fused MLP with online training in WGSL, plus an f64 CPU oracle. Built to answer whether a neural
 radiance cache (NRC) is practical on WebGPU. Spec, plan and status: [docs/design/nrc.md](../../docs/design/nrc.md).
-Design follows VkNRC (D23); the code is ours.
+Design follows VkNRC (D28); the code is ours.
 
 - `config.ts`: network shape (default 64 → 5 × 64 → 3, ReLU, no bias) and Adam/EMA/loss settings.
 - `encoding.ts`: triangle-wave frequency and quartic one-blob encodings, CPU and WGSL; NRC and "learn an image" layouts.
