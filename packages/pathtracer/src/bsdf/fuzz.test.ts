@@ -92,7 +92,7 @@ describe('layering (albedo scaling)', () => {
         }
       }
     }
-  });
+  }, 30_000); // ~7 s alone; the default 5 s timed out under load
   it('albedo of the fuzz alone is w F E_fuzz', () => {
     const f = fz(0.8, 0.5, [0.9, 0.5, 0.1]);
     const wo = dirFromAngles(40, 10);

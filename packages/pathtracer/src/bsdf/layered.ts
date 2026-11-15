@@ -90,6 +90,11 @@ export interface PtLayeredParams {
   film?: PtThinFilm;
 }
 
+/** D24: albedo layering defaults to the `'internal'` base; an explicit `albedoBase` wins; the stochastic walk has no albedo base (default `'openpbr'`, so its kernel text is unchanged). */
+export function ptAlbedoBaseInternal(o: { layering?: 'albedo' | 'stochastic'; albedoBase?: 'openpbr' | 'internal' } | undefined): boolean {
+  return (o?.albedoBase ?? ((o?.layering ?? 'albedo') === 'albedo' ? 'internal' : 'openpbr')) === 'internal';
+}
+
 export interface PtLayeredOptions extends PtBsdfOptions {
   /** Default `'albedo'` (the fast default; `'stochastic'` is the reference mode). */
   layering?: 'albedo' | 'stochastic';
@@ -98,7 +103,7 @@ export interface PtLayeredOptions extends PtBsdfOptions {
   /** Stochastic: independent walks per evaluation (pbrt `nsamples`, default 1). */
   nSamples?: number;
   /**
-   * Albedo layering only. `'openpbr'` (default): base scaled by `1 - E(mu_o)` and nothing else (the specification's
+   * Albedo layering only. Default (D24): `'internal'` with `layering: 'albedo'`; `'openpbr'` is the setting (see `ptAlbedoBaseInternal`). `'openpbr'`: base scaled by `1 - E(mu_o)` and nothing else (the specification's
    * albedo scaling). `'internal'`: the closed-form of a diffuse base under a dielectric (Weidlich and Wilkie 2007; the
    * form Mitsuba's `roughplastic` uses with `nonlinear: true`, written from the formula, not its code): base *
    * (1 - E(mu_o)) (1 - E(mu_i)) / (eta^2 (1 - rho R_i)), which adds the light the interface sends back down (the
@@ -633,7 +638,7 @@ function condEval(p: PtLayeredParams, wo: PtVec3, wi: PtVec3, o: PtLayeredOption
     const wy = wo[1] + wi[1];
     const wz = wo[2] + wi[2];
     fm = mul3(fm, condFresnelRatio(p, Math.abs((wo[0] * wx + wo[1] * wy + wo[2] * wz) / Math.hypot(wx, wy, wz))));
-    if (o.albedoBase === 'internal') fm = mul3(fm, albedoKeep(p, wi[2]));
+    if (ptAlbedoBaseInternal(o)) fm = mul3(fm, albedoKeep(p, wi[2]));
   }
   return { f: [fm[0] + spec.f[0], fm[1] + spec.f[1], fm[2] + spec.f[2]], pdf: mix.pS * spec.pdf + (1 - mix.pS) * m.pdf };
 }
@@ -656,7 +661,7 @@ function condSample(p: PtLayeredParams, wo: PtVec3, u: PtVec3, o: PtLayeredOptio
   if (d.flags === 0) return FAIL;
   if (d.flags & PT_FLAG_DELTA) {
     const f = mul3(mul3(d.f, mix.keep), condFresnelRatio(p, wo[2]));
-    return { wi: d.wi, f: o.albedoBase === 'internal' ? mul3(f, albedoKeep(p, d.wi[2])) : f, pdf: 1 - mix.pS, flags: d.flags, etap: 1 };
+    return { wi: d.wi, f: ptAlbedoBaseInternal(o) ? mul3(f, albedoKeep(p, d.wi[2])) : f, pdf: 1 - mix.pS, flags: d.flags, etap: 1 };
   }
   const e = condEval(p, wo, d.wi, o);
   return e.pdf === 0 || isBlack(e.f) ? FAIL : { wi: d.wi, f: e.f, pdf: e.pdf, flags: PT_FLAG_REFLECTION, etap: 1 };
@@ -673,7 +678,7 @@ function albedoEval(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayeredOp
     wi = neg(wi);
   }
   if (wo[2] === 0 || wi[2] <= 0) return { f: ZERO3, pdf: 0 };
-  const internal = o.albedoBase === 'internal';
+  const internal = ptAlbedoBaseInternal(o);
   const mix = albedoMix(p, wo[2], internal);
   let fd = mul3(scale3(p.baseColor, 1 / PI), mix.keep);
   if (internal) fd = mul3(mul3(fd, albedoKeep(p, wi[2])), internalGain(p));
@@ -694,7 +699,7 @@ function albedoSample(p: PtLayeredParams, wo0: PtVec3, u: PtVec3, o: PtLayeredOp
     const s = condSample(p, wo, u, o);
     return flip && s.flags !== 0 ? { ...s, wi: neg(s.wi) } : s;
   }
-  const mix = albedoMix(p, wo[2], o.albedoBase === 'internal');
+  const mix = albedoMix(p, wo[2], ptAlbedoBaseInternal(o));
   const top = topOf(p);
   const fix = (s: PtBsdfSample): PtBsdfSample => (flip && s.flags !== 0 ? { ...s, wi: neg(s.wi) } : s);
   // One uniform picks the lobe, then is rescaled to a fresh uniform for the direction's first coordinate.

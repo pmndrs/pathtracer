@@ -14,7 +14,7 @@
  */
 
 import { PT_LAYERED_LUT_N, ptLayeredLut } from './layered-lut.ts';
-import type { PtLayeredOptions } from './layered.ts';
+import { ptAlbedoBaseInternal, type PtLayeredOptions } from './layered.ts';
 
 function f32List(a: Float32Array): string {
   return Array.from(a)
@@ -57,7 +57,7 @@ function ptLayeredWgslBase(options: PtLayeredOptions): string {
   const maxDepth = Math.max(1, Math.floor(options.maxDepth ?? 10));
   const nSamples = Math.max(1, Math.floor(options.nSamples ?? 1));
   const pbrtMis = (options.exitMis ?? 'pbrt') === 'pbrt';
-  const internal = options.albedoBase === 'internal';
+  const internal = ptAlbedoBaseInternal(options);
   const n = PT_LAYERED_LUT_N;
   const cond = options.conductorBase === true;
   return /* wgsl */ `

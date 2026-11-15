@@ -10,7 +10,7 @@ import { ptDielectric } from './materials.ts';
 import { ptFrComplex, ptFrDielectric as ptFrDielectricRef } from './bsdf.ts';
 
 const WHITE: PtVec3 = [1, 1, 1];
-const ALBEDO: PtLayeredOptions = { layering: 'albedo' };
+const ALBEDO: PtLayeredOptions = { layering: 'albedo', albedoBase: 'openpbr' };
 const STOCH: PtLayeredOptions = { layering: 'stochastic', maxDepth: 200, exitMis: 'none' };
 const THETAS = [0, 30, 60, 80];
 

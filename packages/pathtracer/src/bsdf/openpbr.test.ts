@@ -157,7 +157,13 @@ describe('OpenPBR adapter (P2.21 / P2.22 / P2.30)', () => {
   it('albedoBase internal fills the internal reflectance from the closed-form fit; openpbr leaves it 0', () => {
     const m = createMaterial({ ior: 1.5 });
     expect(ptBsdfFromMaterial(m, opts({ layered: true }, { layered: { layering: 'albedo', albedoBase: 'internal' } })).k[1]).toBeCloseTo(ptInternalReflectanceFit(1.5), 12);
-    expect(ptBsdfFromMaterial(m, opts({ layered: true })).k[1]).toBe(0);
+    expect(ptBsdfFromMaterial(m, opts({ layered: true }, { layered: { layering: 'albedo', albedoBase: 'openpbr' } })).k[1]).toBe(0);
+  });
+
+  it('D24: the default (no layered options, or layering albedo) is the internal base; the stochastic walk keeps openpbr', () => {
+    const m = createMaterial({ ior: 1.5 });
+    expect(ptBsdfFromMaterial(m, opts({ layered: true })).k[1]).toBeCloseTo(ptInternalReflectanceFit(1.5), 12);
+    expect(ptBsdfFromMaterial(m, opts({ layered: true }, { layered: { layering: 'stochastic' } })).k[1]).toBe(0);
   });
 
   it('the internal-reflectance fit is within 0.012 of the numeric average for ior 1.05 to 2.6', () => {

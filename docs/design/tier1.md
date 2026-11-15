@@ -216,6 +216,8 @@ A/B that settles it:
 
 Until decided, the suggestion holds (class A gates).
 
+**Outcome (P2.32, 2026-11-15):** D23 settled it as suggested. All seven class A scenes pass section 6 at 4096 spp (Attenuation-notex against Mitsuba only, Anisotropy against pbrt); class B is bracketed (stochastic layering 0.04-0.92 of the pbrt-vs-Mitsuba floor), B' and C are coverage. The floor for a reference X is relMSE(other, X), which is not symmetric (Attenuation: 2.4e-2 with pbrt as reference, 5.0e-3 with Mitsuba).
+
 ## 8. Risks and traps
 
 - OpenPBR has no glTF mapping section; do not cite one. Our mapping is flagged in DIVERGES.

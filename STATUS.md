@@ -35,7 +35,7 @@ _Last updated 2026-11-14._
   (`rtShade`) is built and checked. Still to do in P1: moving reflections onto the core.
 - **Our path tracer (P2).** `@pmndrs/pathtracer` renders the test scenes and converges to the references: the furnace
   tests hit their exact values, the single-light scene matches its closed form, and Cornell sits within the references'
-  own disagreement. Sponza agrees too (means within 0.13% of both references, error at the reference noise floor).
+  own disagreement. Sponza agrees too (means within 0.13% of both references, error at the reference noise floor). The Tier 1 class A gate (D23) passes on all seven scenes (P2.32).
   Materials so far: diffuse, metal and glass (smooth and rough), ported from pbrt-v4. Not yet: the HDR sky scene. Speed is not measured properly yet (best effort on the M5: Cornell 512² about 14 ms
   per sample, Sponza 1280×720 about 51 ms).
 - **Quiet pass.** Timing that decides defaults or passes a gate is batched into one run the maintainer starts from a CLI

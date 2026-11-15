@@ -35,7 +35,7 @@
  */
 import type { RtMaterial } from '@pmndrs/raytracer';
 import { PT_BSDF_BLACK, PT_BSDF_CONDUCTOR, PT_BSDF_DIELECTRIC, PT_BSDF_DIFFUSE, PT_BSDF_LAYERED, PT_BSDF_THIN, type PtBsdfParams, type PtVec3 } from './bsdf.ts';
-import type { PtLayeredOptions, PtLayeredParams } from './layered.ts';
+import { ptAlbedoBaseInternal, type PtLayeredOptions, type PtLayeredParams } from './layered.ts';
 import type { PtThinFilm } from './thinfilm.ts';
 
 /** k that gives a conductor with eta = 1 the normal-incidence reflectance `r` (clamped just below 1). */
@@ -278,7 +278,7 @@ export function ptBsdfFromOpenPbr(m: RtMaterial, options: PtMaterialOptions, u: 
       p.ior = ior;
       p.alpha = [r * r, r * r];
       p.eta = s;
-      p.k = [options.layerThickness ?? PT_DEFAULT_LAYER_THICKNESS, options.layered?.albedoBase === 'internal' ? ptInternalReflectanceFit(ior) : 0, 0];
+      p.k = [options.layerThickness ?? PT_DEFAULT_LAYER_THICKNESS, ptAlbedoBaseInternal(options.layered) ? ptInternalReflectanceFit(ior) : 0, 0];
       return p;
     }
   }
@@ -294,7 +294,7 @@ export function ptBsdfOpenPbrWgsl(options: PtMaterialOptions): string {
   const f = options.features;
   const tint = options.transmissionTint ?? true;
   const thickness = options.layerThickness ?? PT_DEFAULT_LAYER_THICKNESS;
-  const internal = options.layered?.albedoBase === 'internal';
+  const internal = ptAlbedoBaseInternal(options.layered);
   const num = (v: number): string => (Number.isInteger(v) ? `${v}.0` : String(v));
   return /* wgsl */ `
 fn ptConductorKFromReflectance(r: vec3f) -> vec3f {
