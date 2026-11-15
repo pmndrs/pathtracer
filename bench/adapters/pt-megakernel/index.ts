@@ -63,6 +63,10 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   seed?: number;
   /** Scheduler (P3.1): `megakernel` (default) or `wavefront` (queues + indirect dispatch; same estimator, no alpha MASK yet). The `pt-wavefront` renderer id sets it. */
   scheduler?: 'megakernel' | 'wavefront';
+  /** Wavefront scheduling (P3.2): `refill` starts a slot's next sample inline when its path ends (A/B; `finish()` drains the tail inside the timed region), `layers` = slots per pixel (needs refill). */
+  refill?: boolean | 'inline' | 'batch';
+  refillThreshold?: number;
+  layers?: number;
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
   /**
@@ -153,17 +157,18 @@ export class PtMegakernelAdapter implements RendererAdapter {
   private lastStats: Record<string, number> = {};
   private limits: { maxDepth: number; rrStartDepth?: number } = { maxDepth: 1 };
 
-  constructor(settings: PtAdapterSettings = {}) {
+  constructor(settings: PtAdapterSettings = {}, id?: string) {
     // OIDN needs albedo + normal.
     this.settings = settings.denoise ? { ...settings, aovs: true } : settings;
     this.info = {
-      id: settings.scheduler === 'wavefront' ? PT_WAVEFRONT_ADAPTER_ID : PT_ADAPTER_ID,
+      id: id ?? (settings.scheduler === 'wavefront' ? PT_WAVEFRONT_ADAPTER_ID : PT_ADAPTER_ID),
       name: settings.scheduler === 'wavefront' ? '@pmndrs/pathtracer wavefront' : '@pmndrs/pathtracer megakernel',
       version: '0.0.0',
       commit: 'workspace',
       backend: 'webgpu',
       config: {
         scheduler: settings.scheduler ?? 'megakernel',
+        ...(settings.scheduler === 'wavefront' ? { refill: settings.refill === true ? 'inline' : settings.refill || 'off', refillThreshold: settings.refillThreshold ?? 0.25, layers: settings.layers ?? 1 } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         nee: settings.nee ?? true,
         envSampling: settings.envSampling ?? 'auto',
@@ -273,11 +278,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
-    const { denoise: _denoise, denoiseTzaUrl: _tza, ...integratorSettings } = this.settings;
+    const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, ...integratorSettings } = this.settings;
     void _denoise;
     void _tza;
+    void _refill;
+    void _thr;
+    void _layers;
     const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
-    this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, kernelOptions) : await PtMegakernel.create(device, caps, kernelOptions);
+    this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
@@ -318,6 +326,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         done += n;
         await device.queue.onSubmittedWorkDone();
       }
+      if (kernel instanceof PtWavefront) await kernel.finish(); // refill: drain the paths still in flight (no-op for the plain scheduler); part of the timed region
       const wallMs = performance.now() - start - readbackMs;
       if (target < spp) {
         const r0 = performance.now();
@@ -328,7 +337,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const wallMs = performance.now() - start - readbackMs;
     const image = toImage(await kernel.readImage());
     await this.readOutputs(kernel, image);
-    return { image, spp, timings: { wallMs }, snapshots, stats: { ...this.lastStats, ...(kernel.instrumented ? { instrumented: 1 } : {}), ...this.outputStats } };
+    const wfStats: Record<string, number> = kernel instanceof PtWavefront && this.settings.refill ? { wf_refill: this.settings.refill === 'batch' ? 2 : 1, wf_layers: this.settings.layers ?? 1, wf_finish_chunks: kernel.lastFinish.chunks, wf_finish_iterations: kernel.lastFinish.iterations, wf_finish_ms: kernel.lastFinish.ms, wf_min_samples: kernel.sampleCount.min, wf_max_samples: kernel.sampleCount.max } : {};
+    return { image, spp, timings: { wallMs }, snapshots, stats: { ...this.lastStats, ...(kernel.instrumented ? { instrumented: 1 } : {}), ...this.outputStats, ...wfStats } };
   }
 
   private outputStats: Record<string, number> = {};
@@ -388,4 +398,4 @@ export class PtMegakernelAdapter implements RendererAdapter {
   }
 }
 
-export const createPtMegakernel = (settings?: PtAdapterSettings): PtMegakernelAdapter => new PtMegakernelAdapter(settings);
+export const createPtMegakernel = (settings?: PtAdapterSettings, id?: string): PtMegakernelAdapter => new PtMegakernelAdapter(settings, id);

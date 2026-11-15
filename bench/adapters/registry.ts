@@ -8,7 +8,15 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2'] as const;
+/** Wavefront scheduling presets (P3.2): the same adapter with `refill` / `layers` set, so `matrix.ts --interleave` can A/B them in one run. `--extra pt_refill=...` still overrides. */
+const WAVEFRONT_PRESETS = {
+  'pt-wf-refill': { refill: 'inline' },
+  'pt-wf-batch': { refill: 'batch' },
+  'pt-wf-refill-l2': { refill: 'inline', layers: 2 },
+  'pt-wf-refill-l4': { refill: 'inline', layers: 4 },
+  'pt-wf-batch-l2': { refill: 'batch', layers: 2 },
+} as const;
 
 export interface AdapterOptions {
   /** three-gpu-pathtracer frame budget (path steps per renderSample call). */
@@ -35,6 +43,12 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel(options.pt);
     case 'pt-wavefront':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...options.pt, scheduler: 'wavefront' });
+    case 'pt-wf-refill':
+    case 'pt-wf-batch':
+    case 'pt-wf-refill-l2':
+    case 'pt-wf-refill-l4':
+    case 'pt-wf-batch-l2':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...WAVEFRONT_PRESETS[id], ...options.pt, scheduler: 'wavefront' }, id);
     default:
       throw new Error(`unknown renderer "${id}" (have: ${[...ADAPTER_IDS, ...OWN_ADAPTER_IDS].join(', ')})`);
   }

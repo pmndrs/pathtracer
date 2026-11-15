@@ -21,8 +21,8 @@ import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
 import { PT_PARAMS_BYTES, resolveIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { ptRaytracerModuleOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
-import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_PARAM_SLOTS, PTWF_SHADOW_VEC4, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
-import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfUnsupported } from './wavefront-wgsl.ts';
+import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
+import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
 
 const STORAGE = 0x80;
 const COPY_DST = 0x8;
@@ -32,8 +32,29 @@ const INDIRECT = 0x100;
 const MAP_READ = 0x1;
 const COMPUTE = 0x4;
 
-/** Options are the megakernel's (`format`, `layout`, `integrator`, `textures`, text transforms), so one adapter setting switches schedulers. */
-export type PtWavefrontOptions = PtMegakernelOptions;
+/**
+ * Options are the megakernel's (`format`, `layout`, `integrator`, `textures`, text transforms), so one adapter setting switches schedulers, plus the
+ * scheduling settings of P3.2 (each is an A/B switch, D11):
+ *  - `refill` (default false): a slot whose path ends gets the pixel's next sample, so the queues stay full. `true` / `'inline'`: the shade thread starts it at once;
+ *    `'batch'`: the slot waits in an idle queue and one dispatch starts all idle slots when the live queue drops below `refillThreshold` (default 0.25, Cycles' rule) of the
+ *    slots (primary rays of a batch are coherent again). `encode(n)` then asks for n samples per pixel but does not wait for them: call `finish()` (async, one tiny
+ *    readback per chunk, early-out when the queues are empty) before reading the image.
+ *  - `layers` (default 1, needs `refill`): path slots per pixel (samples in flight), for films too small to fill the GPU.
+ */
+export interface PtWavefrontOptions extends PtMegakernelOptions {
+  refill?: boolean | 'inline' | 'batch';
+  refillThreshold?: number;
+  layers?: number;
+}
+
+function scheduling(options: Pick<PtWavefrontOptions, 'refill' | 'layers' | 'refillThreshold'>): PtwfConfig {
+  const layers = options.layers ?? 1;
+  if (!Number.isInteger(layers) || layers < 1 || layers > 64) throw new RangeError(`PtWavefront: layers must be an integer in 1..64, got ${layers}`);
+  if (layers > 1 && !options.refill) throw new Error('PtWavefront: layers > 1 needs refill: true (a slot must be able to start the next sample)');
+  const threshold = options.refillThreshold ?? 0.25;
+  if (!(threshold > 0 && threshold <= 1)) throw new RangeError(`PtWavefront: refillThreshold must be in (0, 1], got ${threshold}`);
+  return { refill: !!options.refill, batch: options.refill === 'batch', threshold, layers };
+}
 
 export const PTWF_KERNELS = ['camera', 'intersect', 'shade', 'shadow', 'args'] as const;
 /** Group 2 bindings each kernel declares (`PTWF_BINDING` numbers; 2 = fuzz table, only with `features.fuzz`). Must match the `bindings([...])` of the WGSL. */
@@ -52,7 +73,12 @@ function stripWalkBindings(code: string): string {
 }
 
 /** The five kernels' source and source maps. Throws for options the wavefront does not support (`ptwfUnsupported`). */
-export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): PtWavefrontBuild {
+export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames' | 'refill' | 'layers' | 'refillThreshold'>): PtWavefrontBuild {
+  const wf = scheduling(options);
+  if (wf.layers > 1) {
+    const o = resolveIntegratorOptions(options.integrator ?? {});
+    if (o.aovs || o.counters || o.hooks) throw new Error('PtWavefront: layers > 1 does not support aovs / counters / hooks yet (they index per-pixel buffers by the path slot)');
+  }
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const why = ptwfUnsupported(integratorOptions);
   if (why) throw new Error(`PtWavefront: unsupported: ${why}`);
@@ -63,11 +89,11 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   const outputs = ptOutputsWgsl(resolveIntegratorOptions(integratorOptions), PTWF_BINDING.counters);
   const sampler = parts.slice(1, 2).concat(parts.slice(-1)).join('\n'); // Owen-Sobol + the sampler's ptSample2D
   return {
-    camera: rtTransformWgsl(`${sampler}\n${ptwfCameraWgsl(integratorOptions)}`, { ...t, keep: ['ptwfCamera'] }),
-    intersect: rtTransformWgsl(`${walk}\n${ptwfIntersectWgsl(integratorOptions)}`, { ...t, keep: ['ptwfIntersect'] }),
-    shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions)}`, { ...t, keep: ['ptwfShade'] }),
-    shadow: rtTransformWgsl(`${walk}\n${ptwfShadowWgsl(integratorOptions)}`, { ...t, keep: ['ptwfShadow'] }),
-    args: rtTransformWgsl(ptwfArgsWgsl(), { ...t, keep: ['ptwfArgsMain'] }),
+    camera: rtTransformWgsl(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfCamera'] }),
+    intersect: rtTransformWgsl(`${walk}\n${ptwfIntersectWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfIntersect'] }),
+    shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShade'] }),
+    shadow: rtTransformWgsl(`${walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShadow'] }),
+    args: rtTransformWgsl(ptwfArgsWgsl(wf), { ...t, keep: ['ptwfArgsMain'] }),
   };
 }
 
@@ -86,8 +112,9 @@ interface PtwfLayouts {
 }
 
 /** Group 2 bindings of a kernel for this build: the fuzz table (2) only with fuzz, the debug counters (8) only with counters (shade kernel). */
-function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean): number[] {
-  return [...IO_BINDINGS[kernel], ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : [])].filter((binding) => binding !== 2 || fuzz);
+function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean, refill: boolean): number[] {
+  // refill: the camera kernel (start pass) also appends to the queue, so it binds the counters (5)
+  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : [])].filter((binding) => binding !== 2 || fuzz);
 }
 
 type TraceScene = Parameters<typeof rtSceneBindGroupEntries>[0];
@@ -107,6 +134,7 @@ export class PtWavefront {
   private readonly medium: boolean;
   private hookGroup: GPUBindGroup | null = null;
   private counterBuffer: GPUBuffer | null = null;
+  private readonly wf: PtwfConfig;
   private slot = 0;
   private walkGroup: GPUBindGroup | null = null;
   private sceneGroup: GPUBindGroup | null = null;
@@ -119,11 +147,21 @@ export class PtWavefront {
   private camera: PtLookAtCamera | null = null;
   private limits: PtLimits = { maxDepth: 5 };
   private seed = 0;
-  /** Sample passes encoded since the last `reset`. */
+  /** Sample passes encoded since the last `reset` (refill: the target samples per pixel). */
   samples = 0;
+  /** Refill: iterations encoded since the last `reset` (the parity of the next one continues the queue ping-pong). */
+  private iterBase = 0;
+  /** Refill: iterations a pass (one sample per pixel) took in the last drained render; sizes the next `encode` (`finish` learns it). */
+  private itersPerPass = 0;
+  private stage: GPUBuffer[] = [];
+  /** Refill: fewest and most samples any pixel had in the last `readImage` (equal to `samples` for both once `finish` has drained). */
+  sampleCount = { min: 0, max: 0 };
+  /** Refill: what the last `finish` did (chunks submitted, iterations encoded, wall ms). */
+  lastFinish = { chunks: 0, iterations: 0, ms: 0 };
 
-  private constructor(device: GPUDevice, options: PtWavefrontOptions, pipelines: Record<PtwfKernel, GPUComputePipeline>, layouts: PtwfLayouts, bytes: Record<PtwfKernel, number>, fuzzTable: GPUBuffer | null, medium: boolean) {
+  private constructor(device: GPUDevice, options: PtWavefrontOptions, pipelines: Record<PtwfKernel, GPUComputePipeline>, layouts: PtwfLayouts, bytes: Record<PtwfKernel, number>, fuzzTable: GPUBuffer | null, medium: boolean, wf: PtwfConfig) {
     this.device = device;
+    this.wf = wf;
     this.options = options;
     this.pipelines = pipelines;
     this.layouts = layouts;
@@ -139,6 +177,7 @@ export class PtWavefront {
   static async create(device: GPUDevice, caps: Caps, options: PtWavefrontOptions): Promise<PtWavefront> {
     const label = options.label ?? 'pt wavefront';
     const build = ptWavefrontBuild(caps, options);
+    const wf = scheduling(options);
     const features = options.integrator?.materials?.features;
     device.pushErrorScope('validation');
     // One layout per kernel with only the buffers it declares: a shared layout would bind 3 (walk) + 2 (scene) + 7 buffers and pass the
@@ -147,7 +186,7 @@ export class PtWavefront {
     const walk = device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) });
     const scene = device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures) });
     const ioEntries = (kernel: PtwfKernel): GPUBindGroupLayoutEntry[] =>
-      ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters).map((binding) =>
+      ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters, wf.refill).map((binding) =>
         binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
       ) as GPUBindGroupLayoutEntry[];
     const io = Object.fromEntries(PTWF_KERNELS.map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
@@ -168,7 +207,7 @@ export class PtWavefront {
       fuzzTable = device.createBuffer({ label: `${label} fuzz ltc`, size: table.byteLength, usage: STORAGE | COPY_DST });
       device.queue.writeBuffer(fuzzTable, 0, table);
     }
-    return new PtWavefront(device, options, pipelines, layouts, ptWavefrontKernelBytes(build), fuzzTable, !!features?.medium);
+    return new PtWavefront(device, options, pipelines, layouts, ptWavefrontKernelBytes(build), fuzzTable, !!features?.medium, wf);
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
@@ -180,12 +219,13 @@ export class PtWavefront {
   /** Bytes of path state per path, and of all per-path buffers, for the current film (the spec budget is 96 B of state). */
   memory(): { stateBytesPerPath: number; totalBytes: number } {
     const o = { medium: this.medium, textures: !!this.options.textures };
-    return { stateBytesPerPath: ptwfStateBytes(o), totalBytes: ptwfBufferBytes(this.width * this.height, o).total + this.width * this.height * 16 };
+    const paths = this.width * this.height * this.wf.layers;
+    return { stateBytesPerPath: ptwfStateBytes(o), totalBytes: ptwfBufferBytes(paths, o).total + paths * 16 };
   }
 
   setFilm(width: number, height: number): void {
     if (width === this.width && height === this.height && this.buffers) return;
-    const paths = width * height;
+    const paths = width * height * this.wf.layers;
     const o = { medium: this.medium, textures: !!this.options.textures };
     const bytes = ptwfBufferBytes(paths, o);
     const max = this.device.limits.maxStorageBufferBindingSize;
@@ -196,15 +236,16 @@ export class PtWavefront {
     const make = (label: string, size: number, usage = STORAGE) => this.device.createBuffer({ label: `ptwf ${label}`, size, usage });
     this.buffers = {
       accum: make('accum', paths * 16 * (this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : 1), STORAGE | COPY_SRC | COPY_DST),
-      state: make('state', bytes.state),
+      state: make('state', bytes.state, STORAGE | COPY_DST),
       hit: make('hit', bytes.hit),
-      count: make('counters', bytes.counters),
+      count: make('counters', bytes.counters, STORAGE | COPY_SRC | COPY_DST),
       queue: make('queue', bytes.queue),
       shadow: make('shadow rays', paths * PTWF_SHADOW_VEC4 * 16),
     };
     this.counterBuffer = this.options.integrator?.counters ? make('debug counters', paths * PT_COUNTER_WORDS * 4, STORAGE | COPY_SRC | COPY_DST) : null;
     this.ioGroups = null;
     this.samples = 0;
+    this.iterBase = 0;
   }
 
   /** Layout of the hooks' bind group (`@group(3)` of the shade kernel), or null without hooks. */
@@ -236,16 +277,26 @@ export class PtWavefront {
   }
 
   reset(encoder: GPUCommandEncoder): void {
-    if (this.buffers) encoder.clearBuffer(this.buffers.accum);
     if (this.counterBuffer) encoder.clearBuffer(this.counterBuffer);
+    if (this.buffers) {
+      encoder.clearBuffer(this.buffers.accum);
+      if (this.wf.refill) {
+        // queues, counters and path state persist across encodes: zero counters + state (zero depth word = dormant slot) = a fresh film
+        encoder.clearBuffer(this.buffers.count);
+        encoder.clearBuffer(this.buffers.state);
+      }
+    }
     this.samples = 0;
+    this.iterBase = 0;
   }
 
   /** How many sample passes one `encode` call can take with the current `maxDepth` (the params ring must not wrap inside one encoder). */
   maxPassesPerEncode(): number {
+    if (this.wf.refill) return Infinity; // only the parity of an iteration is ever read: 4 uniform records per encode, any length
     return Math.max(1, Math.floor(PTWF_PARAM_SLOTS / ptwfRecordsPerSample(this.limits.maxDepth)));
   }
 
+  /** `sampleIndex` is the pass number in the plain scheduler and the TARGET samples per pixel in refill mode (`dims.z`). */
   private paramsRecord(sampleIndex: number, iter: number): ArrayBuffer {
     if (!this.camera) throw new Error('PtWavefront: setCamera() first');
     const basis = ptCameraBasis(this.camera, this.width, this.height);
@@ -263,6 +314,11 @@ export class PtWavefront {
     if (!this.walkGroup || !this.sceneGroup) throw new Error('PtWavefront: setScene() first');
     const b = this.buffers;
     if (!b) throw new Error('PtWavefront: setFilm() first');
+    if (this.wf.refill) {
+      this.samples += passes;
+      this.encodeIterations(encoder, Math.max(1, Math.round((passes * this.iterationsPerPass()) / this.wf.layers)), true, timestampWrites);
+      return;
+    }
     if (passes > this.maxPassesPerEncode()) throw new RangeError(`PtWavefront.encode: at most ${this.maxPassesPerEncode()} passes per call at maxDepth ${this.limits.maxDepth}`);
     this.ioGroups ??= this.makeIoGroups(b);
     this.argsGroup ??= this.device.createBindGroup({ label: 'ptwf args', layout: this.layouts.args, entries: [{ binding: 0, resource: { buffer: this.argsBuffer } }] });
@@ -319,6 +375,123 @@ export class PtWavefront {
     pass.end();
   }
 
+  /** Iterations the next `encode(passes)` asks for per pass: the learned figure, else a guess (a short path; `finish` does the rest). */
+  private iterationsPerPass(): number {
+    return this.itersPerPass > 0 ? this.itersPerPass : Math.min(this.limits.maxDepth + 1, 16);
+  }
+
+  /**
+   * Refill mode: `iterations` depth iterations (optionally preceded by the start pass that gives dormant slots their next sample) in one compute pass.
+   * Four uniform records cover every iteration (parity 0 / 1 and the two start records): the kernels only read the parity of `iter`.
+   */
+  private encodeIterations(encoder: GPUCommandEncoder, iterations: number, start: boolean, timestampWrites?: GPUComputePassTimestampWrites): void {
+    if (!this.walkGroup || !this.sceneGroup) throw new Error('PtWavefront: setScene() first');
+    const b = this.buffers;
+    if (!b) throw new Error('PtWavefront: setFilm() first');
+    this.ioGroups ??= this.makeIoGroups(b);
+    this.argsGroup ??= this.device.createBindGroup({ label: 'ptwf args', layout: this.layouts.args, entries: [{ binding: 0, resource: { buffer: this.argsBuffer } }] });
+    this.emptyGroup ??= this.device.createBindGroup({ label: 'ptwf empty', layout: this.layouts.empty, entries: [] });
+    const walkGroup = this.walkGroup;
+    const sceneGroup = this.sceneGroup;
+    const ioGroups = this.ioGroups;
+    const argsGroup = this.argsGroup;
+    const emptyGroup = this.emptyGroup;
+    if (this.layouts.hooks && !this.hookGroup) {
+      if ((this.options.integrator?.hooks?.bindings ?? []).length > 0) throw new Error('PtWavefront: setHookBindGroup() first (the hooks declare bindings)');
+      this.hookGroup = this.device.createBindGroup({ label: 'ptwf hooks (empty)', layout: this.layouts.hooks, entries: [] });
+    }
+    const hookGroup = this.hookGroup;
+    const base = this.slot;
+    this.slot += PTWF_RECORDS_PER_ENCODE;
+    const offsets: number[] = [];
+    for (let i = 0; i < PTWF_RECORDS_PER_ENCODE; i++) {
+      const offset = ((base + i) % PTWF_PARAM_SLOTS) * this.slotBytes;
+      offsets.push(offset);
+      this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(this.samples, i)); // iter = 0, 1 (parity), 2, 3 (start | parity)
+    }
+    const pass = encoder.beginComputePass({ label: 'ptwf refill', timestampWrites });
+    const use = (kernel: PtwfKernel, offset: number): void => {
+      pass.setPipeline(this.pipelines[kernel]);
+      pass.setBindGroup(0, USES_WALK[kernel] ? walkGroup : emptyGroup);
+      pass.setBindGroup(1, USES_SCENE[kernel] ? sceneGroup : emptyGroup);
+      pass.setBindGroup(2, ioGroups[kernel], [offset]);
+      if (kernel === 'args') pass.setBindGroup(3, argsGroup);
+      else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
+    };
+    if (start) {
+      const startOffset = offsets[PTWF_START_ITER + (this.iterBase & 1)] as number;
+      use('camera', startOffset);
+      pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.height / 8), this.wf.layers);
+      use('args', startOffset);
+      pass.dispatchWorkgroups(1);
+    }
+    for (let i = 0; i < iterations; i++) {
+      const offset = offsets[(this.iterBase + i) & 1] as number;
+      use('intersect', offset);
+      pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+      use('shade', offset);
+      pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+      use('args', offset);
+      pass.dispatchWorkgroups(1);
+      if (this.wf.batch) {
+        // batch refill: the camera kernel over the film (zero groups unless the args kernel found the live queue below the threshold); it appends to the NEXT queue, which is what the start record of parity (d + 1) selects
+        use('camera', offsets[PTWF_START_ITER + ((this.iterBase + i + 1) & 1)] as number);
+        pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_REFILL);
+      }
+      use('shadow', offset);
+      pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_SHADOW);
+    }
+    pass.end();
+    this.iterBase += iterations;
+  }
+
+  /**
+   * Refill mode: runs iterations until every path of every `encode`d sample has finished (the next sample of a slot starts inline, so this is
+   * the tail only). Chunks of iterations (32, doubling to 256) are submitted back to back; after each one an 8-byte copy of the queue counters is
+   * mapped while the NEXT chunk already runs on the GPU (one chunk of lag, so the GPU never waits for the CPU), and the loop stops when the
+   * counters of the chunk before say nothing is queued. The over-run is at most two chunks of empty (zero-workgroup) iterations. This is the one
+   * readback of the refill scheduler, once per render, never inside the per-frame encode; timed runs include it (it is part of finishing).
+   */
+  async finish(): Promise<void> {
+    if (!this.wf.refill) return;
+    const t0 = performance.now();
+    const b = this.buffers;
+    if (!b) throw new Error('PtWavefront: setFilm() first');
+    this.stage = this.stage.length ? this.stage : [0, 1].map((i) => this.device.createBuffer({ label: `ptwf finish stage ${i}`, size: 32, usage: MAP_READ | COPY_DST }));
+    const startIter = this.iterBase;
+    const read = async (buffer: GPUBuffer): Promise<number> => {
+      await buffer.mapAsync(1 /* GPUMapMode.READ */);
+      const w = new Uint32Array(buffer.getMappedRange().slice(0));
+      buffer.unmap();
+      return (w[0] as number) + (w[1] as number) + (w[PTWF_COUNT_IDLE] as number); // both queues + the idle slots (batch refill)
+    };
+    let chunk = 32;
+    let previous: Promise<number> | null = null;
+    let beforeLastTwo = this.iterBase;
+    let beforeLast = this.iterBase;
+    let chunks = 0;
+    for (let i = 0; ; i++) {
+      const encoder = this.device.createCommandEncoder({ label: 'ptwf finish' });
+      this.encodeIterations(encoder, chunk, false);
+      encoder.copyBufferToBuffer(b.count, 0, this.stage[i & 1] as GPUBuffer, 0, PTWF_COUNTERS * 4);
+      this.device.queue.submit([encoder.finish()]);
+      chunks++;
+      const mine = read(this.stage[i & 1] as GPUBuffer);
+      beforeLastTwo = beforeLast;
+      beforeLast = this.iterBase - chunk;
+      if (previous && (await previous) === 0) {
+        await mine;
+        break;
+      }
+      previous = mine;
+      chunk = Math.min(chunk * 2, 256);
+    }
+    await this.device.queue.onSubmittedWorkDone();
+    // everything up to the chunk before the last two was needed (the last two ran dry): the learned cost of a pass
+    if (this.samples > 0) this.itersPerPass = Math.max(1, (Math.max(startIter, beforeLastTwo) * this.wf.layers) / this.samples);
+    this.lastFinish = { chunks, iterations: this.iterBase - startIter, ms: performance.now() - t0 };
+  }
+
   private makeIoGroups(b: NonNullable<PtWavefront['buffers']>): Record<PtwfKernel, GPUBindGroup> {
     const resources: Record<number, GPUBindingResource | undefined> = {
       0: { buffer: this.paramsBuffer, offset: 0, size: PT_PARAMS_BYTES },
@@ -332,13 +505,13 @@ export class PtWavefront {
       8: this.counterBuffer ? { buffer: this.counterBuffer } : undefined,
     };
     return Object.fromEntries(
-      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
+      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer, this.wf.refill).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
     ) as Record<PtwfKernel, GPUBindGroup>;
   }
 
   async readImage(): Promise<PtImage> {
     if (!this.buffers) throw new Error('PtWavefront: nothing rendered');
-    const size = this.width * this.height * 16;
+    const size = this.width * this.height * this.wf.layers * 16;
     const staging = this.device.createBuffer({ label: 'ptwf readback', size, usage: MAP_READ | COPY_DST });
     const encoder = this.device.createCommandEncoder({ label: 'ptwf readback' });
     encoder.copyBufferToBuffer(this.buffers.accum, 0, staging, 0, size);
@@ -347,13 +520,36 @@ export class PtWavefront {
     const sums = new Float32Array(staging.getMappedRange().slice(0));
     staging.unmap();
     staging.destroy();
-    const n = Math.max(1, this.samples);
-    const data = new Float32Array(sums.length);
-    for (let i = 0; i < sums.length; i += 4) {
-      data[i] = (sums[i] as number) / n;
-      data[i + 1] = (sums[i + 1] as number) / n;
-      data[i + 2] = (sums[i + 2] as number) / n;
-      data[i + 3] = 1;
+    const pixels = this.width * this.height;
+    const data = new Float32Array(pixels * 4);
+    this.sampleCount = { min: Infinity, max: 0 };
+    if (this.wf.refill) {
+      // slot = layer * pixels + pixel; w = samples started in the slot. Drained (finish()), the summed w is exactly `samples` for every pixel.
+      for (let p = 0; p < pixels; p++) {
+        let r = 0, g = 0, bl = 0, w = 0;
+        for (let l = 0; l < this.wf.layers; l++) {
+          const i = (l * pixels + p) * 4;
+          r += sums[i] as number;
+          g += sums[i + 1] as number;
+          bl += sums[i + 2] as number;
+          w += sums[i + 3] as number;
+        }
+        if (w < this.sampleCount.min) this.sampleCount.min = w;
+        if (w > this.sampleCount.max) this.sampleCount.max = w;
+        const n = Math.max(1, w);
+        data[p * 4] = r / n;
+        data[p * 4 + 1] = g / n;
+        data[p * 4 + 2] = bl / n;
+        data[p * 4 + 3] = 1;
+      }
+    } else {
+      const n = Math.max(1, this.samples);
+      for (let i = 0; i < sums.length; i += 4) {
+        data[i] = (sums[i] as number) / n;
+        data[i + 1] = (sums[i + 1] as number) / n;
+        data[i + 2] = (sums[i + 2] as number) / n;
+        data[i + 3] = 1;
+      }
     }
     return { width: this.width, height: this.height, data, samples: this.samples };
   }
@@ -397,6 +593,8 @@ export class PtWavefront {
     this.paramsBuffer.destroy();
     this.argsBuffer.destroy();
     this.fuzzTable?.destroy();
+    for (const buffer of this.stage) buffer.destroy();
+    this.stage = [];
     this.destroyBuffers();
   }
 }

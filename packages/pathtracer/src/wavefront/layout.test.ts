@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PTWF_INIT, PTWF_STRIDE, PTWF_WORKGROUP, ptwfArgsStep, ptwfBufferBytes, ptwfDispatchesPerSample, ptwfGroups, ptwfPackDepth, ptwfQueueOffsets, ptwfRecordsPerSample, ptwfSlot, ptwfStateBytes, ptwfUnpackDepth } from './layout.ts';
+import { PTWF_INIT, PTWF_LIVE, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP, ptwfArgsStart, ptwfArgsStep, ptwfBufferBytes, ptwfDispatchesPerSample, ptwfGroups, ptwfHasNext, ptwfPackDepth, ptwfQueueOffsets, ptwfRefillDecision, ptwfRecordsPerSample, ptwfSampleOf, ptwfSlot, ptwfStateBytes, ptwfUnpackDepth } from './layout.ts';
 
 describe('wavefront layout (P3.1)', () => {
   it('path state is 64 B plain and 80 B with a medium or textures, under the 96 B budget', () => {
@@ -19,16 +19,18 @@ describe('wavefront layout (P3.1)', () => {
   });
 
   it('packs depth and the specular flag in one word and round-trips', () => {
-    for (const depth of [0, 1, 7, 1000, 0x7fffffff]) {
+    for (const depth of [0, 1, 7, 1000, 0x1fffffff]) {
       for (const specular of [false, true]) {
         const word = ptwfPackDepth(depth, specular);
         expect(word).toBeGreaterThanOrEqual(0);
         expect(word).toBeLessThan(2 ** 32);
-        expect(ptwfUnpackDepth(word)).toEqual({ depth, specular });
+        expect(ptwfUnpackDepth(word)).toEqual({ depth, specular, live: true });
       }
     }
-    expect(ptwfPackDepth(5, true)).toBe(0x80000005);
-    expect(() => ptwfPackDepth(0x80000000, false)).toThrow(RangeError);
+    expect(ptwfPackDepth(5, true)).toBe(0xa0000005);
+    expect(ptwfPackDepth(5, false) & PTWF_LIVE).toBe(PTWF_LIVE); // a stored path is always live; a zero word is a dormant slot
+    expect(ptwfUnpackDepth(0).live).toBe(false);
+    expect(() => ptwfPackDepth(0x20000000, false)).toThrow(RangeError);
     expect(() => ptwfPackDepth(-1, false)).toThrow(RangeError);
   });
 
@@ -119,6 +121,106 @@ describe('wavefront layout (P3.1)', () => {
         }
         expect(seenAlive.size).toBe(paths);
       }
+    }
+  });
+
+  /**
+   * The refill protocol (P3.2) against a CPU model of the camera / shade / args kernels: slots = layers x pixels, each slot runs the samples
+   * `layer, layer + K, ...` of its pixel one after the other (inline refill), the queue counters and slot state persist across encodes, and the
+   * encode's iteration count need not finish anything. Whatever the path lengths, the chunking and the growing target, every pixel must end up
+   * with every sample index 0..T-1 started exactly once and no slot may run two paths at a time.
+   */
+  it('refill: every pixel gets every sample exactly once, across encodes and chunks (simulated)', () => {
+    let seed = 987654321;
+    const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+    for (const [pixels, layers, batch] of [[1, 1, false], [7, 1, false], [7, 3, false], [64, 2, false], [130, 4, false], [33, 8, false], [1, 1, true], [7, 3, true], [64, 2, true], [130, 4, true], [33, 8, true]] as const) {
+      const slots = pixels * layers;
+      let idle = 0; // batch refill: slots that finished a path and still have a sample (the idle counter)
+      const started = new Uint32Array(slots);
+      const live = new Uint8Array(slots);
+      const remaining = new Uint32Array(slots); // steps the current path of the slot still takes
+      const ran: Set<number>[] = Array.from({ length: pixels }, () => new Set());
+      const counters = new Uint32Array(4);
+      const queue: number[][] = [[], []];
+      let iterBase = 0;
+      let target = 0;
+      const pathLength = () => 1 + Math.floor(rand() * rand() * 40); // a heavy-tailed mix of short and long paths
+      const start = (slot: number, q: number) => {
+        const sample = ptwfSampleOf(started[slot] as number, Math.floor(slot / pixels), layers);
+        const pixel = slot % pixels;
+        expect(ran[pixel]!.has(sample), `sample ${sample} of pixel ${pixel} started twice`).toBe(false);
+        ran[pixel]!.add(sample);
+        started[slot]!++;
+        live[slot] = 1;
+        remaining[slot] = pathLength();
+        queue[q]!.push(slot);
+        counters[q]!++;
+      };
+      const encode = (passes: number, iterations: number, withStart: boolean) => {
+        if (withStart) {
+          target += passes;
+          const cur = iterBase & 1;
+          for (let slot = 0; slot < slots; slot++) if (!live[slot] && ptwfHasNext(started[slot] as number, Math.floor(slot / pixels), layers, target)) start(slot, cur);
+          idle = 0; // the start pass restarted every idle slot (the args kernel zeroes the counter on a start record)
+          expect(ptwfArgsStart(counters, PTWF_START_ITER + cur).main[0] * PTWF_WORKGROUP * ptwfArgsStart(counters, PTWF_START_ITER + cur).main[1]).toBeGreaterThanOrEqual(counters[cur] as number);
+        }
+        for (let i = 0; i < iterations; i++) {
+          const d = iterBase + i;
+          const q = d & 1;
+          expect(counters[q]).toBe(queue[q]!.length);
+          expect(counters[2 + q]).toBe(0); // shadow counter of this iteration was zeroed by the previous args
+          const read = [...queue[q]!];
+          expect(new Set(read).size).toBe(read.length); // one path per slot
+          for (const slot of read) {
+            expect(live[slot]).toBe(1);
+            if (rand() < 0.5) counters[2 + q]!++; // a shadow ray
+            remaining[slot]!--;
+            if (remaining[slot] === 0) {
+              live[slot] = 0;
+              if (ptwfHasNext(started[slot] as number, Math.floor(slot / pixels), layers, target)) {
+                if (batch) idle++;
+                else start(slot, q ^ 1); // inline refill
+              }
+            } else {
+              queue[q ^ 1]!.push(slot);
+              counters[q ^ 1]!++;
+            }
+          }
+          if (batch) {
+            // args decides, the camera kernel scans the film in slot order and starts every slot that is not live and has a sample
+            const decision = ptwfRefillDecision(counters[q ^ 1] as number, idle, slots, 0.25, pixels, 1, layers);
+            let scanned = 0;
+            if (decision.refill > 0) {
+              expect(decision.refillGrid).toEqual([Math.ceil(pixels / 8), 1, layers]);
+              for (let slot = 0; slot < slots; slot++) if (!live[slot] && ptwfHasNext(started[slot] as number, Math.floor(slot / pixels), layers, target)) { start(slot, q ^ 1); scanned++; }
+              expect(scanned).toBe(idle); // the scan finds exactly the counted slots, so the main args (live + idle) cover the queue
+              idle = 0;
+            } else expect(decision.refillGrid).toEqual([0, 0, 0]);
+            expect(decision.main[0] * decision.main[1] * PTWF_WORKGROUP).toBeGreaterThanOrEqual(counters[q ^ 1] as number);
+          }
+          const args = ptwfArgsStep(counters, d, 0);
+          expect(args.main[0] * args.main[1] * PTWF_WORKGROUP).toBeGreaterThanOrEqual(counters[q ^ 1] as number);
+          queue[q]!.length = 0; // args zeroed the queue shade read
+          expect(counters[q]).toBe(0);
+        }
+        iterBase += iterations;
+      };
+      // first encode: far too few iterations to finish; later encodes grow the target while paths are still in flight
+      encode(2, 3, true);
+      encode(3, 5, true);
+      encode(1, 0, true);
+      expect(target).toBe(6);
+      let guard = 0;
+      while (counters[0]! + counters[1]! + idle > 0) {
+        encode(0, 7, false); // finish(): chunks without a start pass
+        expect(++guard).toBeLessThan(10000);
+      }
+      encode(4, 1, true); // more samples after a complete render: dormant slots restart
+      while (counters[0]! + counters[1]! + idle > 0) encode(0, 9, false);
+      for (let pixel = 0; pixel < pixels; pixel++) {
+        expect([...ran[pixel]!].sort((a, b) => a - b)).toEqual(Array.from({ length: target }, (_, i) => i));
+      }
+      for (let slot = 0; slot < slots; slot++) expect(live[slot]).toBe(0);
     }
   });
 });

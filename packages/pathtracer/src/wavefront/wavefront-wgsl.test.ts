@@ -17,6 +17,11 @@ const variants: Record<string, Parameters<typeof ptWavefrontBuild>[1]> = {
   tex: { format: {}, layout: texLayout, textures: { buckets: [bucket] } },
   'pbr-albedo': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo' } } } } as never,
   'pbr-stochastic': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'stochastic', maxDepth: 64 } } } } as never,
+  refill: { format: {}, layout, refill: true },
+  'refill-batch-layers': { format: {}, layout, refill: 'batch', layers: 2 },
+  'refill-layers-env': { format: {}, layout, integrator: { envMap: true, envSampling: 'importance' }, refill: true, layers: 4 },
+  'refill-tex': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, refill: true, layers: 2 },
+  'refill-pbr-stochastic': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'stochastic', maxDepth: 64 } } }, refill: true } as never,
   'pbr-fuzz': { format: {}, layout, integrator: { materials: { features: { ...feat, fuzz: true }, layered: { layering: 'albedo' } } } } as never,
 };
 
@@ -53,6 +58,24 @@ describe('wavefront WGSL (P3.1)', () => {
     expect(b.intersect.code).toContain('@group(0)');
     expect(b.shadow.code).toContain('@group(0)');
     expect(b.intersect.code).not.toContain('@group(1)');
+  });
+
+  it('refill kernels: the shade kernel restarts a slot inline, the plain kernels do not; layers need refill', () => {
+    const plain = ptWavefrontBuild(caps, { ...variants.plain!, prune: false, shortenNames: false, minify: false });
+    const refill = ptWavefrontBuild(caps, { ...variants.refill!, layers: 3, prune: false, shortenNames: false, minify: false });
+    expect(plain.shade.code).not.toContain('ptwfRestart');
+    expect(refill.shade.code).toContain('ptwfRestart');
+    expect(refill.shade.code).toContain('const PTWF_LAYERS: u32 = 3u;');
+    expect(refill.camera.code).toContain('@group(2) @binding(5)'); // the start pass appends to the queue
+    expect(plain.camera.code).not.toContain('@group(2) @binding(5)');
+    expect(refill.args.code).toContain('iter >= 2u');
+    expect(plain.args.code).toContain('iter == PTWF_INIT');
+    const batch = ptWavefrontBuild(caps, { ...variants.plain!, refill: 'batch', refillThreshold: 0.5, prune: false, shortenNames: false, minify: false });
+    expect(batch.args.code).toContain('* 0.5)'); // threshold of the refill decision
+    expect(batch.args.code).toContain('ptwfArgs[8]'); // refill grid
+    expect(refill.args.code).not.toContain('ptwfArgs[8]');
+    expect(() => ptWavefrontBuild(caps, { ...variants.plain!, layers: 2 })).toThrow(/layers > 1 needs refill/);
+    expect(() => ptWavefrontBuild(caps, { ...variants.plain!, refill: true, layers: 0 })).toThrow(RangeError);
   });
 
   it('alpha MASK throws a clear error', () => {

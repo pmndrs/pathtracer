@@ -19,7 +19,7 @@
  */
 import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptHookVertexExpr } from '../integrator/outputs-wgsl.ts';
-import { PTWF_ARGS_MAIN, PTWF_ARGS_SHADOW, PTWF_INIT, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
+import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
 export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
@@ -27,6 +27,18 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   if (o.alphaMask) return 'alpha MASK materials (P3.x: the megakernel passes a masked hit without a bounce; the wavefront loop has no place for that yet)';
   return null;
 }
+
+/** Scheduling variants of the kernels (P3.2). `refill`: a finished path starts the slot's next sample inline; `layers`: slots per pixel (needs `refill`). */
+export interface PtwfConfig {
+  refill: boolean;
+  /** Batch refill (needs `refill`): finished slots wait in an idle queue until the live queue drops below `threshold` x slots, then one dispatch starts them all. */
+  batch: boolean;
+  threshold: number;
+  layers: number;
+}
+export const PTWF_PLAIN: PtwfConfig = { refill: false, batch: false, threshold: 0.25, layers: 1 };
+
+const f32Literal = (v: number): string => (Number.isInteger(v) ? `${v}.0` : String(v));
 
 /** Binding numbers in group 2. 2 is the fuzz table's (`ptFuzzWgsl`), so the wavefront buffers start at 3. */
 export const PTWF_BINDING = { params: 0, accum: 1, fuzz: 2, state: 3, hit: 4, count: 5, queue: 6, shadow: 7, counters: 8 /* `integrator.counters`, shade kernel only */, args: 0 /* group 3 of the args kernel; group 3 of the shade kernel is the hooks' */ } as const;
@@ -44,10 +56,16 @@ const bindings = (names: readonly (keyof typeof PTWF_BINDING)[]): string => {
   return names.map((n) => decl[n]).join('\n');
 };
 
-const COMMON = /* wgsl */ `
+const commonWgsl = (wf: PtwfConfig): string => /* wgsl */ `
 const PTWF_WG: u32 = ${PTWF_WORKGROUP}u;
 const PTWF_STRIDE: u32 = ${PTWF_STRIDE}u;
 const PTWF_INIT: u32 = ${PTWF_INIT}u;
+${wf.refill ? `const PTWF_LAYERS: u32 = ${wf.layers}u;
+` : ''}
+// path slots: the stride of every SoA section (one per pixel, or layers per pixel in refill mode)
+fn ptwfSlots(dims: vec4u) -> u32 {
+    return dims.x * dims.y${wf.refill ? ' * PTWF_LAYERS' : ''};
+}
 
 fn ptwfSlot(wid: vec3u, li: u32) -> u32 {
     return (wid.y * PTWF_STRIDE + wid.x) * PTWF_WG + li;
@@ -92,7 +110,7 @@ ${extra ? `    let s4 = ptwfState[4u * n + path];
     p.dir = ptwfF3(s1);
     p.etaScale = bitcast<f32>(s1.w);
     p.beta = ptwfF3(s2);
-    p.depth = s2.w & ${aovs ? '0x3fffffff' : '0x7fffffff'}u;
+    p.depth = s2.w & 0x1fffffffu;
     p.specular = (s2.w >> 31u) == 1u;${aovs ? `
     p.aovDone = ((s2.w >> 30u) & 1u) == 1u;` : ''}
     p.prevP = ptwfF3(s3);
@@ -105,22 +123,82 @@ ${extra ? `    let s4 = ptwfState[4u * n + path];
 fn ptwfStorePath(path: u32, n: u32, p: PtwfPath) {
     ptwfState[path] = vec4u(bitcast<vec3u>(p.origin), bitcast<u32>(p.prevPdf));
     ptwfState[n + path] = vec4u(bitcast<vec3u>(p.dir), bitcast<u32>(p.etaScale));
-    ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''});
+    ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth | 0x20000000u | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''});
     ptwfState[3u * n + path] = vec4u(bitcast<vec3u>(p.prevP), ${tex ? 'bitcast<u32>(p.coneSpread)' : '0u'});
 ${extra ? `    ptwfState[4u * n + path] = vec4u(${medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
 ` : ''}}
 `;
 }
 
+/** Starts sample `sampleIndex` in slot `path`: jitter, primary ray, path state (the camera kernel's body, shared by the start pass and the shade kernel's inline refill). */
+function ptwfStartPathWgsl(o: ResolvedIntegratorOptions): string {
+  const tex = o.textures;
+  return /* wgsl */ `
+fn ptwfStartPath(path: u32, n: u32, sampleIndex: u32) {
+    let dims = ptParams.dims;
+    let pix = path % (dims.x * dims.y);
+    let px = pix % dims.x;
+    let py = pix / dims.x;
+    let pixelSeed = ptPixelSeed(px, py, dims.w);
+    let jitter = ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER);
+    let ndc = vec2f(((f32(px) + jitter.x) / f32(dims.x)) * 2.0 - 1.0, 1.0 - ((f32(py) + jitter.y) / f32(dims.y)) * 2.0);
+    var p: PtwfPath;
+    p.origin = ptParams.origin.xyz;
+    p.dir = normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y);
+    p.prevPdf = 0.0;
+    p.etaScale = 1.0;
+    p.beta = vec3f(1.0);
+    p.depth = 0u;
+    p.specular = false;
+    p.prevP = p.origin;
+    p.sigma = vec3f(0.0);
+    p.coneWidth = 0.0;
+    p.coneSpread = ${tex ? 'bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y))' : '0.0'};
+    ptwfStorePath(path, n, p);
+}
+`;
+}
+
 /** Camera kernel: the start of `ptPath` of the megakernel, writing path state instead of tracing. Needs the sampler. */
-export function ptwfCameraWgsl(options: PtIntegratorOptions = {}): string {
+export function ptwfCameraWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   const o = resolveIntegratorOptions(options);
   const tex = o.textures;
+  if (wf.refill) {
+    return /* wgsl */ `
+${PT_PARAMS_WGSL}
+${bindings(['params', 'accum', 'state', 'count', 'queue'])}
+const PT_FAR: f32 = 1.0e30;
+${commonWgsl(wf)}${stateWgsl(o)}${ptwfStartPathWgsl(o)}
+// start pass of an encode: every dormant slot that still has a sample to start (target dims.z) starts it and joins the queue of the first iteration
+@compute @workgroup_size(8, 8)
+fn ptwfCamera(@builtin(global_invocation_id) id: vec3u) {
+    let dims = ptParams.dims;
+    if (id.x >= dims.x || id.y >= dims.y) {
+        return;
+    }
+    let n = ptwfSlots(dims);
+    let path = id.z * dims.x * dims.y + id.y * dims.x + id.x;
+    if ((ptwfState[2u * n + path].w & 0x20000000u) != 0u) {
+        return;
+    }
+    let started = u32(ptAccum[path].w);
+    let sampleIndex = started * PTWF_LAYERS + id.z;
+    if (sampleIndex >= dims.z) {
+        return;
+    }
+    ptwfStartPath(path, n, sampleIndex);
+    ptAccum[path].w = f32(started + 1u);
+    let cur = ptParams.limits.w & 1u;
+    let slot = atomicAdd(&ptwfCount[cur], 1u);
+    ptwfQueue[cur * n + slot] = path;
+}
+`;
+  }
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'state', 'queue'])}
 const PT_FAR: f32 = 1.0e30;
-${COMMON}${stateWgsl(o)}
+${commonWgsl(wf)}${stateWgsl(o)}
 @compute @workgroup_size(8, 8)
 fn ptwfCamera(@builtin(global_invocation_id) id: vec3u) {
     let dims = ptParams.dims;
@@ -128,7 +206,7 @@ fn ptwfCamera(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
     let path = id.y * dims.x + id.x;
-    let n = dims.x * dims.y;
+    let n = ptwfSlots(dims);
     let pixelSeed = ptPixelSeed(id.x, id.y, dims.w);
     let jitter = ptSample2D(pixelSeed, dims.z, PT_PAIR_JITTER);
     let ndc = vec2f(((f32(id.x) + jitter.x) / f32(dims.x)) * 2.0 - 1.0, 1.0 - ((f32(id.y) + jitter.y) / f32(dims.y)) * 2.0);
@@ -153,13 +231,13 @@ ${o.aovs ? `    p.aovDone = false;
 }
 
 /** Intersect kernel: closest hit of every ray in `Q[iter & 1]`. Needs the raytracer module (walk, no scene). */
-export function ptwfIntersectWgsl(options: PtIntegratorOptions = {}): string {
+export function ptwfIntersectWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   const o = resolveIntegratorOptions(options);
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'state', 'hit', 'count', 'queue'])}
 const PT_FAR: f32 = 1.0e30;
-${COMMON}${stateWgsl(o)}
+${commonWgsl(wf)}${stateWgsl(o)}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -168,7 +246,7 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
     if (slot >= atomicLoad(&ptwfCount[q])) {
         return;
     }
-    let n = ptParams.dims.x * ptParams.dims.y;
+    let n = ptwfSlots(ptParams.dims);
     let path = ptwfQueue[q * n + slot];
     let o = ptwfState[path];
     let d = ptwfState[n + path];
@@ -181,12 +259,12 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
 }
 
 /** Shadow kernel: visibility of every shadow ray; a visible one adds its contribution to the pixel. Needs the raytracer module (walk, no scene). */
-export function ptwfShadowWgsl(options: PtIntegratorOptions = {}): string {
+export function ptwfShadowWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   void options;
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'count', 'queue', 'shadow'])}
-${COMMON}
+${commonWgsl(wf)}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -194,7 +272,7 @@ fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index
     if (slot >= atomicLoad(&ptwfCount[2u + (iter & 1u)])) {
         return;
     }
-    let n = ptParams.dims.x * ptParams.dims.y;
+    let n = ptwfSlots(ptParams.dims);
     let path = ptwfQueue[2u * n + slot];
     let r0 = ptwfShadowRay[path];
     let r1 = ptwfShadowRay[n + path];
@@ -207,12 +285,13 @@ fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index
 }
 
 /** Args kernel (one thread): queue counts -> indirect dispatch args; zeroes the counters nobody reads any more (`ptwfArgsStep` is its twin). Standalone module. */
-export function ptwfArgsWgsl(): string {
+export function ptwfArgsWgsl(wf: PtwfConfig = PTWF_PLAIN): string {
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'count'])}
 @group(3) @binding(0) var<storage, read_write> ptwfArgs: array<u32>;
-const PTWF_WG: u32 = ${PTWF_WORKGROUP}u;
+${wf.batch ? `const PTWF_LAYERS: u32 = ${wf.layers}u;
+` : ''}const PTWF_WG: u32 = ${PTWF_WORKGROUP}u;
 const PTWF_STRIDE: u32 = ${PTWF_STRIDE}u;
 const PTWF_INIT: u32 = ${PTWF_INIT}u;
 
@@ -224,7 +303,15 @@ fn ptwfGroups(count: u32) -> vec3u {
 @compute @workgroup_size(1)
 fn ptwfArgsMain() {
     let iter = ptParams.limits.w;
-    if (iter == PTWF_INIT) {
+${wf.refill ? `    if (iter >= ${PTWF_START_ITER}u) {
+${wf.batch ? `        atomicStore(&ptwfCount[${PTWF_COUNT_IDLE}u], 0u); // the start pass restarts every idle slot
+` : ''}        let g = ptwfGroups(atomicLoad(&ptwfCount[iter & 1u]));
+        ptwfArgs[${PTWF_ARGS_MAIN / 4}] = g.x;
+        ptwfArgs[${PTWF_ARGS_MAIN / 4 + 1}] = g.y;
+        ptwfArgs[${PTWF_ARGS_MAIN / 4 + 2}] = g.z;
+        return;
+    }
+` : `    if (iter == PTWF_INIT) {
         atomicStore(&ptwfCount[0], ptParams.dims.x * ptParams.dims.y);
         atomicStore(&ptwfCount[1], 0u);
         atomicStore(&ptwfCount[2], 0u);
@@ -235,10 +322,23 @@ fn ptwfArgsMain() {
         ptwfArgs[${PTWF_ARGS_MAIN / 4 + 2}] = g.z;
         return;
     }
+`}
     let cur = iter & 1u;
     let nxt = cur ^ 1u;
-    let gm = ptwfGroups(atomicLoad(&ptwfCount[nxt]));
-    let gs = ptwfGroups(atomicLoad(&ptwfCount[2u + cur]));
+${wf.batch ? `    let live = atomicLoad(&ptwfCount[nxt]);
+    let idle = atomicLoad(&ptwfCount[${PTWF_COUNT_IDLE}u]);
+    var refill = 0u;
+    if (idle > 0u && (live == 0u || live < u32(f32(ptParams.dims.x * ptParams.dims.y * PTWF_LAYERS) * ${f32Literal(wf.threshold)}))) {
+        refill = idle;
+        atomicStore(&ptwfCount[${PTWF_COUNT_IDLE}u], 0u);
+    }
+    // the refill dispatch is the camera kernel over the whole film (it scans the slots in pixel order, so the restarted primary rays stay coherent)
+    ptwfArgs[${PTWF_ARGS_REFILL / 4}] = select(0u, (ptParams.dims.x + 7u) / 8u, refill > 0u);
+    ptwfArgs[${PTWF_ARGS_REFILL / 4 + 1}] = select(0u, (ptParams.dims.y + 7u) / 8u, refill > 0u);
+    ptwfArgs[${PTWF_ARGS_REFILL / 4 + 2}] = select(0u, PTWF_LAYERS, refill > 0u);
+    let gm = ptwfGroups(live + refill);
+` : `    let gm = ptwfGroups(atomicLoad(&ptwfCount[nxt]));
+`}    let gs = ptwfGroups(atomicLoad(&ptwfCount[2u + cur]));
     ptwfArgs[${PTWF_ARGS_MAIN / 4}] = gm.x;
     ptwfArgs[${PTWF_ARGS_MAIN / 4 + 1}] = gm.y;
     ptwfArgs[${PTWF_ARGS_MAIN / 4 + 2}] = gm.z;
@@ -255,7 +355,7 @@ fn ptwfArgsMain() {
  * Shade kernel: the body of the megakernel's bounce loop for one queued path (`ptPath`, integrator-wgsl.ts), with the shadow ray queued
  * instead of traced. Needs the scene copy (surface, materials, lights), the BSDF modules, the sampler and the shared integrator head.
  */
-export function ptwfShadeWgsl(options: PtIntegratorOptions = {}): string {
+export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   const o = resolveIntegratorOptions(options);
   const tex = o.textures;
   const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
@@ -282,7 +382,7 @@ ${ptCommonHeadWgsl(o)}
 ${PT_MIS_WGSL}
 
 ${PT_ESCAPED_WGSL}
-${COMMON}${stateWgsl(o)}
+${commonWgsl(wf)}${stateWgsl(o)}${wf.refill ? ptwfStartPathWgsl(o) : ''}
 struct PtwfLd {
     valid: bool,
     contrib: vec3f,
@@ -333,15 +433,43 @@ fn ptwfAddRadiance(path: u32, l: vec3f) {
     }
 }
 
-fn ptwfShadePath(path: u32) {
+${wf.refill ? `// the path of this thread did not continue (escaped, absorbed, depth limit, roulette): the slot starts its next sample or goes dormant
+var<private> ptwfLive: bool;
+
+fn ptwfSampleIndex(path: u32) -> u32 {
+    return (u32(ptAccum[path].w) - 1u) * PTWF_LAYERS + path / (ptParams.dims.x * ptParams.dims.y);
+}
+
+fn ptwfRestart(path: u32) {
     let dims = ptParams.dims;
-    let n = dims.x * dims.y;
+    let n = ptwfSlots(dims);
+    let started = u32(ptAccum[path].w);
+    let sampleIndex = started * PTWF_LAYERS + path / (dims.x * dims.y);
+    if (sampleIndex >= dims.z) {
+        ptwfState[2u * n + path].w = 0u;
+        return;
+    }
+${wf.batch ? `    ptwfState[2u * n + path].w = 0u;
+    atomicAdd(&ptwfCount[${PTWF_COUNT_IDLE}u], 1u);
+` : `    ptwfStartPath(path, n, sampleIndex);
+    ptAccum[path].w = f32(started + 1u);
+    let nq = (ptParams.limits.w + 1u) & 1u;
+    let slot = atomicAdd(&ptwfCount[nq], 1u);
+    ptwfQueue[nq * n + slot] = path;
+`}}
+
+` : ''}fn ptwfShadePath(path: u32) {
+    let dims = ptParams.dims;
+    let n = ptwfSlots(dims);
     let maxDepth = ptParams.limits.x;
     let rrStart = ptParams.limits.y;
     let iter = ptParams.limits.w;
-    let sampleIndex = dims.z;
+${wf.refill ? `    let sampleIndex = ptwfSampleIndex(path);
+    let pixel = path % (dims.x * dims.y);
+    let pixelSeed = ptPixelSeed(pixel % dims.x, pixel / dims.x, dims.w);
+` : `    let sampleIndex = dims.z;
     let pixelSeed = ptPixelSeed(path % dims.x, path / dims.x, dims.w);
-
+`}
     let st = ptwfLoadPath(path, n);
     let ray = RtRay(st.origin, 0.0, st.dir, PT_FAR);
     var beta = st.beta;
@@ -477,7 +605,8 @@ ${counters ? `                ptCountEnd(path, depth, 3u);
     }
 
     ptwfAddRadiance(path, radiance);
-    var next: PtwfPath;
+${wf.refill ? `    ptwfLive = true;
+` : ''}    var next: PtwfPath;
     next.origin = nextOrigin;
     next.prevPdf = prevPdf;
     next.dir = wiWorld;
@@ -504,8 +633,14 @@ fn ptwfShade(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index)
     if (slot >= atomicLoad(&ptwfCount[q])) {
         return;
     }
-    let n = ptParams.dims.x * ptParams.dims.y;
-    ptwfShadePath(ptwfQueue[q * n + slot]);
-}
+    let n = ptwfSlots(ptParams.dims);
+${wf.refill ? `    ptwfLive = false;
+    let path = ptwfQueue[q * n + slot];
+    ptwfShadePath(path);
+    if (!ptwfLive) {
+        ptwfRestart(path);
+    }
+` : `    ptwfShadePath(ptwfQueue[q * n + slot]);
+`}}
 `;
 }
