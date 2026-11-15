@@ -118,6 +118,7 @@ try {
   const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width, height, camera, ...limits }, { min: lo as [number, number, number], max: hi as [number, number, number] }, {
     precision,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
+    ...(arm.infer ? { infer: arm.infer } : {}),
     training: args.training === 'replay' ? 'replay' : 'inline',
     trainSelect: args.trainSelect === 'pixel' ? 'pixel' : 'tile',
     queryDepth: numberArg(args, 'queryDepth', 1),

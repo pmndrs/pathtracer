@@ -392,6 +392,8 @@ export interface NrcSettings {
   precision: Precision;
   /** Inference backend options from `inferArmOptions` (portable when absent). */
   sgm?: MlpEngineOptions['sgm'];
+  /** Portable inference kernel when `sgm` is absent: 'tiled' (default, N1.4) or 'perRecord'. */
+  infer?: 'perRecord' | 'tiled';
   /** Vertex the render paths terminate into the cache at (0 = the primary hit: the "cache only" view). Default 1. */
   queryDepth: number;
   /** Training paths are terminated at vertex M with the cache as the tail; targets for vertices 0..M−1. Default 4. */
@@ -562,6 +564,7 @@ export class NrcCache {
       trainHooks: NRC_TRAIN_HOOKS,
       inferHooks: NRC_INFER_HOOKS,
       ...(s.sgm ? { sgm: s.sgm } : {}),
+      ...(s.infer ? { infer: s.infer } : {}),
     });
     mlp.uploadWeights(NrcCache.freshWeights(s, s.seed));
     const tailInferGroup = inline

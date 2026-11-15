@@ -67,6 +67,7 @@ try {
   precision = fwdArm.precision;
   const mlp = await MlpEngine.create(device, {
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
+    ...(arm.infer ? { infer: arm.infer } : {}),
     ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}),
     precision,
     capacity: batch,

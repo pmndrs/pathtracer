@@ -212,3 +212,91 @@ ${body.map((b) => `  {\n${b}\n  }`).join('\n')}
 }
 `;
 }
+
+/**
+ * Tiled portable INFERENCE (N1.4): the forward half of `trainTiledWgsl` without activation stores. Same entry point name
+ * (`nnInfer`) and bindings as `inferWgsl` (group 0: weights, state; caller hooks `nnInferLoad` / `nnInferStore` in group 1),
+ * so the engine only swaps the generator. A workgroup of 256 threads handles R records; thread (tx, ty) owns outputs 4tx..4tx+3
+ * of R/16 records. Workgroup memory: the f32 activation tile and one staged layer.
+ */
+export function inferTiledWgsl(o: MlpWgslOptions, hooks: string, f: ForwardOptions = DEFAULT_FORWARD): string {
+  validateForwardOptions(o, f);
+  const { shape } = o;
+  const R = f.records;
+  const RB = R / TX;
+  const S4 = rowStride(shape) / 4;
+  const layers = layerCount(shape);
+  const maxLayer = Math.max(...Array.from({ length: layers }, (_, l) => layerIn(shape, l) * layerOut(shape, l)));
+  const each = (fn: (rb: number) => string, sep = '\n') => Array.from({ length: RB }, (_, rb) => fn(rb)).join(sep);
+  const body: string[] = [];
+  for (let l = 0; l < layers; l++) {
+    const nIn4 = layerIn(shape, l) / 4;
+    const nOut = layerOut(shape, l);
+    const nOut4 = Math.ceil(nOut / 4);
+    const last = l === shape.hidden;
+    let b = `  // layer ${l}: ${nOut} × ${layerIn(shape, l)}
+  nnStageTiled(${layerOffset(shape, l) / 4}u, ${(layerIn(shape, l) * nOut) / 4}u, lid);
+${each((rb) => `  var acc${rb} = vec4f(0.0);`)}
+  if (tx < ${nOut4}u) {
+    for (var k = 0u; k < ${nIn4}u; k++) {
+      let w0 = vec4f(nnLayer[(4u * tx + 0u) * ${nIn4}u + k]);
+      let w1 = vec4f(nnLayer[(4u * tx + 1u) * ${nIn4}u + k]);
+      let w2 = vec4f(nnLayer[(4u * tx + 2u) * ${nIn4}u + k]);
+      let w3 = vec4f(nnLayer[(4u * tx + 3u) * ${nIn4}u + k]);
+${each((rb) => `      { let av = nnTile[(ty * ${RB}u + ${rb}u) * NN_S4 + k]; acc${rb} += vec4f(dot(av, w0), dot(av, w1), dot(av, w2), dot(av, w3)); }`)}
+    }
+  }
+  workgroupBarrier();`;
+    if (!last) {
+      b += `\n  if (tx < ${nOut4}u) {
+${each((rb) => `    nnTile[(ty * ${RB}u + ${rb}u) * NN_S4 + tx] = vec4f(T4(max(acc${rb}, vec4f(0.0))));`)}
+  }`;
+    } else {
+      if (nOut > 4) throw new Error('inferTiledWgsl: the output layer must have at most 4 outputs');
+      b += `\n  if (tx == 0u) {
+${each((rb) => `    { let r = r0 + ty * ${RB}u + ${rb}u; if (r < count) { nnInferStore(r, acc${rb}.xyz); } }`)}
+  }`;
+    }
+    body.push(b);
+  }
+  return `${header(o)}
+${encodingWgsl()}
+const NN_R = ${R}u;
+@group(0) @binding(0) var<storage, read> nnWeights: array<T4>;
+@group(0) @binding(1) var<storage, read> nnState: NnState;
+
+var<workgroup> nnLayer: array<T4, ${maxLayer / 4}>;
+var<workgroup> nnTile: array<vec4f, ${R * S4}>;
+
+// Copies \`n4\` vec4s of weights starting at vec4 \`off4\` into workgroup memory. Uniform control flow only.
+fn nnStageTiled(off4: u32, n4: u32, lid: u32) {
+  workgroupBarrier();
+  for (var k = lid; k < n4; k += ${FORWARD_THREADS}u) { nnLayer[k] = nnWeights[off4 + k]; }
+  workgroupBarrier();
+}
+${hooks}
+
+@compute @workgroup_size(${FORWARD_THREADS})
+fn nnInfer(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, @builtin(local_invocation_index) lid: u32) {
+  let r0 = (wid.x + wid.y * nwg.x) * NN_R;
+  let count = nnState.count;
+  let tx = lid % ${TX}u;
+  let ty = lid / ${TX}u;
+  for (var rl = lid; rl < NN_R; rl += ${FORWARD_THREADS}u) {
+    let r = r0 + rl;
+    var x: array<f32, NN_IN>;
+    if (r < count) { x = nnInferLoad(r); }
+    for (var k = 0u; k < NN_IN / 4u; k++) { nnTile[rl * NN_S4 + k] = vec4f(T4(vec4f(x[4u * k], x[4u * k + 1u], x[4u * k + 2u], x[4u * k + 3u]))); }
+  }
+  workgroupBarrier();
+${body.map((b) => `  {\n${b}\n  }`).join('\n')}
+}
+`;
+}
+
+/** Workgroup memory of the tiled inference kernel (bytes): f32 activation tile and one staged layer in T. */
+export function inferTiledWorkgroupBytes(o: MlpWgslOptions, f: ForwardOptions): number {
+  const { shape } = o;
+  const maxLayer = Math.max(...Array.from({ length: layerCount(shape) }, (_, l) => layerIn(shape, l) * layerOut(shape, l)));
+  return f.records * rowStride(shape) * 4 + maxLayer * (o.precision === 'f16' ? 2 : 4);
+}

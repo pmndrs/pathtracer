@@ -64,6 +64,7 @@ try {
     forward,
     forwardOptions,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
+    ...(arm.infer ? { infer: arm.infer } : {}),
   });
   mlp.uploadWeights(initWeights(DEFAULT_SHAPE, 1));
 

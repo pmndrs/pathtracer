@@ -81,7 +81,7 @@ try {
   const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', subgroups), tile: numberArg(args, 'tile', 8) });
   precision = fwdArm.precision;
   const forwardKind = fwdArm.forward;
-  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, forward: forwardKind, forwardOptions, ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}), ...(sgm ? { sgm } : {}) });
+  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, forward: forwardKind, forwardOptions, ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}), ...(sgm ? { sgm } : {}), ...(arm.infer ? { infer: arm.infer } : {}) });
   const inputBuffer = storageBuffer(device, inputs, 'inputs');
   const targetBuffer = storageBuffer(device, targets, 'targets');
   const outputBuffer = storageBuffer(device, n * 3 * 4, 'outputs');

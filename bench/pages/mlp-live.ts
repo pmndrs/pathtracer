@@ -141,6 +141,7 @@ try {
       trainHooks: IMAGE_HOOKS_TRAIN,
       inferHooks: IMAGE_HOOKS_INFER,
       ...(options.sgm ? { sgm: options.sgm } : {}),
+      ...(options.infer ? { infer: options.infer } : {}),
     });
     mlp.uploadWeights(initWeights(DEFAULT_SHAPE, seed));
     counts?.destroy();

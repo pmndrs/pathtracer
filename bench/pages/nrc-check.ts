@@ -70,6 +70,7 @@ try {
   const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width: WIDTH, height: WIDTH, camera, maxDepth }, { min: [-1, -1, -1], max: [1, 1, 1] }, {
     precision,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
+    ...(arm.infer ? { infer: arm.infer } : {}),
     training: args.training === 'replay' ? 'replay' : 'inline',
     updateBlock: numberArg(args, 'updateBlock', 2),
     trainSelect: args.trainSelect === 'pixel' ? 'pixel' : 'tile',

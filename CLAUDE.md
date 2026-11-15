@@ -599,3 +599,6 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   32 KiB); one subgroup per workgroup is 2-3× slower than four; Apple's only f16 config is f16→f16, so f16 sums are noisier than
   the tiled kernel's (f32 row sums). Short MLP kernels time bimodally on this Mac (0.3-1.0 ms medians on a quiet machine):
   quote min and p25.
+- `infer=portable` on the MLP pages is the naive per-record kernel (kept so older CSV rows keep their meaning); the engine's
+  default portable inference is the tiled kernel (`infer: 'tiled'`, 8.6× faster in f16). A one-off 73 ms/M reading for tiled f16
+  was a load spike (loadavg 5.2): rerun before believing a single bad A/B.

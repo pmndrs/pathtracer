@@ -64,10 +64,12 @@ export function inferArmOptions(
   shape: MlpShape,
   precision: Precision,
   opts: { records?: number; subgroups?: number; tile?: number; roundTrip?: 'relu' | 'skip' | 'double' } = {},
-): { precision: Precision; sgm?: MlpEngineOptions['sgm']; description: string } {
+): { precision: Precision; sgm?: MlpEngineOptions['sgm']; infer?: 'perRecord' | 'tiled'; description: string } {
   const records = opts.records ?? 64;
   const subgroups = opts.subgroups ?? 1;
-  if (arm === 'portable') return { precision, description: `portable ${precision}` };
+  // 'portable' stays the per-record kernel (older result rows mean that); the engine's default portable kernel is 'tiled'.
+  if (arm === 'portable') return { precision, infer: 'perRecord', description: `portable ${precision}` };
+  if (arm === 'tiled') return { precision, infer: 'tiled', description: `portable tiled ${precision}` };
   if (arm === 'sgm-emu') {
     const t = opts.tile ?? 8;
     return {
@@ -87,7 +89,7 @@ export function inferArmOptions(
       description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→${config.resultComponentType}, ${records} rec × ${subgroups} sg${opts.roundTrip && opts.roundTrip !== 'relu' ? `, roundTrip=${opts.roundTrip} (TIMING ONLY)` : ''}`,
     };
   }
-  throw new Error(`infer must be portable, sgm or sgm-emu, got ${arm}`);
+  throw new Error(`infer must be portable, tiled, sgm or sgm-emu, got ${arm}`);
 }
 
 /**

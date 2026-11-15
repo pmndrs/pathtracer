@@ -133,8 +133,10 @@ function backendOptions(adapter: GPUAdapter, device: GPUDevice): void {
   const sel = $<HTMLSelectElement>('backend');
   const keep = sel.value;
   const options: [string, string][] = [];
-  if (device.features.has('shader-f16')) options.push(['portable-f16', 'Portable f16']);
-  options.push(['portable-f32', 'Portable f32']);
+  if (device.features.has('shader-f16')) options.push(['tiled-f16', 'Tiled f16 (no flag needed)']);
+  options.push(['tiled-f32', 'Tiled f32 (no flag needed)']);
+  if (device.features.has('shader-f16')) options.push(['portable-f16', 'Per-record f16 (naive)']);
+  options.push(['portable-f32', 'Per-record f32 (naive)']);
   if (hasSubgroupMatrix(device)) {
     options.push(['sgm-4', 'Subgroup matrix, 4 subgroups']);
     options.push(['sgm-1', 'Subgroup matrix, 1 subgroup']);
@@ -154,12 +156,14 @@ async function buildCache(l: Pick<Live, 'adapter' | 'device' | 'plain' | 'width'
     precision = arm.precision;
     sgm = arm.sgm;
   }
+  const infer = backend.startsWith('tiled') ? 'tiled' : 'perRecord';
   const trainHeight = 72;
   const trainWidth = Math.max(4, Math.round((trainHeight * l.width) / l.height / 4) * 4);
   const { caps, trace, sceneBuffers } = l.adapter.debug;
   const cache = await NrcCache.create(l.device, caps, l.plain, [trace, sceneBuffers], { width: l.width, height: l.height, camera: camera(), ...limits(l.scene) }, l.bounds, {
     precision,
     ...(sgm ? { sgm } : {}),
+    infer,
     queryDepth: Number(value('queryDepth')),
     trainDepth: num('trainDepth'),
     trainWidth,

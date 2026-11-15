@@ -13,7 +13,7 @@
 import { DEFAULT_SHAPE, DEFAULT_TRAIN, weightCount, type MlpShape, type TrainSettings } from './config.ts';
 import { NN_WORKGROUP, adamWgsl, inferWgsl, prepareWgsl, rowStride, trainWgsl, weightGradientWgsl, type Precision } from './wgsl.ts';
 import { DEFAULT_GRADIENT, gradientPartialBytes, gradientReduceWgsl, gradientTileWgsl, type GradientKind, type GradientOptions } from './wgsl-gradient.ts';
-import { DEFAULT_FORWARD, defaultForwardRecords, forwardWorkgroupBytes, trainTiledWgsl, type ForwardKind, type ForwardOptions } from './wgsl-forward.ts';
+import { DEFAULT_FORWARD, defaultForwardRecords, forwardWorkgroupBytes, inferTiledWgsl, inferTiledWorkgroupBytes, trainTiledWgsl, type ForwardKind, type ForwardOptions } from './wgsl-forward.ts';
 import { inferSgmWgsl, packSgmWgsl, sgmWeightCount, sgmWorkgroupBytes, type SgmOptions } from './wgsl-sgm.ts';
 import { sgmTrainWorkgroupBytes, trainSgmWgsl } from './wgsl-sgm-train.ts';
 
@@ -36,6 +36,10 @@ export interface MlpEngineOptions {
    * must equal `precision` (emulation: f32).
    */
   sgm?: Omit<SgmOptions, 'shape'>;
+  /** Portable inference (no `sgm`): the tiled kernel (default; N1.4, `inferTiledWgsl`: 8.6× the per-record kernel in f16 on the M5 Pro) or one thread per record ('perRecord'). */
+  infer?: 'perRecord' | 'tiled';
+  /** Tiled inference: records per workgroup (default `defaultForwardRecords(precision)`). */
+  inferOptions?: Partial<ForwardOptions>;
   /** Weight-gradient arm: one thread per weight looping over all records, or the tiled split-K pass (N1.2). Default 'tiled' (N1.2 A/B: f16 step 6.9 → 2.7 ms on the M5 Pro). */
   gradient?: GradientKind;
   /** Tiled arm only: `splits` record ranges per layer and `chunk` records staged per iteration. */
@@ -93,7 +97,7 @@ export class MlpEngine {
   readonly sgmWeights: GPUBuffer | null;
   /** Records per workgroup of the inference kernel. */
   readonly inferGroupRecords: number;
-  readonly inferBackend: 'portable' | 'sgm' | 'sgm-emulated';
+  readonly inferBackend: 'portable' | 'portable-tiled' | 'sgm' | 'sgm-emulated';
 
   private readonly pipelines: Record<'prepare' | 'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUComputePipeline> & { pack?: GPUComputePipeline; packTrain?: GPUComputePipeline; gradientReduce?: GPUComputePipeline };
   private readonly groups: Record<'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUBindGroup> & { pack?: GPUBindGroup; packTrain?: GPUBindGroup; gradientReduce?: GPUBindGroup };
@@ -148,8 +152,9 @@ export class MlpEngine {
     this.trainParams = buffer('trainParams', PARAMS_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.inferParams = buffer('inferParams', PARAMS_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     const sgm = options.sgm;
-    this.inferBackend = sgm ? (sgm.emulate ? 'sgm-emulated' : 'sgm') : 'portable';
-    this.inferGroupRecords = sgm ? sgm.records : NN_WORKGROUP;
+    const tiledInfer = !sgm && (options.infer ?? 'tiled') === 'tiled';
+    this.inferBackend = sgm ? (sgm.emulate ? 'sgm-emulated' : 'sgm') : tiledInfer ? 'portable-tiled' : 'portable';
+    this.inferGroupRecords = sgm ? sgm.records : tiledInfer ? (options.inferOptions?.records ?? defaultForwardRecords(options.precision)) : NN_WORKGROUP;
     this.sgmCount = sgm ? sgmWeightCount(this.shape, sgm.config) : 0;
     this.sgmWeights = sgm ? buffer('sgmWeights', this.sgmCount * bpe) : null;
     this.gradientPartials = this.gradientKind === 'tiled' ? buffer('gradientPartials', gradientPartialBytes({ shape: this.shape, precision: this.precision }, this.gradientOptions)) : null;
@@ -214,6 +219,12 @@ export class MlpEngine {
       const need = sgmTrainWorkgroupBytes(trainSgm);
       if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: sgm training needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower trainSgm.records`);
     }
+    const tiledInfer = !sgm && (options.infer ?? 'tiled') === 'tiled';
+    const inferOptions = { ...DEFAULT_FORWARD, records: defaultForwardRecords(options.precision), ...options.inferOptions };
+    if (tiledInfer) {
+      const need = inferTiledWorkgroupBytes(o, inferOptions);
+      if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: tiled inference needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower inferOptions.records`);
+    }
     if (tiledForward) {
       const need = forwardWorkgroupBytes(o, forwardOptions);
       if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: tiled forward needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower forwardOptions.records`);
@@ -222,7 +233,7 @@ export class MlpEngine {
     const gradientOptions = { ...DEFAULT_GRADIENT, ...options.gradientOptions };
     const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync, pack, gradientReduce, packTrain] = await Promise.all([
       make('prepare', prepareWgsl(o), 'nnPrepare'),
-      sgm ? make('inferSgm', inferSgmWgsl(sgm, options.inferHooks), 'nnInferSgm') : make('infer', inferWgsl(o, options.inferHooks), 'nnInfer'),
+      sgm ? make('inferSgm', inferSgmWgsl(sgm, options.inferHooks), 'nnInferSgm') : make('infer', tiledInfer ? inferTiledWgsl(o, options.inferHooks, inferOptions) : inferWgsl(o, options.inferHooks), 'nnInfer'),
       make('forwardBackward', trainSgm ? trainSgmWgsl(trainSgm, options.trainHooks) : tiledForward ? trainTiledWgsl(o, options.trainHooks, forwardOptions) : trainWgsl(o, options.trainHooks), 'nnForwardBackward'),
       tiled ? make('gradientTile', gradientTileWgsl(o, gradientOptions), 'nnGradientTile') : make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
       make('adam', adam, 'nnAdam'),

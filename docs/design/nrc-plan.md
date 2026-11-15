@@ -49,7 +49,7 @@ Target frame: 16.7 ms on the M5 Pro at 960×540 (upscaled to 1080p), path tracin
 
 | Piece | Measured now (M5 Pro, 2026-11-15) | Target |
 |---|---|---|
-| Inference, 518k queries (960×540) | 4.4 ms (subgroup matrix f16, 4 subgroups); 49 ms portable f16 (quiet) | ≤ 4 ms |
+| Inference, 518k queries (960×540) | 4.4 ms (subgroup matrix f16, 4 subgroups); **5.7 ms tiled f16, no flag**; 49 ms naive | ≤ 4 ms |
 | Training, 4 × 16k records | 2.0 ms (portable f16, 0.51 ms per step: tiled gradient + tiled forward-backward; was 27.5) | ≤ 4 ms ✅ |
 | Path tracing, ~2 short paths per pixel | 640×360: 5.6 ms with training paths (960×540: ~13.5) | rest of the frame |
 | **Cache side, 640×360 total** | **9.0 ms** (render 5.6, 2 steps 1.3, inference 2.1; subgroup matrix f16, flagged Chrome) | 16.7 ms ✅ |
@@ -107,6 +107,8 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-15 (Mac, session 10).** Tiled portable inference (N1.4) is the default: 8.6× the naive kernel in f16, within 1.36× of
+  subgroup matrices. In plain Chrome (no flag) the 960×540 cache frame went from 64 ms to 21 ms (flagged: 19 ms).
 - **2026-11-15 (Mac, session 9).** Subgroup-matrix training (forward-backward) built and verified: 1.55× faster than the tiled kernel
   in f32, 10-25% slower in f16. On Apple, well-tiled plain WGSL is about as fast as the matrix path; NVIDIA is the real test (M6).
   Next: tiled portable inference (N1.4) for users without the flag.
