@@ -22,7 +22,7 @@
  * kernels: inline refill restarts a finished slot in the shade kernel, batch refill dispatches the camera kernel over the film from the args kernel's decision.
  */
 import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
-import { ptHookVertexExpr } from '../integrator/outputs-wgsl.ts';
+import { ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } from '../integrator/outputs-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
@@ -386,11 +386,13 @@ ${medium ? `        st.beta = st.beta * exp(-st.sigma * hit.t);
 /** Shadow kernel: visibility of every shadow ray; a visible one adds its contribution to the pixel. Needs the raytracer module (walk; the scene copy with `ptVisibleMasked`, alpha MASK with an exact shadow policy). */
 export function ptwfShadowWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   const masked = ptMaskShadow(resolveIntegratorOptions(options));
+  // The optional radiance callback: the shade kernel stored (vertex, flags, sample, pixel) in the 4th shadow-ray section.
+  const onRadiance = ptHookWantsRadiance(options.hooks);
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'count', 'queue', 'shadow'])}
 ${masked ? `${ptCommonHeadWgsl(resolveIntegratorOptions(options))}
-${PT_VISIBLE_MASKED_WGSL}` : ''}${commonWgsl(wf)}
+${PT_VISIBLE_MASKED_WGSL}` : ''}${onRadiance ? `${ptHooksWgsl(options.hooks ?? null)}\n` : ''}${commonWgsl(wf)}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -405,7 +407,9 @@ fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index
     let r2 = ptwfShadowRay[2u * n + path];
     if (${masked ? 'ptVisibleMasked' : 'rtVisible'}(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), RT_MASK_ALL)) {
         ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2), 0.0);
-    }
+${onRadiance ? `        let info = ptwfShadowRay[3u * n + path];
+        ptOnRadiance(info.w, info.z, info.x, info.y, ptwfF3(r2));
+` : ''}    }
 }
 `;
 }
@@ -497,6 +501,10 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
   const lodS = ptLodSnippets(o, '    ');
   const mixU = mats?.features.mix || (o.lod !== 'off' && mats) ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
   const hooks = !!o.hooks;
+  // The optional radiance callback (`ptOnRadiance`): call sites only when the hook text defines it (every other kernel keeps its exact text).
+  const onRadiance = ptHookWantsRadiance(o.hooks);
+  const addRadiance = (value: string, index: string, indent: string): string =>
+    onRadiance ? `${indent}{\n${indent}    let ptAdded = ${value};\n${indent}    radiance += ptAdded;\n${indent}    ptOnRadiance(path, sampleIndex, ${index}, ptHookFlags, ptAdded);\n${indent}}\n` : `${indent}radiance += ${value};\n`;
   const counters = o.counters;
   const aovs = o.aovs;
   const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
@@ -632,7 +640,8 @@ ${wf.refill ? `    let sampleIndex = ptwfSampleIndex(path);
 ${medium ? `    var sigma = st.sigma;
 ` : ''}${tex ? `    var cone = RtCone(st.coneWidth, st.coneSpread);
 ` : ''}    var radiance = vec3f(0.0);
-
+${onRadiance ? `    let ptHookFlags = ptHookUpdateFlag(path % dims.x, path / dims.x, sampleIndex);
+` : ''}
     let h0 = ptwfHit[path];
     let h1 = ptwfHit[n + path];
     let h2 = ptwfHit[2u * n + path];
@@ -641,8 +650,7 @@ ${o.alphaMask ? `    if (h1.w != 0u) {
         return; // the intersect kernel ran out of cutout skips (PT_MASK_SKIPS): the path ends, as in the megakernel
     }
 ` : ''}    if (hit.t < 0.0) {
-        radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
-        ptwfAddRadiance(path, radiance);
+${addRadiance('beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf)', 'depth', '        ')}        ptwfAddRadiance(path, radiance);
 ${counters ? `        ptCountRay(path, 1u, 0u);
         ptCountEnd(path, depth, 0u);
 ` : ''}        return;
@@ -673,8 +681,7 @@ ${hooks ? `    var hookEmitted = vec3f(0.0);
                 w = ptMis(prevPdf, light.pmf * rtTriangleSolidAnglePdf(light.area, dist, cosLight));
             }
         }
-        radiance += beta * mat.emissionColor * w;
-${hooks ? `        hookEmitted = beta * mat.emissionColor * w;
+${addRadiance('beta * mat.emissionColor * w', 'depth', '        ')}${hooks ? `        hookEmitted = beta * mat.emissionColor * w;
 ` : ''}    }
 
 ${lodS.bsdf(mixU, shadingNormal, true) ?? `    let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
@@ -709,7 +716,8 @@ ${aniso ? `    var frame = ptFrameFromNormal(${shadingNormal});
             ptwfShadowRay[path] = vec4u(bitcast<vec3u>(ld.ray.origin), bitcast<u32>(ld.ray.tMin));
             ptwfShadowRay[n + path] = vec4u(bitcast<vec3u>(ld.ray.direction), bitcast<u32>(ld.ray.tMax));
             ptwfShadowRay[2u * n + path] = vec4u(bitcast<vec3u>(beta * ld.contrib), 0u);
-${wf.subgroup ? `            ptwfWantShadow = true;
+${onRadiance ? `            ptwfShadowRay[3u * n + path] = vec4u(vertex, ptHookFlags, sampleIndex, path);
+` : ''}${wf.subgroup ? `            ptwfWantShadow = true;
 ` : `            let ss = atomicAdd(&ptwfCount[2u + (iter & 1u)], 1u);
             ptwfQueue[2u * n + ss] = path;
 `}${counters ? `            ptCountRay(path, 0u, 1u);
@@ -717,8 +725,7 @@ ${wf.subgroup ? `            ptwfWantShadow = true;
     }
 ${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' })};
     if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
-        radiance += beta * ptTerminate(hv);
-        ptwfAddRadiance(path, radiance);
+${addRadiance('beta * ptTerminate(hv)', 'vertex + 1u', '        ')}        ptwfAddRadiance(path, radiance);
 ${counters ? `        ptCountEnd(path, depth, 4u);
 ` : ''}        return;
     }

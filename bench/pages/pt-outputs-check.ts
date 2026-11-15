@@ -236,7 +236,7 @@ function expectCounters(label: string, c: PtCounters, expect: { depth: number; e
  *  - Closed room, NEE off, no RR, maxDepth M: the emission of vertex j is rho^j E, so slot j holds spp * rho^j E (j = 0..M); with the cache hook
  *    terminating at vertex K with value c, slots 0..K hold spp * rho^j E and slot K + 1 holds spp * rho^K c.
  *  - Bookkeeping, any settings (NEE + MIS, RR): the slots of a pixel sum to its accumulated radiance.
- * Megakernel only for now (the wavefront has no call sites yet: TASKS N6d).
+ * Both schedulers: the wavefront reports next-event light from its shadow kernel (the hook's group 3 there: `setHookRadianceBindGroup`).
  */
 async function checkRadiance(spp: number, tol: number): Promise<void> {
   const M = 6;
@@ -262,14 +262,15 @@ fn ptTerminate(v: PtPathVertex) -> vec3f {
     { name: 'closed_cache', settings: {}, terminateAt: K, cache: 0.75, expected: (j) => (j <= K ? RHO ** j * E : j === K + 1 ? RHO ** K * 0.75 : 0) },
     { name: 'nee_rr_sum', settings: { nee: true, rrStartDepth: 2 }, terminateAt: 1000, cache: 0 },
   ];
-  for (const c of cases) {
-    const adapter = new PtMegakernelAdapter({ nee: false, rrStartDepth: 0, passesPerSubmit: 4, ...c.settings, hooks: { wgsl: wgsl(c.terminateAt, c.cache), bindings } });
+  for (const scheduler of SCHEDULERS) for (const c of cases) {
+    const adapter = new PtMegakernelAdapter({ nee: false, rrStartDepth: 0, passesPerSubmit: 4, scheduler, ...c.settings, hooks: { wgsl: wgsl(c.terminateAt, c.cache), bindings } });
     await adapter.load(room(M));
     const device = adapter.gpuContext!.device;
     const kernel = adapter.renderer!;
     const pixels = 32 * 32;
     const slots = device.createBuffer({ size: pixels * SLOTS * 12, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     kernel.setHookBindGroup(device.createBindGroup({ layout: kernel.hookBindGroupLayout!, entries: [{ binding: 0, resource: { buffer: slots } }] }));
+    if ('setHookRadianceBindGroup' in kernel) kernel.setHookRadianceBindGroup(device.createBindGroup({ layout: kernel.hookRadianceBindGroupLayout!, entries: [{ binding: 0, resource: { buffer: slots } }] }));
     const result = await adapter.render({ spp });
     const staging = device.createBuffer({ size: slots.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const enc = device.createCommandEncoder();
@@ -294,9 +295,9 @@ fn ptTerminate(v: PtPathVertex) -> vec3f {
         worst = Math.max(worst, Math.abs(sum - pixel) / Math.max(pixel, 1e-3));
       }
     }
-    metrics[`radiance_megakernel_${c.name}_max_rel_dev`] = worst;
-    metrics[`radiance_megakernel_${c.name}_mismatch`] = worst > tol ? 1 : 0;
-    if (worst > tol) note(`radiance callback ${c.name}: max rel dev ${worst}`);
+    metrics[`radiance_${scheduler}_${c.name}_max_rel_dev`] = worst;
+    metrics[`radiance_${scheduler}_${c.name}_mismatch`] = worst > tol ? 1 : 0;
+    if (worst > tol) note(`radiance callback ${scheduler} ${c.name}: max rel dev ${worst}`);
     slots.destroy();
     adapter.dispose();
   }

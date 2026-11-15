@@ -35,6 +35,14 @@ export interface PtHooksOptions {
    * to the cache's update buffer). 0 (default) = no update paths.
    */
   updateBlock?: number;
+  /**
+   * Wavefront only, with `ptOnRadiance` (`ptHookWantsRadiance`): the `bindings` (by binding number) the radiance callback uses. The wavefront adds
+   * next-event light in its shadow kernel, after the visibility test, and calls `ptOnRadiance` there, so that kernel binds these as its own `@group(3)`
+   * (`PtWavefront.setHookRadianceBindGroup`). It has room for 3 storage buffers on Apple (walk 3 + io 4 = 7 of 10; 1 with an exact alpha-mask shadow
+   * policy, which adds the scene copy). Default: all of `bindings`. The hook text then also compiles in the shadow kernel (the hook interface is there;
+   * functions the callback does not reach are pruned).
+   */
+  radianceBindings?: number[];
 }
 
 /** Hook return values and `PtPathVertex.flags` bits (the WGSL constants of the same names). */

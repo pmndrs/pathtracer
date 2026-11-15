@@ -22,7 +22,7 @@ import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
 import { ptApplyMode } from '../integrator/modes.ts';
 import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
-import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
+import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptHookWantsRadiance, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
 import { ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
@@ -163,6 +163,8 @@ export function ptWavefrontKernelBytes(build: PtWavefrontBuild): KernelBytes {
 
 interface PtwfLayouts {
   hooks: GPUBindGroupLayout | null;
+  /** `ptOnRadiance` only: group 3 of the shadow kernel (the hook's `radianceBindings`). */
+  hooksRadiance: GPUBindGroupLayout | null;
   empty: GPUBindGroupLayout;
   walk: GPUBindGroupLayout;
   scene: GPUBindGroupLayout;
@@ -199,6 +201,7 @@ export class PtWavefront {
   private readonly slotBytes: number;
   private readonly medium: boolean;
   private hookGroup: GPUBindGroup | null = null;
+  private hookRadianceGroup: GPUBindGroup | null = null;
   private vbufferView: GPUTextureView | null = null;
   private jitter: [number, number] = [0, 0];
   private counterBuffer: GPUBuffer | null = null;
@@ -264,10 +267,14 @@ export class PtWavefront {
     const io = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
     const hooks = options.integrator?.hooks ? device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] }) : null;
+    // `ptOnRadiance`: the shadow kernel reports next-event light after its visibility test, with the bindings the callback uses.
+    const radianceHooks = options.integrator?.hooks && ptHookWantsRadiance(options.integrator.hooks)
+      ? device.createBindGroupLayout({ label: `${label} hooks radiance`, entries: (options.integrator.hooks.bindings ?? []).filter((e) => options.integrator?.hooks?.radianceBindings?.includes(e.binding) ?? true) })
+      : null;
     const scenePerKernel = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, usesScene(k, options.integrator, options.textures)])) as Record<PtwfKernel, boolean>;
-    const layouts = { hooks, empty, walk, scene, io, args: argsLayout, scene_: scenePerKernel };
+    const layouts = { hooks, hooksRadiance: radianceHooks, empty, walk, scene, io, args: argsLayout, scene_: scenePerKernel };
     const pipelineLayout = (k: PtwfKernel): GPUPipelineLayout =>
-      device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, scenePerKernel[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : []), ...(k === 'shade' && hooks ? [hooks] : [])] });
+      device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, scenePerKernel[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : []), ...(k === 'shade' && hooks ? [hooks] : []), ...(k === 'shadow' && radianceHooks ? [radianceHooks] : [])] });
     const pipelineLayouts = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, pipelineLayout(k)])) as Record<PtwfKernel, GPUPipelineLayout>;
     const layoutError = await device.popErrorScope();
     if (layoutError) throw new Error(`PtWavefront: invalid bind group / pipeline layout: ${layoutError.message}`);
@@ -330,7 +337,8 @@ export class PtWavefront {
       hit: make('hit', bytes.hit),
       count: make('counters', bytes.counters, STORAGE | COPY_SRC | COPY_DST),
       queue: make('queue', bytes.queue),
-      shadow: make('shadow rays', paths * PTWF_SHADOW_VEC4 * 16),
+      // `ptOnRadiance` adds a 4th section: (vertex, flags, sample, pixel) for the shadow kernel's report.
+      shadow: make('shadow rays', paths * (this.layouts.hooksRadiance ? PTWF_SHADOW_VEC4 + 1 : PTWF_SHADOW_VEC4) * 16),
     };
     this.counterBuffer = this.options.integrator?.counters ? make('debug counters', paths * PT_COUNTER_WORDS * 4, STORAGE | COPY_SRC | COPY_DST) : null;
     this.ioGroups = null;
@@ -341,6 +349,17 @@ export class PtWavefront {
   /** Layout of the hooks' bind group (`@group(3)` of the shade kernel), or null without hooks. */
   get hookBindGroupLayout(): GPUBindGroupLayout | null {
     return this.layouts.hooks;
+  }
+
+  /** `ptOnRadiance` only: layout of the shadow kernel's hook group (the hook's `radianceBindings`), or null. */
+  get hookRadianceBindGroupLayout(): GPUBindGroupLayout | null {
+    return this.layouts.hooksRadiance;
+  }
+
+  /** `ptOnRadiance` only: the shadow kernel's hook group (group 3), built on `hookRadianceBindGroupLayout` from the same buffers as `setHookBindGroup`. */
+  setHookRadianceBindGroup(group: GPUBindGroup): void {
+    if (!this.layouts.hooksRadiance) throw new Error('PtWavefront.setHookRadianceBindGroup: the hooks define no ptOnRadiance');
+    this.hookRadianceGroup = group;
   }
 
   /** The hooks' bind group (group 3 of the shade kernel). Not needed for a hook without bindings. */
@@ -428,6 +447,11 @@ export class PtWavefront {
       this.hookGroup = this.device.createBindGroup({ label: 'ptwf hooks (empty)', layout: this.layouts.hooks, entries: [] });
     }
     const hookGroup = this.hookGroup;
+    if (this.layouts.hooksRadiance && !this.hookRadianceGroup) {
+      if (this.layouts.hooksRadiance && (this.options.integrator?.hooks?.bindings ?? []).some((e) => this.options.integrator?.hooks?.radianceBindings?.includes(e.binding) ?? true)) throw new Error('PtWavefront: setHookRadianceBindGroup() first (ptOnRadiance uses bindings)');
+      this.hookRadianceGroup = this.device.createBindGroup({ label: 'ptwf hooks radiance (empty)', layout: this.layouts.hooksRadiance, entries: [] });
+    }
+    const hookRadianceGroup = this.hookRadianceGroup;
     const maxDepth = this.limits.maxDepth;
     const pass = encoder.beginComputePass({ label: 'ptwf samples', timestampWrites });
     const gx = Math.ceil(this.width / 8);
@@ -446,6 +470,7 @@ export class PtWavefront {
       pass.setBindGroup(2, ioGroups[kernel], [offset]);
       if (kernel === 'args') pass.setBindGroup(3, argsGroup);
       else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
+      else if (kernel === 'shadow' && hookRadianceGroup) pass.setBindGroup(3, hookRadianceGroup);
     };
     for (let i = 0; i < passes; i++) {
       record(this.samples, PTWF_INIT);
@@ -504,6 +529,11 @@ export class PtWavefront {
       this.hookGroup = this.device.createBindGroup({ label: 'ptwf hooks (empty)', layout: this.layouts.hooks, entries: [] });
     }
     const hookGroup = this.hookGroup;
+    if (this.layouts.hooksRadiance && !this.hookRadianceGroup) {
+      if (this.layouts.hooksRadiance && (this.options.integrator?.hooks?.bindings ?? []).some((e) => this.options.integrator?.hooks?.radianceBindings?.includes(e.binding) ?? true)) throw new Error('PtWavefront: setHookRadianceBindGroup() first (ptOnRadiance uses bindings)');
+      this.hookRadianceGroup = this.device.createBindGroup({ label: 'ptwf hooks radiance (empty)', layout: this.layouts.hooksRadiance, entries: [] });
+    }
+    const hookRadianceGroup = this.hookRadianceGroup;
     const base = this.slot;
     this.slot += PTWF_RECORDS_PER_ENCODE;
     const offsets: number[] = [];
@@ -520,6 +550,7 @@ export class PtWavefront {
       pass.setBindGroup(2, ioGroups[kernel], [offset]);
       if (kernel === 'args') pass.setBindGroup(3, argsGroup);
       else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
+      else if (kernel === 'shadow' && hookRadianceGroup) pass.setBindGroup(3, hookRadianceGroup);
     };
     const groups = Math.ceil((this.width * this.height * this.wf.layers) / PTWF_WORKGROUP);
     const ordered = { x: Math.min(groups, PTWF_STRIDE), y: Math.ceil(groups / PTWF_STRIDE) };
