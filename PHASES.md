@@ -53,11 +53,14 @@ coverage matrix exists (P2.31). Left: Tier 1 wave 2 (anisotropy, textured models
 Tier 1 gate decision, OIDN on final frames, kernel size on Windows (P2.10; layered kernels are 51–52 KB), and the
 switch-over for the siblings.
 
-## ⬜ P3 — Speed
+## 🟨 P3 — Speed
 
 Wavefront vs megakernel (both kept as settings until measured); wide BVH if it passed; coherence tricks; visibility-
 buffer primaries; NVIDIA/AMD timing on Windows; ray-class material LOD, alpha policy, cache hooks and debug views (R1, R2, R4,
 R10 from research note 12).
+**Progress (2026-11-15):** built — wavefront (P3.1/P3.2), alpha MASK + policy (P3.7, R2), V-buffer primaries (P3.6), material LOD
+(R1), scene-copy packing (P3.11), hooks/counters/AOVs (R10, R4). Left: material sort / subgroup appends (P3.3/P3.4), the auto policy
+(P3.9), a clean quiet rerun, the 3060 numbers and the competitor gate on Tier 2.
 **Exit gate:** faster time-to-equal-quality than every web competitor on every Tier 2 scene (M5, 3060L); ≥150 Mrays/s
 incoherent on 3060L.
 

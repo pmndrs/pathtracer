@@ -1,8 +1,14 @@
 # Status
 
-_Last updated 2026-11-14._
+_Last updated 2026-11-15._
 
-**Phase:** the phases are agreed (PHASES.md, decisions D1–D21) and three run at once. P0 has passed its gate on the Mac (quiet-machine competitor table, 2026-11-14); the RTX 3060 half waits on Windows. P1 (trace core) is built except moving reflections onto it, which is its gate. P2 (our own path tracer) matches pbrt-v4 and Mitsuba on all Tier 0 scenes (including the HDR environment map) and on Sponza, and now renders textures and OpenPBR materials (metal, glass, thin glass, absorbing interiors, coat over diffuse and over metal). Tier 1 (glTF material test models) wave 1 agrees with the references wherever one is valid (bench/results/TIER1-WAVE1.md); the feature-coverage matrix vs the web competitors is in bench/results/TIER1-COVERAGE.md.
+**Phase:** P0 passed its gate on the Mac (the RTX 3060 half waits on Windows). P1 (trace core) met its gate: reflections runs
+on it (P1.5, merged here; the reflections branch waits for reflections' own review). P2 (reference path tracer) passed the
+Tier 1 class A gate (D23, all 7 scenes) and has OIDN on final frames (bench); left are the siblings' switch-over and the
+layering default (D24 fix built, P2.32b, default pending the quiet pass). P3 (speed) is mostly built: a wavefront scheduler
+beside the megakernel (per pixel equal; refill, samples in flight, early-out), alpha MASK in both, visibility-buffer
+primaries, ray-class material LOD, scene-copy packing, cache hooks / counters / AOVs. Every new path is a setting; defaults
+wait for a quiet rerun (the 2026-11-15 pass ran loaded after a reboot, ratios held) and the 3060 (W10 compile time, P3 gate).
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.
