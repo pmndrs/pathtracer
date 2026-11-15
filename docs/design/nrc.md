@@ -23,7 +23,7 @@ PDF before quoting, **[U]** unknown, needs a test.
 Sources we may use: the paper and talks (D10: NVIDIA papers are fine), and **tiny-cuda-nn** (NVlabs, **BSD-3-Clause
 [V 2026-11-14, LICENSE.txt]**: may be ported with attribution in THIRD_PARTY.md). Off limits: the NRC SDK and RTXGI code
 (NVIDIA RTX SDK licence, D10), including `research/sources/native/rtxgi`. instant-ngp is under a non-commercial NVIDIA
-licence: ideas only. VkNRC has no licence: we follow its design and write our own code (§1b, D28).
+licence: ideas only. VkNRC has no licence: we follow its design and write our own code (§1b, D29).
 
 How it works [M unless marked]:
 
@@ -58,7 +58,7 @@ take: an MLP test harness with a CPU (Eigen) oracle and a "learning an image" te
 backward and Adam, then the integrator.
 
 **Licence: none.** No LICENSE file and no licence text anywhere in the tree [V 2026-11-14]; the README only describes
-the project. The maintainer's call (D27, D28), since this track is an experiment to find out whether a web NRC is
+the project. The maintainer's call (D28, D29), since this track is an experiment to find out whether a web NRC is
 possible at all:
 - **We follow its design closely**: kernel layout, record formats, pass graph, constants and the order it was built
   and tested in. VkNRC is credited as the design reference.
@@ -254,7 +254,7 @@ works on `wgsl-f16` at the upscaler's resolution, and the write-up says so.
 
 Built (`packages/mlp`, `@pathtracer/mlp`, private, WGSL prefix `nn`):
 - **Portable arms** `wgsl-f32` / `wgsl-f16`: inference, forward/backward, deterministic weight-gradient pass, Adam/EMA,
-  GPU-side counts and indirect dispatch (V101). f32 verified against the oracle on SwiftShader.
+  GPU-side counts and indirect dispatch (V139). f32 verified against the oracle on SwiftShader.
 - **Subgroup-matrix inference** `wgsl-sgm` (N3a, `wgsl-sgm.ts`): tiles from the adapter's config, weights read as a
   transposed column-major view, ReLU/convert round trip through workgroup memory, 1 or N subgroups per workgroup
   (rows split by `subgroup_id`). The same generator emits an **emulated** form in plain WGSL; that form matches the
@@ -279,7 +279,7 @@ Built (`packages/mlp`, `@pathtracer/mlp`, private, WGSL prefix `nn`):
   that the portable kernel is a naive baseline at 0.45 TFLOP/s (N1.2), so the fair comparison is still open.
 - *Live demo (N10):* works in the app's browser pane (portable backends) and in flagged Chrome (all backends).
 
-**Session 2 (2026-11-15).** Main merged (track N IDs renumbered: D27/D28, V101-V104, W11).
+**Session 2 (2026-11-15).** Main merged (track N IDs renumbered: D28/D29, V139-V142, W11).
 - *N3c:* the rewritten emulated form runs on the Apple GPU in 0.5-0.7 s and matches (8³/16³, 1 and 4 subgroups).
 - *N2 quiet table* (load 2.5-3.2, no row loaded), ms per 1M queries: portable f32 117-120, portable f16 93.7-94.4,
   sgm f32 32.1-32.3, sgm f16 12.3-12.4, sgm f16 ×4 subgroups 8.4. Training step f32 8.2, f16 6.9. Ratios: matrix path
@@ -335,11 +335,11 @@ Without a GPU (correctness only): `PT_CHROME_FLAGS="--no-sandbox --use-webgpu-ad
   - Settles it: whether a second consumer (Denoiser, gi) wants the MLP engine after N2.
 - **Public evidence for gpuweb.** If N2/N3 show a clear win, the numbers fit gpuweb issue #4195 (subgroup matrix). That is
   outward-facing; nothing gets posted without your go (D8).
-- ~~VkNRC licence / native build~~: settled 2026-11-14 (D27, D28): build it natively, follow its design, own code.
+- ~~VkNRC licence / native build~~: settled 2026-11-14 (D28, D29): build it natively, follow its design, own code.
 - **Windows Vulkan backend.** If tensor cores are only reachable through Dawn's Vulkan backend behind a flag, is a
   flag-only result acceptable for the demo? Suggestion: yes, reported as such.
 
-## 9. Native baseline: VkNRC on the RTX 3060 (N6.1, D27)
+## 9. Native baseline: VkNRC on the RTX 3060 (N6.1, D28)
 
 What runs where: VkNRC needs `VK_NV_cooperative_matrix`, `VK_EXT_shader_atomic_float` and ray queries, so it only runs
 on NVIDIA. The RTX 3060 laptop is the machine (Windows W11). It does **not** run on the Mac.
@@ -354,7 +354,7 @@ Vulkan SDK, Visual Studio 2022, x64 Release.
 sun, and offers a split screen (left/right: none, NRC, cache only) with an accumulate toggle. The only number it shows is
 FPS.
 
-**Local patches needed for a baseline** (kept in `.cache`, never committed, D27):
+**Local patches needed for a baseline** (kept in `.cache`, never committed, D28):
 1. GPU timestamps around each pass (path tracer, inference, each training step, optimiser), written to CSV, so we
    compare pass by pass rather than FPS.
 2. A fixed camera pose and frame count from the command line, and an exit after N frames.

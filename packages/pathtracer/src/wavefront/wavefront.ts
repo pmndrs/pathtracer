@@ -20,12 +20,13 @@ import type { Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
+import { ptApplyMode } from '../integrator/modes.ts';
 import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
 import { ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
-import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
-import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
+import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
+import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfPrimaryWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfSortWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
 
 const STORAGE = 0x80;
 const COPY_DST = 0x8;
@@ -45,34 +46,59 @@ const COMPUTE = 0x4;
  *  - `layers` (default 1, needs `refill`): path slots per pixel (samples in flight), for films too small to fill the GPU.
  */
 export interface PtWavefrontOptions extends PtMegakernelOptions {
-  refill?: boolean | 'inline' | 'batch';
+  /** `'ordered'` (P3.10): inline start in the shade kernel, but the restarted slots are appended by the `primary` kernel in slot (pixel) order, so primary rays stay coherent. */
+  refill?: boolean | 'inline' | 'batch' | 'ordered';
   refillThreshold?: number;
   layers?: number;
+  /**
+   * Queue appends of the shade kernel (P3.3, D11 A/B): `'atomic'` (default) one `atomicAdd` per appending thread; `'subgroup'` one `atomicAdd` per subgroup
+   * (`subgroupExclusiveAdd` ranks the lanes, so the queue keeps the lane order; needs the `subgroups` feature, throws without it); `'auto'` = subgroup when the device has the feature.
+   * The shade body is restructured so the appends sit in uniform control flow (`ptwfShadeEntrySubgroup`). The queue is always compact (only live paths are appended): this is the whole of "compaction".
+   */
+  appends?: 'atomic' | 'subgroup' | 'auto';
+  /**
+   * Coherence sorting (P3.4, D11 A/B), each block-wise (a workgroup sorts its 64 queue entries in place, no global payload sort): `'material'` sorts the queue between intersect
+   * and shade by miss / material id; `'octant'` sorts the next queue by ray-direction octant before its intersect; `'both'`; `'none'` (default). Costs one extra dispatch per iteration each.
+   */
+  sort?: 'none' | 'material' | 'octant' | 'both';
 }
 
-function scheduling(options: Pick<PtWavefrontOptions, 'refill' | 'layers' | 'refillThreshold'>): PtwfConfig {
+function scheduling(options: Pick<PtWavefrontOptions, 'refill' | 'layers' | 'refillThreshold' | 'appends' | 'sort'>, caps?: Caps): PtwfConfig {
   const layers = options.layers ?? 1;
   if (!Number.isInteger(layers) || layers < 1 || layers > 64) throw new RangeError(`PtWavefront: layers must be an integer in 1..64, got ${layers}`);
   if (layers > 1 && !options.refill) throw new Error('PtWavefront: layers > 1 needs refill: true (a slot must be able to start the next sample)');
   const threshold = options.refillThreshold ?? 0.25;
   if (!(threshold > 0 && threshold <= 1)) throw new RangeError(`PtWavefront: refillThreshold must be in (0, 1], got ${threshold}`);
-  return { refill: !!options.refill, batch: options.refill === 'batch', threshold, layers };
+  const appends = options.appends ?? 'atomic';
+  if (appends !== 'atomic' && appends !== 'subgroup' && appends !== 'auto') throw new RangeError(`PtWavefront: appends must be 'atomic' | 'subgroup' | 'auto', got ${String(appends)}`);
+  if (appends === 'subgroup' && caps && !caps.subgroups) throw new Error("PtWavefront: appends 'subgroup' needs the `subgroups` device feature (use 'auto' to fall back to atomic appends)");
+  const sort = options.sort ?? 'none';
+  if (sort !== 'none' && sort !== 'material' && sort !== 'octant' && sort !== 'both') throw new RangeError(`PtWavefront: sort must be 'none' | 'material' | 'octant' | 'both', got ${String(sort)}`);
+  const subgroup = appends === 'subgroup' || (appends === 'auto' && !!caps?.subgroups);
+  // optional fields are left out when off, so a default config is the same object shape (and kernel text) as before P3.3 / P3.4 / P3.10
+  return { refill: !!options.refill, batch: options.refill === 'batch', threshold, layers, ...(options.refill === 'ordered' ? { ordered: true } : {}), ...(subgroup ? { subgroup: true } : {}), ...(sort === 'material' || sort === 'both' ? { sortHit: true } : {}), ...(sort === 'octant' || sort === 'both' ? { sortRay: true } : {}) };
 }
 
 export const PTWF_KERNELS = ['camera', 'intersect', 'shade', 'shadow', 'args'] as const;
+/** Kernels that exist only with a setting: `sortHit` / `sortRay` (`sort`, P3.4), `primary` (`refill: 'ordered'`, P3.10). */
+export const PTWF_EXTRA_KERNELS = ['sortHit', 'sortRay', 'primary'] as const;
+export type PtwfBaseKernel = (typeof PTWF_KERNELS)[number];
+export type PtwfExtraKernel = (typeof PTWF_EXTRA_KERNELS)[number];
 /** Group 2 bindings each kernel declares (`PTWF_BINDING` numbers; 2 = fuzz table, only with `features.fuzz`). Must match the `bindings([...])` of the WGSL. */
-const IO_BINDINGS: Record<(typeof PTWF_KERNELS)[number], readonly number[]> = { camera: [0, 1, 3, 6], intersect: [0, 3, 4, 5, 6], shade: [0, 1, 2, 3, 4, 5, 6, 7], shadow: [0, 1, 5, 6, 7], args: [0, 5] };
-const USES_WALK: Record<(typeof PTWF_KERNELS)[number], boolean> = { camera: false, intersect: true, shade: false, shadow: true, args: false };
+const IO_BINDINGS: Record<PtwfKernel, readonly number[]> = { camera: [0, 1, 3, 6], intersect: [0, 3, 4, 5, 6], shade: [0, 1, 2, 3, 4, 5, 6, 7], shadow: [0, 1, 5, 6, 7], args: [0, 5], sortHit: [0, 4, 5, 6], sortRay: [0, 3, 5, 6], primary: [0, 3, 5, 6] };
+const USES_WALK: Record<PtwfKernel, boolean> = { camera: false, intersect: true, shade: false, shadow: true, args: false, sortHit: false, sortRay: false, primary: false };
 /** Kernels that bind the scene copy (group 1): shade always; with alpha MASK also intersect (cutout loop) and, for an exact shadow policy, shadow (`ptVisibleMasked`). */
-function usesScene(kernel: (typeof PTWF_KERNELS)[number], integrator: PtIntegratorOptions | undefined, textures: unknown): boolean {
+function usesScene(kernel: PtwfKernel, integrator: PtIntegratorOptions | undefined, textures: unknown): boolean {
   if (kernel === 'shade') return true;
+  if (kernel === 'sortHit' || kernel === 'sortRay' || kernel === 'primary') return false;
   const o = resolveIntegratorOptions({ ...integrator, ...(textures ? { textures: true } : {}) });
   if (o.primary === 'vbuffer' && kernel === 'intersect') return true; // resolves the V-buffer texel through the scene copy's surface table
   return o.alphaMask && (kernel === 'intersect' || (kernel === 'shadow' && ptMaskShadow(o)));
 }
-export type PtwfKernel = (typeof PTWF_KERNELS)[number];
-/** The five kernels, plus (`integrator.materialLod: 'secondary'`, R1) `shadeSecondary`: the smaller shade kernel for depth >= `materialLodDepth` (the `shade` kernel then only runs depth < N). */
-export type PtWavefrontBuild = Record<PtwfKernel, RtWgslBuild> & { shadeSecondary?: RtWgslBuild };
+export type PtwfKernel = PtwfBaseKernel | PtwfExtraKernel;
+/** The five kernels, plus (`integrator.materialLod: 'secondary'`, R1) `shadeSecondary`: the smaller shade kernel for depth >= `materialLodDepth` (the `shade` kernel then only runs depth < N), plus the settings' extra kernels. */
+export type PtWavefrontBuild = Record<PtwfBaseKernel, RtWgslBuild> & { shadeSecondary?: RtWgslBuild; sortHit?: RtWgslBuild; sortRay?: RtWgslBuild; primary?: RtWgslBuild };
+type KernelBytes = Record<PtwfBaseKernel, number> & Partial<Record<'shadeSecondary' | PtwfExtraKernel, number>>;
 
 /**
  * The shade kernel has no ray traversal, so it drops the walk's group 0 declarations (a declared binding must be in its pipeline layout, and
@@ -83,8 +109,9 @@ function stripWalkBindings(code: string): string {
 }
 
 /** The five kernels' source and source maps. Throws for options the wavefront does not support (`ptwfUnsupported`). */
-export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames' | 'refill' | 'layers' | 'refillThreshold'>): PtWavefrontBuild {
-  const wf = scheduling(options);
+export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames' | 'refill' | 'layers' | 'refillThreshold' | 'appends' | 'sort'>): PtWavefrontBuild {
+  const wf = scheduling(options, caps);
+  if (resolveIntegratorOptions(options.integrator ?? {}).restir) throw new Error('PtWavefront: integrator.restir (ReSTIR DI, P4) is megakernel only so far: the passes run between the primary hit and the shade dispatch of one frame (TASKS P4.x1)');
   if (resolveIntegratorOptions(options.integrator ?? {}).primary === 'vbuffer') {
     if (wf.refill) throw new Error("PtWavefront: integrator.primary 'vbuffer' does not support refill / layers (a slot starts its next sample at its own time; a V-buffer is one frame)");
     if (!options.layout.positions) throw new Error("PtWavefront: integrator.primary 'vbuffer' needs a surface layout with positions");
@@ -96,7 +123,6 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   // R1: the shade kernel only ever sees depth < N when a secondary kernel takes over, so it is built as the default ('full') kernel, byte for byte.
   const lod = resolveIntegratorOptions(options.integrator ?? {});
   const lodOn = lod.lod !== 'off';
-  if (lodOn && wf.refill) throw new Error("PtWavefront: integrator.materialLod 'secondary' is not supported with refill yet (a refilled slot mixes depths in one queue: P3.x)");
   if (lodOn) options = { ...options, integrator: { ...options.integrator, materialLod: 'full' } };
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const why = ptwfUnsupported(integratorOptions);
@@ -113,21 +139,26 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   if (lodOn) {
     const second = ptShadingModulesWgsl({ ...options, integrator: { ...ptSecondaryIntegratorOptions(options.integrator), materialLod: 'secondary', materialLodDepth: lod.lodDepth } });
     const secondOutputs = ptOutputsWgsl(resolveIntegratorOptions(second.integratorOptions), PTWF_BINDING.counters);
-    shadeSecondary = rtTransformWgsl(px(`${stripWalkBindings(full)}\n${second.parts.join('\n')}\n${secondOutputs ? `${secondOutputs}\n` : ''}${ptwfShadeWgsl(second.integratorOptions, wf)}`), { ...t, keep: ['ptwfShade'] });
+    // R1b: with refill a queue mixes depths, so each shade kernel skips the entries of the other class (`lodGate`); the plain scheduler's depth is uniform per dispatch, no gate
+    const secondWf = wf.refill ? { ...wf, lodGate: { role: 'second' as const, depth: lod.lodDepth } } : wf;
+    shadeSecondary = rtTransformWgsl(px(`${stripWalkBindings(full)}\n${second.parts.join('\n')}\n${secondOutputs ? `${secondOutputs}\n` : ''}${ptwfShadeWgsl(second.integratorOptions, secondWf)}`), { ...t, keep: ['ptwfShade'] });
   }
   return {
     ...(shadeSecondary ? { shadeSecondary } : {}),
     camera: rtTransformWgsl(px(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfCamera'] }),
     intersect: rtTransformWgsl(px(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${resolveIntegratorOptions(integratorOptions).primary === 'vbuffer' ? `${ptVbufferWgsl()}\n` : ''}${ptwfIntersectWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfIntersect'] }),
-    shade: rtTransformWgsl(px(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfShade'] }),
+    shade: rtTransformWgsl(px(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, lodOn && wf.refill ? { ...wf, lodGate: { role: 'first' as const, depth: lod.lodDepth } } : wf)}`), { ...t, keep: ['ptwfShade'] }),
     shadow: rtTransformWgsl(px(`${usesScene('shadow', integratorOptions, null) ? full : walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfShadow'] }),
     args: rtTransformWgsl(ptwfArgsWgsl(wf), { ...t, keep: ['ptwfArgsMain'] }),
+    ...(wf.sortHit ? { sortHit: rtTransformWgsl(ptwfSortWgsl('hit', wf), { ...t, keep: ['ptwfSort'] }) } : {}),
+    ...(wf.sortRay ? { sortRay: rtTransformWgsl(ptwfSortWgsl('ray', wf), { ...t, keep: ['ptwfSort'] }) } : {}),
+    ...(wf.ordered ? { primary: rtTransformWgsl(ptwfPrimaryWgsl(wf), { ...t, keep: ['ptwfPrimary'] }) } : {}),
   };
 }
 
 /** Bytes of each kernel's WGSL. */
-export function ptWavefrontKernelBytes(build: PtWavefrontBuild): Record<PtwfKernel, number> & { shadeSecondary?: number } {
-  return { ...(Object.fromEntries(PTWF_KERNELS.map((k) => [k, build[k].code.length])) as Record<PtwfKernel, number>), ...(build.shadeSecondary ? { shadeSecondary: build.shadeSecondary.code.length } : {}) };
+export function ptWavefrontKernelBytes(build: PtWavefrontBuild): KernelBytes {
+  return { ...(Object.fromEntries(PTWF_KERNELS.map((k) => [k, build[k].code.length])) as Record<PtwfBaseKernel, number>), ...(build.shadeSecondary ? { shadeSecondary: build.shadeSecondary.code.length } : {}), ...Object.fromEntries(PTWF_EXTRA_KERNELS.filter((k) => build[k]).map((k) => [k, (build[k] as RtWgslBuild).code.length])) };
 }
 
 interface PtwfLayouts {
@@ -154,7 +185,7 @@ export class PtWavefront {
   readonly options: PtWavefrontOptions;
   /** Largest kernel's WGSL bytes (the D26 budget applies per kernel). */
   readonly wgslBytes: number;
-  readonly kernelBytes: Record<PtwfKernel, number> & { shadeSecondary?: number };
+  readonly kernelBytes: KernelBytes;
   private readonly pipelines: Record<PtwfKernel, GPUComputePipeline>;
   /** R1: the shade kernel of depth >= `lodDepth` (`integrator.materialLod: 'secondary'`), or null. */
   private readonly pipelineSecondary: GPUComputePipeline | null;
@@ -196,7 +227,7 @@ export class PtWavefront {
   /** Refill: what the last `finish` did (chunks submitted, iterations encoded, wall ms). */
   lastFinish = { chunks: 0, iterations: 0, ms: 0 };
 
-  private constructor(device: GPUDevice, options: PtWavefrontOptions, pipelines: Record<PtwfKernel, GPUComputePipeline>, layouts: PtwfLayouts, bytes: Record<PtwfKernel, number> & { shadeSecondary?: number }, fuzzTable: GPUBuffer | null, medium: boolean, wf: PtwfConfig, secondary: GPUComputePipeline | null, lodDepth: number) {
+  private constructor(device: GPUDevice, options: PtWavefrontOptions, pipelines: Record<PtwfKernel, GPUComputePipeline>, layouts: PtwfLayouts, bytes: KernelBytes, fuzzTable: GPUBuffer | null, medium: boolean, wf: PtwfConfig, secondary: GPUComputePipeline | null, lodDepth: number) {
     this.device = device;
     this.pipelineSecondary = secondary;
     this.lodDepth = lodDepth;
@@ -213,10 +244,11 @@ export class PtWavefront {
     this.argsBuffer = device.createBuffer({ label: 'ptwf args', size: PTWF_ARGS_BYTES, usage: STORAGE | INDIRECT });
   }
 
-  static async create(device: GPUDevice, caps: Caps, options: PtWavefrontOptions): Promise<PtWavefront> {
+  static async create(device: GPUDevice, caps: Caps, requested: PtWavefrontOptions): Promise<PtWavefront> {
+    const options = ptApplyMode(requested, 'wavefront');
     const label = options.label ?? 'pt wavefront';
     const build = ptWavefrontBuild(caps, options);
-    const wf = scheduling(options);
+    const wf = scheduling(options, caps);
     const features = options.integrator?.materials?.features;
     const corrTexture = !!features?.layered && ptLayerCorrNeedsTexture(options.integrator?.materials?.layered);
     device.pushErrorScope('validation');
@@ -229,19 +261,20 @@ export class PtWavefront {
       ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters, wf.refill, options.integrator?.primary === 'vbuffer', corrTexture).map((binding) =>
         binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_LAYER_CORR_BINDING ? ptLayerCorrLayoutEntry() : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
       ) as GPUBindGroupLayoutEntry[];
-    const io = Object.fromEntries(PTWF_KERNELS.map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
+    const io = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
     const hooks = options.integrator?.hooks ? device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] }) : null;
-    const scenePerKernel = Object.fromEntries(PTWF_KERNELS.map((k) => [k, usesScene(k, options.integrator, options.textures)])) as Record<PtwfKernel, boolean>;
+    const scenePerKernel = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, usesScene(k, options.integrator, options.textures)])) as Record<PtwfKernel, boolean>;
     const layouts = { hooks, empty, walk, scene, io, args: argsLayout, scene_: scenePerKernel };
     const pipelineLayout = (k: PtwfKernel): GPUPipelineLayout =>
       device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, scenePerKernel[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : []), ...(k === 'shade' && hooks ? [hooks] : [])] });
-    const pipelineLayouts = Object.fromEntries(PTWF_KERNELS.map((k) => [k, pipelineLayout(k)])) as Record<PtwfKernel, GPUPipelineLayout>;
+    const pipelineLayouts = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, pipelineLayout(k)])) as Record<PtwfKernel, GPUPipelineLayout>;
     const layoutError = await device.popErrorScope();
     if (layoutError) throw new Error(`PtWavefront: invalid bind group / pipeline layout: ${layoutError.message}`);
-    const entry: Record<PtwfKernel, string> = { camera: 'ptwfCamera', intersect: 'ptwfIntersect', shade: 'ptwfShade', shadow: 'ptwfShadow', args: 'ptwfArgsMain' };
-    const made = await Promise.all(PTWF_KERNELS.map((k) => rtCreateComputePipelineAsync(device, { label: `${label} ${k}`, layout: pipelineLayouts[k], code: build[k].code, map: build[k].map, entryPoint: entry[k], sourceMap: options.sourceMap })));
-    const pipelines = Object.fromEntries(PTWF_KERNELS.map((k, i) => [k, made[i]])) as Record<PtwfKernel, GPUComputePipeline>;
+    const entry: Record<PtwfKernel, string> = { camera: 'ptwfCamera', intersect: 'ptwfIntersect', shade: 'ptwfShade', shadow: 'ptwfShadow', args: 'ptwfArgsMain', sortHit: 'ptwfSort', sortRay: 'ptwfSort', primary: 'ptwfPrimary' };
+    const built = [...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].filter((k): k is PtwfKernel => !!build[k]);
+    const made = await Promise.all(built.map((k) => rtCreateComputePipelineAsync(device, { label: `${label} ${k}`, layout: pipelineLayouts[k], code: (build[k] as RtWgslBuild).code, map: (build[k] as RtWgslBuild).map, entryPoint: entry[k], sourceMap: options.sourceMap })));
+    const pipelines = Object.fromEntries(built.map((k, i) => [k, made[i]])) as Record<PtwfKernel, GPUComputePipeline>;
     const secondary = build.shadeSecondary ? await rtCreateComputePipelineAsync(device, { label: `${label} shade secondary`, layout: pipelineLayouts.shade, code: build.shadeSecondary.code, map: build.shadeSecondary.map, entryPoint: entry.shade, sourceMap: options.sourceMap }) : null;
     let fuzzTable: GPUBuffer | null = null;
     if (features?.fuzz) {
@@ -424,11 +457,19 @@ export class PtWavefront {
         record(this.samples, d);
         use('intersect');
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+        if (this.wf.sortHit && d < maxDepth) {
+          use('sortHit');
+          pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+        }
         use('shade', d >= this.lodDepth); // R1: from depth lodDepth on, the reduced-material shade kernel (when built)
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
         if (d === maxDepth) break; // depth maxDepth ends every path before NEE and the bounce: nothing left to trace
         use('args');
         pass.dispatchWorkgroups(1);
+        if (this.wf.sortRay) {
+          use('sortRay'); // the queue shade just filled (the args kernel has written its count into the main args)
+          pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+        }
         use('shadow');
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_SHADOW);
       }
@@ -480,6 +521,8 @@ export class PtWavefront {
       if (kernel === 'args') pass.setBindGroup(3, argsGroup);
       else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
     };
+    const groups = Math.ceil((this.width * this.height * this.wf.layers) / PTWF_WORKGROUP);
+    const ordered = { x: Math.min(groups, PTWF_STRIDE), y: Math.ceil(groups / PTWF_STRIDE) };
     if (start) {
       const startOffset = offsets[PTWF_START_ITER + (this.iterBase & 1)] as number;
       use('camera', startOffset);
@@ -491,14 +534,31 @@ export class PtWavefront {
       const offset = offsets[(this.iterBase + i) & 1] as number;
       use('intersect', offset);
       pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+      if (this.wf.sortHit) {
+        use('sortHit', offset);
+        pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+      }
       use('shade', offset);
       pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+      if (this.pipelineSecondary) {
+        // R1b: a queue mixes depths; each shade kernel skips the other class's entries (`lodGate`)
+        pass.setPipeline(this.pipelineSecondary);
+        pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
+      }
+      if (this.wf.ordered) {
+        use('primary', offset); // restarted slots join the next queue in slot order
+        pass.dispatchWorkgroups(ordered.x, ordered.y);
+      }
       use('args', offset);
       pass.dispatchWorkgroups(1);
       if (this.wf.batch) {
         // batch refill: the camera kernel over the film (zero groups unless the args kernel found the live queue below the threshold); it appends to the NEXT queue, which is what the start record of parity (d + 1) selects
         use('camera', offsets[PTWF_START_ITER + ((this.iterBase + i + 1) & 1)] as number);
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_REFILL);
+      }
+      if (this.wf.sortRay) {
+        use('sortRay', offset);
+        pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
       }
       use('shadow', offset);
       pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_SHADOW);
@@ -569,7 +629,7 @@ export class PtWavefront {
       [PT_LAYER_CORR_BINDING]: this.corrTexture ? this.corrTexture.createView() : undefined,
     };
     return Object.fromEntries(
-      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer, this.wf.refill, this.options.integrator?.primary === 'vbuffer', !!this.corrTexture).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
+      [...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer, this.wf.refill, this.options.integrator?.primary === 'vbuffer', !!this.corrTexture).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
     ) as Record<PtwfKernel, GPUBindGroup>;
   }
 

@@ -110,7 +110,7 @@ Newest first. One line per session: what changed, what it showed.
   on every backend; `nrc-live` demo built (`pnpm --filter @pathtracer/bench nrc:live`). On the portable network inference is
   the big per-frame cost (59 ms for 500k queries), so the subgroup-matrix backend matters for the demo. Progress page published.
 - **2026-11-15 (Mac, session 2).** Merged main's 41 local commits (path tracer P1–P3 with hooks); track N IDs
-  renumbered (D27/D28, V101–V104, W11). Emulated subgroup-matrix kernel verified on the Apple GPU (N3c). Denoiser
+  renumbered (D28/D29, V139–V142, W11). Emulated subgroup-matrix kernel verified on the Apple GPU (N3c). Denoiser
   issue pmndrs/denoiser#31 filed for `subgroup_id` offsets. Quiet timing rerun (matrix path 11.2× portable f16). Image
   encoding A/B: two-phase waves at Nyquist, fit error 0.26 → 0.16. Tiled weight gradient: training step 6.9 → 2.7 ms
   (f16). ReLU round trip measured at 12-24% of matrix-path inference. This plan written.

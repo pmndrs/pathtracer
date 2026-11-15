@@ -1,7 +1,7 @@
 // The megakernel variants (Tier 0 / env / OpenPBR / textured) shared by `size-snapshot.ts` (Node, fixed caps) and the `kernel-compile` page
 // (browser, the device's caps). Browser-safe: no node:fs.
 import type { Caps, SceneCopyPacking } from '@pmndrs/raytracer';
-import { ptMegakernelWgsl, ptWavefrontBuild } from '@pmndrs/pathtracer';
+import { ptMegakernelWgsl, ptRestirBuild, ptWavefrontBuild } from '@pmndrs/pathtracer';
 
 export type KernelVariants = Record<string, () => string>;
 
@@ -47,6 +47,12 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   // V-buffer primaries (P3.6): the first hit comes from a texture; the traced variants above are unchanged.
   variants.vbuffer = () => mk(caps, { format: {}, layout, integrator: { primary: 'vbuffer' } });
   variants['tex-mask-vbuffer'] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, primary: 'vbuffer' } });
+  // Real-time mode (P4.1, megakernel only): per-frame outputs, the blue-noise sampler, both, and the whole realtime preset on a textured layered scene.
+  variants['rt-frame'] = () => mk(caps, { format: {}, layout, integrator: { frame: true } } as never);
+  variants['rt-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { sampler: 'bluenoise' } } as never);
+  variants['rt-bluenoise-kronecker'] = () => mk(caps, { format: {}, layout, integrator: { sampler: 'bluenoise', blueNoiseShift: 'kronecker' } } as never);
+  variants['rt-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } } as never);
+  variants['rt-pbr-albedo-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } } } } as never);
   return variants;
 }
 
@@ -94,4 +100,18 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     }
   }
   return variants;
+}
+
+/**
+ * ReSTIR DI (P4): the shade kernel (megakernel with `integrator.restir`) and the module of the four reservoir passes, for the size cap (50 KB) and the byte-identity check
+ * (`size-snapshot.ts`). Apart from `kernelVariants` because the kernel-compile page compiles every entry there as a stand-alone `ptMain` module.
+ */
+export function restirKernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): KernelVariants {
+  const layout = { normals: true, uvs: false, positions: true };
+  const base = scenePacking ? { format: {}, layout, scenePacking } : { format: {}, layout };
+  return {
+    'restir-shade': () => ptMegakernelWgsl(caps, { ...base, integrator: { restir: {} } }),
+    'restir-passes': () => ptRestirBuild(caps, { ...base, integrator: { restir: {} } }).code,
+    'restir-passes-env': () => ptRestirBuild(caps, { ...base, integrator: { restir: {}, envMap: true, envSampling: 'importance' } }).code,
+  };
 }

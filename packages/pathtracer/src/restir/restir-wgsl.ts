@@ -1,0 +1,477 @@
+/**
+ * ReSTIR DI (P4, real-time mode; reference mode stays plain NEE + MIS): WGSL of the four passes that run before the megakernel's shade
+ * dispatch. Written from the papers (Bitterli et al. 2020 "Spatiotemporal reservoir resampling"; Lin et al. 2022 "Generalized resampled
+ * importance sampling" for the unbiased Talbot-MIS combine); no code from RTXDI or any other renderer.
+ *
+ *     ptRestirGbuf      camera ray (the same jittered ray the shade pass will trace) -> position, view depth, shading normal, material
+ *     ptRestirInit      RIS: M candidates from the light sampler -> one reservoir; optional visibility of the chosen sample
+ *     ptRestirTemporal  reproject the primary hit into the previous frame, merge its final reservoir
+ *     ptRestirSpatial   merge the reservoirs of k neighbours (random offsets inside a disc, R6)
+ *
+ * The shade pass is the megakernel itself (`integrator.restir`, integrator-wgsl.ts): at the first scattering vertex it reads the final reservoir,
+ * regenerates the light sample, traces one shadow ray and adds `f cos Le / pdf * W`; the BSDF-sampled continuation gets no MIS weight on
+ * emission at depth 1 (the reservoir already covers the light), deeper vertices keep NEE + MIS.
+ *
+ * **Sample space.** A reservoir sample is (light index, u) with u in [0, 1)^2 quantised to 16 bits per axis: the light point / direction is a
+ * function of (light, u) and of the shading point only through the solid-angle density, so the same sample can be re-evaluated at any other
+ * pixel (identity shift, Jacobian 1 in u-space). The target function is the unshadowed integrand per unit of u:
+ * `F = f(wo, wi) |cos| Le / pdf_omega(wi)` and `phat = luminance(F)`; the source density in u-space is the light-selection pmf. For M = 1 the
+ * estimate `F W` with `W = 1 / pmf` is exactly plain NEE without MIS.
+ *
+ * **Bias correction** (runtime flag): `biased` = Bitterli Alg. 5 (`W = wsum / (phat * sum M)`); `unbiased` = balance-heuristic ("Talbot") MIS over
+ * the contributing domains, `m_i(y) = M_i phat_i(y) / sum_j M_j phat_j(y)` (every phat evaluated on the surface of its own pixel), `W = wsum / phat`.
+ * Unbiased needs `initialVisibility` off (a zeroed occluded sample changes the target).
+ *
+ * Storage: G-buffer = 2 vec4f per pixel per frame (position + view depth, shading normal + material), two frames (cur / prev); reservoirs =
+ * one vec4u per pixel, four regions (A init, B temporal, F0 / F1 final, ping-pong by frame parity). Reservoir words: light index, u (2 x unorm16),
+ * bits(W), M. Needs `integrator.nee`, no textures, legacy materials (`materials: null`), no alpha mask.
+ */
+import { ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+
+export interface PtRestirOptions {
+  /** RIS candidates per pixel (M). Default 8. 1 with temporal and spatial off equals plain NEE (no MIS) in distribution. */
+  candidates?: number;
+  /** Merge the previous frame's final reservoir (reprojected through the previous camera; static scene). Default true. */
+  temporal?: boolean;
+  /** Spatial neighbours merged per pixel (0 = off, at most 8). Default 1. */
+  spatial?: number;
+  /** Radius of the spatial disc in pixels. Default 16. */
+  spatialRadius?: number;
+  /** `'biased'` (1 / sum M) or `'unbiased'` (balance-heuristic MIS; build both, D11). Default `'biased'`. */
+  bias?: 'biased' | 'unbiased';
+  /** Trace a shadow ray for the chosen candidate and zero its weight when occluded (visibility reuse; biased in `unbiased` mode). Default true for `biased`, false for `unbiased`. */
+  initialVisibility?: boolean;
+  /** Cap on the stored confidence M, as a multiple of `candidates` (Bitterli: 20). Default 20. */
+  historyCap?: number;
+  /** R6: spatial neighbour offsets `'random'` (per pixel and frame) or `'fixed'` (one spiral pattern for every pixel and frame: the structured baseline). Default `'random'`. */
+  neighbours?: 'random' | 'fixed';
+  /** R6: the reprojected pixel is `'random'` (stochastic bilinear: nearest of the position plus a +-0.5 px random shift) or `'nearest'`. Default `'random'`. */
+  temporalPick?: 'random' | 'nearest';
+  /** Neighbours and history must have a shading normal within this cosine of ours. Default 0.9. */
+  normalCos?: number;
+  /** ... and a view depth within this fraction of ours. Default 0.1. */
+  depthRel?: number;
+}
+
+export interface ResolvedRestirOptions {
+  candidates: number;
+  temporal: boolean;
+  spatial: number;
+  spatialRadius: number;
+  bias: 'biased' | 'unbiased';
+  initialVisibility: boolean;
+  historyCap: number;
+  neighbours: 'random' | 'fixed';
+  temporalPick: 'random' | 'nearest';
+  normalCos: number;
+  depthRel: number;
+}
+
+export const PT_RESTIR_MAX_CANDIDATES = 64;
+export const PT_RESTIR_MAX_SPATIAL = 8;
+
+export function resolveRestirOptions(o: PtRestirOptions = {}): ResolvedRestirOptions {
+  const bias = o.bias ?? 'biased';
+  return {
+    candidates: Math.max(1, Math.min(PT_RESTIR_MAX_CANDIDATES, Math.floor(o.candidates ?? 8))),
+    temporal: o.temporal ?? true,
+    spatial: Math.max(0, Math.min(PT_RESTIR_MAX_SPATIAL, Math.floor(o.spatial ?? 1))),
+    spatialRadius: o.spatialRadius ?? 16,
+    bias,
+    initialVisibility: o.initialVisibility ?? bias === 'biased',
+    historyCap: o.historyCap ?? 20,
+    neighbours: o.neighbours ?? 'random',
+    temporalPick: o.temporalPick ?? 'random',
+    normalCos: o.normalCos ?? 0.9,
+    depthRel: o.depthRel ?? 0.1,
+  };
+}
+
+/** Bytes of one `PtRsParams` record (13 vec4). The ring slot is `minUniformBufferOffsetAlignment`. */
+export const PT_RESTIR_PARAMS_BYTES = 208;
+/** Flag bits of `PtRsParams.cfg.z`. */
+export const PT_RESTIR_FLAG = { history: 1, unbiased: 2, initialVisibility: 4, randomNeighbours: 8, randomTemporal: 16 } as const;
+/** Reservoir regions (vec4u per pixel each): init, temporal, final parity 0, final parity 1. */
+export const PT_RESTIR_REGION = { init: 0, temporal: 1, final0: 2, final1: 3 } as const;
+export const PT_RESTIR_REGIONS = 4;
+/** vec4f per pixel per G-buffer frame, and u32 words per reservoir. */
+export const PT_RESTIR_GBUF_VEC4 = 2;
+/** Group 2 bindings of the ReSTIR passes. */
+export const PT_RESTIR_BINDING = { params: 0, gbuf: 1, reservoirs: 2 } as const;
+/** Binding of the final reservoir region in the megakernel's io group (`integrator.restir`). */
+export const PT_RESTIR_SHADE_BINDING = 11;
+export const PT_RESTIR_ENTRIES = ['ptRestirGbuf', 'ptRestirInit', 'ptRestirTemporal', 'ptRestirSpatial'] as const;
+
+const f32 = (v: number): string => {
+  const s = Math.fround(v).toString();
+  return /[.e]/.test(s) ? s : `${s}.0`;
+};
+
+/** Reservoir decode shared by the ReSTIR module and the megakernel's shade (unorm16 pair). */
+export const PT_RESTIR_UNPACK_WGSL = /* wgsl */ `fn ptRsUnpackU(w: u32) -> vec2f {
+    return vec2f(f32(w & 0xffffu) + 0.5, f32(w >> 16u) + 0.5) * 0.0000152587890625;
+}`;
+
+/** The ReSTIR passes, to append after the shading modules (light sampling, BSDF, adapter, sampler) of a build whose raytracer module has the walk at group 0 and the scene at group 1. */
+export function ptRestirWgsl(integrator: PtIntegratorOptions = {}): string {
+  const head = ptCommonHeadWgsl(resolveIntegratorOptions(integrator));
+  return /* wgsl */ `
+${head}
+
+struct PtRsParams {
+    dims: vec4u,
+    cfg: vec4u,
+    thr: vec4f,
+    reg: vec4u,
+    reg2: vec4u,
+    curOrigin: vec4f,
+    curForward: vec4f,
+    curRight: vec4f,
+    curUp: vec4f,
+    prevOrigin: vec4f,
+    prevForward: vec4f,
+    prevRight: vec4f,
+    prevUp: vec4f,
+}
+
+@group(2) @binding(${PT_RESTIR_BINDING.params}) var<uniform> ptRsParams: PtRsParams;
+@group(2) @binding(${PT_RESTIR_BINDING.gbuf}) var<storage, read_write> ptRsGbuf: array<vec4f>;
+@group(2) @binding(${PT_RESTIR_BINDING.reservoirs}) var<storage, read_write> ptRsResv: array<vec4u>;
+
+const PT_RS_FLAG_HISTORY: u32 = ${PT_RESTIR_FLAG.history}u;
+const PT_RS_FLAG_UNBIASED: u32 = ${PT_RESTIR_FLAG.unbiased}u;
+const PT_RS_FLAG_VIS: u32 = ${PT_RESTIR_FLAG.initialVisibility}u;
+const PT_RS_FLAG_RAND_NB: u32 = ${PT_RESTIR_FLAG.randomNeighbours}u;
+const PT_RS_FLAG_RAND_TEMP: u32 = ${PT_RESTIR_FLAG.randomTemporal}u;
+const PT_RS_DOMAINS: u32 = ${PT_RESTIR_MAX_SPATIAL + 1}u;
+const PT_RS_LUMA: vec3f = vec3f(${f32(0.2126)}, ${f32(0.7152)}, ${f32(0.0722)});
+
+struct PtRsGeom {
+    p: vec3f,
+    depth: f32,
+    n: vec3f,
+    mat: u32,
+    eye: vec3f,
+}
+
+struct PtRsRes {
+    light: u32,
+    u: vec2f,
+    w: f32,
+    m: f32,
+}
+
+${PT_RESTIR_UNPACK_WGSL}
+
+fn ptRsPackU(u: vec2f) -> u32 {
+    let q = vec2u(min(floor(u * 65536.0), vec2f(65535.0)));
+    return q.x | (q.y << 16u);
+}
+
+fn ptRsRand2(seed: u32, frame: u32, k: u32) -> vec2f {
+    let a = ptPcgHash(seed ^ ptPcgHash(frame * 0x9e3779b1u + k * 0x85ebca6bu + 0x7f4a7c15u));
+    let b = ptPcgHash(a ^ 0xb5297a4du);
+    return vec2f(rtUnit24(a), rtUnit24(b));
+}
+
+fn ptRsEmpty() -> PtRsRes {
+    return PtRsRes(RT_NONE, vec2f(0.5), 0.0, 0.0);
+}
+
+fn ptRsLoadRes(region: u32, pix: u32) -> PtRsRes {
+    let npx = ptRsParams.dims.x * ptRsParams.dims.y;
+    let r = ptRsResv[region * npx + pix];
+    return PtRsRes(r.x, ptRsUnpackU(r.y), bitcast<f32>(r.z), f32(r.w));
+}
+
+fn ptRsStoreRes(region: u32, pix: u32, r: PtRsRes) {
+    let npx = ptRsParams.dims.x * ptRsParams.dims.y;
+    ptRsResv[region * npx + pix] = vec4u(r.light, ptRsPackU(r.u), bitcast<u32>(r.w), u32(r.m));
+}
+
+fn ptRsLoadGeom(fsel: u32, pix: u32, eye: vec3f) -> PtRsGeom {
+    let npx = ptRsParams.dims.x * ptRsParams.dims.y;
+    let i = (fsel * npx + pix) * ${PT_RESTIR_GBUF_VEC4}u;
+    let a = ptRsGbuf[i];
+    let b = ptRsGbuf[i + 1u];
+    return PtRsGeom(a.xyz, a.w, b.xyz, bitcast<u32>(b.w), eye);
+}
+
+fn ptRsTarget(g: PtRsGeom, bp: PtBsdfParams, light: u32, u: vec2f) -> vec3f {
+    if (light == RT_NONE) {
+        return vec3f(0.0);
+    }
+    if (!PT_ENV_SAMPLING && light == rtSceneTable[2].z) {
+        return vec3f(0.0);
+    }
+    let li = rtSampleLightLi(light, g.p, u);
+    if (!li.valid || !(li.pdf > 0.0)) {
+        return vec3f(0.0);
+    }
+    let frame = ptFrameFromNormal(g.n);
+    let wo = ptToLocal(frame, normalize(g.eye - g.p));
+    let wi = ptToLocal(frame, li.wi);
+    let e = ptBsdfEval(bp, wo, wi);
+    return li.radiance * e.f * (abs(wi.z) / li.pdf);
+}
+
+fn ptRsLum(v: vec3f) -> f32 {
+    let l = dot(v, PT_RS_LUMA);
+    return select(0.0, l, l > 0.0 && l < 3.0e38);
+}
+
+fn ptRsVisible(g: PtRsGeom, light: u32, u: vec2f) -> bool {
+    let li = rtSampleLightLi(light, g.p, u);
+    if (!li.valid) {
+        return false;
+    }
+    let origin = ptOffsetOrigin(g.p, ptSideNormal(g.n, li.wi));
+    var ray: RtRay;
+    if (li.distance < 1.0e30) {
+        let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
+        ray = rtSegment(origin, end, 0.0, 0.0);
+    } else {
+        ray = RtRay(origin, 0.0, li.wi, PT_FAR);
+    }
+    return rtVisible(ray, RT_MASK_ALL);
+}
+
+fn ptRsMerge(n: u32, gs: ptr<function, array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL + 1}>>, bps: ptr<function, array<PtBsdfParams, ${PT_RESTIR_MAX_SPATIAL + 1}>>, rs: ptr<function, array<PtRsRes, ${PT_RESTIR_MAX_SPATIAL + 1}>>, unbiased: bool, seed: u32, frame: u32, cap: f32) -> PtRsRes {
+    var out = ptRsEmpty();
+    var wsum = 0.0;
+    var mtot = 0.0;
+    var selPh = 0.0;
+    for (var i = 0u; i < n; i++) {
+        let r = (*rs)[i];
+        mtot += r.m;
+        if (!(r.w > 0.0) || r.light == RT_NONE) {
+            continue;
+        }
+        let ph = ptRsLum(ptRsTarget((*gs)[0], (*bps)[0], r.light, r.u));
+        if (!(ph > 0.0)) {
+            continue;
+        }
+        var w = ph * r.w * r.m;
+        if (unbiased) {
+            var den = 0.0;
+            var own = 0.0;
+            for (var j = 0u; j < n; j++) {
+                let rj = (*rs)[j];
+                if (!(rj.m > 0.0)) {
+                    continue;
+                }
+                var pj = ph;
+                if (j != 0u) {
+                    pj = ptRsLum(ptRsTarget((*gs)[j], (*bps)[j], r.light, r.u));
+                }
+                den += rj.m * pj;
+                if (j == i) {
+                    own = pj;
+                }
+            }
+            w = select(0.0, (r.m * own / den) * ph * r.w, den > 0.0);
+        }
+        wsum += w;
+        if (ptRsRand2(seed, frame, 40u + i).x * wsum < w) {
+            out.light = r.light;
+            out.u = r.u;
+            selPh = ph;
+        }
+    }
+    if (selPh > 0.0 && wsum > 0.0) {
+        out.w = select(wsum / (mtot * selPh), wsum / selPh, unbiased);
+    } else {
+        out.light = RT_NONE;
+    }
+    out.m = min(mtot, cap);
+    return out;
+}
+
+fn ptRsSurfaceOk(a: PtRsGeom, b: PtRsGeom) -> bool {
+    return b.depth > 0.0 && dot(a.n, b.n) >= ptRsParams.thr.y && abs(a.depth - b.depth) <= ptRsParams.thr.z * a.depth;
+}
+
+@compute @workgroup_size(${8}, ${8})
+fn ptRestirGbuf(@builtin(global_invocation_id) id: vec3u) {
+    let P = ptRsParams;
+    if (id.x >= P.dims.x || id.y >= P.dims.y) {
+        return;
+    }
+    let npx = P.dims.x * P.dims.y;
+    let pix = id.y * P.dims.x + id.x;
+    let i = (P.reg.x * npx + pix) * ${PT_RESTIR_GBUF_VEC4}u;
+    let pixelSeed = ptPixelSeed(id.x, id.y, P.dims.w);
+    let jitter = ptSample2D(pixelSeed, P.dims.z, PT_PAIR_JITTER);
+    let ndc = vec2f(((f32(id.x) + jitter.x) / f32(P.dims.x)) * 2.0 - 1.0, 1.0 - ((f32(id.y) + jitter.y) / f32(P.dims.y)) * 2.0);
+    let origin = P.curOrigin.xyz;
+    let ray = RtRay(origin, 0.0, normalize(P.curForward.xyz + P.curRight.xyz * ndc.x + P.curUp.xyz * ndc.y), PT_FAR);
+    let hit = rtClosest(ray, RT_MASK_ALL);
+    if (hit.t < 0.0) {
+        ptRsGbuf[i] = vec4f(0.0, 0.0, 0.0, -1.0);
+        ptRsGbuf[i + 1u] = vec4f(0.0);
+        return;
+    }
+    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL);
+    ptRsGbuf[i] = vec4f(surf.position, dot(surf.position - origin, P.curForward.xyz));
+    ptRsGbuf[i + 1u] = vec4f(surf.shadingNormal, bitcast<f32>(hit.material));
+}
+
+@compute @workgroup_size(${8}, ${8})
+fn ptRestirInit(@builtin(global_invocation_id) id: vec3u) {
+    let P = ptRsParams;
+    if (id.x >= P.dims.x || id.y >= P.dims.y) {
+        return;
+    }
+    let pix = id.y * P.dims.x + id.x;
+    let g = ptRsLoadGeom(P.reg.x, pix, P.curOrigin.xyz);
+    if (!(g.depth > 0.0)) {
+        ptRsStoreRes(P.reg.w, pix, ptRsEmpty());
+        return;
+    }
+    let bp = ptBsdfFromMaterial(rtMaterial(g.mat));
+    if (ptBsdfIsDelta(bp) || bp.kind == PT_BSDF_BLACK) {
+        ptRsStoreRes(P.reg.w, pix, ptRsEmpty());
+        return;
+    }
+    let seed = ptPixelSeed(id.x, id.y, P.dims.w);
+    let count = P.cfg.x;
+    var out = ptRsEmpty();
+    var wsum = 0.0;
+    var selPh = 0.0;
+    for (var c = 0u; c < count; c++) {
+        let a = ptRsRand2(seed, P.dims.z, 2u * c);
+        let pick = rtSampleLight(a.x);
+        if (pick.index == RT_NONE || !(pick.pmf > 0.0)) {
+            continue;
+        }
+        let u = ptRsUnpackU(ptRsPackU(ptRsRand2(seed, P.dims.z, 2u * c + 1u)));
+        let ph = ptRsLum(ptRsTarget(g, bp, pick.index, u));
+        if (!(ph > 0.0)) {
+            continue;
+        }
+        let w = ph / pick.pmf;
+        wsum += w;
+        if (a.y * wsum < w) {
+            out.light = pick.index;
+            out.u = u;
+            selPh = ph;
+        }
+    }
+    out.m = f32(count);
+    if (selPh > 0.0) {
+        out.w = wsum / (f32(count) * selPh);
+        if ((P.cfg.z & PT_RS_FLAG_VIS) != 0u && !ptRsVisible(g, out.light, out.u)) {
+            out.w = 0.0;
+        }
+    } else {
+        out.light = RT_NONE;
+    }
+    ptRsStoreRes(P.reg.w, pix, out);
+}
+
+@compute @workgroup_size(${8}, ${8})
+fn ptRestirTemporal(@builtin(global_invocation_id) id: vec3u) {
+    let P = ptRsParams;
+    if (id.x >= P.dims.x || id.y >= P.dims.y) {
+        return;
+    }
+    let pix = id.y * P.dims.x + id.x;
+    var gs: array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL + 1}>;
+    var bps: array<PtBsdfParams, ${PT_RESTIR_MAX_SPATIAL + 1}>;
+    var rs: array<PtRsRes, ${PT_RESTIR_MAX_SPATIAL + 1}>;
+    gs[0] = ptRsLoadGeom(P.reg.x, pix, P.curOrigin.xyz);
+    rs[0] = ptRsLoadRes(P.reg.z, pix);
+    if (!(gs[0].depth > 0.0)) {
+        ptRsStoreRes(P.reg.w, pix, ptRsEmpty());
+        return;
+    }
+    bps[0] = ptBsdfFromMaterial(rtMaterial(gs[0].mat));
+    let seed = ptPixelSeed(id.x, id.y, P.dims.w);
+    let cap = P.thr.w;
+    var n = 1u;
+    if ((P.cfg.z & PT_RS_FLAG_HISTORY) != 0u) {
+        let d = gs[0].p - P.prevOrigin.xyz;
+        let a = dot(d, P.prevForward.xyz);
+        if (a > 1.0e-4) {
+            let nx = dot(d, P.prevRight.xyz) / dot(P.prevRight.xyz, P.prevRight.xyz) / a;
+            let ny = dot(d, P.prevUp.xyz) / dot(P.prevUp.xyz, P.prevUp.xyz) / a;
+            var pf = vec2f((nx * 0.5 + 0.5) * f32(P.dims.x), (0.5 - ny * 0.5) * f32(P.dims.y));
+            if ((P.cfg.z & PT_RS_FLAG_RAND_TEMP) != 0u) {
+                pf += ptRsRand2(seed, P.dims.z, 7u) - vec2f(0.5);
+            }
+            let q = vec2i(floor(pf));
+            if (all(q >= vec2i(0)) && all(q < vec2i(P.dims.xy))) {
+                let qpix = u32(q.y) * P.dims.x + u32(q.x);
+                let gp = ptRsLoadGeom(P.reg.y, qpix, P.prevOrigin.xyz);
+                if (gp.depth > 0.0 && dot(gs[0].n, gp.n) >= P.thr.y && abs(a - gp.depth) <= P.thr.z * a) {
+                    var rp = ptRsLoadRes(P.reg2.x, qpix);
+                    rp.m = min(rp.m, cap);
+                    if (rp.m > 0.0) {
+                        gs[1] = gp;
+                        bps[1] = ptBsdfFromMaterial(rtMaterial(gp.mat));
+                        rs[1] = rp;
+                        n = 2u;
+                    }
+                }
+            }
+        }
+    }
+    ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap));
+}
+
+@compute @workgroup_size(${8}, ${8})
+fn ptRestirSpatial(@builtin(global_invocation_id) id: vec3u) {
+    let P = ptRsParams;
+    if (id.x >= P.dims.x || id.y >= P.dims.y) {
+        return;
+    }
+    let pix = id.y * P.dims.x + id.x;
+    var gs: array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL + 1}>;
+    var bps: array<PtBsdfParams, ${PT_RESTIR_MAX_SPATIAL + 1}>;
+    var rs: array<PtRsRes, ${PT_RESTIR_MAX_SPATIAL + 1}>;
+    gs[0] = ptRsLoadGeom(P.reg.x, pix, P.curOrigin.xyz);
+    rs[0] = ptRsLoadRes(P.reg.z, pix);
+    if (!(gs[0].depth > 0.0)) {
+        ptRsStoreRes(P.reg.w, pix, ptRsEmpty());
+        return;
+    }
+    bps[0] = ptBsdfFromMaterial(rtMaterial(gs[0].mat));
+    let seed = ptPixelSeed(id.x, id.y, P.dims.w);
+    let cap = P.thr.w;
+    let k = min(P.cfg.y, ${PT_RESTIR_MAX_SPATIAL}u);
+    var n = 1u;
+    for (var j = 0u; j < k; j++) {
+        var off: vec2f;
+        if ((P.cfg.z & PT_RS_FLAG_RAND_NB) != 0u) {
+            let o = ptRsRand2(seed, P.dims.z, 16u + j);
+            let r = P.thr.x * sqrt(o.x);
+            let ang = 6.283185307179586 * o.y;
+            off = vec2f(cos(ang), sin(ang)) * r;
+        } else {
+            let r = P.thr.x * sqrt((f32(j) + 0.5) / f32(k));
+            let ang = f32(j) * 2.399963229728653;
+            off = vec2f(cos(ang), sin(ang)) * r;
+        }
+        let q = vec2i(id.xy) + vec2i(round(off));
+        if (all(q == vec2i(id.xy)) || any(q < vec2i(0)) || any(q >= vec2i(P.dims.xy))) {
+            continue;
+        }
+        let qpix = u32(q.y) * P.dims.x + u32(q.x);
+        let gq = ptRsLoadGeom(P.reg.x, qpix, P.curOrigin.xyz);
+        if (!ptRsSurfaceOk(gs[0], gq)) {
+            continue;
+        }
+        var rq = ptRsLoadRes(P.reg.z, qpix);
+        rq.m = min(rq.m, cap);
+        if (!(rq.m > 0.0)) {
+            continue;
+        }
+        gs[n] = gq;
+        bps[n] = ptBsdfFromMaterial(rtMaterial(gq.mat));
+        rs[n] = rq;
+        n += 1u;
+    }
+    ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap));
+}
+`;
+}

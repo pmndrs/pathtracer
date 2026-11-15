@@ -156,3 +156,5 @@ Generated assets (`bench/assets/generated/`, env maps and noise made by our own 
   `packages/raytracer/tools/bluenoise/` and are ours. No EA FAST (BSD-3) code was read or ported and no NVIDIA STBN
   code or texture is used (D16), so no notice is owed. If FAST code is ever ported, add its BSD-3 text under
   `licenses/` and a section 1 entry.
+- ReSTIR DI (TASKS P4) is **our own code written from the papers**: Bitterli, Wyman, Pharr, Shirley, Lefohn, Jarosz 2020 (reservoir resampling, the biased 1/M combine, temporal and spatial reuse), Lin, Wyman, Yuksel 2022 (generalised RIS and the balance-heuristic combine), Talbot 2005 (RIS). No RTXDI / NVIDIA RTX SDK
+  code was opened or ported (CLAUDE.md licence rules), and no code from Bevy Solari or Capsaicin was used either, so no notice is owed.

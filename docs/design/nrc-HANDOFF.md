@@ -14,11 +14,11 @@ Mac session") and TASKS N0.2/N1.1/N2/N3/N10; the "Verified vs not" table below i
 | Piece | Where | State |
 |---|---|---|
 | Spec + plan | `docs/design/nrc.md` | Paper numbers marked [M] are from memory: check them against `research/papers/gi/nrc-*.pdf` (N0.1) |
-| Divergence register | `docs/design/nrc-diverges.md` | 30 rows, each with a follow-up; DIVERGES V101–V104 point here |
+| Divergence register | `docs/design/nrc-diverges.md` | 30 rows, each with a follow-up; DIVERGES V139–V142 point here |
 | Subgroup-matrix status + wishlist | `docs/design/subgroup-matrix-feedback.md` | **Draft. Never post anything to gpuweb or anywhere else without the maintainer (N9, D8).** |
 | MLP engine | `packages/mlp` (`@pathtracer/mlp`, private, WGSL prefix `nn`) | see below |
 | Bench pages | `bench/pages/mlp-{check,fit,timing,sgm-probe,live}.ts`, shared `mlp-common.ts`, `mlp-image.ts` | all run on SwiftShader; none has run on a real GPU |
-| VkNRC reference | read-only clone `research/sources/native/vknrc` (re-clone from MANIFEST); native build only under `.cache/native/` | no licence: follow its design, never paste its code (D28); native build allowed (D27) |
+| VkNRC reference | read-only clone `research/sources/native/vknrc` (re-clone from MANIFEST); native build only under `.cache/native/` | no licence: follow its design, never paste its code (D29); native build allowed (D28) |
 
 Engine (`packages/mlp/src`): `config.ts` (VkNRC-shaped defaults: 64 → 5×64 → 3, ReLU, no bias, Adam 0.002), `encoding.ts`
 (triangle-wave frequency + quartic one-blob, CPU and WGSL), `oracle.ts` (f64 forward/backward/Adam/EMA), `wgsl.ts`
@@ -80,8 +80,8 @@ changed.
 
 ## Rules that are easy to miss
 
-- D28: VkNRC has no licence. Read it, follow its design, never paste or line-translate its code into the repo.
-- D27: building VkNRC natively is allowed under `.cache/native/` only; its local patches are never committed.
+- D29: VkNRC has no licence. Read it, follow its design, never paste or line-translate its code into the repo.
+- D28: building VkNRC natively is allowed under `.cache/native/` only; its local patches are never committed.
 - N9 / D8: the subgroup-matrix feedback stays a draft until the maintainer says otherwise.
 - `nn*` is the WGSL prefix for `packages/mlp`; keep generated kernels under ~50 KB (Windows DXC).
 - Every new departure from the paper, VkNRC or the Denoiser gets a row in nrc-diverges.md with a follow-up.

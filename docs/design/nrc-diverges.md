@@ -3,12 +3,12 @@
 Research track N's own divergence register ([nrc.md](nrc.md), TASKS section N). Each row says what a source does, what
 we do (or plan to), why, and the follow-up that would close or confirm it. Follow-ups are the work list: a row is
 closed when its A/B has run and the result is recorded here, or when the difference is accepted for good. The repo-wide
-[DIVERGES.md](../../DIVERGES.md) keeps one pointer row (V104) to this file plus the engine-level rows V101–V103.
+[DIVERGES.md](../../DIVERGES.md) keeps one pointer row (V142) to this file plus the engine-level rows V139–V141.
 
 Sources:
 - **Paper:** Müller, Rousselle, Novák, Keller, "Real-time Neural Radiance Caching for Path Tracing", SIGGRAPH 2021
   (arXiv 2106.12372). Paper facts are **[M] from memory** until N0.1 checks them against the PDF on the Mac.
-- **VkNRC:** AdamYuan/VkNRC `a667859`, read from its source [V]. No licence: we follow its design, never its code (D28).
+- **VkNRC:** AdamYuan/VkNRC `a667859`, read from its source [V]. No licence: we follow its design, never its code (D29).
 - **Denoiser:** pmndrs/denoiser `7014384`, `packages/denoiser-wgsl` + `docs/specs/runtimes.md` [V], MIT, ours.
 - **tcnn:** NVlabs/tiny-cuda-nn, BSD-3 [V licence]; behaviour [M].
 
@@ -26,10 +26,10 @@ Status: **planned** (not built yet), **built** (in `packages/mlp` or a bench pag
 | N-D4 | Output factorisation | prediction is radiance ÷ (diffuse + specular reflectance), multiplied back at the query | none: radiance predicted directly | VkNRC's (none) first | design | planned | A/B on N6: factorised vs not, relMSE and texture detail on a textured scene |
 | N-D5 | Loss | relative L2 | relative L2 on **luminance** of the prediction: `2(p − t)/(lum(p)² + 0.01)`, scale 1 | Same as VkNRC; prediction clamped ≥ 0 inside lum only | design | built | A/B per-channel vs luminance denominator in N6 (colour shifts in saturated light?) |
 | N-D6 | Optimiser | Adam [M lr] | Adam lr 0.002, β 0.9/0.999, ε 1e-8, gradient ÷ batch, NaN/inf → 0 | Same | design | built | Image fit (2026-11-15, f16, 1024 steps): relMSE 0.84 at 0.002, 0.32 at 0.005, 0.26 at 0.01, 0.32 at 0.02. Keep VkNRC's 0.002 for NRC until N6 sweeps it (online training is a different regime); the image task wants ~0.01 (N1.3) |
-| N-D7 | Inference weights | EMA of weights | EMA optional (off by default), debiased form | EMA optional (off), plain EMA started at the initial weights (V102) | simplification | built | A/B EMA on/off and both EMA forms in N6 (temporal stability) |
+| N-D7 | Inference weights | EMA of weights | EMA optional (off by default), debiased form | EMA optional (off), plain EMA started at the initial weights (V140) | simplification | built | A/B EMA on/off and both EMA forms in N6 (temporal stability) |
 | N-D8 | Batch | ~4 steps × 16k records per frame | 4 batches × 16,384, trained in sequence; record → random batch | Engine supports it; the N6 page will mirror it | design | planned | N6 sweep steps/frame and records/frame |
 | N-D9 | Weight init | [M] | He normal σ = √(2/64) for every layer | He normal σ = √(2/fan_in) (equal here, fan_in = 64) | design | built | none |
-| N-D10 | f16 loss scaling | tcnn scales the loss (≈128 [M]) for f16 gradients | scale 1, gradients summed then ÷ batch in the optimiser | Deltas stored without ÷ N, gradient pass divides (V101): keeps f16 deltas out of subnormals | platform / design | built | N1.1: check f16 delta underflow counts on the Mac; add a loss scale if any |
+| N-D10 | f16 loss scaling | tcnn scales the loss (≈128 [M]) for f16 gradients | scale 1, gradients summed then ÷ batch in the optimiser | Deltas stored without ÷ N, gradient pass divides (V139): keeps f16 deltas out of subnormals | platform / design | built | N1.1: check f16 delta underflow counts on the Mac; add a loss scale if any |
 | N-D11 | Inference output clamp | [M] | `max(prediction, 0)` before use | Not clamped in the engine; the resolve hook must clamp | simplification | planned | Clamp in the N6 resolve hook; record if it biases dark regions |
 
 ## B. Kernels (how the MLP runs)
@@ -41,12 +41,12 @@ Status: **planned** (not built yet), **built** (in `packages/mlp` or a bench pag
 | N-K3 | Activation (ReLU) | per-element on accumulator tiles | Portable: in registers. Sgm: store tile → per-lane ReLU in workgroup memory → reload | platform (no element access yet, gpuweb #11077) | built (sgm inference, verified natively) | Measured (N3, M5 Pro f16): the ReLU pass is 20-24% of inference with 1 subgroup, 12-13% with 4. Drop it if #11077 ships |
 | N-K4 | ReLU derivative | forward activations stored as 0/NaN mask, backward MMA accumulates onto it, NaN → 0 | Explicit test `a > 0` (portable); 0/1 mask multiply in workgroup memory (sgm) | platform (WGSL makes no NaN guarantees) | built / planned | none unless #11077 lands |
 | N-K5 | Layer chaining | result tile used directly as next layer's operand | Sgm: store result, reload as left operand | platform (no result → left conversion yet, gpuweb #11079) | built (sgm inference) | N3; drop if conversion ships |
-| N-K6 | Weight gradients | per-subgroup dW tiles, summed in shared memory, f32 `atomicAdd` to global | Separate per-weight pass over stored activations and deltas: deterministic, no atomics (V101) | platform (no float atomics) | built: `perWeight` and `tiled` (split-K partials + a reduction dispatch, default; 16-22× faster pass, N1.2) | fixed-point i32 `atomicAdd` arm; why tiled fits end slightly worse at 1024 steps (TASKS N1.2) |
+| N-K6 | Weight gradients | per-subgroup dW tiles, summed in shared memory, f32 `atomicAdd` to global | Separate per-weight pass over stored activations and deltas: deterministic, no atomics (V139) | platform (no float atomics) | built: `perWeight` and `tiled` (split-K partials + a reduction dispatch, default; 16-22× faster pass, N1.2) | fixed-point i32 `atomicAdd` arm; why tiled fits end slightly worse at 1024 steps (TASKS N1.2) |
 | N-K7 | Accumulation precision | f16 accumulate (VkNRC); Denoiser keeps f32 accumulation | Portable f16: vec4 dot in f16, row sum in f32. Sgm: f16 → f16 on Apple (only config), f16 → f32 where offered | platform / design | built / planned | A/B accumulate f16 vs f32 where both exist (Windows) |
 | N-K8 | Subgroup size | fixed 32, full subgroups required | `@subgroup_size(32)` where `subgroup-size-control` exists (Chrome 151+); else tiles from the adapter's size | platform | planned (Apple: closed, size is fixed at 32) | N0.2 on Windows/NVIDIA, AMD (32/64) |
 | N-K9 | Workgroup memory | 32 KiB for backward | Portable: 16 KiB (f32 layer) / 8 KiB (f16); request the adapter max | platform | built | none |
 | N-K10 | Loop structure | GLSL `[[unroll]]` over tile arrays | Host-generated unrolled WGSL (like the Denoiser) | platform (no `@unroll`, gpuweb #11073) | built (portable) | switch to `@unroll` if it ships |
-| N-K11 | Runtime shape | standalone kernels | Standalone `MlpEngine`, not behind the Denoiser's `NetworkRuntime` (V103) | simplification | built | N5 adds `ort` / `webnn` arms; revisit a shared interface |
+| N-K11 | Runtime shape | standalone kernels | Standalone `MlpEngine`, not behind the Denoiser's `NetworkRuntime` (V141) | simplification | built | N5 adds `ort` / `webnn` arms; revisit a shared interface |
 
 ## C. Integrator and scene (N6; the cache runs on main's megakernel since 2026-11-15)
 

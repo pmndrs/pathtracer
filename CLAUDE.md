@@ -47,7 +47,7 @@ simplification.
   `~/Developer/Denoiser/docs/research/rt-denoiser/RULES.md`). Native NRD runs only via the Denoiser Windows harness;
   we consume its output images.
 - GPL / non-commercial (rindr): ideas only. No licence file: read only. Exception: VkNRC may be built natively and its
-  design followed closely for research track N (D27, D28); its source text still never enters this repo.
+  design followed closely for research track N (D28, D29); its source text still never enters this repo.
 - Third-party clones in `research/sources/` are read-only. Never build or run them. Native tools we build (pbrt-v4,
   Mitsuba) get their own checkout under `.cache/native/` (git-ignored).
 
@@ -477,11 +477,42 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - A stochastic lobe pick that mixes a rough-GGX lobe with a Fresnel-1 conductor must use the lobe's OWN albedo (the layered LUT at f0 = 1, `A + B`), not 1: the smooth Fresnel `F(mu)` as the pick probability read 25-70% too bright
   at rough 0.3-0.6 and grazing angles. A coat over a metal needs the conductor refitted AT the view angle (`ptRedFitK`, bisection): a conductor with the stack's NORMAL reflectance rises too fast toward grazing (+13% on a low-reflectance channel).
 - Dropping the fuzz of a reduced vertex reads 10-20% dark on a sheen material; the fuzz albedo has to come back as a Lambert lobe plus a base weight of `1 - w E_f` (a 9 x 9 copy of the LTC table's R is enough; `bsdf/reduced-fuzz.ts`).
-- `SceneTrees.whenBuilt()` never resolves on its own: builds start in `update(encoder)`. Pump one update per frame
-  until `timeline.firstTreesMs !== null && !building` (see trace-core's `pump`).
-- bvh's build workers fail to load when a bench page imports bvh through Vite's `/@fs/` (`a BVH worker failed: it could
-  not be loaded`), and `'auto'` cannot fall back for merged groups (their input was already moved). In bench pages use
-  `createMeshBvhBuilder({ worker: 'never' })` and `SceneTrees.create(device, { workers: { worker: 'never' } })`.
+- ReSTIR DI (P4, `packages/pathtracer/src/restir/`, docs/design/restir-di.md): a reservoir sample is `(light index, u quantised to unorm16)`, re-evaluated at any pixel through `rtSampleLightLi`; target and source density are both per unit of `u`
+  (no area-measure Jacobian). The passes are ONE module with four entry points (`ptRestirGbuf/Init/Temporal/Spatial`, groups 0/1 shared with the megakernel, group 2 = params ring + G-buffer + reservoirs); the shade side is the megakernel
+  (`integrator.restir`, binding 11, final region base in `ptParams.limits.w`). One `encode` pass = one frame; `readImage` is the mean of frames. Not on `PtWavefront` (throws).
+- Judging ReSTIR by the accumulated mean of a static camera hides the point of it: temporal reuse correlates the frames, so 1024 accumulated frames are worth far fewer independent samples. Look at the PER-FRAME image (`restir-check noise`: frame t =
+  t x mean_t - (t-1) x mean_(t-1)) and the moving-camera rows; the accumulated rows are for bias (unbiased mode must read 0 within the seed spread).
+- NEE's Owen-Sobol numbers are stratified over frames, ReSTIR's candidates are PCG: against NEE with Sobol, `ris1` (M = 1, no reuse) reads up to 9x the relMSE on small-light scenes although it is the same estimator. Compare against `sampler: 'pcg'` NEE (`nee_pcg_*` rows) and
+  remember M = 1 has no MIS weight (V134), so it is also worse than NEE + MIS on big lights (quad-light 1.97x, Cornell 1.06x).
+- ReSTIR biased mode darkens: no support test on reused samples; with `initialVisibility` also zeroing occluded samples. Quote `restir-check converge` relBias next to any biased image; `unbiased` + `initialVisibility: false` is the reference-grade setting.
+- `bench/runner/run.ts` kills a page after 60 s: a long check (`restir-check` with 4096-frame references takes minutes) needs `--timeout <ms>`.
+- A kernel with `integrator.restir` needs `nee`, no textures, legacy materials, no alpha mask, no V-buffer, no hooks (`ptRestirUnsupported` says which); restir's own bytes: 39.6 KB passes module, 41.4 KB shade kernel (limit 50 KB), `node bench/size-snapshot.ts` writes `restir-*`.
+- Real-time mode (P4.1, `docs/design/realtime.md`): `integrator.frame` and `sampler: 'bluenoise'` are MEGAKERNEL only (the wavefront throws `ptwfUnsupported`; `mode: 'realtime'` on the wavefront
+  silently drops them). A frame is ONE `encode(encoder, 1)`: `setCamera` for frame 0, then `nextFrame(camera)` (the old camera becomes the previous one, which motion reprojects through);
+  the sampler's sample index is the FRAME index (`setFrameIndex`; `reset` zeroes it). The kernel needs bindings 12 (blue-noise texture, `rg32float` `unfilterable-float`), 13 (previous camera, dynamic
+  offset in step with binding 0) and 14 (planes) in group 2 (11 is ReSTIR's); a page that builds its own layout must add them. `readImage` does NOT divide by the sample count in frame mode.
+- Blue noise in the sampler: a per-frame shift shared by all pixels keeps the spatial structure; ONE shift step for every pair (a plain golden-ratio frame offset) puts pairs on a diagonal and the time
+  average converges to the wrong integral, so each pair has its own irrational step. A same-seed comparison of two samplers is not independent: compare each against a reference at a different seed.
+- `PtFrame` planes: the diffuse / specular split is by the PRIMARY vertex's BSDF kind (V122), the stored demodulation factors are floored at `PT_DEMOD_EPS` (V126); `diffuse * albedo + specular * specularFactor` is the
+  radiance exactly (1e-7). Motion is camera-only (V124), jitter-free by construction: closed-form check = project the hit (rebuilt from viewZ and the sampler's exact jitter, `ptSampleBlueNoise` twin) through both cameras.
+- Blue-noise shift default is `owen` (P4.1 A/B on Cornell: blur-sigma-2 error 1.47x below Owen-Sobol for both shifts, but `kronecker` accumulates 1.75x worse over 128 frames, `owen` equals Owen-Sobol). A camera path that orbits INSIDE Sponza hits a wall within a few degrees (viewZ ~7e-5 m, f32 noise of 5-10 px in a closed-form check): pan in place.
+- A file scene (Sponza) cannot be resized in a page: its web export is keyed on the whole SceneDesc including `film` ("exported glTF is stale"). `realtime-check` therefore runs it at its own film on a pixel grid.
+- Bench helper scripts: the scratchpad directory is SHARED between agents (`edit1.py`, `snap-before` were other agents' files): use your own subdirectory.
+- Subgroup appends (P3.3, `appends: 'subgroup'`): Tint treats the RESULT of `subgroupAdd` / `subgroupBallot` as non-uniform, so `if (total > 0u && subgroupElect())` fails ("subgroupElect must only be called from subgroup uniform control flow"):
+  write `if (subgroupElect()) { if (total > 0u) { atomicAdd } }` and broadcast with `subgroupBroadcastFirst(base)` AFTER the ifs. Every subgroup op needs uniform flow up to the entry point, so the
+  shade body (`ptwfShadePath`, many early returns) only sets private `ptwfWantShadow` / `ptwfWantNext` flags and the kernel appends once after `if (go) { ... }`; no `return` before the ballots, and the
+  `slot < count` test is a flag (`go`), not an early return. A `workgroupBarrier` after a `return` that depends on an `atomicLoad` is rejected the same way (`ptwfSort` has no early return).
+- `rtModuleWgsl` puts `enable subgroups;` in the shade module only: the camera / args / sort kernels do not use subgroup ops (the start pass appends once per encode, not worth it).
+- Block sorts (P3.4): a workgroup sorts ITS 64 queue entries in place (read before the barrier, write after), so only the order inside a block changes and the per-pixel image is unchanged (relMSE 1e-15 vs the
+  megakernel). A global sort would need a histogram + scan + scatter; not built (V110). 'hit' sorts `Q[iter & 1]` after intersect, 'ray' sorts `Q[(iter + 1) & 1]` AFTER the args kernel (the main args then hold that queue's count).
+- Ordered restart (P3.10, `refill: 'ordered'`): the restart marks the slot with `state[slot].w = 0xffffffff` (prevPdf word; a NaN pattern a real pdf never has) and the `primary` kernel (direct dispatch over all
+  slots, between shade and args) clears it and appends the flagged slots per 64-slot block in slot order. The mark must be cleared before the next intersect / shade reads the path.
+- R1b (`materialLod: 'secondary'` + refill): a queue mixes depths, so both shade kernels run over the SAME queue (first, then second) and gate on the path's depth. The first kernel can push a path past
+  the lod depth (or restart a slot at depth 0), so it overwrites each entry it consumed with `PTWF_CONSUMED` (0xffffffff); a gate that re-read the changed state double-shaded those paths (images 20% dark, 93% of pixels differ).
+- WGSL refuses `a & b >= c` ("mixing '&' and '>=' requires parenthesis"): parenthesise a masked word before comparing it.
+- The scratchpad directory is SHARED by the agents of all worktrees: a helper named `edit1.py` was overwritten by another agent between my Write and my run, and ran their edit script (with its own `os.chdir`) in their worktree.
+  Put scripts in a private subdirectory (`scratchpad/<task>/`), never in the scratchpad root; and `snap-before` style output directories are shared too.
+- Worktree agents: the harness refuses a Bash command that mixes a heredoc, `cd` elsewhere or several git invocations ("too complex to verify"); write the file with the Write tool, then run it in a plain command.
 - Cloud sessions reach GitHub (raw.githubusercontent.com included) but not arXiv, research.nvidia.com or author pages
   (proxy 403). Paper numbers have to be checked against `research/papers/` on the Mac.
 - `subgroup-matrix` (gpuweb proposal) has no element-wise ops besides scalar add/sub/mul: activations such as ReLU need a
@@ -489,7 +520,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   be a multiple of the max subgroup size. WGSL has no float atomics, so batched gradient sums need partials plus a
   reduction dispatch (docs/design/nrc.md §2).
 - tiny-cuda-nn is BSD-3 (portable with attribution); the NRC SDK and RTXGI are RTX SDK licence (no code); instant-ngp is
-  non-commercial (ideas only). VkNRC (the NRC reference we follow) has no licence: follow its design, never paste its code (D28).
+  non-commercial (ideas only). VkNRC (the NRC reference we follow) has no licence: follow its design, never paste its code (D29).
 - VkNRC's MLP leans on three things WGSL lacks: per-element access to matrix tiles (ReLU), NaN as a mask (ReLU
   derivative) and f32 `atomicAdd` (weight gradients). Each needs a workgroup-memory pass or a reduction dispatch here.
 - VkNRC builds on Linux (Ubuntu 24.04, GCC 13, CMake 3.28, glslc 2023.8) after `apt-get install libvulkan-dev glslc

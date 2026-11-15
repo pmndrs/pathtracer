@@ -8,7 +8,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer', 'pt-mk-packed', 'pt-wf-packed', 'pt-mk-lay-stoch', 'pt-mk-lay-int', 'pt-mk-lay-lut', 'pt-mk-lay-tex', 'pt-wf-lay-int', 'pt-wf-lay-lut', 'pt-wf-lay-tex', 'pt-mk-lod', 'pt-wf-lod'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer', 'pt-mk-packed', 'pt-wf-packed', 'pt-mk-lay-stoch', 'pt-mk-lay-int', 'pt-mk-lay-lut', 'pt-mk-lay-tex', 'pt-wf-lay-int', 'pt-wf-lay-lut', 'pt-wf-lay-tex', 'pt-mk-lod', 'pt-wf-lod', 'pt-wf-sg', 'pt-wf-sort-mat', 'pt-wf-sort-oct', 'pt-wf-sort-both', 'pt-wf-refill-sg', 'pt-wf-ordered', 'pt-wf-ordered-sg', 'pt-wf-ordered-l2', 'pt-wf-ordered-l4', 'pt-wf-refill-lod', 'pt-wf-ordered-lod', 'pt-auto'] as const;
 /** Wavefront scheduling presets (P3.2): the same adapter with `refill` / `layers` set, so `matrix.ts --interleave` can A/B them in one run. `--extra pt_refill=...` still overrides. */
 const WAVEFRONT_PRESETS = {
   'pt-wf-refill': { refill: 'inline' },
@@ -16,6 +16,20 @@ const WAVEFRONT_PRESETS = {
   'pt-wf-refill-l2': { refill: 'inline', layers: 2 },
   'pt-wf-refill-l4': { refill: 'inline', layers: 4 },
   'pt-wf-batch-l2': { refill: 'batch', layers: 2 },
+  // P3.3 / P3.4 / P3.10 / R1b (D11 A/B switches): subgroup-aggregated appends, block sorts, ordered restart, material LOD with refill
+  'pt-wf-sg': { appends: 'subgroup' },
+  'pt-wf-sort-mat': { sort: 'material' },
+  'pt-wf-sort-oct': { sort: 'octant' },
+  'pt-wf-sort-both': { sort: 'both' },
+  'pt-wf-refill-sg': { refill: 'inline', appends: 'subgroup' },
+  'pt-wf-ordered': { refill: 'ordered' },
+  'pt-wf-ordered-sg': { refill: 'ordered', appends: 'subgroup' },
+  'pt-wf-ordered-l2': { refill: 'ordered', layers: 2 },
+  'pt-wf-ordered-l4': { refill: 'ordered', layers: 4 },
+  'pt-wf-refill-lod': { refill: 'inline', materialLod: 'secondary' },
+  'pt-wf-ordered-lod': { refill: 'ordered', materialLod: 'secondary' },
+  // P3.9: scheduler + settings from `ptwfAutoPolicy` (film, maxDepth, subgroups); may resolve to the megakernel
+  'pt-auto': { auto: true },
 } as const;
 /** R1 presets (`integrator.materialLod: 'secondary'`, depth 1): the megakernel / wavefront with the reduced secondary material, so `--renderers pt-megakernel,pt-mk-lod --interleave` pairs them. */
 const LOD_PRESETS = { 'pt-mk-lod': { materialLod: 'secondary' }, 'pt-wf-lod': { materialLod: 'secondary', scheduler: 'wavefront' } } as const;
@@ -83,6 +97,18 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
     case 'pt-wf-refill-l2':
     case 'pt-wf-refill-l4':
     case 'pt-wf-batch-l2':
+    case 'pt-wf-sg':
+    case 'pt-wf-sort-mat':
+    case 'pt-wf-sort-oct':
+    case 'pt-wf-sort-both':
+    case 'pt-wf-refill-sg':
+    case 'pt-wf-ordered':
+    case 'pt-wf-ordered-sg':
+    case 'pt-wf-ordered-l2':
+    case 'pt-wf-ordered-l4':
+    case 'pt-wf-refill-lod':
+    case 'pt-wf-ordered-lod':
+    case 'pt-auto':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...WAVEFRONT_PRESETS[id], ...options.pt, scheduler: 'wavefront' }, id);
     case 'pt-mk-shadow':
     case 'pt-mk-indirect':

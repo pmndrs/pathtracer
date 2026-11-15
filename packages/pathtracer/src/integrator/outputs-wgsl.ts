@@ -62,10 +62,21 @@ export const PT_TERM_NAMES = ['escaped', 'absorbed', 'maxDepth', 'rr', 'hook', '
 /** Vec4 slots of the AOVs per pixel, in the tail of the accumulation buffer (after the `width * height` radiance sums). */
 export const PT_AOV_VEC4 = 2;
 
+/** Group 2 bindings of the per-frame outputs (`integrator.frame`): the previous camera (uniform, dynamic offset, one slot per pass like `ptParams`) and the planes. */
+export const PT_FRAME_PARAMS_BINDING = 13;
+export const PT_FRAME_BINDING = 14;
+/** Planes of `ptFrame` (each `width * height` vec4f, plane-major): see `PtFrame`. The beauty (total radiance) is the accumulator itself. */
+export const PT_FRAME_PLANES = 6;
+/** Bytes of one `PtFrameParams` record (the previous camera: origin, right, up, forward as vec4f). */
+export const PT_FRAME_PARAMS_BYTES = 64;
+/** Demodulation factors are floored here (per channel) so the division is finite; the stored factor is the floored one, so demodulated x factor reproduces the radiance exactly. */
+export const PT_DEMOD_EPS = 0.001;
+
 export interface PtOutputsFlags {
   hooks: PtHooksOptions | null;
   counters: boolean;
   aovs: boolean;
+  frame?: boolean;
 }
 
 /** `ptHookUpdateFlag` in TypeScript: is the path of pixel (x, y) in sample `sample` an update path? */
@@ -132,8 +143,8 @@ export function ptHookVertexExpr(args: { x: string; y: string; pixel: string; sa
 }
 
 /** Albedo estimate used by the AOV and the hook vertex (`ptAovAlbedo`) and the three writers. Needs `ptAccum`. */
-export function ptAovWgsl(flags: { aovs: boolean; hooks: boolean }): string {
-  if (!flags.aovs && !flags.hooks) return '';
+export function ptAovWgsl(flags: { aovs: boolean; hooks: boolean; frame?: boolean }): string {
+  if (!flags.aovs && !flags.hooks && !flags.frame) return '';
   const writers = flags.aovs
     ? `
 fn ptAovPrimary(pixel: u32, n: u32, viewZ: f32) {
@@ -158,7 +169,63 @@ fn ptAovAlbedo(m: RtMaterial) -> vec3f {
     }
     return m.baseColor * m.baseWeight;
 }
-${writers}`;
+${flags.frame ? ptAovSpecularWgsl() : ''}${writers}`;
+}
+
+function ptAovSpecularWgsl(): string {
+  return /* wgsl */ `
+// Specular demodulation factor of a primary hit: a rough stand-in for the pre-integrated specular term (F0 of the surface: 0.04 for a dielectric, the base colour for a metal, 1 for glass). The engine may supply its own DFG term instead.
+fn ptAovSpecular(m: RtMaterial) -> vec3f {
+    if (m.transmissionWeight > 0.5) {
+        return vec3f(1.0);
+    }
+    return mix(vec3f(0.04), m.baseColor * m.baseWeight, m.metalness);
+}
+`;
+}
+
+/** The per-frame outputs (P4.1): previous-camera uniform, the planes, the reprojection and the writer \`ptPath\` calls once at its end. Needs \`ptParams\`, \`ptAovAlbedo\` (\`ptAovWgsl\` with \`frame\`). */
+export function ptFrameWgsl(): string {
+  return /* wgsl */ `
+struct PtFrameParams {
+    origin: vec4f,
+    right: vec4f,
+    up: vec4f,
+    forward: vec4f,
+}
+@group(2) @binding(${PT_FRAME_PARAMS_BINDING}) var<uniform> ptFrameParams: PtFrameParams;
+@group(2) @binding(${PT_FRAME_BINDING}) var<storage, read_write> ptFrame: array<vec4f>;
+const PT_DEMOD_EPS: f32 = ${PT_DEMOD_EPS};
+
+// (ndc.x, ndc.y, viewZ) of world point p seen from a pinhole camera given as the kernel's basis (right and up are scaled by tan(fov/2) (x aspect)).
+fn ptProject(origin: vec3f, right: vec3f, up: vec3f, forward: vec3f, p: vec3f) -> vec3f {
+    let d = p - origin;
+    let z = dot(d, forward);
+    return vec3f(dot(d, right) / (dot(right, right) * z), dot(d, up) / (dot(up, up) * z), -z);
+}
+
+// Motion of a world point: NDC delta current - previous (+y up, no jitter: both projections are the unjittered cameras) and zPrev - zCur in view space (viewZ negative in front).
+fn ptFrameMotion(p: vec3f) -> vec3f {
+    let c = ptProject(ptParams.origin.xyz, ptParams.right.xyz, ptParams.up.xyz, ptParams.forward.xyz, p);
+    let q = ptProject(ptFrameParams.origin.xyz, ptFrameParams.right.xyz, ptFrameParams.up.xyz, ptFrameParams.forward.xyz, p);
+    return vec3f(c.xy - q.xy, q.z - c.z);
+}
+
+fn ptFramePlanes(pixel: u32, n: u32, radiance: vec3f, direct: vec3f, bounceT: f32, seen: bool, isSpec: bool, normal: vec3f, viewZ: f32, motion: vec3f, rough: f32, albedo: vec3f, spec: vec3f) {
+    let aF = select(vec3f(1.0), max(albedo, vec3f(PT_DEMOD_EPS)), seen);
+    let sF = select(vec3f(1.0), max(spec, vec3f(PT_DEMOD_EPS)), seen);
+    let useSpec = seen && isSpec;
+    let diffuse = select(radiance, direct, useSpec);
+    let specular = select(vec3f(0.0), radiance - direct, useSpec);
+    let hd = select(0.0, bounceT, seen);
+    ptFrame[pixel] = vec4f(diffuse / aF, select(hd, 0.0, useSpec));
+    ptFrame[n + pixel] = vec4f(specular / sF, select(0.0, hd, useSpec));
+    ptFrame[2u * n + pixel] = vec4f(normal, viewZ);
+    ptFrame[3u * n + pixel] = vec4f(motion.xy, rough, motion.z);
+    ptFrame[4u * n + pixel] = vec4f(aF, select(0.0, 1.0, useSpec));
+    ptFrame[5u * n + pixel] = vec4f(sF, select(0.0, 1.0, seen));
+}
+`;
 }
 
 /** Debug counters (`ptCounters`, `PT_COUNTER_WORDS` u32 per pixel). `binding` is the scheduler's slot in group 2. */
@@ -184,7 +251,7 @@ fn ptCountEnd(pixel: u32, depth: u32, reason: u32) {
 
 /** Everything the enabled outputs add after the shading modules, or '' (then nothing at all is appended). */
 export function ptOutputsWgsl(flags: PtOutputsFlags, countersBinding: number | null): string {
-  const parts = [ptAovWgsl({ aovs: flags.aovs, hooks: !!flags.hooks }), ptHooksWgsl(flags.hooks), flags.counters && countersBinding !== null ? ptCountersWgsl(countersBinding) : ''].filter((p) => p !== '');
+  const parts = [ptAovWgsl({ aovs: flags.aovs, hooks: !!flags.hooks, frame: !!flags.frame }), flags.frame ? ptFrameWgsl() : '', ptHooksWgsl(flags.hooks), flags.counters && countersBinding !== null ? ptCountersWgsl(countersBinding) : ''].filter((p) => p !== '');
   return parts.join('\n');
 }
 
@@ -265,4 +332,31 @@ export function ptCounterImage(raw: Uint32Array, width: number, height: number, 
   const s = Math.max(1, samples);
   for (let p = 0; p < n; p++) out[p] = (raw[p * PT_COUNTER_WORDS + word] as number) / s;
   return out;
+}
+
+/** One frame's outputs read back (`PtMegakernel.readFrame`); every plane is `width * height` vec4 (4 floats per pixel, row 0 = top). */
+export interface PtFrame {
+  width: number;
+  height: number;
+  /** Beauty: total radiance of the sample, rgb; a = 1. */
+  radiance: Float32Array;
+  /** rgb: diffuse-class radiance / `albedo` factor (primary emission and sky included); a: hit distance of the first bounce ray (0 = miss, or a specular-class path). */
+  diffuse: Float32Array;
+  /** rgb: specular-class radiance / `specularFactor`; a: hit distance of the first bounce ray (0 = miss, or a diffuse-class path). */
+  specular: Float32Array;
+  /** rgb: world-space unit shading normal of the primary hit (0 on a miss); a: viewZ (negative in front, 0 on a miss). */
+  normalViewZ: Float32Array;
+  /** r, g: motion, NDC delta current - previous (+y up, jitter-free); b: perceptual roughness; a: motionZ = viewZ(previous) - viewZ(current). */
+  motionRoughness: Float32Array;
+  /** rgb: the diffuse demodulation factor (albedo of the primary hit, floored at `PT_DEMOD_EPS`; 1 on a miss); a: 1 when the primary hit is specular-class (conductor / dielectric lobe). */
+  albedo: Float32Array;
+  /** rgb: the specular demodulation factor (approximate pre-integrated specular term, floored; 1 on a miss); a: 1 when the primary ray hit a surface. */
+  specularFactor: Float32Array;
+}
+
+/** Splits the `ptFrame` planes (and the accumulator) into a `PtFrame`. `planes` = `PT_FRAME_PLANES * width * height * 4` floats, `radiance` = `width * height * 4`. */
+export function ptDecodeFrame(radiance: Float32Array, planes: Float32Array, width: number, height: number): PtFrame {
+  const n = width * height * 4;
+  const plane = (i: number): Float32Array => planes.slice(i * n, (i + 1) * n);
+  return { width, height, radiance, diffuse: plane(0), specular: plane(1), normalViewZ: plane(2), motionRoughness: plane(3), albedo: plane(4), specularFactor: plane(5) };
 }

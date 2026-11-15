@@ -79,6 +79,36 @@ if [ "$ONLY" = "p3" ]; then
   node bench/adapters/matrix.ts --renderers $RV --scenes sponza-white --spp 64 --repeat 5 --interleave --append --name "p36-time-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 sponza"
   node bench/adapters/matrix.ts --renderers $RV --scenes cornell,tex-mask --spp 256 --repeat 5 --interleave --extra pt_maxdepth=2 --name "p36-d2-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 d2"
   node bench/adapters/matrix.ts --renderers $RV --scenes sponza-white --spp 64 --repeat 5 --interleave --extra pt_maxdepth=2 --append --name "p36-d2-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 d2 sponza"
+
+  # P3.3 / P3.4 / P3.10 / R1b / P3.9 (docs/QUIET-PASS.md rows of the same names): subgroup appends, block sorts, ordered restart, LOD with refill.
+  # Paired ratios: node bench/adapters/paired-ratios.ts --report <name> [--base pt-megakernel | pt-wavefront]
+  note "p3 7/10 P3.3 + P3.4 + P3.10: appends, sorts, refill flavours (one page per scene, all variants interleaved ABBA inside it; each also checks its image against the first id)"
+  RA=pt-megakernel,pt-wavefront,pt-wf-sg,pt-wf-sort-mat,pt-wf-sort-oct,pt-wf-sort-both
+  RB=pt-megakernel,pt-wavefront,pt-wf-refill,pt-wf-ordered,pt-wf-refill-sg,pt-wf-ordered-sg,pt-wf-batch
+  ab() { # name scene spp renderers extra-args...
+    local name=$1 scene=$2 spp=$3 r=$4; shift 4
+    node bench/runner/run.ts --page wf-sched-ab --suite wf-sched-ab --timeout 3000000 --json "$OUT/wf-sched-ab-$name.json" --args scene=$scene renderers=$r spp=$spp rounds=5 "$@" >> "$LOG" 2>&1 || note "FAILED wf-sched-ab $name"
+  }
+  for set in A B; do
+    R=$RA; [ $set = B ] && R=$RB
+    ab $set-cornell cornell 256 $R
+    ab $set-sponza sponza-white 64 $R
+    ab $set-quad quad-light 1024 $R
+    ab $set-foliage foliage-mask 1024 $R
+    ab $set-env-l1 env-sphere 1024 $R
+  done
+  for L in 4 16; do ab B-env-l$L env-sphere 1024 pt-megakernel,pt-wf-refill,pt-wf-ordered,pt-wf-ordered-sg pt_layers=$L; done
+  ab B-cornell-l2 cornell 256 pt-megakernel,pt-wf-refill,pt-wf-ordered,pt-wf-ordered-sg pt_layers=2
+  note "p3 8/10 P3.9 auto policy vs the best fixed setting per scene"
+  for sc in cornell:256 sponza-white:64 env-sphere:1024 quad-light:1024 foliage-mask:1024; do
+    ab auto-${sc%%:*} ${sc%%:*} ${sc##*:} pt-megakernel,pt-wavefront,pt-wf-refill,pt-wf-batch,pt-auto
+  done
+  note "p3 9/10 R1b: materialLod secondary with refill"
+  ab r1b-lod-cornell lod-cornell 512 pt-mk-lod,pt-wf-lod,pt-wf-refill-lod,pt-wf-ordered-lod
+  ab r1b-clearcoat ClearCoatTest-notex 512 pt-mk-lod,pt-wf-lod,pt-wf-refill-lod,pt-wf-ordered-lod
+  note "p3 10/10 correctness of every scheduling variant (per pixel vs the megakernel; load-wait 0, no timing from this)"
+  node bench/adapters/matrix.ts --renderers pt-megakernel,pt-wavefront,pt-wf-sg,pt-wf-sort-both,pt-wf-refill-sg,pt-wf-ordered-sg,pt-wf-ordered-l2,pt-wf-batch --scenes cornell,quad-light,env-sphere,sponza-white,tex-mask,foliage-mask --spp 32 --snapshots 32 --load-wait 0 --name "wfs-agree-$STAMP" >> "$LOG" 2>&1 || note "FAILED agreement run"
+  node bench/adapters/pt-wf-sched-agreement.ts --report "wfs-agree-$STAMP" --out "$OUT/wfs-agreement.md" >> "$LOG" 2>&1 || note "FAILED: a scheduling variant differs from the megakernel"
 fi
 
 note "done; load $(load)"
