@@ -6,6 +6,9 @@ local agent on the M5 Pro owns the track from now on. Read this file, then [nrc.
 checklist), [nrc-diverges.md](nrc-diverges.md) (every difference from the paper and VkNRC, with follow-ups) and
 TASKS.md section N.
 
+**Update 2026-11-15:** the "First session on the Mac" list below has been run. Results are in nrc.md (Status, "First
+Mac session") and TASKS N0.2/N1.1/N2/N3/N10; the "Verified vs not" table below is the cloud session's view.
+
 ## What exists
 
 | Piece | Where | State |

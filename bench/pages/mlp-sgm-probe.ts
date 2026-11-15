@@ -30,7 +30,21 @@ function plainConfigs(info: GPUAdapterInfo): Array<Record<string, unknown>> {
   });
 }
 
-async function tryCompile(device: GPUDevice, code: string): Promise<{ ok: boolean; stage: string; message: string }> {
+type CompileResult = { ok: boolean; stage: string; message: string; compileMs?: number };
+
+/** Compile + pipeline, timed; gives up waiting after `limitMs` (a Metal compile of the old emulated form never finished). */
+async function tryCompile(device: GPUDevice, code: string, limitMs = 20000): Promise<CompileResult> {
+  const t0 = performance.now();
+  let timer = 0;
+  const timeout = new Promise<CompileResult>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, stage: 'timeout', message: `no pipeline after ${limitMs} ms` }), limitMs) as unknown as number;
+  });
+  const r = await Promise.race([compileOnce(device, code), timeout]);
+  clearTimeout(timer);
+  return { ...r, compileMs: Math.round(performance.now() - t0) };
+}
+
+async function compileOnce(device: GPUDevice, code: string): Promise<CompileResult> {
   device.pushErrorScope('validation');
   const module = device.createShaderModule({ code });
   const info = await module.getCompilationInfo();
@@ -89,7 +103,7 @@ try {
         const opts = (r: number): SgmOptions => ({ shape: DEFAULT_SHAPE, config, records: r, subgroups: 1, enableName, ...partial });
         while (records > config.M * (partial.subgroups ?? 1) && sgmWorkgroupBytes(opts(records)) > device.limits.maxComputeWorkgroupStorageSize) records /= 2;
         let code = '';
-        let r: { ok: boolean; stage: string; message: string };
+        let r: CompileResult;
         try {
           code = inferSgmWgsl(opts(records), BUFFER_HOOKS_INFER);
           r = await tryCompile(device, code);
@@ -104,6 +118,20 @@ try {
   } else {
     notes.results = 'subgroup matrix feature not exposed: start Chrome with --enable-unsafe-webgpu (and a recent Chrome)';
   }
+  // The emulated twin (plain WGSL, any device): compile time only. Last, because a stuck compile can block the queue.
+  const emulated: Array<Record<string, unknown>> = [];
+  for (const tile of [8, 16]) {
+    for (const subgroups of [1, 4]) {
+      const config: SgmConfig = { componentType: 'f32', resultComponentType: 'f32', M: tile, N: tile, K: tile, minSubgroupSize: 32, maxSubgroupSize: 32 };
+      const opts: SgmOptions = { shape: DEFAULT_SHAPE, config, records: 64, subgroups, emulate: true };
+      if (sgmWorkgroupBytes(opts) > device.limits.maxComputeWorkgroupStorageSize) continue;
+      const code = inferSgmWgsl(opts, BUFFER_HOOKS_INFER);
+      const r = await tryCompile(device, code);
+      metrics[r.ok ? 'emu_ok' : 'emu_failed'] = (metrics[r.ok ? 'emu_ok' : 'emu_failed'] ?? 0) + 1;
+      emulated.push({ form: `emulated ${tile}³ x${subgroups}`, ...r, wgslBytes: code.length });
+    }
+  }
+  notes.emulated = emulated;
   await drainDevice(device);
   // Compile failures are findings, so they do not fail the run; but device errors from a failed pipeline would, so
   // they were captured in error scopes above.

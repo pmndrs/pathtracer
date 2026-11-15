@@ -13,7 +13,7 @@
  *  - several subgroups per workgroup: row blocks split by `@builtin(subgroup_id)` (needs `subgroup_uniformity`,
  *    Chrome 145+). Whether matrix built-ins accept those offsets is what the probe page tests (TASKS N0.2).
  *
- * `emulate: true` emits the same kernel with plain-WGSL stand-ins (every lane holds whole tiles, f32). It runs
+ * `emulate: true` emits the same kernel with plain-WGSL stand-ins (32 lanes share each tile, f32). It runs
  * anywhere, including SwiftShader, so tiling, offsets, the transposed weight view, output padding and the
  * multi-subgroup row split are checked against the CPU oracle before a device with subgroup matrices is available.
  * Not for timing.
@@ -57,7 +57,7 @@ export interface SgmOptions {
 
 /** Lanes per subgroup the kernel is laid out for (the config's max; the proposal requires workgroup x to be a multiple). */
 export function sgmLanes(o: SgmOptions): number {
-  return o.emulate ? 32 : o.config.maxSubgroupSize;
+  return o.emulate ? EMU_LANES : o.config.maxSubgroupSize;
 }
 
 export function sgmWorkgroupSize(o: SgmOptions): number {
@@ -157,30 +157,45 @@ function nativeOps(c: SgmConfig): Ops {
   };
 }
 
+/** Result elements each emulated lane owns: element e of the M × N tile belongs to lane e % 32. */
+export function sgmEmuElementsPerLane(c: Pick<SgmConfig, 'M' | 'N'>): number {
+  return Math.ceil((c.M * c.N) / EMU_LANES);
+}
+
+const EMU_LANES = 32;
+
 function emulatedOps(c: SgmConfig): Ops {
   const { M, N, K } = c;
+  const E = sgmEmuElementsPerLane(c);
+  const guard = M * N % EMU_LANES ? `if (e >= ${M * N}u) { continue; }\n    ` : '';
   return {
     prelude: /* wgsl */ `
 // Emulated subgroup matrices (correctness only). Left/right "tiles" are lazy views (offset, stride) read at multiply
-// time, which matches the native load semantics here because nnA and the weights do not change in between. Every
-// lane computes the whole result tile (f32).
+// time, which matches the native load semantics here because nnA and the weights do not change in between. Like a real
+// subgroup, the ${EMU_LANES} lanes share the result tile: lane j owns elements j, j + ${EMU_LANES}, ... (${E} each, f32).
+// An earlier form had every lane compute and store the whole tile in a by-value private array: on Apple (Chrome 157)
+// that ran for minutes per dispatch and once took the machine down (CLAUDE.md Traps).
 alias EmuLeft = vec2u;  // M rows × K cols, row-major view of nnA
 alias EmuRight = vec2u; // K rows × N cols, column-major view of the weights: element (k, n) at off + n * stride + k
-alias EmuResult = array<f32, ${M * N}>; // M rows × N cols, row-major
+alias EmuResult = array<f32, ${E}>; // this lane's elements of the M × N row-major tile
+var<private> nnEmuLane: u32;
 fn emuMma(l: EmuLeft, r: EmuRight, acc: EmuResult) -> EmuResult {
   var o = acc;
-  for (var i = 0u; i < ${M}u; i++) {
-    for (var n = 0u; n < ${N}u; n++) {
-      var s = o[i * ${N}u + n];
-      for (var k = 0u; k < ${K}u; k++) { s += f32(nnA[l.x + i * l.y + k]) * f32(nnSgmW[r.x + n * r.y + k]); }
-      o[i * ${N}u + n] = s;
-    }
+  for (var j = 0u; j < ${E}u; j++) {
+    let e = nnEmuLane + j * ${EMU_LANES}u;
+    ${guard}let i = e / ${N}u;
+    let n = e % ${N}u;
+    var s = o[j];
+    for (var k = 0u; k < ${K}u; k++) { s += f32(nnA[l.x + i * l.y + k]) * f32(nnSgmW[r.x + n * r.y + k]); }
+    o[j] = s;
   }
   return o;
 }
-// Every lane writes the same values: a benign race, and only in this emulation.
 fn emuStore(off: u32, v: EmuResult, stride: u32) {
-  for (var i = 0u; i < ${M}u; i++) { for (var n = 0u; n < ${N}u; n++) { nnS[off + i * stride + n] = TR(v[i * ${N}u + n]); } }
+  for (var j = 0u; j < ${E}u; j++) {
+    let e = nnEmuLane + j * ${EMU_LANES}u;
+    ${guard}nnS[off + (e / ${N}u) * stride + e % ${N}u] = TR(v[j]);
+  }
 }
 `,
     left: 'EmuLeft',
@@ -273,7 +288,8 @@ ${hooks}
 @compute @workgroup_size(${wg})
 fn nnInferSgm(${builtins.join(', ')}) {
   let base = (wid.x + wid.y * nwg.x) * ${R}u;
-  let sg = ${sgIndex};
+  let sg = ${sgIndex};${o.emulate ? `
+  nnEmuLane = lid % ${EMU_LANES}u;` : ''}
   for (var i = lid; i < ${R}u; i += ${wg}u) {
     let r = base + i;
     var x: array<f32, NN_IN>;

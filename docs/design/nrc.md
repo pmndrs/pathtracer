@@ -111,7 +111,8 @@ per pixel at 1080p is 2.07M queries, about **100 GFLOP per frame for inference a
 |---|---|---|---|
 | RTX 3060 Laptop, plain f16 | ~13 TFLOP/s [M] | ~30 ms | ~8 ms |
 | RTX 3060 Laptop, tensor cores | ~50+ TFLOP/s dense [M] | ~8 ms | ~2 ms |
-| M5 Pro, plain f16 | [U] | [U] | [U] |
+| M5 Pro, portable f16 (naive kernel, measured 2026-11-15) | 0.45 TFLOP/s achieved | ~190 ms | ~47 ms |
+| M5 Pro, `wgsl-sgm` f16, 4 subgroups (measured 2026-11-15) | 5.1 TFLOP/s achieved | ~17 ms | ~4.2 ms |
 
 So **without matrix hardware, a full-resolution NRC does not fit a real-time frame; at half resolution it might.**
 This is the case for `subgroup-matrix`, and it is also why the demo should run at the upscaler's input resolution.
@@ -257,10 +258,25 @@ Built (`packages/mlp`, `@pathtracer/mlp`, private, WGSL prefix `nn`):
   transposed column-major view, ReLU/convert round trip through workgroup memory, 1 or N subgroups per workgroup
   (rows split by `subgroup_id`). The same generator emits an **emulated** form in plain WGSL; that form matches the
   oracle on SwiftShader for 8³ and 16³ tiles, 1/2/4 subgroups and ragged counts (inference 3–4e-7 rel). The native
-  form has never been compiled (no device here). Training on subgroup matrices is N3b, not started.
+  form compiled first time on the M5 Pro and matches the oracle (below). Training on subgroup matrices is N3b, not started.
 - **Pages:** `mlp-check` (GPU vs oracle, `infer=portable|sgm|sgm-emu`), `mlp-fit` (learn an HDR image, PFM snapshots,
   `oracleSteps` replay), `mlp-timing` (GPU ms per inference pass and training step for one arm), `mlp-sgm-probe`
   (configs + which kernel forms compile), `mlp-live` (interactive demo, below).
+
+**First Mac session (2026-11-15, M5 Pro, Chrome 157, Metal).** Every checklist step ran.
+- *Probe (N0.2):* configs f32→f32 and f16→f16, 8×8×8; subgroup size fixed at 32. `subgroup-id ×4` compiles with no
+  diagnostic override; the `local_invocation_index / 32` control fails and compiles only with
+  `diagnostic(off, chromium.subgroup_matrix_uniformity)`.
+- *Correctness (N1, N3a):* portable f32 2.5e-7 / f16 1.6e-3 (inference), gradients 3.1e-7 / 1.3e-2; native sgm f32→f32
+  3.5e-7, f16→f16 2.8e-3, 1 and 4 subgroups identical. The emulated twin hung the Apple GPU (and the Mac rebooted during
+  its 16³ run); rewritten so the 32 lanes share each tile, verified on SwiftShader, not yet re-run on the GPU (N3c).
+- *Fit (N1.1):* deterministic, but VkNRC's lr 0.002 gives relMSE 0.84-0.98 after 1024 steps; lr 0.01 gives 0.26. The
+  chirp stripes stay unlearned at any lr (encoding follow-up N1.3).
+- *Timing (N2, best effort, not a quiet pass):* ms per 1M queries: portable f32 179-183, portable f16 95.4, sgm f32 33.3,
+  sgm f16 12.6, sgm f16 with 4 subgroups 8.46. Training step (portable, 16k): f32 8.05, f16 6.78. **On the M5 Pro the
+  matrix path beats our portable f16 by 7.5× (11× with 4 subgroups)**, against the expectation in §2b. The caveat is
+  that the portable kernel is a naive baseline at 0.45 TFLOP/s (N1.2), so the fair comparison is still open.
+- *Live demo (N10):* works in the app's browser pane (portable backends) and in flagged Chrome (all backends).
 
 **Mac session checklist** (each line is one command from the repo root; quiet-machine rules for the timing lines):
 

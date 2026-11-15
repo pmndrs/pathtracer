@@ -176,7 +176,22 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   `pnpm install` after adding a workspace dependency.
 - Since Chrome 145 (`subgroup_uniformity` + `@builtin(subgroup_id)` from 144), control flow on `subgroup_id` is
   subgroup-uniform; `local_invocation_index / 32` is not (verified Chrome 153). Derive per-subgroup offsets from
-  `subgroup_id`. Whether subgroup-matrix built-ins accept such offsets is untested (TASKS N0.2).
+  `subgroup_id`. Subgroup-matrix load/store accept such offsets without any diagnostic override (Chrome 157, Metal,
+  verified 2026-11-15); `local_invocation_index / 32` offsets need `diagnostic(off, chromium.subgroup_matrix_uniformity)`
+  (the unprefixed `subgroup_matrix_uniformity` is not the rule's name).
+- Apple (M5 Pro, Chrome 157) offers subgroup matrices only as f32→f32 and f16→f16, 8×8×8, subgroup size fixed at 32.
+- Never run an "every lane computes the whole tile" emulation on a real GPU: the first emulated sgm form (each of 32 lanes
+  doing the full 8×8 or 16×16 tile in a by-value `array<f32, 64|256>`) compiled in 65 ms but one dispatch did not finish
+  in 30-70 s on the M5 Pro, and the Mac rebooted during the 16³ run. The emulation now splits each tile across the lanes
+  (`sgmEmuElementsPerLane`). Try a new kernel shape on SwiftShader first (`PT_CHROME_FLAGS="--use-webgpu-adapter=swiftshader
+  --enable-unsafe-swiftshader"`, `--allow-software --no-lock`, works on the Mac), then one tiny dispatch on the GPU.
+- zsh does not word-split `$var`: `node bench/runner/run.ts --args $a` with `a="infer=sgm subgroups=4"` passes ONE argument
+  (the page then reads `infer` as `sgm subgroups=4`). Loop in `bash -c '…'` or write `${=a}`.
+- The desktop app's browser pane runs WebGPU on the real GPU (canvas works) but exposes no subgroup matrices, and a hidden
+  pane throttles `requestAnimationFrame` to ~1 fps. For the sgm backends drive the runner's Chrome flags over CDP
+  (`--remote-debugging-port=0`, `DevToolsActivePort` in the profile; `Runtime.evaluate`).
+- Branches cut before main's P1.4 load-check change count Electron GPU helpers (Claude, Spotify, Notion, Creative Cloud)
+  as Chrome and mark every run `loaded`: take `bench/runner/load-check.ts` (+ test) from main.
 - gpuweb issue bodies (not comments) are readable through `gh api -X GET search/issues -f q='repo:gpuweb/gpuweb <n>
   in:number'`; proposal files through raw.githubusercontent.com. developer.chrome.com and googlesource are not
   reachable from cloud sessions; use WebSearch summaries for those.

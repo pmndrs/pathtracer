@@ -58,6 +58,13 @@ describe('sgm generator', () => {
     const code = inferSgmWgsl(opts({ config: { ...APPLE, componentType: 'f32', resultComponentType: 'f32' }, emulate: true, subgroups: 2 }), BUFFER_HOOKS_INFER);
     expect(code).not.toMatch(/subgroup_matrix|subgroupMatrix|^enable/m);
     expect(code).toContain('emuMma(');
+    // Lanes share the tile (8 × 8 = 2 elements per lane); no lane holds a whole tile.
+    expect(code).toContain('alias EmuResult = array<f32, 2>;');
+    expect(code).toContain('nnEmuLane = lid % 32u;');
+    expect(code).not.toContain('continue;');
+    const t4 = inferSgmWgsl(opts({ config: { ...APPLE, componentType: 'f32', resultComponentType: 'f32', M: 4, N: 4, K: 4 }, emulate: true }), BUFFER_HOOKS_INFER);
+    expect(t4).toContain('alias EmuResult = array<f32, 1>;');
+    expect(t4).toContain('if (e >= 16u) { continue; }');
   });
 
   it('pack kernel zero-fills padded output rows', () => {

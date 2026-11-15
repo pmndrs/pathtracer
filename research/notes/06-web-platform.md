@@ -71,6 +71,16 @@ Fallback: workgroup memory + atomics versions of every subgroup op, selected via
 ### 3.5 Subgroup matrix / neural denoiser
 **Update 2026-11-14 [V]:** still `chromium-experimental-subgroup-matrix` (Draft proposal). Since this note: bf16/fp8 limited-use types and D3D12 (SM 6.10, preview) mappings merged; open investigations on element access (#11077), result→left conversion (#11079), workgroup matrices (#11078), `@unroll` (#11073). Shipped around it: `subgroup_id` (Chrome 144), `subgroup_uniformity` (145, verified on 153), `@subgroup_size` (151–152). Details and our asks: `docs/design/subgroup-matrix-feedback.md`.
 
+**Measured 2026-11-15 [V] (M5 Pro, Chrome 157.0.8103.52, Metal, `--enable-unsafe-webgpu`; `bench/pages/mlp-sgm-probe.ts`):**
+`subgroupMatrixConfigs` = f32×f32→f32 8×8×8 and f16×f16→f16 8×8×8 (no mixed f16→f32); subgroup size 32..32; workgroup
+memory 32 KiB; WGSL language features include `subgroup_id` and `subgroup_uniformity`. The MLP inference kernel (6 layers,
+64 wide) compiles natively in both configs with 1 subgroup and with **4 subgroups whose matrix load/store offsets come from
+`@builtin(subgroup_id)`, with no diagnostic override**. The same kernel with offsets from `local_invocation_index / 32`
+fails (`'subgroupMatrixStore' requires argument 1 to be uniform`) and compiles only with
+`diagnostic(off, chromium.subgroup_matrix_uniformity)`; `diagnostic(off, subgroup_matrix_uniformity)` is not accepted as
+the matrix rule's name. Results match the f64 oracle (f32 3.5e-7, f16 2.8e-3). Timing (best effort): 3.4 TFLOP/s with 1
+subgroup, 5.1 TFLOP/s with 4 (f16), 1.3 TFLOP/s f32; our naive portable f16 kernel reaches 0.45 (TASKS N2).
+
 Gpuweb draft: types `subgroup_matrix_left/right/result<T,..>`, `subgroupMatrixLoad/Store/MultiplyAccumulate`; compute only; subgroup-uniform. Config list via `GPUAdapterInfo.subgroupMatrixConfigs` (componentType, resultComponentType, M,N,K, min/maxSubgroupSize). Metal 3: 8x8x8 f16/f32/bf16; Vulkan: from KHR coop matrix props (NVIDIA/AMD/Intel give 16x16x16 f16); D3D12: needs `D3D12_LINEAR_ALGEBRA_TIER_1_0`/SM6.10, not common yet. Expect 3-10x over plain f16 FMA convs on supported HW (**vendor-typical, not measured by me**). Plan: denoiser conv kernels with 3 variants (subgroup-matrix f16 / plain f16 / f32), pick by feature. Rating: Prototype (our Denoiser repo owns it; coordinate).
 
 ### 3.6 Hardware ray tracing in WebGPU
