@@ -14,8 +14,9 @@
  * Bindings: group 0 bvh walk and group 1 scene copy as the megakernel (a kernel that does not use a group declares none of it),
  * group 2 params + accumulator (+ fuzz table at 2) + the wavefront buffers, group 3 (args kernel only) the indirect args.
  *
- * Not in slice 1 (P3.2+): alpha MASK materials (the megakernel passes a masked hit without a bounce; here it would need extra iterations
- * or a loop in intersect), refill, compaction, octant binning, material sorting, several samples in flight, subgroup-aggregated appends.
+ * Not yet (P3.3+): alpha MASK materials (the megakernel passes a masked hit without a bounce; here it would need extra iterations
+ * or a loop in intersect), compaction, octant binning, material sorting, subgroup-aggregated appends. Refill and layers (P3.2) are the `PtwfConfig` variants of the
+ * kernels: inline refill restarts a finished slot in the shade kernel, batch refill dispatches the camera kernel over the film from the args kernel's decision.
  */
 import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptHookVertexExpr } from '../integrator/outputs-wgsl.ts';

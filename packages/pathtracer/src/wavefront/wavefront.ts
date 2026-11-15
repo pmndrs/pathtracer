@@ -9,7 +9,8 @@
  * Same surface as the megakernel (create / setScene / setFilm / setCamera / setLimits / setSeed / reset / encode / readImage / destroy).
  * One sample pass = camera + args(INIT) + for each depth `intersect, shade, args, shadow`, with GPU-written indirect dispatch args:
  * no readback and no CPU decision inside the frame. The queue protocol and buffer layout are in `layout.ts`. Slice 1: one sample in
- * flight, one path per pixel, no refill / sorting / compaction (P3.2+), no alpha MASK (`ptwfUnsupported`).
+ * flight, one path per pixel, no sorting / compaction (P3.3+), no alpha MASK (`ptwfUnsupported`). P3.2 adds the opt-in refill modes and `layers` (see `PtWavefrontOptions`);
+ * with `refill`, `encode` does not wait for its paths: `await finish()` before `readImage`.
  *
  * The params uniform is a ring of dynamic-offset slots like the megakernel's, with one record per depth iteration
  * (`PTWF_PARAM_SLOTS`; `maxPassesPerEncode()` says how many sample passes fit in one `encode`).

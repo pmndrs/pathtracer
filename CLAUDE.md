@@ -408,4 +408,14 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   weights come from `/@fs/<Denoiser>/packages/denoiser/tzas`, served because `server.ts` adds the linked checkout to `fs.allow` and defines `__BENCH_DENOISER_TZAS__`). A `link:` dev dependency needs `pnpm install --offline`.
   Buffer usage bits are not texture usage bits (`MAP_READ` is 1 on a buffer, `COPY_SRC` is 1 on a texture): a wrong constant fails device-side with a validation error, not at the call.
 - A counted or AOV render's wall time is not a timing result: `pt_counters=1` rows are invalid for timing (`stats.instrumented`); `pt_aovs` / `pt_denoise` readbacks run after the timed region but the AOV writes are in the kernel.
-
+- Wavefront refill (P3.2): the primary rays of a refilled sample must be restarted in PIXEL order. `inline` refill appends a restarted path in atomic order (random), which broke
+  primary-ray coherence (+25% on Sponza); `batch` scans the slots in pixel order (the camera kernel over the film) and is as fast as slice 1 there. Any refill or sort that scrambles
+  the queue order shows up first on a big-film scene with short paths, not on Cornell. Per-path SoA sections are indexed by `n` = SLOTS (K x pixels), the pixel is `path % (width*height)`.
+- Depth word of the wavefront state: bit 31 specular, bit 30 AOV `aovDone` (R4), bit 29 live (refill), depth 29 bits. Zero word = dormant slot (a `clearBuffer` of the state resets a film).
+- A refill `encode` does not finish its paths: call `await pt.finish()` before `readImage` (it is part of the timed region; the adapter does it). `reset()` zeroes state + counters in refill mode.
+- Only the PARITY of the iteration is read by the wavefront kernels (`iter & 1`), so refill needs 4 uniform records per encode and has no params-ring limit; the start records are `iter` 2 | parity.
+- `git worktree` agents: a fresh worktree has no `node_modules`/`bench/assets/{generated,downloads}`: `pnpm install --offline`, copy the two asset dirs from the main checkout; `link:` paths like
+  `../../Denoiser/...` resolve relative to the worktree (deeper), so re-point `bench/node_modules/denoiser` (and others) to the absolute path or typecheck says "Cannot find module".
+- `git checkout --merge <file>` during a rebase labels the sides `ours`/`theirs` (the normal markers say `HEAD`/the commit): a regex written for one silently matches nothing.
+- A small WebGPU `mapAsync` of 20 B per chunk, issued while the next chunk is already submitted, costs nothing measurable (finish() of furnace-dielectric: 3 ms for 96 empty iterations); the cost to
+  avoid is the dispatch overhead of empty iterations (~22 us each, 4 per iteration), not the readback.
