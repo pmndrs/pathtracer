@@ -125,7 +125,8 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
       strictPort: false,
       // The runner reloads pages itself; hot reload and file watching would only add noise (and watch research/).
       hmr: false,
-      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : [])] },
+      // REFLECTIONS_REPO: a reflections checkout the `reflections-ab` page loads by path (P1.5; not a dependency).
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : []), ...(process.env.REFLECTIONS_REPO ? [process.env.REFLECTIONS_REPO] : [])] },
       watch: null,
     },
     plugins: [

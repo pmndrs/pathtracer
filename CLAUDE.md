@@ -381,6 +381,18 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   at cos 0.7 against the exact spectral sum) and adds the harmonics through the Rec.709 image of XYZ without a white balance; ours fixes the first two and balances.
 - `IridescenceDielectricSpheres` is a 7 x 7 x 7 grid, material index = 49 ix + 7 iy + iz with x = base ior, y = film thickness (0.1-0.7 um), z = film ior (both
   ship only as `.gltf` + `.bin`, pass `'gltf'` to `make`); one z slice (`i % 7 === 2`) is 49 spheres, 88k triangles.
+- A fresh pathtracer worktree has no package links: `pnpm install --offline` needs `.claude/worktrees/bvh` -> `~/Developer/bvh`
+  (packages/raytracer's `link:../../../bvh` resolves there), as reflections' worktrees have. Reflections links
+  `link:../pathtracer/packages/raytracer` (TS source; a reflections worktree needs `.claude/worktrees/pathtracer` too).
+- `reflections-ab` (P1.5) loads reflections' trace seam by path: `REFLECTIONS_REPO=<checkout> node bench/runner/run.ts --page
+  reflections-ab --args reflections=<checkout>`. The checkout needs the deleted @pmndrs/bvh wrapper for A: use reflections commit
+  36e206a (worktree `p1.5-ab-baseline`).
+- Our module pasted into someone else's shader: build its caps with no optional features (`buildCaps({ features: new Set(), limits })`)
+  or the `enable` lines land mid-file and the shader fails. Reflections' own WGSL also uses `rt`/`RT_` names (`RT_SOURCE`,
+  `rtLobeVisibility`); no collision today, check its names when adding ours.
+- WGSL refuses `a * b ^ c` (mixing `*` and `^` needs parentheses); it only fails on the GPU.
+- Reflections' timing pages show 2-20x bursts on every variant at once on this Mac: compare per-variant floors or medians over
+  5+ interleaved rounds, never one run.
 - Shader-compile timing (`--page kernel-compile`): a unique comment in the WGSL does NOT defeat the cache. Tint drops it, the generated MSL/HLSL(DXIL) is identical and a backend or driver cache answers (Mac: repeat 1 = 130-475 ms, repeats 2-3 = 9-12 ms). The page puts a unique f32 literal in a live line of `ptMain` (`1 + n/2^23` in the accumulate); if `ptMain`'s accumulate line changes, update `LIVE` in the page (it throws). Check cold/warm and the per-repeat list.
 - Tier 1 gate floor (P2.32): relMSE is not symmetric (the reference is the denominator). The floor for reference X is relMSE(other, X): AttenuationTest is 2.4e-2 with pbrt as reference
   and 5.0e-3 with Mitsuba. `compareImages(test, ref)`; use the floor of the reference you judge against. Slope of 1/spp from `relMSE(snapshot s, own final)` reads k 1.1-1.3 (shared samples), not 1.
