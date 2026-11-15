@@ -21,7 +21,7 @@
  * Not yet (P3.3+): compaction, octant binning, material sorting, subgroup-aggregated appends. Refill and layers (P3.2) are the `PtwfConfig` variants of the
  * kernels: inline refill restarts a finished slot in the shade kernel, batch refill dispatches the camera kernel over the film from the args kernel's decision.
  */
-import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptMaskIndirect, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptHookVertexExpr } from '../integrator/outputs-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
@@ -481,7 +481,8 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
   const film = !!mats?.features.thinFilm;
   const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
   const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
-  const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
+  const lodS = ptLodSnippets(o, '    ');
+  const mixU = mats?.features.mix || (o.lod !== 'off' && mats) ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
   const hooks = !!o.hooks;
   const counters = o.counters;
   const aovs = o.aovs;
@@ -611,9 +612,9 @@ ${counters ? `        ptCountRay(path, 1u, 0u);
     }${counters ? `
     ptCountRay(path, 1u, 0u);` : ''}${aovs ? `
     var aovDone = st.aovDone;` : ''}
-${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
+${lodS.decl}${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
     let coneW = rtConeAt(cone, hit.t);
-    let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
+    let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${lodS.texBias}, PT_TEX_CONE);
     let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);
     var shadingN = surf.shadingNormal;
     if (mat.normalTexture != RT_TEXTURE_NONE) {
@@ -639,9 +640,9 @@ ${hooks ? `    var hookEmitted = vec3f(0.0);
 ${hooks ? `        hookEmitted = beta * mat.emissionColor * w;
 ` : ''}    }
 
-    let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
-${film ? `    ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5);
-` : ''}${fuzz ? `    ptFuzzW = mat.sheenWeight;
+${lodS.bsdf(mixU, shadingNormal, true) ?? `    let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
+`}${film ? `    ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5${lodS.and});
+` : ''}${fuzz ? `    ptFuzzW = ${lodS.fuzzW};
     ptFuzzC = vec4f(mat.sheenColor, mat.sheenRoughness);
 ` : ''}${aovs ? `    if (depth == 0u) {
         ptAovPrimary(path, n, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)));
@@ -660,7 +661,7 @@ ${counters ? `        ptCountEnd(path, depth, select(2u, 1u, ${black}));
 ${layered ? `    ptLayerSeed = pixelSeed ^ (sampleIndex * 2654435761u) ^ (vertex * 2246822519u);
 ` : ''}
 ${aniso ? `    var frame = ptFrameFromNormal(${shadingNormal});
-    if (bp.kind == PT_BSDF_CONDUCTOR && mat.specularAnisotropy > 0.0) {
+    if (bp.kind == PT_BSDF_CONDUCTOR && mat.specularAnisotropy > 0.0${lodS.and}) {
         frame = ptFrameFromTangent(${shadingNormal}, surf.vertexTangent, mat.anisotropyRotation * 6.283185307179586);
     }
 ` : `    let frame = ptFrameFromNormal(${shadingNormal});

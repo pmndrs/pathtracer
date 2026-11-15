@@ -207,6 +207,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.exitMis ? { exitMis: settings.exitMis } : {}),
         layerDepth: settings.layerDepth ?? 64,
         layerThickness: settings.layerThickness ?? 1e-6,
+        ...(settings.materialLod === 'secondary' ? { materialLod: 'secondary', materialLodDepth: settings.materialLodDepth ?? 1 } : {}),
         transmissionTint: settings.transmissionTint ?? true,
         ...(settings.textureLod === 'cone' ? { textureConeScale: settings.textureConeScale ?? 'auto' } : {}),
       },

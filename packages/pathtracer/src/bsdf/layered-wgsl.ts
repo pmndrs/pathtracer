@@ -27,6 +27,34 @@ function f32List(a: Float32Array): string {
     .join(',');
 }
 
+/**
+ * The directional-albedo table and its lookup (`ptLayerAlbedoLut(f0, mu, rough)`), the part of the albedo layering that has no other dependency. The R1 reduced
+ * material (`ptBsdfReducedWgsl`) emits it on its own in a kernel that has no layered code (the wavefront's secondary shade kernel).
+ */
+export function ptLayerLutWgsl(): string {
+  const n = PT_LAYERED_LUT_N;
+  const lut = ptLayeredLut();
+  return /* wgsl */ `// E(mu, r) split-sum table (layered-lut.ts): E = F0 * A + B; rows = roughness (sqrt axis), columns = mu (sqrt axis).
+var<private> PT_LAYER_LUT: array<f32, ${lut.length}> = array<f32, ${lut.length}>(${f32List(lut)});
+fn ptLayerAlbedoLut(f0: f32, mu: f32, rough: f32) -> f32 {
+  let x = sqrt(clamp(mu, 0.0, 1.0)) * ${n - 1}.0;
+  let y = sqrt(clamp(rough, 0.0, 1.0)) * ${n - 1}.0;
+  let x0 = u32(min(floor(x), ${n - 2}.0));
+  let y0 = u32(min(floor(y), ${n - 2}.0));
+  let fx = x - f32(x0);
+  let fy = y - f32(y0);
+  let i00 = (y0 * ${n}u + x0) * 2u;
+  let i01 = i00 + 2u;
+  let i10 = i00 + ${n * 2}u;
+  let i11 = i10 + 2u;
+  let e00 = f0 * PT_LAYER_LUT[i00] + PT_LAYER_LUT[i00 + 1u];
+  let e01 = f0 * PT_LAYER_LUT[i01] + PT_LAYER_LUT[i01 + 1u];
+  let e10 = f0 * PT_LAYER_LUT[i10] + PT_LAYER_LUT[i10 + 1u];
+  let e11 = f0 * PT_LAYER_LUT[i11] + PT_LAYER_LUT[i11 + 1u];
+  return clamp((e00 * (1.0 - fx) + e01 * fx) * (1.0 - fy) + (e10 * (1.0 - fx) + e11 * fx) * fy, 0.0, 1.0);
+}`;
+}
+
 export function ptLayeredWgsl(options: PtLayeredOptions = {}): string {
   const code = ptLayeredWgslBase(options);
   if (!options.thinFilm) return code;
@@ -467,25 +495,7 @@ fn ptTopReflSample(t: PtTop, wo: vec3f, u0: f32, u1: f32) -> PtBsdfSample {
   return PtBsdfSample(wi, Rv * k, ptGgxVisiblePdf(a, wo, wm) / (4.0 * abs(dwo)), PT_FLAG_REFLECTION, 1.0);
 }
 
-// E(mu, r) split-sum table (layered-lut.ts): E = F0 * A + B; rows = roughness (sqrt axis), columns = mu (sqrt axis).
-var<private> PT_LAYER_LUT: array<f32, ${lut.length}> = array<f32, ${lut.length}>(${f32List(lut)});
-fn ptLayerAlbedoLut(f0: f32, mu: f32, rough: f32) -> f32 {
-  let x = sqrt(clamp(mu, 0.0, 1.0)) * ${n - 1}.0;
-  let y = sqrt(clamp(rough, 0.0, 1.0)) * ${n - 1}.0;
-  let x0 = u32(min(floor(x), ${n - 2}.0));
-  let y0 = u32(min(floor(y), ${n - 2}.0));
-  let fx = x - f32(x0);
-  let fy = y - f32(y0);
-  let i00 = (y0 * ${n}u + x0) * 2u;
-  let i01 = i00 + 2u;
-  let i10 = i00 + ${n * 2}u;
-  let i11 = i10 + 2u;
-  let e00 = f0 * PT_LAYER_LUT[i00] + PT_LAYER_LUT[i00 + 1u];
-  let e01 = f0 * PT_LAYER_LUT[i01] + PT_LAYER_LUT[i01 + 1u];
-  let e10 = f0 * PT_LAYER_LUT[i10] + PT_LAYER_LUT[i10 + 1u];
-  let e11 = f0 * PT_LAYER_LUT[i11] + PT_LAYER_LUT[i11 + 1u];
-  return clamp((e00 * (1.0 - fx) + e01 * fx) * (1.0 - fy) + (e10 * (1.0 - fx) + e11 * fx) * fy, 0.0, 1.0);
-}
+${ptLayerLutWgsl()}
 fn ptLayeredTopAlbedo(p: PtLayeredParams, mu: f32) -> f32 {
   if (p.ior == 1.0) { return 0.0; }
   if (p.ior == 1.0 || ptIsSmooth(p.alpha)) { return ptFrDielectric(max(mu, 1e-6), p.ior); }

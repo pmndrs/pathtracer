@@ -238,6 +238,31 @@ node/triangle/instance loads 2.5), BSDF 9.8 (`ptBsdfSample` 2.9, `ptBsdfEval` 1.
 sampler 1.3, Owen-Sobol 1.1, adapter 0.9. An `hdri` scene adds the map lookup, pdf and CDF sampling (+2.8 KB shortened).
 `rayMasks: false`. ~250 ms compile on the Mac; DXC unmeasured (P2.10). Print the table: `node bench/size-breakdown.ts [--env]`.
 
+## Ray-class material LOD (R1, `integrator.materialLod`)
+
+A real-time setting, biased, never on in reference mode. `materialLod: 'full'` (default) leaves every kernel byte-identical (`node bench/size-snapshot.ts`,
+cmp of all variants). `'secondary'` (page arg `pt_lod=secondary`, `pt_lod_depth=N`, renderer ids `pt-mk-lod` / `pt-wf-lod`) shades the vertices at depth >= `materialLodDepth` (default 1:
+the hits of indirect rays; 0 = every vertex, used by the furnace check) with `ptBsdfReduced` (`bsdf/adapter.ts`, TS twin + WGSL, tests in `bsdf/lod.test.ts`). NVIDIA's Table 3 idea
+(research note 12): a hit that indirect light merely passes through does not need the coat, the fuzz or the film.
+
+What a reduced vertex evaluates (OpenPBR mode; legacy mode has nothing to reduce but the texture footprint). The reduction keeps the directional albedo, so the
+average does not move; the price is variance at the vertex (a stochastic lobe pick, like the metal / dielectric `mix`):
+
+| full material | reduced vertex |
+|---|---|
+| dielectric specular or coat over a diffuse base (`PT_BSDF_LAYERED`) | one random lobe: GGX with Fresnel 1 with probability `q` (`q A = s E(mu_o)`, E the layered kernel's albedo table, A the Fresnel-1 lobe's albedo), else Lambert of `D / (1 - q)`, D the albedo layering's diffuse albedo with the internal base |
+| coated metal | plain conductor (eta 1) whose Fresnel at `mu_o` is the stack's `E + (1 - E)^2 r_in` (bisection on k, 10 steps), alpha = max(metal, coat) |
+| fuzz (sheen) | folded in: with probability `w max(F) E_f` a Lambert lobe of colour `F / max(F)`, base weights scaled by `1 - w E_f` (`E_f` from a 9 x 9 copy of the LTC table's R, `bsdf/reduced-fuzz.ts`) |
+| anisotropy | the mean of the two alphas |
+| thin film | not evaluated |
+| thin-walled / rough dielectric, medium | unchanged |
+| texture footprint (`textureLod: 'cone'`) | x `PT_LOD_TEX_BIAS` (2: one mip level coarser) |
+
+Megakernel: the reduced branch is a run-time `depth >= PT_LOD_DEPTH` branch next to the full lobes (they stay compiled for depth < N), so the kernel grows. Wavefront (plain scheduler): `shade`
+(depth < N) is the default shade kernel byte for byte; `shadeSecondary` (depth >= N, `PtWavefront.kernelBytes.shadeSecondary`) is compiled WITHOUT the layered / fuzz / film / aniso / coated-metal
+code (`ptReducedKernelFeatures`), and the host picks the kernel per depth iteration (iteration d shades exactly the vertices of depth d). Refill modes are not supported yet (a
+refilled slot mixes depths in one queue: the class would have to travel in the queue entry; TASKS R1b).
+
 ## Open choices (defaults hold until measured)
 
 1. **Kernel size.** Done: 40.4 KB (43.2 KB with a map) by pruning and short names (see Size). Remaining ideas, not needed for the
