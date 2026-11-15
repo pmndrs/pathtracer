@@ -628,5 +628,9 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Windows: on NVIDIA the per-record MLP kernel (`infer=portable`) beats the tiled one in Chrome/D3D12 (17 vs 24 ms per M queries, f16), the
   reverse of Apple, and the same per-record kernel is 3.5x slower on Dawn/Vulkan (60 ms): compare kernels within one backend.
 - Windows: Canary 160 ignores `--use-adapter-luid` and hands out the Intel UHD; `--gpu nvidia` then fails the run. Use Chrome stable.
+- Windows: the user environment sets `CMAKE_TOOLCHAIN_FILE` to a vcpkg checkout that does not exist; CMake then fails at `project()`. Build native tools
+  with `env -u CMAKE_TOOLCHAIN_FILE cmake ...` (VkNRC: `-A x64 -G "Visual Studio 17 2022"`, then `cmake --build build --target VkNRC --config Release -- -m`).
+- Windows: the RTX 3060 Laptop heats to 80-87 °C within minutes of back-to-back full-load runs (VkNRC, a 1024 spp megakernel cell) and the runner then marks
+  rows `thermal throttling` although clocks stay at 1.5-2.0 GHz (reason 0x20, software thermal slowdown). Pause between long runs; quote the start temperature.
 - Windows: the `caps` page used to set only `window.__benchResult`, so the runner always timed out on it; it now calls `reportResult`.
   Its subgroup-matrix probe compiles a result type the adapter lists (NVIDIA has no f32 or 8×8 config).
