@@ -13,7 +13,12 @@
  *  4. Stability (warm cache, no accumulation): mean relative frame-to-frame change of single frames, cache side vs plain at k spp.
  *  5. Floors: relMSE and FLIP of pbrt-v4 against Mitsuba (both 4096 spp): numbers below these are not measurable.
  *
- * Args: res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
+ * 6. Adaptation (scenario=adapt or all; real-time mode: every frame cleared, a new seed, training on): single-frame error at
+ *    1..64 frames after arriving at the reference view, for a fresh network (cold), a cache warmed on the opposite view then a
+ *    hard cut (cut), the same warm-up then a 60-frame camera flight to the view (fly), against a cache warmed at the view
+ *    (steady) and plain path tracing (k spp per frame).
+ *
+ * Args: scenario=static|adapt|all  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
  *       trainSelect=tile|pixel  queryDepth=1  lr=0.002  upload=1 (PFMs of the 16- and 256-frame images)  flip=1
  * Timing rows are wall clock per submit (best effort on a shared machine); the quality numbers are deterministic for a seed.
  */
@@ -181,7 +186,12 @@ try {
     }
   };
 
+  const scenario = args.scenario ?? 'static';
+  const runStatic = scenario === 'static' || scenario === 'all';
+  const runAdapt = scenario === 'adapt' || scenario === 'all';
+
   // 2. Cold start: a fresh network.
+  if (runStatic) {
   cache.resetNetwork();
   await series('cold');
 
@@ -195,8 +205,10 @@ try {
   }
   await series('warm');
 
+  }
+
   // 4. Stability: single frames, no accumulation.
-  {
+  if (runStatic) {
     const lumOf = (d: Float32Array, i: number) => 0.2126 * (d[i * 4] as number) + 0.7152 * (d[i * 4 + 1] as number) + 0.0722 * (d[i * 4 + 2] as number);
     const refLum = (i: number) => 0.2126 * (ref.data[i * ref.channels] as number) + 0.7152 * (ref.data[i * ref.channels + 1] as number) + 0.0722 * (ref.data[i * ref.channels + 2] as number);
     const prev: Record<string, Float32Array | null> = { plain: null, nrc: null };
@@ -225,6 +237,89 @@ try {
     }
     metrics.stability_plain_rel_change = median(change.plain!);
     metrics.stability_nrc_rel_change = median(change.nrc!);
+  }
+
+  // 6. Adaptation, real-time mode.
+  if (runAdapt) {
+    const viewB = camera;
+    const viewA: PtLookAtCamera = { ...camera, position: [8, 1.7, 0], target: [-10, 2.6, 0] };
+    const setCam = (c: PtLookAtCamera) => {
+      plain.setCamera(c);
+      cache.setCamera(c);
+    };
+    let seedN = 5000;
+    const rtFrame = async (): Promise<void> => {
+      const sd = seedN++;
+      plain.setSeed(sd);
+      cache.render.setSeed(sd);
+      await submit((e) => {
+        plain.reset(e);
+        cache.reset(e);
+        cache.encodeFrame(e);
+        plain.encode(e, k);
+      });
+    };
+    const single = async (): Promise<{ plain: number; nrc: number; nrcBias: number }> => {
+      const [a, b] = await Promise.all([plain.readImage(), cache.render.readImage()]);
+      const mb = compareImages(asImage(b), ref);
+      return { plain: compareImages(asImage(a), ref).relMse, nrc: mb.relMse, nrcBias: mb.relBias };
+    };
+    const ts = [1, 2, 4, 8, 16, 32, 64];
+    const warmAt = async (view: PtLookAtCamera) => {
+      cache.resetNetwork();
+      setCam(view);
+      for (let i = 0; i < warm; i++) await rtFrame();
+    };
+    const curve = async (tag: string) => {
+      let t = 0;
+      for (const T of ts) {
+        while (t < T) {
+          await rtFrame();
+          t++;
+        }
+        const m = await single();
+        metrics[`adapt_${tag}_nrc_relmse_t${T}`] = m.nrc;
+        metrics[`adapt_${tag}_nrc_relbias_t${T}`] = m.nrcBias;
+      }
+    };
+    // Steady state and plain: a cache warmed at the view itself.
+    await warmAt(viewB);
+    const plainErr: number[] = [];
+    const steadyErr: number[] = [];
+    const steadyBias: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      await rtFrame();
+      const m = await single();
+      plainErr.push(m.plain);
+      steadyErr.push(m.nrc);
+      steadyBias.push(m.nrcBias);
+    }
+    metrics.adapt_plain_relmse = median(plainErr);
+    metrics.adapt_steady_nrc_relmse = median(steadyErr);
+    metrics.adapt_steady_nrc_relbias = median(steadyBias);
+    // Cold: a fresh network at the view.
+    cache.resetNetwork();
+    setCam(viewB);
+    await curve('cold');
+    // Cut: warmed on the opposite view, then a hard cut.
+    await warmAt(viewA);
+    setCam(viewB);
+    await curve('cut');
+    // Fly: the same warm-up, then 60 frames moving A -> B (training all the way).
+    await warmAt(viewA);
+    // Walk A -> B while turning around by yaw (lerping the targets would pass through a straight-up view).
+    const yawOf = (c: PtLookAtCamera) => Math.atan2(c.target[2] - c.position[2], c.target[0] - c.position[0]);
+    const yawA = yawOf(viewA);
+    const yawB = yawOf(viewB) + (yawOf(viewB) < yawA ? 2 * Math.PI : 0) - 2 * Math.PI;
+    for (let i = 1; i <= 60; i++) {
+      const f = i / 60;
+      const p = viewA.position.map((v, j) => v + (viewB.position[j]! - v) * f) as [number, number, number];
+      const yaw = yawA + (yawB - yawA) * f;
+      setCam({ ...viewB, position: p, target: [p[0] + Math.cos(yaw), p[1] + 0.05, p[2] + Math.sin(yaw)] });
+      await rtFrame();
+    }
+    setCam(viewB);
+    await curve('fly');
   }
 
   reportResult(
