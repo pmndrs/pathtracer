@@ -398,3 +398,14 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Wavefront vs megakernel agreement is per pixel (max relative difference <= 7e-5, mostly 1e-6): `node bench/adapters/pt-wavefront-agreement.ts --a <mk report> --b <wf report>`.
   A difference above that is a bug in the wavefront port, not noise: both use the same sampler dimensions per pixel and vertex. The `pt-megakernel`
   adapter config now carries `scheduler`, so its config hash differs from rows written before 2026-11-15.
+- Optional integrator outputs (R10 hooks, R4 counters, AOVs; `integrator/outputs-wgsl.ts`): their template text must emit nothing (no blank line, no `\n`) when off. Two traps hit while adding them: a gated block ending in a
+  newline placed before the original newline adds a blank line (the megakernel stayed identical but the wavefront shade kernel grew by one `\n`), so put the leading `\n` inside the gate for end-of-line additions
+  (`x;${on ? `\n    y;` : ''}`). `node bench/size-snapshot.ts` now writes the `wf-*` wavefront kernels too (`bench/kernel-variants.ts` `wavefrontKernelVariants`): `diff -r` two snapshot directories, ignore `Only in`.
+- AOVs live in the TAIL of the accumulation buffer (`width * height` radiance vec4s, then 2 vec4 per pixel), not in their own binding: the wavefront shade kernel is at 8 of the 10 storage buffers per stage on Apple
+  (scene 2 + 6 io), so hooks can add 2 buffers there (1 with counters), 4 in the megakernel (`--page pt-outputs-check --args check=budget`). `readImage` copies only the first `width * height * 16` bytes.
+- The Cornell red wall's four corners are not coplanar and its mesh has smooth vertex normals: test its AOV normal against the wall within ~0.02, never exactly. Minified kernel text has no spaces around `,` `)` `(` (`@group(2)@binding(3)var<storage,read_write> x`): regex tests need `\s*`.
+- OIDN on our frames (`bench/adapters/shared/oidn.ts`): the Denoiser wants view-space normals ([-1,1], miss = 0), albedo [0,1], rgba32float color with `hdr: true` and `device` = our device (texture uploads need the same device; the
+  weights come from `/@fs/<Denoiser>/packages/denoiser/tzas`, served because `server.ts` adds the linked checkout to `fs.allow` and defines `__BENCH_DENOISER_TZAS__`). A `link:` dev dependency needs `pnpm install --offline`.
+  Buffer usage bits are not texture usage bits (`MAP_READ` is 1 on a buffer, `COPY_SRC` is 1 on a texture): a wrong constant fails device-side with a validation error, not at the call.
+- A counted or AOV render's wall time is not a timing result: `pt_counters=1` rows are invalid for timing (`stats.instrumented`); `pt_aovs` / `pt_denoise` readbacks run after the timed region but the AOV writes are in the kernel.
+

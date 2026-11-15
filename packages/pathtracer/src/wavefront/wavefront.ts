@@ -18,10 +18,11 @@ import { rtCreateComputePipelineAsync, rtModuleWgsl, rtSceneBindGroupEntries, rt
 import type { Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
-import { PT_PARAMS_BYTES } from '../integrator/integrator-wgsl.ts';
+import { PT_PARAMS_BYTES, resolveIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { ptRaytracerModuleOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_PARAM_SLOTS, PTWF_SHADOW_VEC4, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
-import { ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfUnsupported } from './wavefront-wgsl.ts';
+import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfUnsupported } from './wavefront-wgsl.ts';
 
 const STORAGE = 0x80;
 const COPY_DST = 0x8;
@@ -58,11 +59,13 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   const t = { prune: options.prune, shorten: options.shortenNames, minify: options.minify };
   const walk = rtModuleWgsl(caps, { ...options.format, rayMasks: false, traceSlot: { group: 0, firstBinding: 0 } });
   const full = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
+  // Optional outputs (hooks, counters, AOVs; `integrator/outputs-wgsl.ts`) join the shade kernel only: it is the one that sees every vertex.
+  const outputs = ptOutputsWgsl(resolveIntegratorOptions(integratorOptions), PTWF_BINDING.counters);
   const sampler = parts.slice(1, 2).concat(parts.slice(-1)).join('\n'); // Owen-Sobol + the sampler's ptSample2D
   return {
     camera: rtTransformWgsl(`${sampler}\n${ptwfCameraWgsl(integratorOptions)}`, { ...t, keep: ['ptwfCamera'] }),
     intersect: rtTransformWgsl(`${walk}\n${ptwfIntersectWgsl(integratorOptions)}`, { ...t, keep: ['ptwfIntersect'] }),
-    shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${ptwfShadeWgsl(integratorOptions)}`, { ...t, keep: ['ptwfShade'] }),
+    shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions)}`, { ...t, keep: ['ptwfShade'] }),
     shadow: rtTransformWgsl(`${walk}\n${ptwfShadowWgsl(integratorOptions)}`, { ...t, keep: ['ptwfShadow'] }),
     args: rtTransformWgsl(ptwfArgsWgsl(), { ...t, keep: ['ptwfArgsMain'] }),
   };
@@ -74,11 +77,17 @@ export function ptWavefrontKernelBytes(build: PtWavefrontBuild): Record<PtwfKern
 }
 
 interface PtwfLayouts {
+  hooks: GPUBindGroupLayout | null;
   empty: GPUBindGroupLayout;
   walk: GPUBindGroupLayout;
   scene: GPUBindGroupLayout;
   io: Record<PtwfKernel, GPUBindGroupLayout>;
   args: GPUBindGroupLayout;
+}
+
+/** Group 2 bindings of a kernel for this build: the fuzz table (2) only with fuzz, the debug counters (8) only with counters (shade kernel). */
+function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean): number[] {
+  return [...IO_BINDINGS[kernel], ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : [])].filter((binding) => binding !== 2 || fuzz);
 }
 
 type TraceScene = Parameters<typeof rtSceneBindGroupEntries>[0];
@@ -96,6 +105,8 @@ export class PtWavefront {
   private readonly fuzzTable: GPUBuffer | null;
   private readonly slotBytes: number;
   private readonly medium: boolean;
+  private hookGroup: GPUBindGroup | null = null;
+  private counterBuffer: GPUBuffer | null = null;
   private slot = 0;
   private walkGroup: GPUBindGroup | null = null;
   private sceneGroup: GPUBindGroup | null = null;
@@ -136,14 +147,15 @@ export class PtWavefront {
     const walk = device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) });
     const scene = device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures) });
     const ioEntries = (kernel: PtwfKernel): GPUBindGroupLayoutEntry[] =>
-      IO_BINDINGS[kernel].filter((binding) => binding !== 2 || features?.fuzz).map((binding) =>
+      ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters).map((binding) =>
         binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
       ) as GPUBindGroupLayoutEntry[];
     const io = Object.fromEntries(PTWF_KERNELS.map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
-    const layouts = { empty, walk, scene, io, args: argsLayout };
+    const hooks = options.integrator?.hooks ? device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] }) : null;
+    const layouts = { hooks, empty, walk, scene, io, args: argsLayout };
     const pipelineLayout = (k: PtwfKernel): GPUPipelineLayout =>
-      device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, USES_SCENE[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : [])] });
+      device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, USES_SCENE[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : []), ...(k === 'shade' && hooks ? [hooks] : [])] });
     const pipelineLayouts = Object.fromEntries(PTWF_KERNELS.map((k) => [k, pipelineLayout(k)])) as Record<PtwfKernel, GPUPipelineLayout>;
     const layoutError = await device.popErrorScope();
     if (layoutError) throw new Error(`PtWavefront: invalid bind group / pipeline layout: ${layoutError.message}`);
@@ -183,15 +195,32 @@ export class PtWavefront {
     this.destroyBuffers();
     const make = (label: string, size: number, usage = STORAGE) => this.device.createBuffer({ label: `ptwf ${label}`, size, usage });
     this.buffers = {
-      accum: make('accum', paths * 16, STORAGE | COPY_SRC | COPY_DST),
+      accum: make('accum', paths * 16 * (this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : 1), STORAGE | COPY_SRC | COPY_DST),
       state: make('state', bytes.state),
       hit: make('hit', bytes.hit),
       count: make('counters', bytes.counters),
       queue: make('queue', bytes.queue),
       shadow: make('shadow rays', paths * PTWF_SHADOW_VEC4 * 16),
     };
+    this.counterBuffer = this.options.integrator?.counters ? make('debug counters', paths * PT_COUNTER_WORDS * 4, STORAGE | COPY_SRC | COPY_DST) : null;
     this.ioGroups = null;
     this.samples = 0;
+  }
+
+  /** Layout of the hooks' bind group (`@group(3)` of the shade kernel), or null without hooks. */
+  get hookBindGroupLayout(): GPUBindGroupLayout | null {
+    return this.layouts.hooks;
+  }
+
+  /** The hooks' bind group (group 3 of the shade kernel). Not needed for a hook without bindings. */
+  setHookBindGroup(group: GPUBindGroup): void {
+    if (!this.layouts.hooks) throw new Error('PtWavefront.setHookBindGroup: the kernels were built without hooks');
+    this.hookGroup = group;
+  }
+
+  /** True when the kernels write debug counters: timings are not results. */
+  get instrumented(): boolean {
+    return !!this.options.integrator?.counters;
   }
 
   setCamera(camera: PtLookAtCamera): void {
@@ -208,6 +237,7 @@ export class PtWavefront {
 
   reset(encoder: GPUCommandEncoder): void {
     if (this.buffers) encoder.clearBuffer(this.buffers.accum);
+    if (this.counterBuffer) encoder.clearBuffer(this.counterBuffer);
     this.samples = 0;
   }
 
@@ -242,6 +272,11 @@ export class PtWavefront {
     const ioGroups = this.ioGroups;
     const argsGroup = this.argsGroup;
     const emptyGroup = this.emptyGroup;
+    if (this.layouts.hooks && !this.hookGroup) {
+      if ((this.options.integrator?.hooks?.bindings ?? []).length > 0) throw new Error('PtWavefront: setHookBindGroup() first (the hooks declare bindings)');
+      this.hookGroup = this.device.createBindGroup({ label: 'ptwf hooks (empty)', layout: this.layouts.hooks, entries: [] });
+    }
+    const hookGroup = this.hookGroup;
     const maxDepth = this.limits.maxDepth;
     const pass = encoder.beginComputePass({ label: 'ptwf samples', timestampWrites });
     const gx = Math.ceil(this.width / 8);
@@ -259,6 +294,7 @@ export class PtWavefront {
       pass.setBindGroup(1, USES_SCENE[kernel] ? sceneGroup : emptyGroup);
       pass.setBindGroup(2, ioGroups[kernel], [offset]);
       if (kernel === 'args') pass.setBindGroup(3, argsGroup);
+      else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
     };
     for (let i = 0; i < passes; i++) {
       record(this.samples, PTWF_INIT);
@@ -293,9 +329,10 @@ export class PtWavefront {
       5: { buffer: b.count },
       6: { buffer: b.queue },
       7: { buffer: b.shadow },
+      8: this.counterBuffer ? { buffer: this.counterBuffer } : undefined,
     };
     return Object.fromEntries(
-      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: IO_BINDINGS[k].filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
+      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
     ) as Record<PtwfKernel, GPUBindGroup>;
   }
 
@@ -321,7 +358,36 @@ export class PtWavefront {
     return { width: this.width, height: this.height, data, samples: this.samples };
   }
 
+  private async readBuffer(buffer: GPUBuffer, size: number): Promise<ArrayBuffer> {
+    const staging = this.device.createBuffer({ label: 'ptwf readback', size, usage: MAP_READ | COPY_DST });
+    const encoder = this.device.createCommandEncoder({ label: 'ptwf readback' });
+    encoder.copyBufferToBuffer(buffer, 0, staging, 0, size);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(1 /* GPUMapMode.READ */);
+    const data = staging.getMappedRange().slice(0);
+    staging.unmap();
+    staging.destroy();
+    return data;
+  }
+
+  /** The AOVs (`integrator.aovs`), averaged over the samples so far. Outside any timed region. */
+  async readAovs(): Promise<PtAovs> {
+    if (!this.buffers) throw new Error('PtWavefront: nothing rendered');
+    if (!this.options.integrator?.aovs) throw new Error('PtWavefront.readAovs: the kernels were built without integrator.aovs');
+    const sums = new Float32Array(await this.readBuffer(this.buffers.accum, this.width * this.height * 16 * (1 + PT_AOV_VEC4)));
+    return ptDecodeAovs(sums, this.width, this.height, this.samples);
+  }
+
+  /** The debug counters (`integrator.counters`) summed over the samples so far. Outside any timed region. */
+  async readCounters(): Promise<PtCounters> {
+    if (!this.counterBuffer) throw new Error('PtWavefront.readCounters: the kernels were built without integrator.counters');
+    const raw = new Uint32Array(await this.readBuffer(this.counterBuffer, this.width * this.height * PT_COUNTER_WORDS * 4));
+    return { width: this.width, height: this.height, samples: this.samples, raw, summary: ptSummarizeCounters(raw, this.width, this.height, this.samples) };
+  }
+
   private destroyBuffers(): void {
+    this.counterBuffer?.destroy();
+    this.counterBuffer = null;
     if (!this.buffers) return;
     for (const buffer of Object.values(this.buffers)) buffer.destroy();
     this.buffers = null;

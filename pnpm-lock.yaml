@@ -57,6 +57,9 @@ importers:
       '@types/three':
         specifier: 0.187.0
         version: 0.187.0
+      denoiser:
+        specifier: link:../../Denoiser/packages/denoiser
+        version: link:../../Denoiser/packages/denoiser
       three:
         specifier: 0.187.0
         version: 0.187.0

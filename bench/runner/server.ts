@@ -30,6 +30,18 @@ function linkedBvhRoot(): string | null {
   }
 }
 
+/**
+ * The checkout of the linked `denoiser` package (OIDN on WebGPU, `pt_denoise=oidn`, bench/adapters/shared/oidn.ts), or null when it is not linked.
+ * Vite needs it in `server.fs.allow`, and the OIDN weights (`<root>/tzas`) are served through `/@fs/`.
+ */
+function linkedDenoiserRoot(): string | null {
+  try {
+    return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', 'denoiser'));
+  } catch {
+    return null;
+  }
+}
+
 export const RESULTS_DIR = resolve(REPOSITORY_ROOT, 'bench', 'results');
 export const INCOMING_DIR = resolve(RESULTS_DIR, 'incoming');
 
@@ -105,13 +117,15 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
     appType: 'mpa',
     // Pages have no dependencies that need pre-bundling; skipping the scan keeps startup fast and quiet.
     optimizeDeps: { noDiscovery: true, include: [] },
+    // Where the page finds the OIDN `.tza` weights of the linked Denoiser checkout (undefined when it is not linked).
+    define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? `/@fs${linkedDenoiserRoot()}/tzas` : null) },
     server: {
       host: '127.0.0.1',
       port: 5291,
       strictPort: false,
       // The runner reloads pages itself; hot reload and file watching would only add noise (and watch research/).
       hmr: false,
-      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : [])] },
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : [])] },
       watch: null,
     },
     plugins: [

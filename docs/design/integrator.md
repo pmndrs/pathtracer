@@ -161,6 +161,42 @@ Layering A/B on the class B scenes (relBias vs pbrt / Mitsuba): ClearCoat stocha
 Grey-base smooth `coateddiffuse` (ours vs pbrt 1024 spp, oc-coated-clay geometry) 1.0002: the stochastic port matches pbrt. A saturated base (0.5, 0.02, 0.01) reads 0.937 red / 1.028 green / 1.004 blue against pbrt at any roughness (0, 0.06, 0.3): pbrt is
 spectral and the walk multiplies the uplifted spectrum, so the three-channel result differs; ours agrees with Mitsuba (RGB) on that torus (relMSE 4.9e-4). Do not chase it in the layered code.
 
+## Hooks, counters and AOVs (R10, R4, P2 exit item)
+
+Three outputs, each off by default and gated by JS template text so that with them off every kernel (the megakernel's variants and the five wavefront kernels)
+is byte-identical (`node bench/size-snapshot.ts <dir>` before and after, `diff -r`; the snapshot now also holds the `wf-*` variants). All three work on both schedulers.
+
+- **Hooks** (`integrator.hooks = { wgsl, bindings?, updateBlock? }`, spec section 8, D3). The text declares `fn ptOnVertex(v: PtPathVertex) -> u32` (`PT_HOOK_CONTINUE` / `PT_HOOK_TERMINATE`)
+  and / or `fn ptTerminate(v: PtPathVertex) -> vec3f`; a missing one defaults to continue / black. Called at every scattering vertex after emission and NEE, before the BSDF sample.
+  `PtPathVertex`: `position`, `depth` (index of this vertex: 0 = first surface hit), `normal` (geometric, facing wo), `materialClass` (`PT_BSDF_*`), `wo` (world, toward the previous vertex),
+  `pixel`, `throughput` (beta here), `flags`, `emitted` (beta x emission x MIS of this vertex), `sampleIndex`, `albedo`, `material`. On terminate the integrator adds `throughput * ptTerminate(v)` and ends
+  the path (the cache supplies the INDIRECT radiance; emission and NEE of the vertex are already in). The hook's own buffers are `@group(3)` (`PtMegakernel.hookBindGroupLayout` /
+  `setHookBindGroup`; the wavefront binds group 3 to the shade kernel only). Storage budget under the 10 per stage of Apple: the megakernel leaves 4 buffers for the hook (3 with counters),
+  the wavefront's shade kernel 2 (1 with counters); one less with a fuzz table.
+  Check (`pt-outputs-check`): closed emissive diffuse room (sphere, camera at the centre, NEE off, so every path is deterministic: a cosine-sampled Lambert bounce weighs exactly rho): no hook
+  E (1 - rho^(M+1)) / (1 - rho); terminate at vertex k with cache 0 = the depth-limited sum E (1 - rho^(k+1)) / (1 - rho); with cache = the true indirect radiance rho E / (1 - rho) = the
+  untruncated E / (1 - rho); both exact (max relative deviation 0) on every pixel, megakernel = wavefront per pixel, and a hook with its own storage buffer counts pixels x spp terminations.
+- **Training paths** (how gi marks update paths): `updateBlock: B` sets `PT_VERTEX_UPDATE` in `v.flags` for one pixel per BxB block per sample (`(x % B) + (y % B) * B == sample % B^2`, so every pixel
+  is an update path once in B^2 samples). The integrator does nothing else with it: an update path is one whose hook returns continue at every vertex (it runs to its natural end) while it writes
+  `(cell, throughput, emitted)` of its vertices into the cache's own update buffer. Check: 1 of 16 samples per pixel never terminates and the pixel mean follows exactly. There is no path-end callback
+  (V84): gi back-propagates from the radiance its update paths saw at the vertices (or asks for the callback).
+- **Counters** (`integrator.counters`, R4): one `array<u32>` (12 words per pixel, summed over samples: depth, extension rays, shadow rays, bvh node visits (reserved, 0), then paths per termination reason
+  `escaped, absorbed, maxDepth, rr, hook, invalid, maskOverflow`), megakernel group 2 binding 3, wavefront shade kernel binding 8. `readCounters()` returns the raw words and a summary; the adapter writes
+  `counter_depth`, `counter_rays`, `counter_shadow_rays` PFMs and `counter_*` stats; the row is invalid for timing. Check: room depth M, M + 1 extension rays, 0 / M shadow rays (NEE: 99.9% of
+  vertices find a light sample), reason `maxDepth` 100%; hook at vertex k: depth k + 1, reason `hook`; sky sphere: depth 1, `escaped`; RR run: `rr` 96.7%; megakernel = wavefront word for word.
+- **AOVs** (`integrator.aovs`): the accumulation buffer grows by 2 vec4 per pixel after the `width * height` radiance sums (so no extra binding in the wavefront): `(albedo.rgb, viewZ sum)` and
+  `(normal.xyz, primary hits)`. `readAovs()` returns albedo, unit world-space normal, viewZ (negative in front, mean over the samples that hit) and coverage. The albedo and normal come from the first
+  non-delta vertex (the guide follows mirrors and smooth glass, the way OIDN's guidance wants), viewZ from the primary hit. Check: plane + red mirror sphere: albedo never exceeds the plane's base colour,
+  normals +y, viewZ within 7e-6 of the closed form over 1032 pixels; Cornell (128 x 128): red, green and white wall albedos exact to 1e-5 on every pixel that is not an edge, green normal (+x) exact,
+  red normal within 0.02 of its two triangles (the skewed wall has smooth vertex normals); the image with AOVs on is bit-identical to the image without; megakernel = wavefront.
+- **OIDN** (bench only, `pt_denoise=oidn`; the library has no dependency on it): `bench/adapters/shared/oidn.ts` hands the converged frame to the Denoiser package (`link:` dev dependency,
+  `rt_hdr_calb_cnrm`, HDR with autoexposure) on the render's own `GPUDevice`, with the AOV albedo and the normals rotated to view space. The raw image stays the result; `<name>__denoised.pfm` is an extra image.
+  `node bench/adapters/oidn-compare.ts --raw ... --denoised ... --scene cornell`: Cornell 512 x 512, 16 spp vs the 4096 spp references: relMSE pbrt 7.2e-3 -> 5.9e-4, Mitsuba 6.7e-3 -> 1.9e-4 (floor
+  4.4e-4); LDR-FLIP 0.077 -> 0.051 / 0.063 -> 0.029; HDR-FLIP 0.191 -> 0.151 / 0.111 -> 0.051; relBias vs pbrt +0.70% -> +0.43%, vs Mitsuba +0.01% -> -0.26% (OIDN's own small bias). Quality only.
+
+Sizes (minified, unit-test caps): megakernel plain 40.5 KB -> 41.8 hooks / 41.1 counters / 41.4 AOVs / 43.0 all three; `pbr-albedo` 49.2 KB -> 51.7 KB with all three (over the DXC class, D26). Wavefront shade
+(the only kernel that changes; the camera kernel +68 B with AOVs): plain 29.6 -> 30.9 / 30.1 / 30.6 / 32.1 KB; pbr-albedo 38.4 -> 41.0 KB. All under 50 KB.
+
 ## Size
 
 **40.4 KB minified** (43.2 KB with an HDR env map; unit-test caps 41.5 / 44.5 KB), under the 50 KB Windows-DXC class. Three steps

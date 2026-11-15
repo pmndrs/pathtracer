@@ -18,6 +18,7 @@
  * or a loop in intersect), refill, compaction, octant binning, material sorting, several samples in flight, subgroup-aggregated appends.
  */
 import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { ptHookVertexExpr } from '../integrator/outputs-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_SHADOW, PTWF_INIT, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
@@ -28,7 +29,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
 }
 
 /** Binding numbers in group 2. 2 is the fuzz table's (`ptFuzzWgsl`), so the wavefront buffers start at 3. */
-export const PTWF_BINDING = { params: 0, accum: 1, fuzz: 2, state: 3, hit: 4, count: 5, queue: 6, shadow: 7, args: 0 /* group 3 */ } as const;
+export const PTWF_BINDING = { params: 0, accum: 1, fuzz: 2, state: 3, hit: 4, count: 5, queue: 6, shadow: 7, counters: 8 /* `integrator.counters`, shade kernel only */, args: 0 /* group 3 of the args kernel; group 3 of the shade kernel is the hooks' */ } as const;
 
 const bindings = (names: readonly (keyof typeof PTWF_BINDING)[]): string => {
   const decl: Record<string, string> = {
@@ -62,6 +63,7 @@ function stateWgsl(o: ResolvedIntegratorOptions): string {
   const medium = !!o.materials?.features.medium;
   const tex = o.textures;
   const extra = medium || tex;
+  const aovs = o.aovs;
   return /* wgsl */ `
 struct PtwfPath {
     origin: vec3f,
@@ -75,7 +77,8 @@ struct PtwfPath {
     sigma: vec3f,
     coneWidth: f32,
     coneSpread: f32,
-}
+${aovs ? `    aovDone: bool,
+` : ''}}
 
 fn ptwfLoadPath(path: u32, n: u32) -> PtwfPath {
     let s0 = ptwfState[path];
@@ -89,8 +92,9 @@ ${extra ? `    let s4 = ptwfState[4u * n + path];
     p.dir = ptwfF3(s1);
     p.etaScale = bitcast<f32>(s1.w);
     p.beta = ptwfF3(s2);
-    p.depth = s2.w & 0x7fffffffu;
-    p.specular = (s2.w >> 31u) == 1u;
+    p.depth = s2.w & ${aovs ? '0x3fffffff' : '0x7fffffff'}u;
+    p.specular = (s2.w >> 31u) == 1u;${aovs ? `
+    p.aovDone = ((s2.w >> 30u) & 1u) == 1u;` : ''}
     p.prevP = ptwfF3(s3);
     p.coneSpread = ${tex ? 'bitcast<f32>(s3.w)' : '0.0'};
     p.sigma = ${medium ? 'ptwfF3(s4)' : 'vec3f(0.0)'};
@@ -101,7 +105,7 @@ ${extra ? `    let s4 = ptwfState[4u * n + path];
 fn ptwfStorePath(path: u32, n: u32, p: PtwfPath) {
     ptwfState[path] = vec4u(bitcast<vec3u>(p.origin), bitcast<u32>(p.prevPdf));
     ptwfState[n + path] = vec4u(bitcast<vec3u>(p.dir), bitcast<u32>(p.etaScale));
-    ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth | select(0u, 0x80000000u, p.specular));
+    ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''});
     ptwfState[3u * n + path] = vec4u(bitcast<vec3u>(p.prevP), ${tex ? 'bitcast<u32>(p.coneSpread)' : '0u'});
 ${extra ? `    ptwfState[4u * n + path] = vec4u(${medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
 ` : ''}}
@@ -139,7 +143,8 @@ fn ptwfCamera(@builtin(global_invocation_id) id: vec3u) {
     p.prevP = p.origin;
     p.sigma = vec3f(0.0);
     p.coneWidth = 0.0;
-    p.coneSpread = ${tex ? 'bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y))' : '0.0'};
+${o.aovs ? `    p.aovDone = false;
+` : ''}    p.coneSpread = ${tex ? 'bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y))' : '0.0'};
     ptwfStorePath(path, n, p);
     ptAccum[path] = ptAccum[path] + vec4f(0.0, 0.0, 0.0, 1.0);
     ptwfQueue[path] = path;
@@ -264,6 +269,12 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}): string {
   const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
   const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
   const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
+  const hooks = !!o.hooks;
+  const counters = o.counters;
+  const aovs = o.aovs;
+  const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
+  // Counters: the path's end (reason) is recorded where it returns; each queued extension / shadow ray where the shade kernel sees it.
+  const end = (reason: number): string => (counters ? `        ptCountEnd(path, depth, ${reason}u);\n` : '');
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'state', 'hit', 'count', 'queue', 'shadow'])}
@@ -350,8 +361,12 @@ ${medium ? `    var sigma = st.sigma;
     if (hit.t < 0.0) {
         radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
         ptwfAddRadiance(path, radiance);
-        return;
-    }
+${counters ? `        ptCountRay(path, 1u, 0u);
+        ptCountEnd(path, depth, 0u);
+` : ''}        return;
+    }${counters ? `
+    ptCountRay(path, 1u, 0u);` : ''}${aovs ? `
+    var aovDone = st.aovDone;` : ''}
 ${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
     let coneW = rtConeAt(cone, hit.t);
     let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
@@ -364,7 +379,8 @@ ${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_N
     let mat = rtMaterial(hit.material);`}
 ${medium ? `    beta = beta * exp(-sigma * hit.t);
 ` : ''}
-    if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
+${hooks ? `    var hookEmitted = vec3f(0.0);
+` : ''}    if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
         var w = 1.0;
         if (!(depth == 0u || specularBounce) && PT_NEE) {
             let lightIndex = rtLightIndexOfHit(hit.instance, hit.triangle);
@@ -376,15 +392,24 @@ ${medium ? `    beta = beta * exp(-sigma * hit.t);
             }
         }
         radiance += beta * mat.emissionColor * w;
-    }
+${hooks ? `        hookEmitted = beta * mat.emissionColor * w;
+` : ''}    }
 
     let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
 ${film ? `    ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5);
 ` : ''}${fuzz ? `    ptFuzzW = mat.sheenWeight;
     ptFuzzC = vec4f(mat.sheenColor, mat.sheenRoughness);
-` : ''}    if (${fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK'} || depth >= maxDepth) {
+` : ''}${aovs ? `    if (depth == 0u) {
+        ptAovPrimary(path, n, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)));
+    }
+    if (!aovDone && !ptBsdfIsDelta(bp)) {
+        aovDone = true;
+        ptAovGuide(path, n, ptAovAlbedo(mat), ${shadingNormal});
+    }
+` : ''}    if (${black} || depth >= maxDepth) {
         ptwfAddRadiance(path, radiance);
-        return;
+${counters ? `        ptCountEnd(path, depth, select(2u, 1u, ${black}));
+` : ''}        return;
     }
     let vertex = depth;
     depth += 1u;
@@ -404,15 +429,23 @@ ${aniso ? `    var frame = ptFrameFromNormal(${shadingNormal});
             ptwfShadowRay[2u * n + path] = vec4u(bitcast<vec3u>(beta * ld.contrib), 0u);
             let ss = atomicAdd(&ptwfCount[2u + (iter & 1u)], 1u);
             ptwfQueue[2u * n + ss] = path;
-        }
+${counters ? `            ptCountRay(path, 0u, 1u);
+` : ''}        }
     }
-
+${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' })};
+    if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
+        radiance += beta * ptTerminate(hv);
+        ptwfAddRadiance(path, radiance);
+${counters ? `        ptCountEnd(path, depth, 4u);
+` : ''}        return;
+    }
+` : ''}
     let dirU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION));
     let compU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).y;
     let s = ${sampleFn}(bp, wo, vec3f(compU, dirU.x, dirU.y));
     if (s.flags == 0u || !(s.pdf > 0.0)) {
         ptwfAddRadiance(path, radiance);
-        return;
+${end(5)}        return;
     }
     beta = beta * s.f * (abs(s.wi.z) / s.pdf);
     specularBounce = (s.flags & PT_FLAG_DELTA) != 0u;
@@ -436,7 +469,8 @@ ${medium ? `        sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.0);
             let q = max(0.0, 1.0 - m);
             if (ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_RR)).x < q) {
                 ptwfAddRadiance(path, radiance);
-                return;
+${counters ? `                ptCountEnd(path, depth, 3u);
+` : ''}                return;
             }
             beta = beta / (1.0 - q);
         }
@@ -455,7 +489,8 @@ ${medium ? `        sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.0);
     next.sigma = ${medium ? 'sigma' : 'vec3f(0.0)'};
     next.coneWidth = ${tex ? 'cone.width' : '0.0'};
     next.coneSpread = ${tex ? 'cone.spread' : '0.0'};
-    ptwfStorePath(path, n, next);
+${aovs ? `    next.aovDone = aovDone;
+` : ''}    ptwfStorePath(path, n, next);
     let nq = (iter + 1u) & 1u;
     let slot = atomicAdd(&ptwfCount[nq], 1u);
     ptwfQueue[nq * n + slot] = path;

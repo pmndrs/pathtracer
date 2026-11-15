@@ -7,7 +7,7 @@
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
  *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg  pt_nee=0|1  pt_env=uniform|importance|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
- *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_texture_lod=0|cone  pt_texture_cone_scale=auto|N  pt_layering=albedo|stochastic  pt_albedo_base=openpbr|internal  pt_exit_mis=pbrt|none  pt_layer_depth=N  pt_layer_thickness=T  pt_tint=0|1  pt_coverage=0|1  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)
+ *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_texture_lod=0|cone  pt_texture_cone_scale=auto|N  pt_layering=albedo|stochastic  pt_albedo_base=openpbr|internal  pt_exit_mis=pbrt|none  pt_layer_depth=N  pt_layer_thickness=T  pt_tint=0|1  pt_coverage=0|1  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)  pt_aovs=0|1 (albedo/normal/depth extra images)  pt_counters=0|1 (counter heatmaps, row INVALID for timing)  pt_denoise=oidn (extra `denoised` image; raw stays the result)
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
  * `skipped=1` and upload nothing.
@@ -86,6 +86,9 @@ try {
     ...(args['pt_seed'] ? { seed: numberArg(args, 'pt_seed', 0) } : {}),
     ...(args['pt_prune'] ? { prune: args['pt_prune'] !== '0' } : {}),
     ...(args['pt_shorten'] ? { shortenNames: args['pt_shorten'] !== '0' } : {}),
+    ...(args['pt_counters'] ? { counters: args['pt_counters'] === '1' } : {}),
+    ...(args['pt_aovs'] ? { aovs: args['pt_aovs'] === '1' } : {}),
+    ...(args['pt_denoise'] ? { denoise: args['pt_denoise'] as 'oidn' } : {}),
     ...(args['pt_passes'] ? { passesPerSubmit: numberArg(args, 'pt_passes', 8) } : {}),
   };
   const adapter = await createAdapter(rendererId, { frameBudget, bounces, emitters, mutracer, pt });
@@ -107,6 +110,8 @@ try {
     const name = `${adapter.info.id}__${sceneName}`;
     await uploadImage(name, result.image);
     for (const snap of result.snapshots ?? []) await uploadImage(`${name}__spp${snap.spp}`, snap.image);
+    // Extra images of our own renderer (AOVs, counter heatmaps, the OIDN-denoised frame): next to the raw image, which stays the one the metrics read.
+    for (const extra of (adapter as unknown as { extraImages?: { name: string; image: Parameters<typeof uploadImage>[1] }[] }).extraImages ?? []) await uploadImage(`${name}__${extra.name}`, extra.image);
 
     const { mean, nonFinite } = channelMeans(result.image.data, result.image.channels);
     const approximations = (adapter as unknown as { approximations?: string[] }).approximations ?? [];
@@ -115,7 +120,8 @@ try {
         scene: sceneName,
         renderer: adapter.info.id,
         config,
-        valid: nonFinite === 0 && deviceErrors.length === 0,
+        // Counters make a render instrumented: its time is not a result (R4), so the row is invalid for timing (notes.stats.instrumented = 1).
+        valid: nonFinite === 0 && deviceErrors.length === 0 && !result.stats?.instrumented,
         metrics: {
           spp: result.spp,
           wall_ms: result.timings.wallMs,

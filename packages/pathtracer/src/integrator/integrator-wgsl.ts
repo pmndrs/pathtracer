@@ -14,6 +14,7 @@
 import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtSamplerKind } from './dimensions.ts';
+import { ptHookVertexExpr, type PtHooksOptions } from './outputs-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
   /** `'owen-sobol'` (reference) or `'pcg'` (debug). */
@@ -55,6 +56,16 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    * hit; inside/outside from the hit side, no nesting). Default null: the legacy adapter and the unchanged kernel text.
    */
   materials?: PtMaterialOptions | null;
+  /**
+   * L3 path hooks (R10, spec section 8): user WGSL `ptOnVertex(v: PtPathVertex) -> u32` and `ptTerminate(v: PtPathVertex) -> vec3f`, called by both
+   * schedulers at every scattering vertex after emission and next-event estimation (`outputs-wgsl.ts`; `docs/design/integrator.md`). A hook that returns
+   * `PT_HOOK_TERMINATE` ends the path and adds `throughput * ptTerminate(v)`. Default null: no hook code at all (the kernel text is unchanged).
+   */
+  hooks?: PtHooksOptions | null;
+  /** Per-pixel debug counters (R4): depth, rays, termination reason, in one storage buffer (`readCounters`). Never in a timed run. Default false: the kernel text is unchanged. */
+  counters?: boolean;
+  /** First non-specular albedo + normal and the primary viewZ, accumulated like radiance in the tail of the accumulation buffer (`readAovs`). Default false: the kernel text is unchanged. */
+  aovs?: boolean;
 }
 
 export interface ResolvedIntegratorOptions {
@@ -67,10 +78,13 @@ export interface ResolvedIntegratorOptions {
   textureLod: 'cone' | 0;
   alphaMask: boolean;
   materials: PtMaterialOptions | null;
+  hooks: PtHooksOptions | null;
+  counters: boolean;
+  aovs: boolean;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), materials: o.materials ?? null };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false };
 }
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
@@ -168,6 +182,11 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
   const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
   const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
+  const hooks = !!o.hooks;
+  const counters = o.counters;
+  const aovs = o.aovs;
+  const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
+  const term = (reason: number): string => (counters ? `            termReason = ${reason}u;\n` : '');
   return /* wgsl */ `
 alias PtRadiance = vec4f;
 ${PT_PARAMS_WGSL}
@@ -207,7 +226,7 @@ fn ptVisibleMasked(ray0: RtRay, mask: u32) -> bool {
 
 ` : ''}${PT_MIS_WGSL}
 
-fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32) -> vec3f {
+fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters ? ', pxIndex: u32' : ''}) -> vec3f {
     let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
     let pointU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_LIGHT_POINT));
     let pick = rtSampleLight(selectU);
@@ -235,7 +254,8 @@ fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
     } else {
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);
     }
-    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
+${counters ? `    ptCountRay(pxIndex, 0u, 1u);
+` : ''}    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
         return vec3f(0.0);
     }
     let pl = pick.pmf * li.pdf;
@@ -258,7 +278,10 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     let origin = ptParams.origin.xyz;
     var ray = RtRay(origin, 0.0, normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y), PT_FAR);
 
-    var radiance = vec3f(0.0);
+${counters || aovs || hooks ? `    let pxIndex = px.y * dims.x + px.x;
+` : ''}${counters ? `    var termReason = 0u;
+` : ''}${aovs ? `    var aovDone = false;
+` : ''}    var radiance = vec3f(0.0);
     var beta = vec3f(1.0);
     var specularBounce = false;
     var depth = 0u;
@@ -271,7 +294,8 @@ ${medium ? `    var sigma = vec3f(0.0);
 ` : ''}
     loop {
         let hit = rtClosest(ray, RT_MASK_ALL);
-        if (hit.t < 0.0) {
+${counters ? `        ptCountRay(pxIndex, 1u, 0u);
+` : ''}        if (hit.t < 0.0) {
             radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
             break;
         }
@@ -289,14 +313,16 @@ ${medium ? `        beta = beta * exp(-sigma * hit.t);
 ` : ''}${mask ? `        if (mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff) {
             skips += 1u;
             if (skips > PT_MASK_SKIPS) {
-                break;
+${counters ? `                termReason = 6u;
+` : ''}                break;
             }
             cone = RtCone(coneW, cone.spread);
             ray = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
             continue;
         }
 ` : ''}
-        if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
+${hooks ? `        var hookEmitted = vec3f(0.0);
+` : ''}        if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
             var w = 1.0;
             if (!(depth == 0u || specularBounce) && PT_NEE) {
                 let lightIndex = rtLightIndexOfHit(hit.instance, hit.triangle);
@@ -308,14 +334,23 @@ ${medium ? `        beta = beta * exp(-sigma * hit.t);
                 }
             }
             radiance += beta * mat.emissionColor * w;
-        }
+${hooks ? `            hookEmitted = beta * mat.emissionColor * w;
+` : ''}        }
 
         let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
 ${film ? `        ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5);
 ` : ''}${fuzz ? `        ptFuzzW = mat.sheenWeight;
         ptFuzzC = vec4f(mat.sheenColor, mat.sheenRoughness);
-` : ''}        if (${fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK'} || depth >= maxDepth) {
-            break;
+` : ''}${aovs ? `        if (depth == 0u) {
+            ptAovPrimary(pxIndex, dims.x * dims.y, -dot(surf.position - origin, normalize(ptParams.forward.xyz)));
+        }
+        if (!aovDone && !ptBsdfIsDelta(bp)) {
+            aovDone = true;
+            ptAovGuide(pxIndex, dims.x * dims.y, ptAovAlbedo(mat), ${shadingNormal});
+        }
+` : ''}        if (${black} || depth >= maxDepth) {
+${counters ? `            termReason = select(2u, 1u, ${black});
+` : ''}            break;
         }
         let vertex = depth;
         depth += 1u;
@@ -328,14 +363,20 @@ ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
 ` : `        let frame = ptFrameFromNormal(${shadingNormal});
 `}        let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
-            radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex);
+            radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters ? ', pxIndex' : ''});
         }
 
-        let dirU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION));
+${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' })};
+        if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
+            radiance += beta * ptTerminate(hv);
+${term(4)}            break;
+        }
+
+` : ''}        let dirU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION));
         let compU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).y;
         let s = ${sampleFn}(bp, wo, vec3f(compU, dirU.x, dirU.y));
         if (s.flags == 0u || !(s.pdf > 0.0)) {
-            break;
+${term(5)}            break;
         }
         beta = beta * s.f * (abs(s.wi.z) / s.pdf);
         specularBounce = (s.flags & PT_FLAG_DELTA) != 0u;
@@ -358,13 +399,15 @@ ${medium ? `            sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.
             if (m < 1.0) {
                 let q = max(0.0, 1.0 - m);
                 if (ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_RR)).x < q) {
-                    break;
+${counters ? `                    termReason = 3u;
+` : ''}                    break;
                 }
                 beta = beta / (1.0 - q);
             }
         }
     }
-    return PtRadiance(radiance, 0.0);
+${counters ? `    ptCountEnd(pxIndex, depth, termReason);
+` : ''}    return PtRadiance(radiance, 0.0);
 }
 
 @compute @workgroup_size(${PT_WORKGROUP[0]}, ${PT_WORKGROUP[1]})

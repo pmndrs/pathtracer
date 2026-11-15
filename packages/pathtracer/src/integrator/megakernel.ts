@@ -25,6 +25,7 @@ import { ptThinFilmWgsl } from '../bsdf/thinfilm-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { ptSamplerWgsl } from './dimensions.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
+import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from './outputs-wgsl.ts';
 
 // GPUBufferUsage bits spelled out so this file loads in Node (tests).
 const STORAGE = 0x80;
@@ -33,6 +34,9 @@ const COPY_SRC = 0x4;
 const UNIFORM = 0x40;
 const MAP_READ = 0x1;
 const COMPUTE = 0x4;
+
+/** Group 2 binding of the debug counters (0 params, 1 accumulator, 2 fuzz table). The hooks' own bind group is group 3. */
+export const PT_MEGAKERNEL_COUNTERS_BINDING = 3;
 
 /** Uniform slots in the ring (one per outstanding sample pass). */
 export const PT_PARAM_SLOTS = 1024;
@@ -117,7 +121,10 @@ export function ptRaytracerModuleOptions(options: Pick<PtMegakernelOptions, 'for
 export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const raytracer = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
-  const ours = [...parts, ptIntegratorWgsl(integratorOptions)].join('\n');
+  const resolved = resolveIntegratorOptions(integratorOptions);
+  // Optional outputs (hooks, counters, AOVs; `outputs-wgsl.ts`) are appended only when asked, so a kernel without them keeps its text.
+  const outputs = ptOutputsWgsl(resolved, PT_MEGAKERNEL_COUNTERS_BINDING);
+  const ours = [...parts, ...(outputs ? [outputs] : []), ptIntegratorWgsl(integratorOptions)].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };
@@ -139,6 +146,9 @@ export class PtMegakernel {
   private readonly paramsBuffer: GPUBuffer;
   /** The fuzz LTC table (`features.fuzz` only, group 2 binding 2). */
   private readonly fuzzTable: GPUBuffer | null;
+  private readonly hookLayout: GPUBindGroupLayout | null;
+  private hookGroup: GPUBindGroup | null = null;
+  private counterBuffer: GPUBuffer | null = null;
   private readonly slotBytes: number;
   private slot = 0;
   private walkGroup: GPUBindGroup | null = null;
@@ -155,6 +165,7 @@ export class PtMegakernel {
 
   private constructor(device: GPUDevice, options: PtMegakernelOptions, pipeline: GPUComputePipeline, layouts: GPUBindGroupLayout[], wgslBytes: number, fuzzTable: GPUBuffer | null) {
     this.fuzzTable = fuzzTable;
+    this.hookLayout = layouts[3] ?? null;
     this.device = device;
     this.options = options;
     this.pipeline = pipeline;
@@ -178,8 +189,10 @@ export class PtMegakernel {
           { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } },
           { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
           ...(options.integrator?.materials?.features.fuzz ? [{ binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
+          ...(options.integrator?.counters ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
       }),
+      ...(options.integrator?.hooks ? [device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] })] : []),
     ];
     // On a compile error this throws with original line numbers, names and source text (rtCreateComputePipelineAsync).
     const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: layouts }), code, map, entryPoint: 'ptMain', sourceMap: options.sourceMap });
@@ -198,12 +211,33 @@ export class PtMegakernel {
     this.sceneGroup = this.device.createBindGroup({ label: 'pt scene', layout: this.sceneLayout, entries: rtSceneCopyBindGroupEntries(scene) });
   }
 
+  /** Layout of the hooks' bind group (`@group(3)`; `options.integrator.hooks.bindings`), or null without hooks. Build your bind group on it, then `setHookBindGroup`. */
+  get hookBindGroupLayout(): GPUBindGroupLayout | null {
+    return this.hookLayout;
+  }
+
+  /** The hooks' bind group (group 3). Not needed for a hook without bindings. */
+  setHookBindGroup(group: GPUBindGroup): void {
+    if (!this.hookLayout) throw new Error('PtMegakernel.setHookBindGroup: the kernel was built without hooks');
+    this.hookGroup = group;
+  }
+
+  /** True when the kernel writes debug counters: its timings are not results (the adapter marks such rows invalid). */
+  get instrumented(): boolean {
+    return !!this.options.integrator?.counters;
+  }
+
   setFilm(width: number, height: number): void {
     if (width === this.width && height === this.height && this.accum) return;
     this.width = width;
     this.height = height;
     this.accum?.destroy();
-    this.accum = this.device.createBuffer({ label: 'pt accum', size: width * height * 16, usage: STORAGE | COPY_SRC | COPY_DST });
+    this.counterBuffer?.destroy();
+    this.counterBuffer = null;
+    // The AOVs (when on) live in the tail of the accumulator: width * height radiance sums, then PT_AOV_VEC4 vec4 per pixel.
+    const vec4PerPixel = this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : 1;
+    this.accum = this.device.createBuffer({ label: 'pt accum', size: width * height * 16 * vec4PerPixel, usage: STORAGE | COPY_SRC | COPY_DST });
+    if (this.options.integrator?.counters) this.counterBuffer = this.device.createBuffer({ label: 'pt counters', size: width * height * PT_COUNTER_WORDS * 4, usage: STORAGE | COPY_SRC | COPY_DST });
     this.ioGroup = null;
     this.samples = 0;
   }
@@ -224,6 +258,7 @@ export class PtMegakernel {
   /** Zeroes the accumulation buffer and the sample counter. Encodes into `encoder`. */
   reset(encoder: GPUCommandEncoder): void {
     if (this.accum) encoder.clearBuffer(this.accum);
+    if (this.counterBuffer) encoder.clearBuffer(this.counterBuffer);
     this.samples = 0;
   }
 
@@ -251,12 +286,18 @@ export class PtMegakernel {
         { binding: 0, resource: { buffer: this.paramsBuffer, offset: 0, size: PT_PARAMS_BYTES } },
         { binding: 1, resource: { buffer: this.accum } },
         ...(this.fuzzTable ? [{ binding: 2, resource: { buffer: this.fuzzTable } }] : []),
+        ...(this.counterBuffer ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, resource: { buffer: this.counterBuffer } }] : []),
       ],
     });
+    if (this.hookLayout && !this.hookGroup) {
+      if ((this.options.integrator?.hooks?.bindings ?? []).length > 0) throw new Error('PtMegakernel: setHookBindGroup() first (the hooks declare bindings)');
+      this.hookGroup = this.device.createBindGroup({ label: 'pt hooks (empty)', layout: this.hookLayout, entries: [] });
+    }
     const pass = encoder.beginComputePass({ label: 'pt samples', timestampWrites });
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.walkGroup);
     pass.setBindGroup(1, this.sceneGroup);
+    if (this.hookGroup) pass.setBindGroup(3, this.hookGroup);
     const gx = Math.ceil(this.width / PT_WORKGROUP[0]);
     const gy = Math.ceil(this.height / PT_WORKGROUP[1]);
     for (let i = 0; i < passes; i++) {
@@ -293,7 +334,35 @@ export class PtMegakernel {
     return { width: this.width, height: this.height, data, samples: this.samples };
   }
 
+  private async readBuffer(buffer: GPUBuffer, offset: number, size: number): Promise<ArrayBuffer> {
+    const staging = this.device.createBuffer({ label: 'pt readback', size, usage: MAP_READ | COPY_DST });
+    const encoder = this.device.createCommandEncoder({ label: 'pt readback' });
+    encoder.copyBufferToBuffer(buffer, offset, staging, 0, size);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(1 /* GPUMapMode.READ */);
+    const data = staging.getMappedRange().slice(0);
+    staging.unmap();
+    staging.destroy();
+    return data;
+  }
+
+  /** The AOVs (`integrator.aovs`), averaged over the samples so far. Outside any timed region. */
+  async readAovs(): Promise<PtAovs> {
+    if (!this.accum) throw new Error('PtMegakernel: nothing rendered');
+    if (!this.options.integrator?.aovs) throw new Error('PtMegakernel.readAovs: the kernel was built without integrator.aovs');
+    const sums = new Float32Array(await this.readBuffer(this.accum, 0, this.width * this.height * 16 * (1 + PT_AOV_VEC4)));
+    return ptDecodeAovs(sums, this.width, this.height, this.samples);
+  }
+
+  /** The debug counters (`integrator.counters`) summed over the samples so far. Outside any timed region. */
+  async readCounters(): Promise<PtCounters> {
+    if (!this.counterBuffer) throw new Error('PtMegakernel.readCounters: the kernel was built without integrator.counters');
+    const raw = new Uint32Array(await this.readBuffer(this.counterBuffer, 0, this.width * this.height * PT_COUNTER_WORDS * 4));
+    return { width: this.width, height: this.height, samples: this.samples, raw, summary: ptSummarizeCounters(raw, this.width, this.height, this.samples) };
+  }
+
   destroy(): void {
+    this.counterBuffer?.destroy();
     this.paramsBuffer.destroy();
     this.fuzzTable?.destroy();
     this.accum?.destroy();

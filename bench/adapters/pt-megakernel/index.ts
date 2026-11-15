@@ -13,7 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, ptMaterialFeatures, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptMaterialFeatures, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -65,6 +65,13 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   scheduler?: 'megakernel' | 'wavefront';
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
+  /**
+   * Denoise the final frame with OIDN (`denoise: 'oidn'`, P2 exit item): needs the AOVs (turned on here). The raw image stays the result (metrics run on it);
+   * the denoised one is an extra image (`extraImages`, uploaded as `<name>__denoised`). Page arg `pt_denoise=oidn`. Quality only, never in a timed region.
+   */
+  denoise?: 'oidn';
+  /** OIDN weights base URL for the Denoiser package (`.tza` files); default `/@fs/<Denoiser checkout>/packages/denoiser/tzas` of the bench server. */
+  denoiseTzaUrl?: string;
   /** Kernel text options (P2.10): drop unreachable declarations / shorten top-level names. Default true; false is the A/B baseline. */
   prune?: boolean;
   shortenNames?: boolean;
@@ -129,7 +136,16 @@ export class PtMegakernelAdapter implements RendererAdapter {
 
   gpuContext: GpuContext | null = null;
   approximations: string[] = [];
+  /** Extra images of the last `render` (AOVs, counter heatmaps, the denoised frame): the competitor page uploads them next to the main image. */
+  extraImages: { name: string; image: Image }[] = [];
+  /** AOVs and counters of the last `render` (when `aovs` / `counters` are on). */
+  lastAovs: PtAovs | null = null;
+  lastCounters: PtCounters | null = null;
   private readonly settings: PtAdapterSettings;
+  /** The scheduler instance (`PtMegakernel` or `PtWavefront`), for checks that bind hook buffers or read outputs themselves. */
+  get renderer(): PtMegakernel | PtWavefront | null {
+    return this.kernel;
+  }
   private kernel: PtMegakernel | PtWavefront | null = null;
   private trace: TraceSceneBuffers | null = null;
   private sceneBuffers: SceneCopyBuffers | null = null;
@@ -138,7 +154,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
   private limits: { maxDepth: number; rrStartDepth?: number } = { maxDepth: 1 };
 
   constructor(settings: PtAdapterSettings = {}) {
-    this.settings = settings;
+    // OIDN needs albedo + normal.
+    this.settings = settings.denoise ? { ...settings, aovs: true } : settings;
     this.info = {
       id: settings.scheduler === 'wavefront' ? PT_WAVEFRONT_ADAPTER_ID : PT_ADAPTER_ID,
       name: settings.scheduler === 'wavefront' ? '@pmndrs/pathtracer wavefront' : '@pmndrs/pathtracer megakernel',
@@ -158,6 +175,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.maxDepth !== undefined ? { maxDepth: settings.maxDepth } : {}),
         ...(settings.rrStartDepth !== undefined ? { rrStartDepth: settings.rrStartDepth } : {}),
         seed: settings.seed ?? 0,
+        ...(settings.counters ? { counters: true } : {}),
+        ...(settings.aovs || settings.denoise ? { aovs: true } : {}),
+        ...(settings.denoise ? { denoise: settings.denoise } : {}),
         lightSelection: lightSelectionName(settings.lightSelection ?? DEFAULT_LIGHT_SELECTION),
         textureLod: settings.textureLod ?? 0,
         layering: settings.layering ?? 'stochastic',
@@ -253,7 +273,10 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
-    const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const { denoise: _denoise, denoiseTzaUrl: _tza, ...integratorSettings } = this.settings;
+    void _denoise;
+    void _tza;
+    const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, kernelOptions) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
@@ -304,7 +327,55 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const wallMs = performance.now() - start - readbackMs;
     const image = toImage(await kernel.readImage());
-    return { image, spp, timings: { wallMs }, snapshots, stats: this.lastStats };
+    await this.readOutputs(kernel, image);
+    return { image, spp, timings: { wallMs }, snapshots, stats: { ...this.lastStats, ...(kernel.instrumented ? { instrumented: 1 } : {}), ...this.outputStats } };
+  }
+
+  private outputStats: Record<string, number> = {};
+
+  /** AOVs, counters and the denoised frame after the timed region (readbacks and the denoiser are never inside it). */
+  private async readOutputs(kernel: PtMegakernel | PtWavefront, image: Image): Promise<void> {
+    this.extraImages = [];
+    this.outputStats = {};
+    this.lastAovs = null;
+    this.lastCounters = null;
+    const plane = (name: string, data: Float32Array, channels: 1 | 3, width: number, height: number): void => {
+      const rgba = new Float32Array(width * height * 4);
+      for (let i = 0; i < width * height; i++) for (let c = 0; c < 3; c++) rgba[i * 4 + c] = data[i * channels + (channels === 1 ? 0 : c)] as number;
+      this.extraImages.push({ name, image: { width, height, channels: 4, data: rgba } });
+    };
+    if (this.settings.aovs) {
+      const aovs = await kernel.readAovs();
+      this.lastAovs = aovs;
+      const viewDepth = new Float32Array(aovs.viewZ.length);
+      for (let i = 0; i < viewDepth.length; i++) viewDepth[i] = -(aovs.viewZ[i] as number);
+      plane('aov_albedo', aovs.albedo, 3, aovs.width, aovs.height);
+      plane('aov_normal', aovs.normal, 3, aovs.width, aovs.height);
+      plane('aov_depth', viewDepth, 1, aovs.width, aovs.height);
+      this.outputStats.aov_coverage = aovs.coverage.reduce((a, b) => a + b, 0) / Math.max(1, aovs.coverage.length);
+    }
+    if (this.settings.counters) {
+      const counters = await kernel.readCounters();
+      this.lastCounters = counters;
+      const word = (w: number) => {
+        const out = new Float32Array(counters.width * counters.height);
+        for (let p = 0; p < out.length; p++) out[p] = (counters.raw[p * PT_COUNTER_WORDS + w] as number) / Math.max(1, counters.samples);
+        return out;
+      };
+      const rays = word(PT_COUNTER.extensionRays).map((v, p) => v + (counters.raw[p * PT_COUNTER_WORDS + PT_COUNTER.shadowRays] as number) / Math.max(1, counters.samples));
+      plane('counter_depth', word(PT_COUNTER.depth), 1, counters.width, counters.height);
+      plane('counter_rays', rays, 1, counters.width, counters.height);
+      plane('counter_shadow_rays', word(PT_COUNTER.shadowRays), 1, counters.width, counters.height);
+      const { summary } = counters;
+      this.outputStats = { ...this.outputStats, counter_depth_mean: summary.depth, counter_extension_rays_mean: summary.extensionRays, counter_shadow_rays_mean: summary.shadowRays, ...Object.fromEntries(Object.entries(summary.reasons).map(([k, v]) => [`counter_term_${k}`, v])) };
+    }
+    if (this.settings.denoise === 'oidn' && this.lastAovs && this.scene && this.gpuContext) {
+      const { denoiseWithOidn } = await import('../shared/oidn.ts');
+      const t0 = performance.now();
+      const clean = await denoiseWithOidn(this.gpuContext.device, image, this.lastAovs, this.scene.camera, { ...(this.settings.denoiseTzaUrl ? { tzaUrl: this.settings.denoiseTzaUrl } : {}) });
+      this.outputStats.denoise_ms = performance.now() - t0;
+      this.extraImages.push({ name: 'denoised', image: clean });
+    }
   }
 
   dispose(): void {
