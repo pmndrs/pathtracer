@@ -36,6 +36,7 @@ What the next pass should measure. Add a row when something needs a quiet-machin
 
 | Item | What | Command | Decides |
 |---|---|---|---|
+| P1.5 | Reflections' trace pass on our core vs three-mesh-bvh (the @pmndrs/bvh wrapper it replaced: best-effort numbers in reflections `docs/research/w81/`) | in the reflections worktree pinned before the deletion (`~/Developer/reflections/.claude/worktrees/p1.5-ab-baseline`, commit 36e206a: both providers, four variants): `REFLECTIONS_PORT=5453 pnpm check -- --only ssr-rt-bvh --rt-bvh-timing-only --rt-bvh-rounds 5` (writes `out/rt-bvh-timing.json`; compare `@pmndrs/bvh` with `@pmndrs/raytracer`) | P1 gate "no rays/s regression" |
 | P2.3 | VNDF standard vs spherical cap (and maybe a branchless basis): cost per sample, noise at equal spp | not runnable yet: needs the integrator (P2.4); add the command here when it exists | `vndf` default, docs/design/bsdf.md choice 1 |
 
 ## Reported

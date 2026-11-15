@@ -125,6 +125,16 @@ closest hit plus ≤ 1 shadow ray, min of 5 interleaved rounds; no readback insi
 about 1.75× the primary hit on this tiny scene; Lambert vs Full is within the noise. Sponza and the 3060 are for the
 quiet pass.
 
+## First consumer: reflections (P1.5)
+
+Reflections' traced pass shades its hits with `rtShade` FULL through its seam (`traceHitShade`, `raytracerHitShading`;
+reflections W81, D5201). `bench/pages/reflections-ab.ts` sends the same camera rays through reflections' own WGSL seam
+with its old provider + probe-free shading (A) and with ours (B), against `PtMegakernel` maxDepth 1 on B's buffers
+(128 px, 1024 samples, best effort): per material B/PT 1.000 (Cornell walls), 0.999 / 1.000 (lamp- / sun-lit floors),
+0.997 (gold, roughness 0.3); A/PT 0.000, 0.117 / 0.923, 0.119. A red plastic (roughness 0.3) reads 1.62x the path
+tracer's OpenPBR layering (albedo + internal; 1.63x the walk) and 1.11x its legacy Lambert adapter: the builtin BSDF is
+three-like (choice 1). No cache term there (DIVERGES V83).
+
 ## Open choices (each one is a setting or a settled seam; defaults hold until measured)
 
 ### 1. Full BSDF: builtin or a consumer hook (`bsdf: 'builtin' | 'external'`)

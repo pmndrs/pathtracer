@@ -32,7 +32,9 @@ _Last updated 2026-11-14._
   lookup, from WGSL or as a batch over a ray buffer. All 590k test rays agree with bvh's CPU version (the remaining
   differences are explained float ties; primary rays must match exactly). It now carries the scene's materials and
   lights on the GPU (the "scene copy"), with power-based light picking. One-bounce shading for the sibling repos
-  (`rtShade`) is built and checked. Still to do in P1: moving reflections onto the core.
+  (`rtShade`) is built and checked. Reflections now runs on it, on a reflections branch (P1.5): same hits, same trace cost
+  within the noise, and hit lighting by `rtShade` matches our path tracer's first bounce. Left for the P1 gate: the quiet
+  timing run, the maintainer's call on reflections' default hit shading, and merging that branch.
 - **Our path tracer (P2).** `@pmndrs/pathtracer` renders the test scenes and converges to the references: the furnace
   tests hit their exact values, the single-light scene matches its closed form, and Cornell sits within the references'
   own disagreement. Sponza agrees too (means within 0.13% of both references, error at the reference noise floor).
@@ -43,7 +45,7 @@ _Last updated 2026-11-14._
 
 **Next**
 - P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
-- Reflections onto the core (P1.5, the P1 gate): a separate session card is waiting.
+- Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 

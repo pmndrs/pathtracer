@@ -31,8 +31,9 @@ regression in reflection rays/s.
 **Parallel (in bvh):** BVH4 / CWBVH8 vs BVH2. Gate ≥1.3× incoherent closest-hit on 3060L and M5.
 
 **Progress:** built and checked: L0/L1/`rtSurface` and the batch tracer (P1.1, 590k test rays agree with bvh's CPU
-walk), the scene copy with materials, lights and light sampling (P1.4), and L2 `rtShade` (P1.3). Left: reflections
-onto the core (P1.5, the gate itself), the trace settings A/B (P1.6, quiet pass), incremental scene updates, textures,
+walk), the scene copy with materials, lights and light sampling (P1.4), and L2 `rtShade` (P1.3). Reflections runs on the
+core on a branch (P1.5: same hits, trace cost equal within the noise, `rtShade` hits match PT maxDepth 1; left: quiet
+timing, the default hit shading P1.5b, the merge). Left: the trace settings A/B (P1.6, quiet pass), incremental scene updates, textures,
 environment maps (P1.4b–e). Wide BVH (X1): both formats built and correct on a bvh branch. Quiet M5 numbers (2026-11-14) pass 1.3× on merged
 trees per scene, BVH4 on Sponza (1.34–1.43×) and CWBVH8 on Bistro (1.39–1.46×), but no one format passes both; the
 3060 runs are still to do.
