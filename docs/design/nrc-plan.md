@@ -107,6 +107,7 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-16 (Windows, M6 WN2).** Every MLP arm matches the oracle on the RTX 3060: the native 16×16×16 f16→f32 matrix kernels (inference and training, 1 and 4 subgroups) worked first time on Dawn/Vulkan, with f16 errors at the tiled kernel's level (replay p99 0.015 vs Apple's f16-accumulating 0.035).
 - **2026-11-16 (Windows, RTX 3060 Laptop, M6 WN1).** Chrome on Windows cannot reach the tensor cores: Dawn runs on D3D12 there and its D3D12 backend has no subgroup matrices; no Chrome switch offers a hardware Vulkan adapter. Dawn on Vulkan (dawn.node, runner `--dawn vulkan`) offers f16→f32 16×16×16 once the NVIDIA f16 toggle is on; our sgm kernel compiles there first time. Q3 is measured on that path (WN2-WN3); Chrome keeps the tiled arms.
 - **2026-11-15 (Mac, session 10).** Tiled portable inference (N1.4) is the default: 8.6× the naive kernel in f16, within 1.36× of
   subgroup matrices. In plain Chrome (no flag) the 960×540 cache frame went from 64 ms to 21 ms (flagged: 19 ms).
