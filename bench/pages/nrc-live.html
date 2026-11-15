@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NRC live</title>
+    <style>
+      :root {
+        /* Layout: the image fills the left, one control column on the right; stacks under 900px. */
+        --bg: #f3f4f6;
+        --panel: #ffffff;
+        --fg: #16191f;
+        --muted: #5b6372;
+        --line: #d9dde4;
+        --accent: #1f6feb;
+        --warn: #b45309;
+        --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+        --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #0e1013; --panel: #171a1f; --fg: #e6e8ec; --muted: #9aa3b2; --line: #2a2f37; --accent: #5b9cff; --warn: #f0a04b; color-scheme: dark; }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); }
+      .app { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; height: 100%; padding: 12px max(12px, env(safe-area-inset-right, 0px)) 12px max(12px, env(safe-area-inset-left, 0px)); }
+      @media (max-width: 900px) { .app { grid-template-columns: 1fr; height: auto; } }
+      .view { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+      .stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; }
+      canvas { display: block; max-width: 100%; max-height: 100%; cursor: grab; touch-action: none; }
+      canvas:active { cursor: grabbing; }
+      .tag { position: absolute; top: 8px; padding: 2px 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 12px; pointer-events: none; }
+      .tag.l { left: 8px; }
+      .tag.r { right: 8px; }
+      .status { color: var(--muted); font-family: var(--mono); font-size: 12px; min-height: 1.5em; }
+      .status.err { color: var(--warn); white-space: pre-wrap; }
+      aside { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+      h1 { font-size: 15px; margin: 0; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+      fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+      label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      label.check { justify-content: flex-start; }
+      select, input[type='number'] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; max-width: 160px; }
+      input[type='range'] { width: 140px; }
+      button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; }
+      table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+      td { padding: 2px 0; border-bottom: 1px solid var(--line); }
+      td.v { text-align: right; }
+      .note { color: var(--muted); font-size: 12px; margin: 0; }
+      kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="view">
+        <div class="stage" id="stage">
+          <canvas id="canvas" width="960" height="540" aria-label="Split view: plain path tracing on the left, path tracing with the neural radiance cache on the right"></canvas>
+          <span class="tag l" id="tagLeft">Path tracing</span>
+          <span class="tag r" id="tagRight">Path tracing + NRC</span>
+        </div>
+        <div class="status" id="status">Loading…</div>
+      </div>
+      <aside>
+        <div>
+          <h1>Neural radiance cache</h1>
+          <p class="note">Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Q</kbd>/<kbd>E</kbd> down/up. Drag the divider with <kbd>Shift</kbd> held.</p>
+        </div>
+        <fieldset>
+          <h2>Scene</h2>
+          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="cornell">Cornell box</option></select></label>
+          <label>Resolution <select id="res"><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
+          <label>Max depth <input id="maxDepth" type="number" min="1" max="16" value="8" /></label>
+        </fieldset>
+        <fieldset>
+          <h2>View</h2>
+          <label>Show <select id="view"><option value="split">Split</option><option value="plain">Path tracing only</option><option value="nrc">With NRC only</option><option value="diff">Difference ×4</option></select></label>
+          <label>Cache at <select id="queryDepth"><option value="0">first hit (cache only)</option><option value="1" selected>second hit</option><option value="2">third hit</option><option value="3">fourth hit</option></select></label>
+          <label>Exposure <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
+          <label class="check"><input id="accumulate" type="checkbox" checked /> Accumulate while still</label>
+        </fieldset>
+        <fieldset>
+          <h2>Time per frame</h2>
+          <label>Plain samples / frame <input id="plainSpp" type="number" min="1" max="64" value="1" /></label>
+          <label class="check"><input id="equalTime" type="checkbox" /> Equal time (set by Benchmark)</label>
+        </fieldset>
+        <fieldset>
+          <h2>Cache</h2>
+          <label>Network <select id="backend"></select></label>
+          <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
+          <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="4" /></label>
+          <label>Learning rate <input id="lr" type="number" min="0.0001" max="0.1" step="0.001" value="0.002" /></label>
+          <label>Training path depth <input id="trainDepth" type="number" min="1" max="8" value="4" /></label>
+          <div class="row"><button id="resetCache">Reset cache</button><button id="resetImage">Clear image</button><button id="resetView">Reset view</button></div>
+        </fieldset>
+        <fieldset>
+          <h2>Measure</h2>
+          <div class="row"><button class="primary" id="bench">Benchmark</button><button id="save">Save A/B</button></div>
+          <table id="timings" aria-label="Benchmark results"><tbody><tr><td>Press Benchmark for GPU times.</td><td class="v"></td></tr></tbody></table>
+          <p class="note" id="saveNote"></p>
+        </fieldset>
+      </aside>
+    </div>
+    <script type="module" src="./nrc-live.ts"></script>
+  </body>
+</html>

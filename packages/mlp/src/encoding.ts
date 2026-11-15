@@ -192,3 +192,30 @@ fn nnEncodeImage(uv: vec2f) -> array<f32, NN_IN> {
 }
 `;
 }
+
+/**
+ * WGSL twin of `encodeNrc` (VkNRC's 64-input layout): `fn nnEncodeNrc(position, direction, normal, roughness, diffuse,
+ * specular) -> array<f32, NN_IN>` with position already normalised to [−1, 1]³ and direction / normal as (θ/π, φ/2π).
+ * Needs `encodingWgsl()` (every MLP kernel includes it) and NN_IN = 64.
+ */
+export function nrcEncodingWgsl(): string {
+  return /* wgsl */ `
+fn nnEncodeNrc(position: vec3f, direction: vec2f, normal: vec2f, roughness: f32, diffuse: vec3f, specular: vec3f) -> array<f32, NN_IN> {
+  var e: array<f32, NN_IN>;
+  nnFrequency(position.x, &e, 0u);
+  nnFrequency(position.y, &e, NN_FREQUENCIES);
+  nnFrequency(position.z, &e, 2u * NN_FREQUENCIES);
+  let o = 3u * NN_FREQUENCIES;
+  nnOneBlob(direction.x, &e, o);
+  nnOneBlob(direction.y, &e, o + NN_BLOB_BINS);
+  nnOneBlob(normal.x, &e, o + 2u * NN_BLOB_BINS);
+  nnOneBlob(normal.y, &e, o + 3u * NN_BLOB_BINS);
+  nnOneBlob(1.0 - exp(-roughness), &e, o + 4u * NN_BLOB_BINS);
+  let c = o + 5u * NN_BLOB_BINS;
+  e[c] = diffuse.x; e[c + 1u] = diffuse.y; e[c + 2u] = diffuse.z;
+  e[c + 3u] = specular.x; e[c + 4u] = specular.y; e[c + 5u] = specular.z;
+  e[c + 6u] = 1.0; e[c + 7u] = 1.0;
+  return e;
+}
+`;
+}

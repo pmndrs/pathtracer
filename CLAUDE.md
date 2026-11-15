@@ -542,3 +542,10 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   not. Have one lane copy it into a `var<workgroup>` and loop on `workgroupUniformLoad(&v)` (`wgsl-gradient.ts`).
 - `mlp-check`'s `gradient_rel_error` is normalised by the largest gradient: a wrong small-magnitude layer can hide in it.
   The per-weight check is the `mlp-fit --args oracleSteps=N batch=B` replay (use B = the real batch to cover chunking).
+- The runner's Vite server (`startBenchServer`, also `bench/live.ts`) has no file watching and no HMR: after editing a page or
+  module, restart it, or the browser keeps getting the first version.
+- `set` is a reserved word in WGSL (so are many short names); a binding called `set` fails to parse.
+- A worktree has no `bench/assets/generated/web/`: run `node bench/adapters/export-scenes.ts <scene>` in it. The main
+  checkout's export can be stale against the current scene definition (Sponza was, 2026-11-15).
+- A Metal "Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)" device loss in the app's browser pane went away
+  on reload (shared GPU, many earlier reloads); retry once before debugging.

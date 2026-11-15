@@ -48,18 +48,20 @@ Status: **planned** (not built yet), **built** (in `packages/mlp` or a bench pag
 | N-K10 | Loop structure | GLSL `[[unroll]]` over tile arrays | Host-generated unrolled WGSL (like the Denoiser) | platform (no `@unroll`, gpuweb #11073) | built (portable) | switch to `@unroll` if it ships |
 | N-K11 | Runtime shape | standalone kernels | Standalone `MlpEngine`, not behind the Denoiser's `NetworkRuntime` (V103) | simplification | built | N5 adds `ort` / `webnn` arms; revisit a shared interface |
 
-## C. Integrator and scene (N6, planned)
+## C. Integrator and scene (N6; the cache runs on main's megakernel since 2026-11-15)
 
 | ID | Topic | Paper [M] | VkNRC [V] | Ours (plan) | Why | Follow-up |
 |---|---|---|---|---|---|---|
 | N-I1 | Ray tracing | hardware RT | Vulkan ray queries, V-buffer raster for primaries | Software BVH (trace core, `rtClosest`), primary rays traced | platform (no RT in WebGPU) | report trace vs MLP time separately |
-| N-I2 | Training-path selection | random pixel per screen tile | per **subgroup**: whole subgroup trains with p = 0.03 | Per subgroup, like VkNRC (keeps control flow uniform) | platform / design | A/B per-tile vs per-subgroup: spatial coverage vs speed |
+| N-I2 | Training-path selection | random pixel per screen tile | per **subgroup**: whole subgroup trains with p = 0.03 | Built: a separate low-res trainer film (128 × 72 by default, every pixel a training path); planned per subgroup like VkNRC | platform / design | A/B per-tile vs per-subgroup: spatial coverage vs speed |
 | N-I3 | Unbiased training paths | a small fraction of training paths are not terminated in the cache [M] | none | VkNRC's (none) first | design | A/B with 1/16 unbiased paths: bias under strong indirect light |
 | N-I4 | Termination | area-spread heuristic, c = 0.01 | same c; `a0 = d²/(4π cos)`, accumulates `√(d²/(pdf·cos))` | Same as VkNRC | design | sweep c in N6 |
 | N-I5 | Self-training | tail of training path queries the cache | inference pass writes the prediction into training records before training | Same: inference before training each frame | design | none |
 | N-I6 | Materials | full BSDFs | Cook-Torrance (diffuse + specular) | Lambert (sponza-white) first | scene | Cook-Torrance once P1.3/P1.4 land |
 | N-I7 | Lighting | scenes with emitters and env | constant white sky (radiance 10), emissive materials, no NEE | sponza-white sun + sky with NEE; a "VkNRC lighting" setting for like-for-like images (N6.2) | scene | compare both settings against VkNRC native (N6.1) |
 | N-I8 | Resolution | 1080p | window size | full and upscaler ratio 2 | perf (budget, nrc.md §2) | report both |
+| N-I9 | Training targets | radiance gathered along the training path [M] | training paths in the main pass, targets back-propagated along the path | Separate trainer film over the same camera; targets from **deterministic replays**: run k terminates every path at vertex k (its accumulator = radiance up to vertex k's emission and NEE), the tail run at vertex M; target_k = (R_M − R_k + β_M·cache(x_M)) / β_k | platform (main's hooks expose neither a vertex's NEE term nor the final escape; no path-end callback, V84) | Cost M + 1 trainer passes per frame (small film). Ask the integrator for a path-end hook and the running radiance in `PtPathVertex`, then A/B one pass vs replays (same targets, cost only) |
+| N-I10 | Roughness input | per-vertex roughness | material roughness | 1.0 for every vertex (the hook vertex has no roughness yet) | simplification | exact for sponza-white (all Lambert); read `rtMaterial(v.material)` roughness before glossy scenes |
 
 ## Follow-up queue (by when it can run)
 

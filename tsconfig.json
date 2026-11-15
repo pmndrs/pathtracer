@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/*/src", "packages/*/tools", "bench/src", "bench/scenes", "bench/runner", "bench/metrics", "bench/viewer", "bench/adapters", "bench/exporters", "bench/pages", "bench/references"]
+  "include": ["packages/*/src", "packages/*/tools", "bench/src", "bench/scenes", "bench/runner", "bench/metrics", "bench/viewer", "bench/adapters", "bench/exporters", "bench/pages", "bench/references", "bench/nrc", "bench/live.ts"]
 }

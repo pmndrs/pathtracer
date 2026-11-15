@@ -19,7 +19,9 @@
     "assets:generate": "node scenes/tier0/generate-assets.ts",
     "assets:fetch": "node assets/fetch.ts",
     "adapters:export": "node adapters/export-scenes.ts",
-    "competitors": "node adapters/matrix.ts"
+    "competitors": "node adapters/matrix.ts",
+    "mlp:live": "node live.ts mlp-live",
+    "nrc:live": "node live.ts nrc-live"
   },
   "devDependencies": {
     "@meimu/mutracer": "0.3.1",

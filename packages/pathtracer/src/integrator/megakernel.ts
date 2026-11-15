@@ -239,6 +239,15 @@ export class PtMegakernel {
     this.sceneGroup = this.device.createBindGroup({ label: 'pt scene', layout: this.sceneLayout, entries: rtSceneCopyBindGroupEntries(scene) });
   }
 
+  /**
+   * The accumulation buffer (`array<vec4f>`: radiance sum, w = samples; AOVs after `width * height` when on), or null before `setFilm`.
+   * For a cache that adds its contribution after the pass (track N: `throughput x prediction` per terminated path) and for live display
+   * without a readback. Replaced by `setFilm` on a size change.
+   */
+  get accumulator(): GPUBuffer | null {
+    return this.accum;
+  }
+
   /** Layout of the hooks' bind group (`@group(3)`; `options.integrator.hooks.bindings`), or null without hooks. Build your bind group on it, then `setHookBindGroup`. */
   get hookBindGroupLayout(): GPUBindGroupLayout | null {
     return this.hookLayout;

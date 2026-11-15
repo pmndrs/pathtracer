@@ -55,7 +55,8 @@ wait for a quiet rerun (the 2026-11-15 pass ran loaded after a reboot, ratios he
   (`packages/mlp`) matches its CPU reference on the M5 Pro in f32 and f16, and the subgroup-matrix (tensor-tile) version
   compiles natively in Chrome 157 and matches too. First timings (not a quiet pass): subgroup-matrix inference is 7.5-11x
   faster than our plain f16 kernel (8.5 ms per million queries, about 17 ms at 1080p); training is now the larger cost.
-  Plan and progress: `docs/design/nrc-plan.md`.
+  The cache now runs on our path tracer and passes its closed-form check; the demo page is `pnpm --filter @pathtracer/bench
+  nrc:live`. Plan and progress: `docs/design/nrc-plan.md`.
 
 **Next**
 - P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.

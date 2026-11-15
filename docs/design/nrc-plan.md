@@ -35,7 +35,9 @@ network; Chrome started with `--enable-unsafe-webgpu` adds the subgroup-matrix b
   pause training, reset the cache, camera (orbit/fly, a few saved views, a scripted fly-through to watch the cache
   adapt).
 - **Save A/B**: writes both halves as linear PFM plus timings, so the bench viewer shows the pair side by side.
-- Headless twin: the same page with `?offscreen=1` is a runner page (`nrc`) that produces the M5 tables.
+- Headless twin: the same page with `?offscreen=1` is a runner page (`nrc`) that produces the M5 tables (not built yet).
+
+**Built (2026-11-15):** everything above except the reference error view, the coverage view and the headless twin.
 
 ## 3. Budget (what "fast enough" means)
 
@@ -59,8 +61,8 @@ Status: ✅ done · 🟡 in progress · ⬜ not started. Rows in TASKS.md carry 
 | M0 | Groundwork | Subgroup-matrix probe, adapter caps, paper numbers checked | We know which machines run the matrix path | N0.1–N0.4 | 🟡 probe done (Apple); paper check and Windows open |
 | M1 | MLP engine + oracle | `packages/mlp`: forward, backward, Adam, f32/f16, CPU oracle; check, fit, timing and live pages | GPU matches the oracle; image fit converges | N1, N1.1, N1.3, N10 | ✅ engine, correctness, live page, encoding A/B (two-phase waves: fit error 0.26 → 0.16) |
 | M2 | Speed | Fast portable kernels (N1.2), subgroup-matrix inference (N3a) and training (N3b), round-trip cost per layer (N3) | §3 budget met on the M5 Pro, or the gap is measured | N1.2, N2, N3, N3a–c | 🟡 inference ✅ (8.4 ms per million queries, quiet); emulated twin ✅ on the GPU; training 🟡 (tiled gradient: step 6.9 → 2.7 ms; forward-backward next) |
-| M3 | NRC on our path tracer | A cache hook for main's integrator (`ptOnVertex` / `ptTerminate`, `updateBlock` training paths): query and training buffers, target back-propagation, inference, resolve into the accumulation | Closed-room check: the learned cache converges to the analytic indirect radiance `ρE/(1−ρ)`; megakernel = wavefront | N6a | ⬜ |
-| M4 | Demo page | `nrc-live` (§2), user-testable | The maintainer can run it and see both halves | N6b | ⬜ |
+| M3 | NRC on our path tracer | A cache hook for main's integrator (`ptOnVertex` / `ptTerminate`, `updateBlock` training paths): query and training buffers, target back-propagation, inference, resolve into the accumulation | Closed-room check: the learned cache converges to the analytic indirect radiance `ρE/(1−ρ)`; megakernel = wavefront | N6a | ✅ megakernel (room gate: 0.06-0.55% mean error, all backends); wavefront open |
+| M4 | Demo page | `nrc-live` (§2), user-testable | The maintainer can run it and see both halves | N6b | 🟡 built and running (`nrc:live`); try it in flagged Chrome |
 | M5 | Equal-time study | `nrc` runner page; tables on sponza-white: relMSE, FLIP, bias, stability vs plain PT at equal ms | Q2 answered on the M5 Pro | N6c | ⬜ |
 | M6 | Windows / NVIDIA | Matrix path on the RTX 3060 (Dawn Vulkan vs D3D12), N2 table there, VkNRC native baseline | Q3 answered for NVIDIA; native vs web ratio | N0.3, N6.1, N6.2 | ⬜ (maintainer's laptop) |
 | M7 | Hash-cache competitor | SHaRC-like non-neural cache at equal time | Q4 answered | N7 | ⬜ |
@@ -101,6 +103,9 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-15 (Mac, session 3).** The cache runs on main's path tracer (`bench/nrc/cache.ts`): passes the closed-room gate
+  on every backend; `nrc-live` demo built (`pnpm --filter @pathtracer/bench nrc:live`). On the portable network inference is
+  the big per-frame cost (59 ms for 500k queries), so the subgroup-matrix backend matters for the demo. Progress page published.
 - **2026-11-15 (Mac, session 2).** Merged main's 41 local commits (path tracer P1–P3 with hooks); track N IDs
   renumbered (D27/D28, V101–V104, W11). Emulated subgroup-matrix kernel verified on the Apple GPU (N3c). Denoiser
   issue pmndrs/denoiser#31 filed for `subgroup_id` offsets. Quiet timing rerun (matrix path 11.2× portable f16). Image

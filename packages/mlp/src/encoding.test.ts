@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLOB_BINS, DEFAULT_IMAGE_ENCODING, FREQUENCIES, encodeImage, frequency, imageEncodingWgsl, imageEncodingWidth, oneBlob, triangleWave } from './encoding.ts';
+import { BLOB_BINS, DEFAULT_IMAGE_ENCODING, FREQUENCIES, NRC_ENCODED, encodeImage, frequency, imageEncodingWgsl, imageEncodingWidth, nrcEncodingWgsl, oneBlob, triangleWave } from './encoding.ts';
 
 describe('image encoding layouts (N1.3)', () => {
   it('the default layout is the original one', () => {
@@ -37,5 +37,14 @@ describe('image encoding layouts (N1.3)', () => {
     expect(w).toContain('nnOneBlob(uv.x, &e, 32u);');
     expect(w).toContain('e[40u] = 1.0;');
     expect(imageEncodingWgsl()).not.toContain('+ 0.5);');
+  });
+});
+
+describe('NRC encoding WGSL twin', () => {
+  it('fills the same 64 slots as encodeNrc', () => {
+    const w = nrcEncodingWgsl();
+    expect(3 * FREQUENCIES + 5 * BLOB_BINS + 8).toBe(NRC_ENCODED);
+    expect(w).toContain('nnOneBlob(1.0 - exp(-roughness), &e, o + 4u * NN_BLOB_BINS);');
+    expect(w).toContain('e[c + 6u] = 1.0; e[c + 7u] = 1.0;');
   });
 });
