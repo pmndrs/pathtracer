@@ -580,3 +580,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   checkout's export can be stale against the current scene definition (Sponza was, 2026-11-15).
 - A Metal "Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)" device loss in the app's browser pane went away
   on reload (shared GPU, many earlier reloads); retry once before debugging.
+- Generated WGSL that repeats a block per layer must wrap each block in `{}`: `var acc0` declared twice in one function scope
+  fails. Unrolled tiled kernels pass the ~50 KB guideline quickly (tiled forward with 128 records: 50.4 KB); keep R ≤ 64.
+- `mlp-check`'s `update_rel_error` is the max over weights and is dominated by near-zero gradients where Adam's sign decides
+  a full step; compare `updateP99` and the `mlp-fit oracleSteps=` replay instead.

@@ -13,6 +13,7 @@
 import { DEFAULT_SHAPE, DEFAULT_TRAIN, weightCount, type MlpShape, type TrainSettings } from './config.ts';
 import { NN_WORKGROUP, adamWgsl, inferWgsl, prepareWgsl, rowStride, trainWgsl, weightGradientWgsl, type Precision } from './wgsl.ts';
 import { DEFAULT_GRADIENT, gradientPartialBytes, gradientReduceWgsl, gradientTileWgsl, type GradientKind, type GradientOptions } from './wgsl-gradient.ts';
+import { DEFAULT_FORWARD, defaultForwardRecords, forwardWorkgroupBytes, trainTiledWgsl, type ForwardKind, type ForwardOptions } from './wgsl-forward.ts';
 import { inferSgmWgsl, packSgmWgsl, sgmWeightCount, sgmWorkgroupBytes, type SgmOptions } from './wgsl-sgm.ts';
 
 export interface MlpEngineOptions {
@@ -38,6 +39,10 @@ export interface MlpEngineOptions {
   gradient?: GradientKind;
   /** Tiled arm only: `splits` record ranges per layer and `chunk` records staged per iteration. */
   gradientOptions?: Partial<GradientOptions>;
+  /** Forward-backward arm: one thread per record ('perRecord') or the tiled workgroup-per-R-records kernel (N1.2b). Default 'tiled' (N1.2b A/B: forward-backward 2.49 → 0.31 ms f16, 3.65 → 0.50 ms f32, M5 Pro). */
+  forward?: ForwardKind;
+  /** Tiled forward arm only: `records` per workgroup (default `defaultForwardRecords(precision)`: 64 f16, 48 f32). */
+  forwardOptions?: Partial<ForwardOptions>;
 }
 
 /** Per-stage timestamps for one training step (3 passes, 6 slots from `first`: begin/end of prepare+forward-backward, gradient, Adam). */
@@ -87,6 +92,8 @@ export class MlpEngine {
   private readonly groups: Record<'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUBindGroup> & { pack?: GPUBindGroup; gradientReduce?: GPUBindGroup };
   readonly gradientKind: GradientKind;
   readonly gradientOptions: GradientOptions;
+  readonly forwardKind: ForwardKind;
+  readonly forwardOptions: ForwardOptions;
   /** Per-split partial dW (tiled arm only). */
   readonly gradientPartials: GPUBuffer | null;
   private readonly sgmCount: number;
@@ -105,6 +112,8 @@ export class MlpEngine {
     this.weightCount = weightCount(this.shape);
     this.gradientKind = options.gradient ?? 'tiled';
     this.gradientOptions = { ...DEFAULT_GRADIENT, ...options.gradientOptions };
+    this.forwardKind = options.forward ?? 'tiled';
+    this.forwardOptions = { ...DEFAULT_FORWARD, records: defaultForwardRecords(options.precision), ...options.forwardOptions };
 
     const bpe = this.precision === 'f16' ? 2 : 4;
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
@@ -177,12 +186,18 @@ export class MlpEngine {
       const need = sgmWorkgroupBytes(sgm);
       if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: sgm needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower sgm.records`);
     }
+    const forwardOptions = { ...DEFAULT_FORWARD, records: defaultForwardRecords(options.precision), ...options.forwardOptions };
+    const tiledForward = (options.forward ?? 'tiled') === 'tiled';
+    if (tiledForward) {
+      const need = forwardWorkgroupBytes(o, forwardOptions);
+      if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: tiled forward needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower forwardOptions.records`);
+    }
     const tiled = (options.gradient ?? 'tiled') === 'tiled';
     const gradientOptions = { ...DEFAULT_GRADIENT, ...options.gradientOptions };
     const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync, pack, gradientReduce] = await Promise.all([
       make('prepare', prepareWgsl(o), 'nnPrepare'),
       sgm ? make('inferSgm', inferSgmWgsl(sgm, options.inferHooks), 'nnInferSgm') : make('infer', inferWgsl(o, options.inferHooks), 'nnInfer'),
-      make('forwardBackward', trainWgsl(o, options.trainHooks), 'nnForwardBackward'),
+      make('forwardBackward', tiledForward ? trainTiledWgsl(o, options.trainHooks, forwardOptions) : trainWgsl(o, options.trainHooks), 'nnForwardBackward'),
       tiled ? make('gradientTile', gradientTileWgsl(o, gradientOptions), 'nnGradientTile') : make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
       make('adam', adam, 'nnAdam'),
       make('sync', adam, 'nnSync'),
@@ -265,7 +280,7 @@ export class MlpEngine {
    * Adam. `counts[countWord]` is the number of records; `hooks` is the caller's group-1 bind group.
    */
   encodeTrainStep(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites, stages?: TrainStageTimestamps): void {
-    this.writeParams(this.trainParams, this.capacity, countWord, true, NN_WORKGROUP);
+    this.writeParams(this.trainParams, this.capacity, countWord, true, this.forwardKind === 'tiled' ? this.forwardOptions.records : NN_WORKGROUP);
     const stage = (name: string, n: number): GPUComputePassDescriptor =>
       stages ? { label: `nn train ${name}`, timestampWrites: { querySet: stages.querySet, beginningOfPassWriteIndex: stages.first + 2 * n, endOfPassWriteIndex: stages.first + 2 * n + 1 } } : {};
     // Without `stages` everything is one pass (the production shape); with it, three passes so each stage is timed.

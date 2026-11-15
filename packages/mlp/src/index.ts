@@ -6,3 +6,4 @@ export * from './wgsl.ts';
 export { MlpEngine, type MlpEngineOptions } from './engine.ts';
 export * from './wgsl-sgm.ts';
 export * from './wgsl-gradient.ts';
+export * from './wgsl-forward.ts';

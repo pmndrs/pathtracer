@@ -70,6 +70,8 @@ try {
     inferCapacity: pixels,
     useEma,
     gradient: args.gradient === 'perWeight' ? 'perWeight' : 'tiled',
+    forward: args.forward === 'perRecord' ? 'perRecord' : 'tiled',
+    ...(args.fwdRecords ? { forwardOptions: { records: numberArg(args, 'fwdRecords', 64) } } : {}),
     train: { ...DEFAULT_TRAIN, learningRate },
     trainHooks: imageHooksTrain(encoding),
     inferHooks: imageHooksInfer(encoding),

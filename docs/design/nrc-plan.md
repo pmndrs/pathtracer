@@ -50,10 +50,10 @@ Target frame: 16.7 ms on the M5 Pro at 960×540 (upscaled to 1080p), path tracin
 | Piece | Measured now (M5 Pro, 2026-11-15) | Target |
 |---|---|---|
 | Inference, 518k queries (960×540) | 4.4 ms (subgroup matrix f16, 4 subgroups); 49 ms portable f16 (quiet) | ≤ 4 ms |
-| Training, 4 × 16k records | 10.8 ms (portable f16, 2.7 ms per step with the tiled gradient; was 27.5) | ≤ 4 ms → tiled forward-backward (N1.2b) or N3b |
+| Training, 4 × 16k records | 2.0 ms (portable f16, 0.51 ms per step: tiled gradient + tiled forward-backward; was 27.5) | ≤ 4 ms ✅ |
 | Path tracing, ~2 short paths per pixel | not measured for this scene and resolution | rest of the frame |
 
-Training is the blocker today, not inference; within a step, forward-backward (2.5 of 2.7 ms).
+Training met its budget on 2026-11-15 (0.51 ms per step); the path tracer's own passes are now the larger part of a frame.
 
 ## 4. Milestones
 
