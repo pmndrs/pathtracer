@@ -21,10 +21,11 @@ export interface PtHooksOptions {
   wgsl: string;
   /**
    * Layout entries of the hook's own bind group (`@group(3)`; the wavefront binds it to the shade kernel only), e.g. a hash table. Default none.
-   * Mind the 10 storage buffers per stage of Apple GPUs. Measured (`pt-outputs-check check=budget`, M5 Pro): the megakernel leaves 4 for the hook
-   * (walk 3, scene 2, accumulator = 6 + fuzz table + counters), 3 with `counters`; the wavefront's shade kernel leaves 2 (scene 2, accumulator, state,
-   * hit, count, queue, shadow rays = 8), 1 with `counters`; the fuzz table takes one more. `create` fails on pipeline creation with the validation
-   * message when the sum is over the device limit.
+   * Mind the 10 storage buffers per stage of Apple GPUs. Measured (`pt-outputs-check check=budget`, M5 Pro): with the scene copy `split` (two buffers,
+   * the default) the megakernel leaves 4 for the hook (walk 3, scene 2, accumulator = 6 + fuzz table + counters), 3 with `counters`; the wavefront's
+   * shade kernel leaves 2 (scene 2, accumulator, state, hit, count, queue, shadow rays = 8), 1 with `counters`; the fuzz table takes one more.
+   * With `scenePacking: 'packed'` (P3.11, the scene copy as ONE buffer) every number is one higher: megakernel 5 (4 with `counters`), wavefront shade
+   * 3 (2 with `counters`). `create` fails on pipeline creation with the validation message when the sum is over the device limit.
    */
   bindings?: GPUBindGroupLayoutEntry[];
   /**

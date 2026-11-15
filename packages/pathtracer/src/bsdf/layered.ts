@@ -54,6 +54,7 @@ import {
   type PtVec3,
 } from './bsdf.ts';
 import { ptDielectricF0, ptLayeredAlbedo } from './layered-lut.ts';
+import { ptLayerCorrection, type PtAlbedoCorrection } from './layered-correction.ts';
 
 /** Set on the sample of a stochastic layered BSDF: `pdf` is only proportional to the true density (pbrt `pdfIsProportional`). */
 export const PT_FLAG_PROPORTIONAL = 8;
@@ -111,6 +112,12 @@ export interface PtLayeredOptions extends PtBsdfOptions {
    * DIVERGES V57.
    */
   albedoBase?: 'openpbr' | 'internal';
+  /**
+   * Albedo layering with the `'internal'` base only (P2.32b, DIVERGES V97). `'none'` (default): the closed form as is. `'lut'` / `'texture'`: the base lobe is multiplied by the fitted
+   * correction `c(r, mu_o, base Ri)` (`layered-correction.ts`) that brings its energy to the stochastic walk's (the closed form reads +11-15% bright on a bright rough base).
+   * `'lut'` keeps the table as a WGSL const array, `'texture'` as an 8 x 8 `rgba16float` texture bound at group 2 `PT_LAYER_CORR_BINDING`; the CPU twin is the same for both.
+   */
+  albedoCorrection?: PtAlbedoCorrection;
   /**
    * Stochastic, rough interface only. `'pbrt'` (default) weights the two exit estimators with pbrt's power heuristic, which
    * compares a density over inside directions with one over outside directions (a Jacobian apart): pbrt's own `f` then reads
@@ -584,12 +591,24 @@ function internalGain(p: PtLayeredParams): PtVec3 {
   return [k(p.baseColor[0]), k(p.baseColor[1]), k(p.baseColor[2])];
 }
 
-function albedoMix(p: PtLayeredParams, mu: number, internal: boolean): Mix {
+/** P2.32b: the fitted correction of the internal base per channel (1 when off or the interface is smooth). `corr` is the lobe kind, undefined = off. */
+function corrFactor(p: PtLayeredParams, mu: number, corr: 'lut' | 'texture' | undefined): PtVec3 {
+  if (!corr || ptLayeredSmoothTop(p)) return [1, 1, 1];
+  const r = Math.sqrt(0.5 * (p.alpha[0] + p.alpha[1]));
+  const f = (c: number): number => ptLayerCorrection(corr, c, p.internalReflectance, mu, r);
+  return [f(p.baseColor[0]), f(p.baseColor[1]), f(p.baseColor[2])];
+}
+
+function corrKind(o: PtLayeredOptions): 'lut' | 'texture' | undefined {
+  return ptAlbedoBaseInternal(o) && o.albedoCorrection && o.albedoCorrection !== 'none' ? o.albedoCorrection : undefined;
+}
+
+function albedoMix(p: PtLayeredParams, mu: number, internal: boolean, corr?: 'lut' | 'texture'): Mix {
   const keep = albedoKeep(p, mu);
   const eS = avg([1 - keep[0], 1 - keep[1], 1 - keep[2]]);
   let eB = avg(mul3(p.baseColor, keep));
   // hemispherical albedo of the 'internal' base: rho keep(mu_o) (1 - R_i) / (1 - rho R_i)
-  if (internal) eB = avg(mul3(mul3(p.baseColor, keep), internalGain(p))) * (1 - p.internalReflectance) * p.ior * p.ior;
+  if (internal) eB = avg(mul3(mul3(mul3(p.baseColor, keep), internalGain(p)), corrFactor(p, mu, corr))) * (1 - p.internalReflectance) * p.ior * p.ior;
   return { keep, pS: eS + eB > 0 ? eS / (eS + eB) : 0 };
 }
 
@@ -679,9 +698,11 @@ function albedoEval(p: PtLayeredParams, wo0: PtVec3, wi0: PtVec3, o: PtLayeredOp
   }
   if (wo[2] === 0 || wi[2] <= 0) return { f: ZERO3, pdf: 0 };
   const internal = ptAlbedoBaseInternal(o);
-  const mix = albedoMix(p, wo[2], internal);
+  const corr = corrKind(o);
+  const mix = albedoMix(p, wo[2], internal, corr);
   let fd = mul3(scale3(p.baseColor, 1 / PI), mix.keep);
   if (internal) fd = mul3(mul3(fd, albedoKeep(p, wi[2])), internalGain(p));
+  if (corr) fd = mul3(fd, corrFactor(p, wo[2], corr));
   const spec = topEval(topOf(p), wo, wi, (o.transport ?? 'radiance') === 'radiance', PT_LAYER_REFLECTION);
   // topEval's pdf is already restricted to reflection (pr/(pr+pt) = 1)
   return { f: [fd[0] + spec.f[0], fd[1] + spec.f[1], fd[2] + spec.f[2]], pdf: mix.pS * spec.pdf + (1 - mix.pS) * (wi[2] / PI) };
@@ -699,7 +720,7 @@ function albedoSample(p: PtLayeredParams, wo0: PtVec3, u: PtVec3, o: PtLayeredOp
     const s = condSample(p, wo, u, o);
     return flip && s.flags !== 0 ? { ...s, wi: neg(s.wi) } : s;
   }
-  const mix = albedoMix(p, wo[2], ptAlbedoBaseInternal(o));
+  const mix = albedoMix(p, wo[2], ptAlbedoBaseInternal(o), corrKind(o));
   const top = topOf(p);
   const fix = (s: PtBsdfSample): PtBsdfSample => (flip && s.flags !== 0 ? { ...s, wi: neg(s.wi) } : s);
   // One uniform picks the lobe, then is rescaled to a fresh uniform for the direction's first coordinate.

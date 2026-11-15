@@ -48,6 +48,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
    */
   layering?: 'albedo' | 'stochastic';
   albedoBase?: 'openpbr' | 'internal';
+  /** P2.32b (albedo layering, internal base): fitted correction of the base lobe, `'none'` (default) | `'lut'` | `'texture'`. */
+  albedoCorrection?: 'none' | 'lut' | 'texture';
   exitMis?: 'pbrt' | 'none';
   layerDepth?: number;
   layerThickness?: number;
@@ -68,6 +70,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   refill?: boolean | 'inline' | 'batch';
   refillThreshold?: number;
   layers?: number;
+  /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`). Images are per-pixel identical; only the addressing differs. */
+  scenePacking?: 'split' | 'packed';
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
   /**
@@ -180,6 +184,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.scheduler === 'wavefront' ? { refill: settings.refill === true ? 'inline' : settings.refill || 'off', refillThreshold: settings.refillThreshold ?? 0.25, layers: settings.layers ?? 1 } : {}),
         ...(settings.alphaPolicy && settings.alphaPolicy !== 'exact' ? { alphaPolicy: settings.alphaPolicy } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
+        ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         nee: settings.nee ?? true,
         envSampling: settings.envSampling ?? 'auto',
@@ -198,6 +203,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         textureLod: settings.textureLod ?? 0,
         layering: settings.layering ?? 'stochastic',
         ...(settings.albedoBase ? { albedoBase: settings.albedoBase } : {}),
+        ...(settings.albedoCorrection && settings.albedoCorrection !== 'none' ? { albedoCorrection: settings.albedoCorrection } : {}),
         ...(settings.exitMis ? { exitMis: settings.exitMis } : {}),
         layerDepth: settings.layerDepth ?? 64,
         layerThickness: settings.layerThickness ?? 1e-6,
@@ -271,7 +277,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     builder.dispose();
     this.trace = uploadTraceScene(device, data, scene.name);
     const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
-    this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene` });
+    this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}) });
     this.lastLoad = { caps, copy, input };
     const loadMs = performance.now() - t0;
 
@@ -279,7 +285,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     // A metallic-roughness texture decides metalness per texel (factor x B in [0, factor]): the kernel needs both lobes and the stochastic mix, whatever the factor says.
     let materials: PtMaterialOptions | null = null;
     if (Object.values(scene.materials).some((m) => m.type === 'openpbr')) {
-      const layered: PtLayeredOptions = { layering: this.settings.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...(this.settings.albedoBase ? { albedoBase: this.settings.albedoBase } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
+      const layered: PtLayeredOptions = { layering: this.settings.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...(this.settings.albedoBase ? { albedoBase: this.settings.albedoBase } : {}), ...(this.settings.albedoCorrection ? { albedoCorrection: this.settings.albedoCorrection } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
       const features = ptMaterialFeatures(input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m)));
       // The thin film (P2.27) lives in the albedo layering's Fresnel; the stochastic walk has no film (DIVERGES V82).
       if (features.thinFilm && layered.layering === 'stochastic') {
@@ -297,7 +303,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _refill;
     void _thr;
     void _layers;
-    const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);

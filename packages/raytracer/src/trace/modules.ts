@@ -13,8 +13,8 @@ import type { Defines } from '../caps/wgsl.ts';
 import { DEFAULT_BATCH_WORKGROUP_SIZE, STORAGE_BUFFER_BUDGET, type BatchWorkgroupSize } from './constants.ts';
 import { surfaceVertexOffsets, type SurfaceLayout } from './surface-table.ts';
 import { RT_CORE_WGSL, rtBatchArgsWgsl, rtBatchWgsl, rtSurfaceWgsl } from './wgsl-source.ts';
-import { SCENE_COPY_STORAGE_BUFFERS, SCENE_HEADER_VEC4S } from '../scene/constants.ts';
-import { rtSceneWgsl } from '../scene/scene-wgsl.ts';
+import { DEFAULT_SCENE_PACKING, SCENE_HEADER_VEC4S, sceneCopyStorageBuffers, type SceneCopyPacking } from '../scene/constants.ts';
+import { rtPackSceneAccess, rtSceneWgsl } from '../scene/scene-wgsl.ts';
 import type { TextureLayout } from '../scene/texture.ts';
 import { rtShadeWgsl } from '../shade/shade-wgsl.ts';
 import type { RtShadeOptions } from '../shade/shade.ts';
@@ -48,7 +48,7 @@ export interface RtModuleOptions extends SceneFormat {
    * Include the scene copy (D4): `rtSurface` (unless `surface: false`), `rtMaterial` and the light functions, over the scene
    * copy's two bindings at `slot` (`rtSceneEntries`). `layout` is `SceneCopy.layout`. Default: no scene, no `rtSurface`.
    */
-  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean; /** Material textures (P1.4c): `SceneCopy.textureLayout`. Adds `rtTexSample`, `rtApplyMaterialTextures`, `rtApplyNormalMap` and the `RT_SURF_TEXFRAME` surface data; needs materials, uvs and positions in the layout. */ textures?: TextureLayout | null } | false;
+  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean; /** Material textures (P1.4c): `SceneCopy.textureLayout`. Adds `rtTexSample`, `rtApplyMaterialTextures`, `rtApplyNormalMap` and the `RT_SURF_TEXFRAME` surface data; needs materials, uvs and positions in the layout. */ textures?: TextureLayout | null; /** `split` (two bindings, default `DEFAULT_SCENE_PACKING`) or `packed` (one: `rtScene`, P3.11); upload with the same `uploadSceneCopy({ packing })`. */ packing?: SceneCopyPacking } | false;
   /**
    * Add L2 `rtShade` (P1.3, `shade/`): one-bounce shading with a hook for the indirect term. Needs `scene` with surface, materials and lights;
    * it adds the light point sampling (`rtSampleLightLi`, as `scene.sampling`), so do not append `rtLightSampleWgsl()` yourself. `true` = defaults.
@@ -274,7 +274,7 @@ function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): st
     if (shade && (options.scene.surface === false || options.scene.materials === false || options.scene.lights === false)) {
       throw new Error('rtModuleWgsl: shade needs scene surface, materials and lights');
     }
-    source += rtSceneWgsl({ group: slot.group, firstBinding: slot.firstBinding, materials: options.scene.materials, lights: options.scene.lights, sampling: options.scene.sampling || shade, textures: options.scene.textures });
+    source += rtSceneWgsl({ group: slot.group, firstBinding: slot.firstBinding, materials: options.scene.materials, lights: options.scene.lights, sampling: options.scene.sampling || shade, textures: options.scene.textures, packing: options.scene.packing });
   } else if (options.shade) {
     throw new Error('rtModuleWgsl: shade needs the scene copy (scene option)');
   }
@@ -285,6 +285,8 @@ function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): st
     source += rtSurfaceWgsl({ ...base, headerVec4s: SCENE_HEADER_VEC4S });
   }
   if (options.shade) source += rtShadeWgsl(options.shade === true ? {} : options.shade);
+  // The surface and shade text is written against the split bindings: point it at the packed buffer (the scene part already is).
+  if (options.scene && (options.scene.packing ?? DEFAULT_SCENE_PACKING) === 'packed') source = rtPackSceneAccess(source);
   return source;
 }
 
@@ -304,16 +306,16 @@ export function rtWalkEntries(options: SceneFormat = {}): readonly ModuleBinding
   return traceModuleEntries({ triangleLeaves: sceneFormatOf(options).triangleLeaves });
 }
 
-/** The scene copy's two bindings, in order: table, data. */
-export function rtSceneEntries(): readonly ModuleBindingEntry[] {
+/** The scene copy's bindings, in order: table, data (one binding, the packed buffer, with `packing: 'packed'`). */
+export function rtSceneEntries(packing: SceneCopyPacking = DEFAULT_SCENE_PACKING): readonly ModuleBindingEntry[] {
   const entry: ModuleBindingEntry = { visibility: 0x4 /* GPUShaderStage.COMPUTE */, buffer: { type: 'read-only-storage' } };
-  return [entry, entry];
+  return packing === 'packed' ? [entry] : [entry, entry];
 }
 
 /** Storage buffers the module adds to a kernel (spec section 3 binding budget). */
 export function rtModuleStorageBuffers(options: RtModuleOptions = {}): number {
   const walk = sceneFormatOf(options).triangleLeaves === 'indexed' ? STORAGE_BUFFER_BUDGET.walkIndexed : STORAGE_BUFFER_BUDGET.walk;
-  return walk + (options.scene ? SCENE_COPY_STORAGE_BUFFERS : 0);
+  return walk + (options.scene ? sceneCopyStorageBuffers(options.scene.packing) : 0);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -419,7 +419,8 @@ async function checkCornell(): Promise<void> {
 async function checkBudget(): Promise<void> {
   const adapter = await navigator.gpu.requestAdapter();
   metrics.budget_max_storage_buffers_per_stage = adapter!.limits.maxStorageBuffersPerShaderStage;
-  for (const scheduler of SCHEDULERS) {
+  // P3.11: `packed` binds the scene copy as one storage buffer, so each kernel has one more binding for the hooks (keys carry `_packed`; the split keys are unchanged).
+  for (const scenePacking of ['split', 'packed'] as const) for (const scheduler of SCHEDULERS) {
     for (const counters of [false, true]) {
       let fits = 0;
       for (let hookBuffers = 0; hookBuffers <= 8; hookBuffers++) {
@@ -428,7 +429,7 @@ async function checkBudget(): Promise<void> {
         const bindings = Array.from({ length: hookBuffers }, (_, i) => ({ binding: i, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' as const } }));
         const wgsl = `${decl}\nfn ptOnVertex(v: PtPathVertex) -> u32 { ${use} return PT_HOOK_CONTINUE; }`;
         try {
-          const a = new PtMegakernelAdapter({ scheduler, counters, nee: false, hooks: { wgsl, bindings } });
+          const a = new PtMegakernelAdapter({ scheduler, counters, nee: false, scenePacking, hooks: { wgsl, bindings } });
           await a.load(room(2, 8));
           a.dispose();
           fits = hookBuffers;
@@ -436,7 +437,7 @@ async function checkBudget(): Promise<void> {
           break;
         }
       }
-      metrics[`budget_${scheduler}_counters${counters ? 1 : 0}_hook_storage_buffers_fit`] = fits;
+      metrics[`budget_${scheduler}_counters${counters ? 1 : 0}_hook_storage_buffers_fit${scenePacking === 'packed' ? '_packed' : ''}`] = fits;
     }
   }
 }

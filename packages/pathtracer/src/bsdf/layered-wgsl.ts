@@ -15,13 +15,14 @@
 
 import { PT_LAYERED_LUT_N, ptLayeredLut } from './layered-lut.ts';
 import { ptAlbedoBaseInternal, type PtLayeredOptions } from './layered.ts';
+import { PT_LAYER_CORR_BINDING, PT_LAYER_CORR_NM, PT_LAYER_CORR_NR, ptLayerCorrLut } from './layered-correction.ts';
 
 function f32List(a: Float32Array): string {
   return Array.from(a)
     .map((v) => {
       const s = String(Number(v.toFixed(4)));
       if (/e/.test(s)) return s;
-      return s.includes('.') ? s.replace(/^0\./, '.') : `${s}.0`;
+      return s.includes('.') ? s.replace(/^(-?)0\./, '$1.') : `${s}.0`;
     })
     .join(',');
 }
@@ -120,7 +121,7 @@ ${cond ? `fn ptLayerSmoothBase(p: PtLayeredParams) -> bool { return p.isCond && 
 }
 fn ptLayerFail() -> PtBsdfSample { return PtBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, 0u, 1.0); }
 
-${stochastic ? stochasticWgsl(cond) : albedoWgsl(n, cond)}
+${stochastic ? stochasticWgsl(cond) : albedoWgsl(n, cond, internal && options.albedoCorrection && options.albedoCorrection !== 'none' ? options.albedoCorrection : undefined)}
 `;
 }
 
@@ -434,7 +435,7 @@ fn ptLayeredEval(p: PtLayeredParams, wo: vec3f, wi: vec3f, seed: u32) -> PtBsdfE
 `;
 }
 
-function albedoWgsl(n: number, cond: boolean): string {
+function albedoWgsl(n: number, cond: boolean, corr?: 'lut' | 'texture'): string {
   const lut = ptLayeredLut();
   const text = /* wgsl */ `
 // The interface's reflection lobe only (what the albedo layering needs; the walk's restricted-sampling pair is not emitted).
@@ -492,7 +493,7 @@ fn ptLayeredTopAlbedo(p: PtLayeredParams, mu: f32) -> f32 {
   return ptLayerAlbedoLut(t * t, mu, sqrt(0.5 * (p.alpha.x + p.alpha.y)));
 }
 
-fn ptLayerKeep(p: PtLayeredParams, mu: f32) -> vec3f {
+${corr ? corrWgsl(corr) : ''}fn ptLayerKeep(p: PtLayeredParams, mu: f32) -> vec3f {
   let s = p.specularColor * p.specularWeight;
   return vec3f(1.0) - min(s * ptLayeredTopAlbedo(p, mu), vec3f(1.0));
 }
@@ -505,7 +506,7 @@ fn ptLayerMix(p: PtLayeredParams, mu: f32) -> PtLayerMix {
   let keep = ptLayerKeep(p, mu);
   let eS = ptAvg(vec3f(1.0) - keep);
   var eB = ptAvg(p.baseColor * keep);
-  if (PT_LAYER_BASE_INTERNAL) { eB = ptAvg(p.baseColor * keep * ptLayerInternalGain(p)) * (1.0 - p.internalReflectance) * p.ior * p.ior; }
+  if (PT_LAYER_BASE_INTERNAL) { eB = ptAvg(p.baseColor * keep * ptLayerInternalGain(p)${corr ? ' * ptLayerCorr(p, mu)' : ''}) * (1.0 - p.internalReflectance) * p.ior * p.ior; }
   var pS = 0.0;
   if (eS + eB > 0.0) { pS = eS / (eS + eB); }
   return PtLayerMix(keep, pS);
@@ -518,7 +519,7 @@ fn ptLayeredEval(p: PtLayeredParams, wo0: vec3f, wi0: vec3f, seed: u32) -> PtBsd
   if (wo.z == 0.0 || wi.z <= 0.0) { return PtBsdfEval(vec3f(0.0), 0.0); }
   let lm = ptLayerMix(p, wo.z);
   var fd = p.baseColor / PT_PI * lm.keep;
-  if (PT_LAYER_BASE_INTERNAL) { fd = fd * ptLayerKeep(p, wi.z) * ptLayerInternalGain(p); }
+  if (PT_LAYER_BASE_INTERNAL) { fd = fd * ptLayerKeep(p, wi.z) * ptLayerInternalGain(p)${corr ? ' * ptLayerCorr(p, wo.z)' : ''}; }
   let spec = ptTopReflEval(ptLayerTop(p), wo, wi);
   return PtBsdfEval(fd + spec.f, lm.pS * spec.pdf + (1.0 - lm.pS) * (wi.z / PT_PI));
 }
@@ -637,6 +638,41 @@ fn ptLayeredSample(p: PtLayeredParams, wo0: vec3f, u: vec3f, seed: u32) -> PtBsd
   if (flip && s.flags != 0u) { s.wi = -s.wi; }
   if (s.flags == 0u || s.pdf == 0.0 || s.wi.z == 0.0 || ptIsBlack(s.f)) { return ptLayerFail(); }
   return s;
+}
+`;
+}
+
+/** P2.32b: the fitted internal-base correction (layered-correction.ts). Emitted only with `albedoCorrection` 'lut' / 'texture'. Text ends in a newline. */
+function corrWgsl(kind: 'lut' | 'texture'): string {
+  const nr = PT_LAYER_CORR_NR;
+  const nm = PT_LAYER_CORR_NM;
+  const coef =
+    kind === 'lut'
+      ? `// (a, b, c) per node (layered-correction.ts): rows = roughness (sqrt axis), columns = mu (sqrt axis).
+var<private> PT_LAYER_CORR: array<f32, ${nr * nm * 3}> = array<f32, ${nr * nm * 3}>(${f32List(ptLayerCorrLut())});
+fn ptLayerCorrAt(iy: u32, ix: u32) -> vec3f {
+  let i = (iy * ${nm}u + ix) * 3u;
+  return vec3f(PT_LAYER_CORR[i], PT_LAYER_CORR[i + 1u], PT_LAYER_CORR[i + 2u]);
+}`
+      : `// (a, b, c, 0) per node as an rgba16float ${nm} x ${nr} texture (x = mu node, y = roughness node), group 2 binding ${PT_LAYER_CORR_BINDING}.
+@group(2) @binding(${PT_LAYER_CORR_BINDING}) var ptLayerCorrTex: texture_2d<f32>;
+fn ptLayerCorrAt(iy: u32, ix: u32) -> vec3f { return textureLoad(ptLayerCorrTex, vec2u(ix, iy), 0).xyz; }`;
+  return `${coef}
+fn ptLayerCorrCoef(mu: f32, rough: f32) -> vec3f {
+  let x = sqrt(clamp(mu, 0.0, 1.0)) * ${nm - 1}.0;
+  let y = sqrt(clamp(rough, 0.0, 1.0)) * ${nr - 1}.0;
+  let x0 = u32(min(floor(x), ${nm - 2}.0));
+  let y0 = u32(min(floor(y), ${nr - 2}.0));
+  let fx = x - f32(x0);
+  let fy = y - f32(y0);
+  return (ptLayerCorrAt(y0, x0) * (1.0 - fx) + ptLayerCorrAt(y0, x0 + 1u) * fx) * (1.0 - fy) + (ptLayerCorrAt(y0 + 1u, x0) * (1.0 - fx) + ptLayerCorrAt(y0 + 1u, x0 + 1u) * fx) * fy;
+}
+// c = a + b x + c x^2 with x = base Ri per channel, capped at 1.
+fn ptLayerCorr(p: PtLayeredParams, mu: f32) -> vec3f {
+  if (ptIsSmooth(p.alpha)) { return vec3f(1.0); }
+  let k = ptLayerCorrCoef(mu, sqrt(0.5 * (p.alpha.x + p.alpha.y)));
+  let x = clamp(p.baseColor, vec3f(0.0), vec3f(1.0)) * p.internalReflectance;
+  return clamp(vec3f(k.x) + x * (vec3f(k.y) + x * k.z), vec3f(0.0), vec3f(1.0));
 }
 `;
 }

@@ -4,6 +4,9 @@
  * `stripComments`): the documentation is here and in constants.ts / material.ts / lights.ts.
  *
  * Bindings (group/binding from the caller, two consecutive): `rtSceneTable: array<vec4u>`, `rtSceneData: array<u32>`.
+ * With `packing: 'packed'` (P3.11) one binding instead: `rtScene: array<vec4u>` = [header | table | data] (constants.ts `SceneCopyPacking`), and the
+ * generated text reaches the table as `rtScene[i + 1u]` and the data as `rtSceneWord(i)`: `rtPackSceneAccess` rewrites every `rtSceneTable[..]` /
+ * `rtSceneData[..]` of a finished source, so the split text of every generator stays byte-identical to what it was before packing existed.
  *
  * Public WGSL (decoded structs have the TypeScript twins `RtMaterial`, `RtLight`, ...):
  *
@@ -25,7 +28,7 @@
  *       fn rtApplyMaterialTextures(m, uv, uvFootprint) -> RtMaterial   glTF semantics: baseColor * rgb, opacity * a, roughness * g, metalness * b, emission * rgb
  *       fn rtApplyNormalMap(n, tangent, texel) -> vec3f         tangent-space normal map (glTF: +Y up) around the shading normal
  */
-import { INSTANCE_LIGHT, LIGHT_FLAG, LIGHT_KIND, LIGHT_MAP_MODE, LIGHT_RECORD_VEC4S, SCENE_HEADER_VEC4S, SCENE_NONE } from './constants.ts';
+import { INSTANCE_LIGHT, LIGHT_FLAG, LIGHT_KIND, LIGHT_MAP_MODE, LIGHT_RECORD_VEC4S, PACKED_HEADER, PACKED_TABLE_BASE_VEC4S, SCENE_HEADER_VEC4S, SCENE_NONE, DEFAULT_SCENE_PACKING, type SceneCopyPacking } from './constants.ts';
 import { MATERIAL_FLAG, MATERIAL_RECORD_VEC4S } from './material.ts';
 import { rtLightSampleWgsl } from './light-sample.ts';
 import { SURFACE_TABLE } from '../trace/constants.ts';
@@ -40,18 +43,78 @@ export interface SceneWgslOptions {
   lights?: boolean;
   /** Also emit the light point sampling (`light-sample.ts`: `rtSampleLightLi` and friends). Needs `lights`. Default false (kernel size). */
   sampling?: boolean;
-  /** Emit the texture arrays and lookups (needs `materials`). Bindings follow the two buffers: textures, then samplers (`rtSceneCopyLayoutEntries`). */
+  /** Emit the texture arrays and lookups (needs `materials`). Bindings follow the buffers (two, or one packed): textures, then samplers (`rtSceneCopyLayoutEntries`). */
   textures?: TextureLayout | null;
+  /** `split` (default `DEFAULT_SCENE_PACKING`): `rtSceneTable` + `rtSceneData`; `packed`: one `rtScene` binding. */
+  packing?: SceneCopyPacking;
+}
+
+/** Bindings the scene copy's buffers take (2 split, 1 packed): textures start after them. */
+export function rtSceneBufferBindings(packing: SceneCopyPacking = DEFAULT_SCENE_PACKING): number {
+  return packing === 'packed' ? 1 : 2;
+}
+
+/**
+ * Rewrites a WGSL source written against the split bindings so it reads the packed buffer: `rtSceneTable[e]` -> `rtScene[e + 1u]` (the table starts
+ * after the header vec4), `rtSceneData[e]` -> `rtSceneWord(e)`. Nested brackets are handled; an index with an operator that binds weaker than `+` is
+ * parenthesised. Idempotent (the output has neither name). Does not touch the binding declarations: `rtSceneBindingsWgsl` emits those per packing.
+ */
+export function rtPackSceneAccess(source: string): string {
+  const re = /rtScene(Table|Data)\[/g;
+  const convert = (text: string): string => {
+    let out = '';
+    let last = 0;
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const open = m.index + m[0].length;
+      let depth = 1;
+      let close = open;
+      for (; close < text.length && depth > 0; close++) {
+        const c = text[close];
+        if (c === '[') depth++;
+        else if (c === ']') depth--;
+      }
+      if (depth !== 0) throw new Error('rtPackSceneAccess: unbalanced bracket after ' + m[0]);
+      const inner = convert(text.slice(open, close - 1));
+      out += text.slice(last, m.index);
+      if (m[1] === 'Data') out += `rtSceneWord(${inner})`;
+      else if (/^\d+u?$/.test(inner.trim())) out += `rtScene[${parseInt(inner, 10) + PACKED_TABLE_BASE_VEC4S}u]`;
+      else out += `rtScene[${weakerThanAdd(inner) ? `(${inner})` : inner} + ${PACKED_TABLE_BASE_VEC4S}u]`;
+      last = close;
+      re.lastIndex = close;
+    }
+    return out + text.slice(last);
+  };
+  return convert(source);
+}
+
+/** True when the expression has a top-level (outside parentheses and brackets) operator that binds weaker than `+`. */
+function weakerThanAdd(expr: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i] as string;
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (depth === 0 && (c === '&' || c === '|' || c === '^' || c === '<' || c === '>' || c === '=' || c === '!' || c === '?')) return true;
+  }
+  return false;
 }
 
 const hex = (value: number): string => `0x${value.toString(16)}u`;
 
 /** The bindings and the generic accessors (always emitted). */
 export function rtSceneBindingsWgsl(o: SceneWgslOptions): string {
+  const packed = (o.packing ?? DEFAULT_SCENE_PACKING) === 'packed';
+  const declarations = packed
+    ? `@group(${o.group}) @binding(${o.firstBinding}) var<storage, read> rtScene: array<vec4u>;
+fn rtSceneWord(i: u32) -> u32 {
+    return rtScene[rtScene[0][${PACKED_HEADER.dataBase}] + (i >> 2u)][i & 3u];
+}`
+    : `@group(${o.group}) @binding(${o.firstBinding}) var<storage, read> rtSceneTable: array<vec4u>;
+@group(${o.group}) @binding(${o.firstBinding + 1}) var<storage, read> rtSceneData: array<u32>;`;
   return /* wgsl */ `
 const RT_NONE: u32 = ${hex(SCENE_NONE)};
-@group(${o.group}) @binding(${o.firstBinding}) var<storage, read> rtSceneTable: array<vec4u>;
-@group(${o.group}) @binding(${o.firstBinding + 1}) var<storage, read> rtSceneData: array<u32>;
+${declarations}
 struct RtSceneInfo {
     instanceSlots: u32,
     materialCount: u32,
@@ -373,11 +436,12 @@ fn rtLightPmfOfHit(instance: u32, triangle: u32) -> f32 {
 }
 
 /** The texture arrays, their samplers and the lookups. One `texture_2d_array` + sampler pair per bucket; `rtTexSample` switches on the slot's bucket. */
-export function rtTexturesWgsl(o: { group: number; firstBinding: number; layout: TextureLayout }): string {
+export function rtTexturesWgsl(o: { group: number; firstBinding: number; layout: TextureLayout; packing?: SceneCopyPacking }): string {
   const n = o.layout.buckets.length;
+  const first = o.firstBinding + rtSceneBufferBindings(o.packing);
   const decls: string[] = [];
-  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${o.firstBinding + 2 + i}) var rtTex${i}: texture_2d_array<f32>;`);
-  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${o.firstBinding + 2 + n + i}) var rtSmp${i}: sampler;`);
+  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${first + i}) var rtTex${i}: texture_2d_array<f32>;`);
+  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${first + n + i}) var rtSmp${i}: sampler;`);
   const cases = Array.from({ length: n }, (_, i) => `        case ${i}u: {\n            return textureSampleLevel(rtTex${i}, rtSmp${i}, uv, layer, lod);\n        }`).join('\n');
   return /* wgsl */ `
 ${decls.join('\n')}
@@ -450,7 +514,7 @@ export function rtSceneWgsl(o: SceneWgslOptions): string {
   if ((o.lights ?? true) && o.sampling) source += rtLightSampleWgsl();
   if (o.textures) {
     if (!(o.materials ?? true)) throw new Error('rtSceneWgsl: textures need materials');
-    source += rtTexturesWgsl({ group: o.group, firstBinding: o.firstBinding, layout: o.textures });
+    source += rtTexturesWgsl({ group: o.group, firstBinding: o.firstBinding, layout: o.textures, ...(o.packing ? { packing: o.packing } : {}) });
   }
-  return source;
+  return (o.packing ?? DEFAULT_SCENE_PACKING) === 'packed' ? rtPackSceneAccess(source) : source;
 }

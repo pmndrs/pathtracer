@@ -410,11 +410,22 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Wavefront vs megakernel agreement is per pixel (max relative difference <= 7e-5, mostly 1e-6): `node bench/adapters/pt-wavefront-agreement.ts --a <mk report> --b <wf report>`.
   A difference above that is a bug in the wavefront port, not noise: both use the same sampler dimensions per pixel and vertex. The `pt-megakernel`
   adapter config now carries `scheduler`, so its config hash differs from rows written before 2026-11-15.
+- Scene copy packing (P3.11, `sceneCopy.packing` = `uploadSceneCopy({ packing })` + `scenePacking` on `PtMegakernel` / `PtWavefront` / `RtModuleOptions.scene.packing`): `packed` binds
+  the table and the data as ONE `rtScene: array<vec4u>` = [header vec4 | table | data], one storage buffer less in every kernel (hooks get one more: megakernel 5, wavefront shade 3; Apple's 10-buffer wavefront shade
+  kernel goes 8 -> 7, intersect with MASK 9 -> 8). Generators still WRITE `rtSceneTable[..]` / `rtSceneData[..]`; `rtPackSceneAccess(source)` rewrites a finished source to `rtScene[i + 1u]` / `rtSceneWord(i)`, so
+  `split` text is byte-identical to before packing (check: `node bench/size-snapshot.ts <dir> split` before / after, `diff -r`; `... packed` is the other set). Any WGSL you append to a packed kernel must go through
+  `rtPackSceneAccess` too (a stray `rtSceneTable` is an undeclared identifier; builders do it for their own text, a bench page's extra kernel does not). Textures / samplers move down one binding when packed
+  (`rtSceneCopyLayoutEntries(first, textures, packing)`, `rtSceneBufferBindings`); a kernel, its layout and the uploaded buffers must agree on the packing (`setScene` throws). The packed buffer is
+  header + table + data (16 B aligned, data zero-padded to a whole vec4), so the 128 MiB-class binding cap applies to the SUM (`uploadSceneCopy` throws a RangeError that names both sizes and suggests `split`);
+  Sponza is 21.0 MiB (84 B per unwelded triangle with normals + positions), so the cap is ~1.5M such triangles, and the table is small unless there are many lights (96 B each) or instances (128 B each). Packed images
+  equal split per pixel on 6 of 8 scenes and differ by <= 3.2e-7 relative (1-3 ulp, relMSE 3e-17) on IORTestGrid (both schedulers) and env-sphere (wavefront): not addressing (every accessor is bit-exact
+  in `--page scene-copy packing=both`), a different compiled kernel contracts some float ops differently. `DEFAULT_SCENE_PACKING` is still `split`; `writeSceneCopy(device, buffers, copy)` rewrites a rebuilt copy
+  in place for either packing (the packed one rewrites the whole buffer: the data region moves when the table length changes).
 - Optional integrator outputs (R10 hooks, R4 counters, AOVs; `integrator/outputs-wgsl.ts`): their template text must emit nothing (no blank line, no `\n`) when off. Two traps hit while adding them: a gated block ending in a
   newline placed before the original newline adds a blank line (the megakernel stayed identical but the wavefront shade kernel grew by one `\n`), so put the leading `\n` inside the gate for end-of-line additions
   (`x;${on ? `\n    y;` : ''}`). `node bench/size-snapshot.ts` now writes the `wf-*` wavefront kernels too (`bench/kernel-variants.ts` `wavefrontKernelVariants`): `diff -r` two snapshot directories, ignore `Only in`.
 - AOVs live in the TAIL of the accumulation buffer (`width * height` radiance vec4s, then 2 vec4 per pixel), not in their own binding: the wavefront shade kernel is at 8 of the 10 storage buffers per stage on Apple
-  (scene 2 + 6 io), so hooks can add 2 buffers there (1 with counters), 4 in the megakernel (`--page pt-outputs-check --args check=budget`). `readImage` copies only the first `width * height * 16` bytes.
+  (scene 2 + 6 io), so hooks can add 2 buffers there (1 with counters), 4 in the megakernel (`--page pt-outputs-check --args check=budget`); with the scene copy packed (P3.11) 3 (2) and 5 (4): the page prints both, `_packed` keys. `readImage` copies only the first `width * height * 16` bytes.
 - The Cornell red wall's four corners are not coplanar and its mesh has smooth vertex normals: test its AOV normal against the wall within ~0.02, never exactly. Minified kernel text has no spaces around `,` `)` `(` (`@group(2)@binding(3)var<storage,read_write> x`): regex tests need `\s*`.
 - OIDN on our frames (`bench/adapters/shared/oidn.ts`): the Denoiser wants view-space normals ([-1,1], miss = 0), albedo [0,1], rgba32float color with `hdr: true` and `device` = our device (texture uploads need the same device; the
   weights come from `/@fs/<Denoiser>/packages/denoiser/tzas`, served because `server.ts` adds the linked checkout to `fs.allow` and defines `__BENCH_DENOISER_TZAS__`). A `link:` dev dependency needs `pnpm install --offline`.
@@ -447,3 +458,11 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   with `best effort (background apps: ...)`. After a reboot wait until `mds_stores`/`fileproviderd` settle (can take > 30 min) before a quiet pass; quote the
   per-round load1 next to any number. `alpha-policy-ab.ts` reads the last N CSV rows of a cell, so later runs of the same cell corrupt its timing columns; use
   `bench/adapters/paired-ratios.ts --report <name>` (per-round `run.json`) for paired ratios.
+- Albedo correction (P2.32b, `albedoCorrection: 'none' | 'lut' | 'texture'`, `layered-correction.ts`): the internal base is multiplied by a fitted `c(r, mu_o, base Ri)`; refit with
+  `node bench/layered-correction-fit.ts gen --ior X --out f.json` (3 iors, ~4 min each, 3 in parallel) then `fit f1.json f2.json f3.json` (writes `layered-correction-data.ts`). Two traps in the fit:
+  below r ~0.03 the lobe is smooth (`ptIsSmooth`), the sampler returns a delta and a quadrature of the "specular" part is meaningless (the table rows 0-1 are the identity); the cosine-sampled
+  `evalAlbedo` of a narrow lobe is far too noisy below r 0.33 (use the sampler there). `texture` declares `@group(2) @binding(10)` inside the layered WGSL, so a page that builds its own
+  pipeline layout for a kernel with that option must add `ptLayerCorrLayoutEntry()`; `PtMegakernel` / `PtWavefront` (shade kernel) do it. With `none` every kernel stays byte-identical
+  (`node bench/size-snapshot.ts`, cmp all incl. `wf-*`). The megakernel with all features + `lut` is 51.0 KB (texture 50.0 KB; plain `albedoInternal` 49.2 KB): over the ~50 KB DXC class.
+  Render-level numbers sit between the walk's sampler albedo and its pbrt-exit-MIS `f` (they differ by up to 13% at r 1, V58): fit and judge against both, and against the references.
+

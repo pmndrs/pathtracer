@@ -12,7 +12,8 @@
  *  - `rtSurface` (scene source) against `readSurfaceFromTable` (the same CPU decode the slice-1 table is tested with).
  * The module under test is the full inline module (bvh walk + core + scene copy), so a WGSL compile error anywhere fails the page.
  *
- * Args: scenes=cornell,quad-light,mixed,many-lights   lights=20000 (size of the stress scene)
+ * Args: scenes=cornell,quad-light,mixed,many-lights   lights=20000 (size of the stress scene)   packing=both|split|packed (P3.11: `packed` binds the
+ * scene copy as ONE storage buffer, header + table + data; every check above runs on both and must stay bit-exact; `tRaw` also reads raw table / data words)
  */
 import {
   SCENE_HEADER,
@@ -32,8 +33,11 @@ import {
   rtModuleWgsl,
   rtSceneCopyBindGroupEntries,
   rtSceneCopyLayoutEntries,
+  rtPackSceneAccess,
   sampleAlias,
+  type SceneCopyPacking,
   uploadSceneCopy,
+  writeSceneCopy,
   type RtMaterial,
   type RtTriangleLight,
   type SceneCopy,
@@ -56,7 +60,8 @@ type FieldType = 'f32' | 'u32' | 'bool' | 'vec3f';
 type Field = readonly [name: string, type: FieldType];
 
 const U32_FIELDS = new Set(['alphaMode', 'baseColorTexture', 'roughnessMetalTexture', 'normalTexture', 'emissionTexture']);
-const MATERIAL_FIELDS: Field[] = Object.entries(defaultMaterial()).map(([name, value]) => [name, Array.isArray(value) ? 'vec3f' : typeof value === 'boolean' ? 'bool' : U32_FIELDS.has(name) ? 'u32' : 'f32'] as Field);
+// The thin-film fields live in the material record but not in the WGSL `RtMaterial` (read through `ptMaterialFilm`; `lobe-oracle` checks them).
+const MATERIAL_FIELDS: Field[] = Object.entries(defaultMaterial()).filter(([name]) => !name.startsWith('thinFilm')).map(([name, value]) => [name, Array.isArray(value) ? 'vec3f' : typeof value === 'boolean' ? 'bool' : U32_FIELDS.has(name) ? 'u32' : 'f32'] as Field);
 const LIGHT_FIELDS: Field[] = [
   ['kind', 'u32'], ['position', 'vec3f'], ['edge1', 'vec3f'], ['edge2', 'vec3f'], ['normal', 'vec3f'], ['area', 'f32'], ['pmf', 'f32'], ['radiance', 'vec3f'], ['material', 'u32'], ['instance', 'u32'], ['triangle', 'u32'], ['twoSided', 'bool'],
 ];
@@ -153,6 +158,15 @@ fn tHits(@builtin(global_invocation_id) id: vec3u) {
 }
 
 @compute @workgroup_size(64)
+fn tRaw(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= tParams.count) { return; }
+    let w = rtSceneData[tIn[id.x * 2u]];
+    let t = rtSceneTable[tIn[id.x * 2u + 1u]];
+    tOut[id.x * 5u] = w;
+    tOut[id.x * 5u + 1u] = t.x; tOut[id.x * 5u + 2u] = t.y; tOut[id.x * 5u + 3u] = t.z; tOut[id.x * 5u + 4u] = t.w;
+}
+
+@compute @workgroup_size(64)
 fn tSurface(@builtin(global_invocation_id) id: vec3u) {
     if (id.x >= tParams.count) { return; }
     let q = id.x * 16u;
@@ -229,10 +243,11 @@ function randomMaterials(count: number, seed: number): RtMaterial[] {
         conductorEtaK: rnd() < 0.5,
         emissionTwoSided: rnd() < 0.5,
         doubleSided: rnd() < 0.5,
-        baseColorTexture: rnd() < 0.5 ? 0xffff : Math.floor(rnd() * 0xfffe),
-        roughnessMetalTexture: Math.floor(rnd() * 0x10000),
-        normalTexture: Math.floor(rnd() * 0x10000),
-        emissionTexture: Math.floor(rnd() * 0x10000),
+        // Texture slots must name a texture the scene has (`buildSceneCopy` checks, P1.4c): none here; the slot packing is material.test.ts and texture-check.
+        baseColorTexture: 0xffff,
+        roughnessMetalTexture: 0xffff,
+        normalTexture: 0xffff,
+        emissionTexture: 0xffff,
       }),
     );
   }
@@ -307,12 +322,12 @@ interface Runner {
   bytes: number;
 }
 
-async function makeRunner(device: GPUDevice, code: string): Promise<Runner> {
+async function makeRunner(device: GPUDevice, code: string, packing: SceneCopyPacking): Promise<Runner> {
   const module = device.createShaderModule({ label: 'scene-copy test', code });
   const info = await module.getCompilationInfo();
   const errors = info.messages.filter((m) => m.type === 'error');
   if (errors.length) throw new Error(`WGSL compile errors:\n${errors.slice(0, 10).map((m) => `${m.lineNum}:${m.linePos} ${m.message}`).join('\n')}`);
-  const sceneLayout = device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries() });
+  const sceneLayout = device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, undefined, packing) });
   const ioLayout = device.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -394,6 +409,24 @@ async function checkScene(name: string, copy: SceneCopy, input: SceneCopyInput, 
   const mWords = words(MATERIAL_FIELDS);
   const mOut = await runner.run('tMaterials', Uint32Array.from(ids), ids.length, ids.length * mWords, scene);
   ids.forEach((id, i) => tally.expectEqual('material_words', tag(`material ${id}`), mOut.subarray(i * mWords, (i + 1) * mWords), flatten(MATERIAL_FIELDS, readMaterial(copy, id) as unknown as Record<string, unknown>)));
+
+  // Raw words: the first, the last and 5000 random data words, table vec4s (the same indices; every one in range).
+  {
+    const rnd = random(0x5eed);
+    const tableVec4s = copy.table.length / 4;
+    const n = 5000;
+    const pairs = new Uint32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      pairs[i * 2] = i === 0 ? 0 : i === 1 ? copy.data.length - 1 : Math.floor(rnd() * copy.data.length);
+      pairs[i * 2 + 1] = i === 0 ? 0 : i === 1 ? tableVec4s - 1 : Math.floor(rnd() * tableVec4s);
+    }
+    const raw = await runner.run('tRaw', pairs, n, n * 5, scene);
+    for (let i = 0; i < n; i++) {
+      const d = pairs[i * 2] as number;
+      const t = pairs[i * 2 + 1] as number;
+      tally.expectEqual('raw_words', tag(`raw ${i} (data ${d}, table ${t})`), raw.subarray(i * 5, i * 5 + 5), [copy.data[d] as number, ...Array.from(copy.table.subarray(t * 4, t * 4 + 4))]);
+    }
+  }
 
   // Light records.
   const triangleLights = copy.triangleLightCount;
@@ -523,6 +556,9 @@ try {
   const args = getArgs();
   const sceneNames = (args.scenes ?? 'cornell,quad-light,mixed,many-lights').split(',').filter(Boolean);
   const lightsCount = numberArg(args, 'lights', 20000);
+  const packingArg = args.packing ?? 'both';
+  if (!['both', 'split', 'packed'].includes(packingArg)) throw new Error(`packing must be both, split or packed, got '${packingArg}'`);
+  const packings: SceneCopyPacking[] = packingArg === 'both' ? ['split', 'packed'] : [packingArg as SceneCopyPacking];
 
   if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -538,20 +574,29 @@ try {
   let moduleBytes = 0;
   for (const name of sceneNames) {
     const { copy, input } = loadScene(name, lightsCount);
-    const key = `${copy.layout.normals}/${copy.layout.uvs}/${copy.layout.positions}`;
-    let runner = runners.get(key);
-    if (!runner) {
-      // The full inline module: bvh walk (never called here), core, scene copy at group 2, then the test kernels.
-      const code = rtModuleWgsl(caps, { scene: { slot: { group: 2, firstBinding: 0 }, layout: copy.layout } }) + KERNELS;
-      runner = await makeRunner(device, code);
-      runners.set(key, runner);
-      moduleBytes = Math.max(moduleBytes, runner.bytes);
+    for (const packing of packings) {
+      const key = `${packing}/${copy.layout.normals}/${copy.layout.uvs}/${copy.layout.positions}`;
+      let runner = runners.get(key);
+      if (!runner) {
+        // The full inline module: bvh walk (never called here), core, scene copy at group 2, then the test kernels (rewritten for the packed binding).
+        const code = rtModuleWgsl(caps, { scene: { slot: { group: 2, firstBinding: 0 }, layout: copy.layout, packing } }) + (packing === 'packed' ? rtPackSceneAccess(KERNELS) : KERNELS);
+        runner = await makeRunner(device, code, packing);
+        runners.set(key, runner);
+        moduleBytes = Math.max(moduleBytes, runner.bytes);
+      }
+      const gpu = uploadSceneCopy(device, copy, { label: `${name} ${packing}`, packing });
+      const before = tally.mismatches.length;
+      await checkScene(`${name}/${packing}`, copy, input, runner, gpu, tally);
+      // In-place rewrite (reflections' `setTransforms` / `setLights` pattern): a rebuilt copy with a brighter sun into the same buffers, every check again.
+      if (input.sun && before === tally.mismatches.length) {
+        const copy2 = buildSceneCopy({ ...input, sun: { ...input.sun, irradiance: input.sun.irradiance.map((v) => v * 2) as [number, number, number] } });
+        const fits = writeSceneCopy(device, gpu, copy2);
+        tally.expectEqual('rewrite_fits', `${name}/${packing}`, [fits ? 1 : 0], [1]);
+        if (fits) await checkScene(`${name}/${packing}/rewritten`, copy2, input, runner, gpu, tally);
+      }
+      notes[`${name}/${packing}`] = { lights: copy.lights.length, triangleLights: copy.triangleLightCount, materials: copy.materials.length, bytes: copy.byteLength, storageBytes: gpu.storageBytes, layout: copy.layout, fingerprint: copy.fingerprint, mismatches: tally.mismatches.length - before };
+      gpu.destroy();
     }
-    const gpu = uploadSceneCopy(device, copy, { label: name });
-    const before = tally.mismatches.length;
-    await checkScene(name, copy, input, runner, gpu, tally);
-    notes[name] = { lights: copy.lights.length, triangleLights: copy.triangleLightCount, materials: copy.materials.length, bytes: copy.byteLength, layout: copy.layout, fingerprint: copy.fingerprint, mismatches: tally.mismatches.length - before };
-    gpu.destroy();
   }
 
   await drainDevice(device);
@@ -563,7 +608,7 @@ try {
   if (deviceErrors.length) tally.mismatches.push(`device errors: ${deviceErrors.join('; ')}`);
   if (tally.mismatches.length) throw new Error(`scene-copy failed: ${tally.mismatches.length} mismatches\n${tally.mismatches.slice(0, 40).join('\n')}`);
 
-  reportResult({ scene: sceneNames.join('+'), renderer: 'rt-scene-copy', config: { scenes: sceneNames, lights: lightsCount, caps: { tier: caps.tier, subgroups: caps.subgroups } }, metrics, notes }, { adapter: adapterSummary, deviceErrors });
+  reportResult({ scene: sceneNames.join('+'), renderer: 'rt-scene-copy', config: { scenes: sceneNames, lights: lightsCount, packings, caps: { tier: caps.tier, subgroups: caps.subgroups } }, metrics, notes }, { adapter: adapterSummary, deviceErrors });
 } catch (error) {
   reportError(error, { adapter: adapterSummary, deviceErrors });
 }

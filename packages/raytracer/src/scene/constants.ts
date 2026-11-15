@@ -27,8 +27,37 @@ export const TEXTURE_SLOT_NONE = 0xffff;
 /** Bump when any layout below changes. Part of the fingerprint. */
 export const SCENE_COPY_VERSION = 1;
 
-/** Storage buffers a kernel spends on the whole scene copy (spec section 3 budget). */
+/** Storage buffers a kernel spends on the whole scene copy with `packing: 'split'` (spec section 3 budget). */
 export const SCENE_COPY_STORAGE_BUFFERS = 2;
+/** With `packing: 'packed'` the table and the data share one storage buffer. */
+export const SCENE_COPY_PACKED_STORAGE_BUFFERS = 1;
+
+/**
+ * How the scene copy is bound (P3.11, `sceneCopy.packing`):
+ *  - `split`: two storage buffers, `rtSceneTable: array<vec4u>` and `rtSceneData: array<u32>`.
+ *  - `packed`: one storage buffer `rtScene: array<vec4u>` = [ header vec4 | table | data ], frees one binding in every kernel. Header vec4 `(dataBase, tableBase, dataWords, totalVec4s)`
+ *    in vec4 units from the start of the buffer (`PACKED_HEADER`). The table words are byte-identical to `SceneCopy.table` (so every table offset in the
+ *    scene header stays valid, only shifted by `PACKED_TABLE_BASE_VEC4S`, a compile-time constant); the data region starts at vec4 `dataBase` (16-byte
+ *    aligned: the table is whole vec4s, the data is zero-padded to whole vec4s) and a data word `i` is `rtScene[dataBase + (i >> 2)][i & 3]`.
+ *    `dataBase` is the buffer's first vec4 (one uniform-address load, L1/constant-cache hot), not a uniform buffer or a pipeline constant: a uniform would
+ *    cost a binding (the thing this setting frees) and an `override` would recompile the kernel per scene.
+ */
+export type SceneCopyPacking = 'split' | 'packed';
+/**
+ * The library default. Stays `split` (the byte-identical pre-P3.11 kernels) until the quiet-pass A/B (docs/QUIET-PASS.md, `scene-packing` rows) is in; the
+ * suggestion is `packed` when timing is a wash, because it frees a binding in every kernel.
+ */
+export const DEFAULT_SCENE_PACKING: SceneCopyPacking = 'split';
+export const PACKED_HEADER_VEC4S = 1;
+/** vec4 index of the table inside a packed buffer (a compile-time constant in the generated WGSL). */
+export const PACKED_TABLE_BASE_VEC4S = 1;
+/** Words of the packed header vec4. */
+export const PACKED_HEADER = { dataBase: 0, tableBase: 1, dataWords: 2, totalVec4s: 3 } as const;
+
+/** Storage buffers the scene copy adds to a kernel for this packing. */
+export function sceneCopyStorageBuffers(packing: SceneCopyPacking = DEFAULT_SCENE_PACKING): number {
+  return packing === 'packed' ? SCENE_COPY_PACKED_STORAGE_BUFFERS : SCENE_COPY_STORAGE_BUFFERS;
+}
 
 export const SCENE_HEADER_VEC4S = 4;
 /** Word positions inside the header (4 vec4u = 16 words). */

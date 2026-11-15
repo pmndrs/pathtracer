@@ -49,6 +49,7 @@ import {
   rtSceneBindGroupEntries,
   rtSceneCopyBindGroupEntries,
   rtSceneCopyLayoutEntries,
+  type SceneCopyPacking,
   rtWalkEntries,
   unpackRay,
   uploadSceneCopy,
@@ -172,6 +173,9 @@ async function readBack(device: GPUDevice, buffers: GPUBuffer[]): Promise<ArrayB
 }
 
 /** The page's own kernel on the inline module: L1 with a cone, L0, and the full `rtSurface` per ray. */
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split). */
+let PACKING: SceneCopyPacking = 'split';
+
 const INLINE_KERNEL = /* wgsl */ `
 struct PageParams { count: u32, mask: u32, pad0: u32, pad1: u32, cone: vec4f }
 @group(1) @binding(0) var<storage, read> pageRays: array<RtRay>;
@@ -219,7 +223,7 @@ async function makeKernels(device: GPUDevice, caps: Caps, format: Format): Promi
   };
 
   const surfaceLayout = { normals: true, uvs: true, positions: true };
-  const code = rtModuleWgsl(caps, { ...base, scene: { slot: { group: 2, firstBinding: 0 }, layout: surfaceLayout, materials: false, lights: false } }) + INLINE_KERNEL;
+  const code = rtModuleWgsl(caps, { ...base, scene: { slot: { group: 2, firstBinding: 0 }, layout: surfaceLayout, materials: false, lights: false, packing: PACKING } }) + INLINE_KERNEL;
   const layouts = [
     device.createBindGroupLayout({ entries: withBindings(rtWalkEntries(base)) }),
     device.createBindGroupLayout({
@@ -229,7 +233,7 @@ async function makeKernels(device: GPUDevice, caps: Caps, format: Format): Promi
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
       ],
     }),
-    device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries() }),
+    device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, undefined, PACKING) }),
   ];
   const pipeline = await device.createComputePipelineAsync({
     label: `${format.name} inline`,
@@ -734,6 +738,8 @@ let deviceErrors: string[] = [];
 
 try {
   const args = getArgs();
+  if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
   const sceneNames = (args.scenes ?? 'cornell,quad-light,edges,sponza-white').split(',').filter(Boolean);
   const perSet = numberArg(args, 'rays', 8192);
   const withSceneTrees = (args.sceneTrees ?? '1') !== '0';
@@ -780,7 +786,7 @@ try {
     const scene = await loadTraceScene(name);
     stage('loaded');
     const copy = buildSceneCopy({ meshes: scene.meshes, instances: scene.instances as SurfaceInstanceInput[], materials: [], options: { surface: { positions: true } } });
-    const surface = uploadSceneCopy(device, copy, { label: `${name} scene` });
+    const surface = uploadSceneCopy(device, copy, { label: `${name} scene`, packing: PACKING });
     const allHits = makeAllHits(scene, tiny);
     const edges = makeEdgeIndex(scene);
     let sets: RaySet[] | null = null;
@@ -890,7 +896,7 @@ try {
     {
       scene: sceneNames.join('+'),
       renderer: 'rt-trace-core',
-      config: { perSet, formats: FORMATS.map((f) => f.name), sceneTrees: withSceneTrees, caps: { tier: caps.tier, subgroups: caps.subgroups } },
+      config: { packing: PACKING, perSet, formats: FORMATS.map((f) => f.name), sceneTrees: withSceneTrees, caps: { tier: caps.tier, subgroups: caps.subgroups } },
       metrics,
       notes: { primaryDetails: total.primaryDetails, workers: { oracleBuilderUsesWorker: builder.usesWorker, ...workerNotes }, perScene, bySet: total.bySet, examples: total.examples },
     },

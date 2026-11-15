@@ -15,9 +15,10 @@
  * The params uniform is a ring of dynamic-offset slots like the megakernel's, with one record per depth iteration
  * (`PTWF_PARAM_SLOTS`; `maxPassesPerEncode()` says how many sample passes fit in one `encode`).
  */
-import { rtCreateComputePipelineAsync, rtModuleWgsl, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtTransformWgsl, rtWalkEntries, withBindings } from '@pmndrs/raytracer';
+import { rtCreateComputePipelineAsync, rtModuleWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtTransformWgsl, rtWalkEntries, withBindings } from '@pmndrs/raytracer';
 import type { Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
+import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
 import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
@@ -81,7 +82,7 @@ function stripWalkBindings(code: string): string {
 }
 
 /** The five kernels' source and source maps. Throws for options the wavefront does not support (`ptwfUnsupported`). */
-export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames' | 'refill' | 'layers' | 'refillThreshold'>): PtWavefrontBuild {
+export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames' | 'refill' | 'layers' | 'refillThreshold'>): PtWavefrontBuild {
   const wf = scheduling(options);
   if (resolveIntegratorOptions(options.integrator ?? {}).primary === 'vbuffer') {
     if (wf.refill) throw new Error("PtWavefront: integrator.primary 'vbuffer' does not support refill / layers (a slot starts its next sample at its own time; a V-buffer is one frame)");
@@ -100,11 +101,13 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   // Optional outputs (hooks, counters, AOVs; `integrator/outputs-wgsl.ts`) join the shade kernel only: it is the one that sees every vertex.
   const outputs = ptOutputsWgsl(resolveIntegratorOptions(integratorOptions), PTWF_BINDING.counters);
   const sampler = parts.slice(1, 2).concat(parts.slice(-1)).join('\n'); // Owen-Sobol + the sampler's ptSample2D
+  // The appended integrator text is written against the split bindings; `full` (rtModuleWgsl) already has the packed ones.
+  const px = (code: string): string => ((options.scenePacking ?? DEFAULT_SCENE_PACKING) === 'packed' ? rtPackSceneAccess(code) : code);
   return {
-    camera: rtTransformWgsl(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfCamera'] }),
-    intersect: rtTransformWgsl(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${resolveIntegratorOptions(integratorOptions).primary === 'vbuffer' ? `${ptVbufferWgsl()}\n` : ''}${ptwfIntersectWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfIntersect'] }),
-    shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShade'] }),
-    shadow: rtTransformWgsl(`${usesScene('shadow', integratorOptions, null) ? full : walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShadow'] }),
+    camera: rtTransformWgsl(px(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfCamera'] }),
+    intersect: rtTransformWgsl(px(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${resolveIntegratorOptions(integratorOptions).primary === 'vbuffer' ? `${ptVbufferWgsl()}\n` : ''}${ptwfIntersectWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfIntersect'] }),
+    shade: rtTransformWgsl(px(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfShade'] }),
+    shadow: rtTransformWgsl(px(`${usesScene('shadow', integratorOptions, null) ? full : walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfShadow'] }),
     args: rtTransformWgsl(ptwfArgsWgsl(wf), { ...t, keep: ['ptwfArgsMain'] }),
   };
 }
@@ -126,9 +129,9 @@ interface PtwfLayouts {
 }
 
 /** Group 2 bindings of a kernel for this build: the fuzz table (2) only with fuzz, the debug counters (8) only with counters (shade kernel). */
-function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean, refill: boolean, vbuffer = false): number[] {
+function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean, refill: boolean, vbuffer = false, corr = false): number[] {
   // refill: the camera kernel (start pass) also appends to the queue, so it binds the counters (5)
-  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : []), ...(kernel === 'intersect' && vbuffer ? [PT_VBUFFER_BINDING] : [])].filter((binding) => binding !== 2 || fuzz);
+  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : []), ...(kernel === 'intersect' && vbuffer ? [PT_VBUFFER_BINDING] : []), ...(kernel === 'shade' && corr ? [PT_LAYER_CORR_BINDING] : [])].filter((binding) => binding !== 2 || fuzz);
 }
 
 type TraceScene = Parameters<typeof rtSceneBindGroupEntries>[0];
@@ -144,6 +147,8 @@ export class PtWavefront {
   private readonly paramsBuffer: GPUBuffer;
   private readonly argsBuffer: GPUBuffer;
   private readonly fuzzTable: GPUBuffer | null;
+  /** P2.32b: the `albedoCorrection: 'texture'` table (shade kernel, group 2 binding `PT_LAYER_CORR_BINDING`). */
+  private corrTexture: GPUTexture | null = null;
   private readonly slotBytes: number;
   private readonly medium: boolean;
   private hookGroup: GPUBindGroup | null = null;
@@ -195,15 +200,16 @@ export class PtWavefront {
     const build = ptWavefrontBuild(caps, options);
     const wf = scheduling(options);
     const features = options.integrator?.materials?.features;
+    const corrTexture = !!features?.layered && ptLayerCorrNeedsTexture(options.integrator?.materials?.layered);
     device.pushErrorScope('validation');
     // One layout per kernel with only the buffers it declares: a shared layout would bind 3 (walk) + 2 (scene) + 7 buffers and pass the
     // 10-storage-buffers-per-stage limit of Apple GPUs (Chrome/Metal). A kernel that has no walk (or no scene) gets an empty group there.
     const empty = device.createBindGroupLayout({ label: `${label} empty`, entries: [] });
     const walk = device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) });
-    const scene = device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures) });
+    const scene = device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) });
     const ioEntries = (kernel: PtwfKernel): GPUBindGroupLayoutEntry[] =>
-      ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters, wf.refill, options.integrator?.primary === 'vbuffer').map((binding) =>
-        binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
+      ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters, wf.refill, options.integrator?.primary === 'vbuffer', corrTexture).map((binding) =>
+        binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_LAYER_CORR_BINDING ? ptLayerCorrLayoutEntry() : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
       ) as GPUBindGroupLayoutEntry[];
     const io = Object.fromEntries(PTWF_KERNELS.map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
@@ -224,10 +230,13 @@ export class PtWavefront {
       fuzzTable = device.createBuffer({ label: `${label} fuzz ltc`, size: table.byteLength, usage: STORAGE | COPY_DST });
       device.queue.writeBuffer(fuzzTable, 0, table);
     }
-    return new PtWavefront(device, options, pipelines, layouts, ptWavefrontKernelBytes(build), fuzzTable, !!features?.medium, wf);
+    const kernel = new PtWavefront(device, options, pipelines, layouts, ptWavefrontKernelBytes(build), fuzzTable, !!features?.medium, wf);
+    if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
+    return kernel;
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
+    if ((this.options.scenePacking ?? DEFAULT_SCENE_PACKING) !== scene.packing) throw new Error(`PtWavefront.setScene: the kernel was built for scene packing '${this.options.scenePacking ?? DEFAULT_SCENE_PACKING}' but the scene copy is '${scene.packing}' (build both with the same packing)`);
     if (!!this.options.textures !== !!scene.textures) throw new Error(`PtWavefront.setScene: the kernel was built ${this.options.textures ? 'with' : 'without'} textures but the scene copy has ${scene.textures ? 'some' : 'none'}`);
     this.walkGroup = this.device.createBindGroup({ label: 'ptwf walk', layout: this.layouts.walk, entries: rtSceneBindGroupEntries(trace) });
     this.sceneGroup = this.device.createBindGroup({ label: 'ptwf scene', layout: this.layouts.scene, entries: rtSceneCopyBindGroupEntries(scene) });
@@ -538,9 +547,10 @@ export class PtWavefront {
       7: { buffer: b.shadow },
       8: this.counterBuffer ? { buffer: this.counterBuffer } : undefined,
       [PT_VBUFFER_BINDING]: this.vbufferView ?? undefined,
+      [PT_LAYER_CORR_BINDING]: this.corrTexture ? this.corrTexture.createView() : undefined,
     };
     return Object.fromEntries(
-      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer, this.wf.refill, this.options.integrator?.primary === 'vbuffer').filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
+      PTWF_KERNELS.map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer, this.wf.refill, this.options.integrator?.primary === 'vbuffer', !!this.corrTexture).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
     ) as Record<PtwfKernel, GPUBindGroup>;
   }
 
@@ -628,6 +638,7 @@ export class PtWavefront {
     this.paramsBuffer.destroy();
     this.argsBuffer.destroy();
     this.fuzzTable?.destroy();
+    this.corrTexture?.destroy();
     for (const buffer of this.stage) buffer.destroy();
     this.stage = [];
     this.destroyBuffers();

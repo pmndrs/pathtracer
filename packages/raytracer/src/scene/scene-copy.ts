@@ -25,6 +25,9 @@ import {
   INSTANCE_LIGHT,
   LIGHT_MAP_MODE,
   LIGHT_RECORD_VEC4S,
+  PACKED_HEADER,
+  PACKED_HEADER_VEC4S,
+  PACKED_TABLE_BASE_VEC4S,
   SCENE_COPY_STORAGE_BUFFERS,
   SCENE_COPY_VERSION,
   SCENE_FLAG,
@@ -388,6 +391,55 @@ export function buildSceneCopy(input: SceneCopyInput): SceneCopy {
     textures,
     textureLayout: textures ? textureLayoutOf(textures) : null,
   };
+}
+
+/**
+ * The packed layout (P3.11, `SceneCopyPacking`): one `array<vec4u>` = [header vec4 | table | data zero-padded to whole vec4s].
+ * `table` and `data` are copied unchanged, so every offset in the scene header, the surface records and the light maps stays valid.
+ */
+export interface PackedSceneCopy {
+  words: Uint32Array;
+  /** vec4 index of the table (`PACKED_TABLE_BASE_VEC4S`). */
+  tableBase: number;
+  /** vec4 index of the data region. */
+  dataBase: number;
+  /** Bytes the table region and the data region take (the data padded to a whole vec4). */
+  tableBytes: number;
+  dataBytes: number;
+  byteLength: number;
+}
+
+/** Bytes of the packed buffer without building it (16-byte aligned regions). */
+export function packedSceneCopyBytes(copy: Pick<SceneCopy, 'table' | 'data'>): number {
+  return (PACKED_HEADER_VEC4S + copy.table.length / 4 + Math.ceil(copy.data.length / 4)) * 16;
+}
+
+export function packSceneCopy(copy: Pick<SceneCopy, 'table' | 'data'>): PackedSceneCopy {
+  const tableVec4s = copy.table.length / 4;
+  const dataVec4s = Math.ceil(copy.data.length / 4);
+  const tableBase = PACKED_TABLE_BASE_VEC4S;
+  const dataBase = tableBase + tableVec4s;
+  const total = dataBase + dataVec4s;
+  const words = new Uint32Array(total * 4);
+  words[PACKED_HEADER.dataBase] = dataBase;
+  words[PACKED_HEADER.tableBase] = tableBase;
+  words[PACKED_HEADER.dataWords] = copy.data.length;
+  words[PACKED_HEADER.totalVec4s] = total;
+  words.set(copy.table, tableBase * 4);
+  words.set(copy.data, dataBase * 4);
+  return { words, tableBase, dataBase, tableBytes: tableVec4s * 16, dataBytes: dataVec4s * 16, byteLength: words.byteLength };
+}
+
+/** Twin of WGSL `rtSceneWord(i)` (and of `rtScene[tableBase + i]`) over a packed buffer: data word `i`. */
+export function readPackedDataWord(words: Uint32Array, i: number): number {
+  const dataBase = words[PACKED_HEADER.dataBase] as number;
+  return words[(dataBase + (i >>> 2)) * 4 + (i & 3)] as number;
+}
+
+/** Twin of WGSL `rtScene[PACKED_TABLE_BASE + i]`: table vec4 `i` as 4 words. */
+export function readPackedTableVec4(words: Uint32Array, i: number): Uint32Array {
+  const at = (((words[PACKED_HEADER.tableBase] as number) + i) * 4) >>> 0;
+  return words.subarray(at, at + 4);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

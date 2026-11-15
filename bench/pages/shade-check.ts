@@ -26,6 +26,8 @@ import {
   rtSceneBindGroupEntries,
   rtSceneCopyBindGroupEntries,
   rtSceneCopyLayoutEntries,
+  rtPackSceneAccess,
+  type SceneCopyPacking,
   rtWalkEntries,
   sceneFormatOf,
   shade,
@@ -186,6 +188,9 @@ interface HarnessOptions {
   extraWgsl?: string;
 }
 
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split): every harness of the page uses it. */
+let PACKING: SceneCopyPacking = 'split';
+
 class Harness {
   readonly device: GPUDevice;
   readonly caps: Caps;
@@ -227,15 +232,15 @@ class Harness {
     builder.dispose();
     const trace = uploadTraceScene(device, data, o.name);
     const copy = buildSceneCopy({ ...input, options: { ...input.options, surface: { ...input.options?.surface, positions: true } } });
-    const buffers = uploadSceneCopy(device, copy, { label: `${o.name} scene` });
+    const buffers = uploadSceneCopy(device, copy, { label: `${o.name} scene`, packing: PACKING });
     const format = sceneFormatOf(trace);
-    const module = rtModuleWgsl(caps, { ...format, rayMasks: false, traceSlot: { group: 0, firstBinding: 0 }, scene: { slot: { group: 1, firstBinding: 0 }, layout: copy.layout }, shade: o.shade ?? true });
+    const module = rtModuleWgsl(caps, { ...format, rayMasks: false, traceSlot: { group: 0, firstBinding: 0 }, scene: { slot: { group: 1, firstBinding: 0 }, layout: copy.layout, packing: PACKING }, shade: o.shade ?? true });
     const ptParts = o.shade?.bsdf === 'external' ? `${stripWgslComments(ptBsdfWgsl({}))}\n${ptBsdfAdapterWgsl()}\n` : '';
-    const code = rtMinifyWgsl(`${module}\n${ptParts}${o.extraWgsl ?? ''}\n${KERNEL}`);
+    const code = rtMinifyWgsl(PACKING === 'packed' ? rtPackSceneAccess(`${module}\n${ptParts}${o.extraWgsl ?? ''}\n${KERNEL}`) : `${module}\n${ptParts}${o.extraWgsl ?? ''}\n${KERNEL}`);
     const COMPUTE = 0x4;
     const layouts = [
       device.createBindGroupLayout({ entries: withBindings(rtWalkEntries(format)) }),
-      device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries() }),
+      device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, undefined, PACKING) }),
       device.createBindGroupLayout({
         entries: [
           { binding: 0, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -684,7 +689,7 @@ async function checkAgainstPathTracer(device: GPUDevice, caps: Caps, spp: number
   const lambert = await h.accumulate(camera, width, height, 'lambert', spp, 3);
   const full = await h.accumulate(camera, width, height, 'full', spp, 4);
 
-  const pt = await PtMegakernel.create(device, caps, { format: sceneFormatOf(h.trace), layout: h.copy.layout, integrator: {}, label: 'pt maxDepth 1' });
+  const pt = await PtMegakernel.create(device, caps, { format: sceneFormatOf(h.trace), layout: h.copy.layout, scenePacking: PACKING, integrator: {}, label: 'pt maxDepth 1' });
   pt.setScene(h.trace, h.buffers);
   pt.setFilm(width, height);
   pt.setCamera(camera);
@@ -778,6 +783,8 @@ try {
   const tol = numberArg(args, 'tol', 2e-3);
   const mc = numberArg(args, 'mc', 262144);
   const spp = numberArg(args, 'spp', 1024);
+  if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
   if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
@@ -795,7 +802,7 @@ try {
 
   const total = Object.entries(metrics).filter(([k]) => k.endsWith('_mismatch')).reduce((sum, [, v]) => sum + v, 0);
   reportResult(
-    { scene: 'shade-check', renderer: 'ours', config: { rays: count, tol, mc, spp }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems, ...notes } },
+    { scene: 'shade-check', renderer: 'ours', config: { rays: count, tol, mc, spp, packing: PACKING }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems, ...notes } },
     { adapter: adapterSummary, deviceErrors },
   );
   if (total > 0) throw new Error(`shade-check: ${total} mismatches. First:\n${problems.join('\n')}`);

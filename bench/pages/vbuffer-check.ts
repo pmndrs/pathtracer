@@ -12,12 +12,17 @@
  * Args: scenes=cornell,MetalRoughSpheres,tex-mask,sponza-white  spp=1024  check=raster,resolve,image  jitters=3  specpp=16
  */
 import { PT_VBUFFER_NO_MATERIAL, ptCameraBasis, ptCameraDirection, ptVbufferPack, ptVbufferResolve, ptVbufferUnpack, ptVbufferWgsl, ptRaytracerModuleOptions } from '@pmndrs/pathtracer';
-import { RtBatchTracer, rtModuleWgsl, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtWalkEntries, sceneFormatOf, withBindings } from '@pmndrs/raytracer';
+import type { SceneCopyPacking } from '@pmndrs/raytracer';
+import { RtBatchTracer, rtPackSceneAccess, rtModuleWgsl, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtWalkEntries, sceneFormatOf, withBindings } from '@pmndrs/raytracer';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import { getScene } from '../scenes/index.ts';
 import { compareImages } from '../metrics/metrics.ts';
 import { PtMegakernelAdapter, type PtAdapterSettings } from '../adapters/pt-megakernel/index.ts';
+
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split). */
+let PACKING: SceneCopyPacking = 'split';
+const rtPackIf = (code: string): string => (PACKING === 'packed' ? rtPackSceneAccess(code) : code);
 
 let adapterSummary: AdapterSummary | null = null;
 const deviceErrors: string[] = [];
@@ -88,7 +93,7 @@ const percentile = (values: number[], p: number): number => {
 /** 1. rasteriser vs traced primaries. */
 async function checkRaster(name: string, jitterCount: number): Promise<void> {
   const scene = getScene(name);
-  const adapter = new PtMegakernelAdapter({ primary: 'vbuffer' });
+  const adapter = new PtMegakernelAdapter({ primary: 'vbuffer', scenePacking: PACKING });
   await adapter.load(scene);
   const dbg = adapter.debug;
   const raster = dbg.raster!;
@@ -186,7 +191,7 @@ async function checkRaster(name: string, jitterCount: number): Promise<void> {
 /** 2. WGSL `ptVbufferHit` against traced hits, through a V-buffer built from those hits. */
 async function checkResolve(name: string): Promise<void> {
   const scene = getScene(name);
-  const adapter = new PtMegakernelAdapter({ primary: 'vbuffer' });
+  const adapter = new PtMegakernelAdapter({ primary: 'vbuffer', scenePacking: PACKING });
   await adapter.load(scene);
   const dbg = adapter.debug;
   const device = adapter.gpuContext!.device;
@@ -207,7 +212,7 @@ async function checkResolve(name: string): Promise<void> {
   device.queue.writeTexture({ texture }, upload, { bytesPerRow: rowBytes }, [width, height]);
   const format = sceneFormatOf(dbg.trace);
   const textures = dbg.copy.textureLayout ?? undefined;
-  const code = `${rtModuleWgsl(dbg.caps, ptRaytracerModuleOptions({ format, layout: dbg.copy.layout, ...(textures ? { textures } : {}) }))}
+  const code = rtPackIf(`${rtModuleWgsl(dbg.caps, ptRaytracerModuleOptions({ format, layout: dbg.copy.layout, scenePacking: PACKING, ...(textures ? { textures } : {}) }))}
 ${ptVbufferWgsl()}
 @group(2) @binding(0) var<storage, read> checkRays: array<RtRay>;
 @group(2) @binding(1) var<storage, read_write> checkOut: array<u32>;
@@ -227,13 +232,13 @@ fn checkMain(@builtin(global_invocation_id) id: vec3u) {
     checkOut[o + 7u] = bitcast<u32>(h.normal.x);
     checkOut[o + 8u] = bitcast<u32>(h.normal.y);
     checkOut[o + 9u] = bitcast<u32>(h.normal.z);
-}`;
+}`);
   const module = device.createShaderModule({ code });
   const info = await module.getCompilationInfo();
   const errors = info.messages.filter((m) => m.type === 'error');
   if (errors.length > 0) throw new Error(`vbuffer-check resolve kernel: ${errors.slice(0, 3).map((m) => `${m.lineNum}: ${m.message}`).join(' | ')}`);
   const empty = device.createBindGroupLayout({ entries: [] });
-  const sceneLayout = device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, dbg.copy.textureLayout ?? undefined) });
+  const sceneLayout = device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, dbg.copy.textureLayout ?? undefined, PACKING) });
   const ioLayout = device.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -306,7 +311,7 @@ fn checkMain(@builtin(global_invocation_id) id: vec3u) {
 }
 
 async function renderImage(name: string, settings: PtAdapterSettings, spp: number) {
-  const adapter = new PtMegakernelAdapter({ passesPerSubmit: 8, ...settings });
+  const adapter = new PtMegakernelAdapter({ passesPerSubmit: 8, scenePacking: PACKING, ...settings });
   await adapter.load(getScene(name));
   const result = await adapter.render({ spp });
   const image = result.image;
@@ -361,6 +366,8 @@ try {
   adapterSummary = summarizeAdapter(adapter);
   void watchDevice;
   const scenes = (args.scenes ?? 'cornell,MetalRoughSpheres,tex-mask,sponza-white').split(',');
+  if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
   const only = (args.check ?? 'raster,resolve,image').split(',');
   for (const name of scenes) {
     if (only.includes('raster')) await checkRaster(name, jitters);

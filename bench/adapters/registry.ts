@@ -8,7 +8,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer', 'pt-mk-packed', 'pt-wf-packed', 'pt-mk-lay-stoch', 'pt-mk-lay-int', 'pt-mk-lay-lut', 'pt-mk-lay-tex', 'pt-wf-lay-int', 'pt-wf-lay-lut', 'pt-wf-lay-tex'] as const;
 /** Wavefront scheduling presets (P3.2): the same adapter with `refill` / `layers` set, so `matrix.ts --interleave` can A/B them in one run. `--extra pt_refill=...` still overrides. */
 const WAVEFRONT_PRESETS = {
   'pt-wf-refill': { refill: 'inline' },
@@ -32,6 +32,23 @@ const ALPHA_PRESETS = {
 const VBUFFER_PRESETS = {
   'pt-mk-vbuffer': { primary: 'vbuffer' },
   'pt-wf-vbuffer': { primary: 'vbuffer', scheduler: 'wavefront' },
+} as const;
+
+/** Scene copy packing (P3.11): the same adapter with the scene copy bound as ONE storage buffer, so `matrix.ts --interleave` can A/B it against `pt-megakernel` / `pt-wavefront` (split). */
+const PACKED_PRESETS = {
+  'pt-mk-packed': { scenePacking: 'packed' },
+  'pt-wf-packed': { scenePacking: 'packed', scheduler: 'wavefront' },
+} as const;
+
+/** Layered-BSDF presets (P2.32b): the stochastic walk and the albedo layering (internal base) without / with the fitted correction, so `matrix.ts --interleave` can A/B them in one run. */
+const LAYERING_PRESETS = {
+  'pt-mk-lay-stoch': { layering: 'stochastic' },
+  'pt-mk-lay-int': { layering: 'albedo', albedoBase: 'internal' },
+  'pt-mk-lay-lut': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut' },
+  'pt-mk-lay-tex': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' },
+  'pt-wf-lay-int': { layering: 'albedo', albedoBase: 'internal', scheduler: 'wavefront' },
+  'pt-wf-lay-lut': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut', scheduler: 'wavefront' },
+  'pt-wf-lay-tex': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture', scheduler: 'wavefront' },
 } as const;
 
 export interface AdapterOptions {
@@ -72,6 +89,17 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
     case 'pt-wf-indirect':
     case 'pt-wf-secondary':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...ALPHA_PRESETS[id], ...options.pt }, id);
+    case 'pt-mk-packed':
+    case 'pt-wf-packed':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...PACKED_PRESETS[id], ...options.pt }, id);
+    case 'pt-mk-lay-stoch':
+    case 'pt-mk-lay-int':
+    case 'pt-mk-lay-lut':
+    case 'pt-mk-lay-tex':
+    case 'pt-wf-lay-int':
+    case 'pt-wf-lay-lut':
+    case 'pt-wf-lay-tex':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...LAYERING_PRESETS[id], ...options.pt }, id);
     case 'pt-mk-vbuffer':
     case 'pt-wf-vbuffer':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...VBUFFER_PRESETS[id], ...options.pt }, id);

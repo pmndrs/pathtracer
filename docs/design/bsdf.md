@@ -231,6 +231,19 @@ of the walk at base 0.8, 0.04 at 85 deg, but 8% over for white rough bases), and
 under a uniform env against pbrt `coateddiffuse` (thickness 0.01 / 0 variants, maxdepth 100) and Mitsuba `roughplastic`
 (`nonlinear` true/false), when the material contract and exporters land (`layering`, `albedoBase`, `exitMis` are the three settings).
 
+### Albedo correction for the internal base (P2.32b, `albedoCorrection`, DIVERGES V97)
+
+The closed-form internal base assumes a smooth interface. The stochastic walk loses single-scatter energy at every rough crossing (a white base at
+r 0.65 reflects 0.60, the closed form 1.05), so `albedo + internal` read +13% on the AttenuationTest backdrop (white base, r 0.5-0.8), +12% on SheenTestGrid
+and +2-3% on MetalRoughSpheres against the walk. `albedoCorrection: 'lut' | 'texture'` (default `'none'`, kernels byte-identical) multiplies the base lobe
+by `c(r, mu_o, x) = a + b x + c x^2`, `x` = base * Ri(ior) per channel, capped at 1; (a, b, c) bilinear on an 8 x 8 grid (sqrt r, sqrt mu), identity for
+smooth interfaces. Fit: `bench/layered-correction-fit.ts` (Monte Carlo of the walk, three iors, grey bases 0.2-1, weighted least squares on the base energy,
+data in `bench/results/layered-correction/`); the target is the mean of the walk's sampler albedo and its pbrt-exit-MIS `f` albedo from r 0.33, because a
+reference-mode render reads between the two. ior has no axis: the collapse onto `x = base Ri` costs 3% rms (a table fitted at ior 1.5 only is 4-6% rms and
+up to 35% off at ior 2). Encodings: `'lut'` = WGSL const array of 192 numbers (+1.8 KB in the megakernel), `'texture'` = 8 x 8 `rgba16float` read with four
+`textureLoad`s (no sampler), group 2 binding 10 (`PT_LAYER_CORR_BINDING`) in the megakernel io group and the wavefront shade io group (+0.8 KB; one more
+binding, not a storage buffer). Numbers: `bench/results/TIER1-GATE.md` follow-up table and TASKS P2.32b.
+
 ### Wiring (P2.21, P2.22, P2.30): what the megakernel does with it
 
 - Interface choice per material (adapter): `specular_ior` / `specular_roughness` / Fresnel scale `specular_color * specular_weight`; a coat (`coat_weight > 0.5`) replaces it by the coat's (V67). Base `base_weight * base_color`.

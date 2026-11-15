@@ -5,6 +5,7 @@ export * from './bsdf/materials.ts';
 export * from './bsdf/adapter.ts';
 export * from './bsdf/layered.ts';
 export * from './bsdf/layered-lut.ts';
+export * from './bsdf/layered-correction.ts';
 export * from './bsdf/layered-wgsl.ts';
 export * from './bsdf/fuzz.ts';
 export * from './bsdf/fuzz-wgsl.ts';

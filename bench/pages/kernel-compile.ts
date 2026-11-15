@@ -44,7 +44,8 @@ try {
   const repeat = Math.max(1, numberArg(args, 'repeat', 3));
   const warmOn = numberArg(args, 'warm', 1) !== 0;
   const filter = args.variants ? args.variants.split(',').map((s) => s.trim()).filter(Boolean) : null;
-  const all = kernelVariants(caps);
+  if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
+  const all = kernelVariants(caps, args.packing as 'split' | 'packed' | undefined);
   const names = Object.keys(all).filter((n) => !filter || filter.includes(n));
   if (filter) for (const f of filter) if (!(f in all)) throw new Error(`Unknown variant "${f}"; known: ${Object.keys(all).join(', ')}`);
 

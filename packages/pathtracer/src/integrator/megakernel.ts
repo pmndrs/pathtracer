@@ -13,12 +13,13 @@
  * is never rewritten before the pass that read it ran, as long as no more than `PT_PARAM_SLOTS` passes are outstanding.
  * Accumulation is f32 `array<vec4f>` (sum of radiance, w = samples); `readImage` divides. Nothing here reads back unless you call it.
  */
-import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
+import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl, ptLayeredDispatchWgsl } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
 import { ptLayeredWgsl } from '../bsdf/layered-wgsl.ts';
+import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { ptFuzzWgsl } from '../bsdf/fuzz-wgsl.ts';
 import { ptThinFilmWgsl } from '../bsdf/thinfilm-wgsl.ts';
@@ -61,6 +62,11 @@ export interface PtMegakernelOptions {
   integrator?: PtIntegratorOptions;
   /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
   textures?: TextureLayout | null;
+  /**
+   * How the scene copy is bound (P3.11): `split` (two storage buffers, the default `DEFAULT_SCENE_PACKING`) or `packed` (one: frees a binding in the kernel).
+   * Upload the scene copy with the same `uploadSceneCopy(..., { packing })`; `setScene` throws on a mismatch.
+   */
+  scenePacking?: SceneCopyPacking;
   /**
    * Drop the indentation of every line and the spaces around `{ } ( ) , ;` (every line break stays, so compiler line numbers
    * are kept). Default true: it is 17% of the text (63.3 KB -> 52.7 KB). Comments must already be gone (they are).
@@ -110,30 +116,31 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
 }
 
 /** The raytracer module options both schedulers use for the walk (group 0) and the scene copy (group 1). */
-export function ptRaytracerModuleOptions(options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'textures'>): Parameters<typeof rtModuleWgsl>[1] {
+export function ptRaytracerModuleOptions(options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'textures' | 'scenePacking'>): Parameters<typeof rtModuleWgsl>[1] {
   return {
     ...options.format,
     rayMasks: false,
     traceSlot: { group: 0, firstBinding: 0 },
-    scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}) },
+    scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}), ...(options.scenePacking ? { packing: options.scenePacking } : {}) },
   };
 }
 
 /** The kernel's source and the map that reads its compiler messages (`rtMapCompilationInfo`). `create` compiles `code`. */
-export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
+export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const raytracer = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
   const resolved = resolveIntegratorOptions(integratorOptions);
   // Optional outputs (hooks, counters, AOVs; `outputs-wgsl.ts`) are appended only when asked, so a kernel without them keeps its text.
   const outputs = ptOutputsWgsl(resolved, PT_MEGAKERNEL_COUNTERS_BINDING);
   const ours = [...parts, ...(outputs ? [outputs] : []), ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : []), ptIntegratorWgsl(integratorOptions)].join('\n');
+  const packed = (options.scenePacking ?? DEFAULT_SCENE_PACKING) === 'packed';
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
-  const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
+  const { code, map } = rtTransformWgsl(`${raytracer}\n${packed ? rtPackSceneAccess(ours) : ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };
 }
 
 /** The kernel's source for these options (what `create` compiles). Exported for size checks and the tests. */
-export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): string {
+export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames'>): string {
   return ptMegakernelBuild(caps, options).code;
 }
 
@@ -148,6 +155,8 @@ export class PtMegakernel {
   private readonly paramsBuffer: GPUBuffer;
   /** The fuzz LTC table (`features.fuzz` only, group 2 binding 2). */
   private readonly fuzzTable: GPUBuffer | null;
+  /** P2.32b: the `albedoCorrection: 'texture'` table (group 2 binding `PT_LAYER_CORR_BINDING`), only for such a kernel. */
+  private corrTexture: GPUTexture | null = null;
   private readonly hookLayout: GPUBindGroupLayout | null;
   private hookGroup: GPUBindGroup | null = null;
   private vbufferView: GPUTextureView | null = null;
@@ -184,9 +193,10 @@ export class PtMegakernel {
   static async create(device: GPUDevice, caps: Caps, options: PtMegakernelOptions): Promise<PtMegakernel> {
     const label = options.label ?? 'pt megakernel';
     const { code, map } = ptMegakernelBuild(caps, options);
+    const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
     const layouts = [
       device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) }),
-      device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures) }),
+      device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) }),
       device.createBindGroupLayout({
         label: `${label} io`,
         entries: [
@@ -195,6 +205,7 @@ export class PtMegakernel {
           ...(options.integrator?.materials?.features.fuzz ? [{ binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(options.integrator?.counters ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
           ...(options.integrator?.primary === 'vbuffer' ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
+          ...(corrTexture ? [ptLayerCorrLayoutEntry()] : []),
         ],
       }),
       ...(options.integrator?.hooks ? [device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] })] : []),
@@ -207,10 +218,13 @@ export class PtMegakernel {
       fuzzTable = device.createBuffer({ label: `${label} fuzz ltc`, size: table.byteLength, usage: STORAGE | COPY_DST });
       device.queue.writeBuffer(fuzzTable, 0, table);
     }
-    return new PtMegakernel(device, options, pipeline, layouts, code.length, fuzzTable);
+    const kernel = new PtMegakernel(device, options, pipeline, layouts, code.length, fuzzTable);
+    if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
+    return kernel;
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
+    if ((this.options.scenePacking ?? DEFAULT_SCENE_PACKING) !== scene.packing) throw new Error(`PtMegakernel.setScene: the kernel was built for scene packing '${this.options.scenePacking ?? DEFAULT_SCENE_PACKING}' but the scene copy is '${scene.packing}' (build both with the same packing)`);
     if (!!this.options.textures !== !!scene.textures) throw new Error(`PtMegakernel.setScene: the kernel was built ${this.options.textures ? 'with' : 'without'} textures but the scene copy has ${scene.textures ? 'some' : 'none'}`);
     this.walkGroup = this.device.createBindGroup({ label: 'pt walk', layout: this.walkLayout, entries: rtSceneBindGroupEntries(trace) });
     this.sceneGroup = this.device.createBindGroup({ label: 'pt scene', layout: this.sceneLayout, entries: rtSceneCopyBindGroupEntries(scene) });
@@ -313,6 +327,7 @@ export class PtMegakernel {
         ...(this.fuzzTable ? [{ binding: 2, resource: { buffer: this.fuzzTable } }] : []),
         ...(this.counterBuffer ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, resource: { buffer: this.counterBuffer } }] : []),
         ...(this.vbufferView ? [{ binding: PT_VBUFFER_BINDING, resource: this.vbufferView }] : []),
+        ...(this.corrTexture ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.corrTexture.createView() }] : []),
       ],
     });
     if (this.hookLayout && !this.hookGroup) {
@@ -391,6 +406,7 @@ export class PtMegakernel {
     this.counterBuffer?.destroy();
     this.paramsBuffer.destroy();
     this.fuzzTable?.destroy();
+    this.corrTexture?.destroy();
     this.accum?.destroy();
     this.accum = null;
   }

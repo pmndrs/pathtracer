@@ -277,8 +277,9 @@ try {
   for (const [name, options] of [
     ['albedo_openpbr', { layering: 'albedo' }],
     ['albedo_internal', { layering: 'albedo', albedoBase: 'internal' }],
+    ['albedo_internal_corr_lut', { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut' }],
   ] as [string, PtLayeredOptions][]) {
-    const rand = rng(name === 'albedo_openpbr' ? 7001 : 7002);
+    const rand = rng(name === 'albedo_openpbr' ? 7001 : name === 'albedo_internal' ? 7002 : 7003);
     const cases: Case[] = [];
     const roughs = [0, 0.05, 0.1, 0.25, 0.5, 1];
     for (let i = 0; i < count; i++) {
