@@ -124,14 +124,7 @@ suggestion, pros/cons and the A/B that would settle it.
 
 ## Open questions for the maintainer
 
-- **Tier 1 gate: which scenes count toward "converges to pbrt-v4 within the noise floor"?** (docs/design/tier1.md §7)
-  Suggestion: class A only (thick dielectric + volume, thin smooth transmission, black-base ior, pure metals, emissive
-  strength, anisotropic metals after the tangent check); class B reported with d(ours, pbrt) / d(Mitsuba, pbrt); B' and C
-  coverage only.
-  - Pro: every gate scene has two references that agree to the floor; no gate result rests on an approximation.
-  - Con: the default glTF non-metal (dielectric over diffuse) would not gate; the class A list is short.
-  - Alternative: also gate class B in reference mode with `layering: 'stochastic'` against pbrt `coateddiffuse`.
-  - Settles it: sensitivity (stripped vs full ≥ 10x floor), d(pbrt, Mitsuba) per class B scene, and the P2.21 layering A/B.
+- ~~Tier 1 gate~~: settled 2026-11-15, D23 (class A only). ~~Default layering~~: D24. ~~Wide BVH default~~: D25 (per scene until the 3060). ~~Kernel size~~: D26 (measure W10 first).
 
 - **Capsaicin: a third reference renderer, or a cross-check only?** Suggestion: cross-check and native timing baseline on
   the RTX 3060, for opaque scenes only. Keep pbrt + Mitsuba as the references (D15).
