@@ -78,7 +78,16 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   counters?: boolean;
   /** First non-specular albedo + normal and the primary viewZ, accumulated like radiance in the tail of the accumulation buffer (`readAovs`). Default false: the kernel text is unchanged. */
   aovs?: boolean;
+  /**
+   * Where the primary hit comes from (P3.6). `'trace'` (default): a camera ray, traced; no V-buffer code at all (the kernel text is unchanged). `'vbuffer'`: the engine
+   * rasterised a visibility buffer (`vbuffer.ts`: instance + triangle + material + barycentrics per pixel) and the kernel resolves the primary hit from it; the engine owns
+   * the sub-pixel jitter (`setVbufferJitter`), the camera-ray sampler pair is not consumed, bounces trace as usual. Needs `layout.positions`; the wavefront scheduler needs
+   * `refill: false`.
+   */
+  primary?: PtPrimary;
 }
+
+export type PtPrimary = 'trace' | 'vbuffer';
 
 export type PtAlphaPolicy = 'exact' | 'opaqueShadow' | 'opaqueIndirect' | 'opaqueSecondary';
 
@@ -97,10 +106,11 @@ export interface ResolvedIntegratorOptions {
   hooks: PtHooksOptions | null;
   counters: boolean;
   aovs: boolean;
+  primary: PtPrimary;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace' };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -240,6 +250,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const hooks = !!o.hooks;
   const counters = o.counters;
   const aovs = o.aovs;
+  const vb = o.primary === 'vbuffer';
   const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
   const term = (reason: number): string => (counters ? `            termReason = ${reason}u;\n` : '');
   return /* wgsl */ `
@@ -299,7 +310,7 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     let maxDepth = ptParams.limits.x;
     let rrStart = ptParams.limits.y;
     let pixelSeed = ptPixelSeed(px.x, px.y, dims.w);
-    let jitter = ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER);
+    let jitter = ${vb ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER)'};
     let ndc = vec2f(((f32(px.x) + jitter.x) / f32(dims.x)) * 2.0 - 1.0, 1.0 - ((f32(px.y) + jitter.y) / f32(dims.y)) * 2.0);
     let origin = ptParams.origin.xyz;
     var ray = RtRay(origin, 0.0, normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y), PT_FAR);
@@ -318,10 +329,19 @@ ${mask ? `    var skips = 0u;
 ${medium ? `    var sigma = vec3f(0.0);
 ` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
-    loop {
-        let hit = rtClosest(ray, RT_MASK_ALL);
+${vb ? `    var primary = true;
+` : ''}    loop {
+${vb ? `        var hit: RtHit;
+        if (primary) {
+            primary = false;
+            hit = ptVbufferHit(px, ray);
+        } else {
+            hit = rtClosest(ray, RT_MASK_ALL);
+${counters ? `            ptCountRay(pxIndex, 1u, 0u);
+` : ''}        }
+` : `        let hit = rtClosest(ray, RT_MASK_ALL);
 ${counters ? `        ptCountRay(pxIndex, 1u, 0u);
-` : ''}        if (hit.t < 0.0) {
+` : ''}`}        if (hit.t < 0.0) {
             radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
             break;
         }

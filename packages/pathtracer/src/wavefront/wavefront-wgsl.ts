@@ -212,7 +212,7 @@ fn ptwfCamera(@builtin(global_invocation_id) id: vec3u) {
     let path = id.y * dims.x + id.x;
     let n = ptwfSlots(dims);
     let pixelSeed = ptPixelSeed(id.x, id.y, dims.w);
-    let jitter = ptSample2D(pixelSeed, dims.z, PT_PAIR_JITTER);
+    let jitter = ${o.primary === 'vbuffer' ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, dims.z, PT_PAIR_JITTER)'};
     let ndc = vec2f(((f32(id.x) + jitter.x) / f32(dims.x)) * 2.0 - 1.0, 1.0 - ((f32(id.y) + jitter.y) / f32(dims.y)) * 2.0);
     var p: PtwfPath;
     p.origin = ptParams.origin.xyz;
@@ -241,6 +241,37 @@ ${o.aovs ? `    p.aovDone = false;
 export function ptwfIntersectWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   const o = resolveIntegratorOptions(options);
   if (o.alphaMask) return ptwfIntersectMaskWgsl(o, wf);
+  if (o.primary === 'vbuffer') {
+    return /* wgsl */ `
+${PT_PARAMS_WGSL}
+${bindings(['params', 'state', 'hit', 'count', 'queue'])}
+const PT_FAR: f32 = 1.0e30;
+${commonWgsl(wf)}${stateWgsl(o)}
+@compute @workgroup_size(${PTWF_WORKGROUP})
+fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+    let iter = ptParams.limits.w;
+    let q = iter & 1u;
+    let slot = ptwfSlot(wid, li);
+    if (slot >= atomicLoad(&ptwfCount[q])) {
+        return;
+    }
+    let n = ptwfSlots(ptParams.dims);
+    let path = ptwfQueue[q * n + slot];
+    let o = ptwfState[path];
+    let d = ptwfState[n + path];
+    let ray = RtRay(ptwfF3(o), 0.0, ptwfF3(d), PT_FAR);
+    var hit: RtHit;
+    if ((ptwfState[2u * n + path].w & 0x1fffffffu) == 0u) {
+        hit = ptVbufferHit(vec2u(path % ptParams.dims.x, path / ptParams.dims.x), ray); // the primary hit: from the V-buffer, not traced
+    } else {
+        hit = rtClosest(ray, RT_MASK_ALL);
+    }
+    ptwfHit[path] = vec4u(bitcast<u32>(hit.t), hit.instance, hit.triangle, hit.material);
+    ptwfHit[n + path] = vec4u(bitcast<vec2u>(hit.bary), select(0u, 1u, hit.frontFace), 0u);
+    ptwfHit[2u * n + path] = vec4u(bitcast<vec3u>(hit.normal), 0u);
+}
+`;
+  }
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'state', 'hit', 'count', 'queue'])}
@@ -292,8 +323,14 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
     let path = ptwfQueue[q * n + slot];
     var st = ptwfLoadPath(path, n);
     var ray = RtRay(st.origin, 0.0, st.dir, PT_FAR);
-    var hit = rtClosest(ray, RT_MASK_ALL);
-    var skips = 0u;
+${o.primary === 'vbuffer' ? `    var hit: RtHit;
+    if (st.depth == 0u) {
+        hit = ptVbufferHit(vec2u(path % ptParams.dims.x, path / ptParams.dims.x), ray); // the primary hit: from the V-buffer; a cutout texel continues by tracing below
+    } else {
+        hit = rtClosest(ray, RT_MASK_ALL);
+    }
+` : `    var hit = rtClosest(ray, RT_MASK_ALL);
+`}    var skips = 0u;
     var over = 0u;
     var moved = false;
     loop {

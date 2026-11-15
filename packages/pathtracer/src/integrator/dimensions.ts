@@ -8,6 +8,7 @@
  * coordinate of a pair, which is itself a stratified uniform number.
  *
  *     pair 0                          pixel jitter (x right, y down), the box filter of radius 0.5
+ *                                     (not consumed with `integrator.primary: 'vbuffer'`: the engine owns the jitter, `vbuffer.ts`; no other pair moves)
  *     pair 1                          reserved: lens / time
  *     pair 2 + 4 v + 0                vertex v: light point (u for the position on the chosen light / direction on a sun or environment)
  *     pair 2 + 4 v + 1                vertex v: BSDF direction (u1, u2 of `ptBsdfSample`)

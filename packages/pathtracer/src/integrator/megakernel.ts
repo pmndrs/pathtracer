@@ -24,6 +24,7 @@ import { ptFuzzWgsl } from '../bsdf/fuzz-wgsl.ts';
 import { ptThinFilmWgsl } from '../bsdf/thinfilm-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { ptSamplerWgsl } from './dimensions.ts';
+import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from './outputs-wgsl.ts';
 
@@ -98,6 +99,7 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
   const integratorOptions: PtIntegratorOptions = { ...options.integrator, ...(options.textures ? { textures: true } : {}) };
   const integrator = resolveIntegratorOptions(integratorOptions);
   const mats = integrator.materials;
+  if (integrator.primary === 'vbuffer' && !options.layout.positions) throw new Error("ptMegakernelBuild: integrator.primary 'vbuffer' needs a surface layout with positions (the hit position comes from the barycentrics)");
   if (mats?.features.aniso && !options.layout.tangents) throw new Error('ptMegakernelBuild: anisotropic materials (features.aniso) need a surface layout with tangents');
   const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}), ...(mats?.features.aniso ? { aniso: true } : {}), ...(mats?.features.thinFilm ? { thinFilm: true } : {}) };
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
@@ -124,7 +126,7 @@ export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions,
   const resolved = resolveIntegratorOptions(integratorOptions);
   // Optional outputs (hooks, counters, AOVs; `outputs-wgsl.ts`) are appended only when asked, so a kernel without them keeps its text.
   const outputs = ptOutputsWgsl(resolved, PT_MEGAKERNEL_COUNTERS_BINDING);
-  const ours = [...parts, ...(outputs ? [outputs] : []), ptIntegratorWgsl(integratorOptions)].join('\n');
+  const ours = [...parts, ...(outputs ? [outputs] : []), ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : []), ptIntegratorWgsl(integratorOptions)].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };
@@ -148,6 +150,8 @@ export class PtMegakernel {
   private readonly fuzzTable: GPUBuffer | null;
   private readonly hookLayout: GPUBindGroupLayout | null;
   private hookGroup: GPUBindGroup | null = null;
+  private vbufferView: GPUTextureView | null = null;
+  private jitter: [number, number] = [0, 0];
   private counterBuffer: GPUBuffer | null = null;
   private readonly slotBytes: number;
   private slot = 0;
@@ -190,6 +194,7 @@ export class PtMegakernel {
           { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
           ...(options.integrator?.materials?.features.fuzz ? [{ binding: 2, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(options.integrator?.counters ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
+          ...(options.integrator?.primary === 'vbuffer' ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
         ],
       }),
       ...(options.integrator?.hooks ? [device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] })] : []),
@@ -225,6 +230,21 @@ export class PtMegakernel {
   /** True when the kernel writes debug counters: its timings are not results (the adapter marks such rows invalid). */
   get instrumented(): boolean {
     return !!this.options.integrator?.counters;
+  }
+
+  /**
+   * `primary: 'vbuffer'`: the V-buffer texture (`rgba32uint`, format in `vbuffer.ts`, `width x height`, row 0 = top) the next `encode` reads. The engine rasterises into it
+   * before the encode (same command encoder is fine: passes run in order). Pass the texture or a view of it.
+   */
+  setVbuffer(texture: GPUTexture | GPUTextureView): void {
+    if (this.options.integrator?.primary !== 'vbuffer') throw new Error("PtMegakernel.setVbuffer: the kernel was built without integrator.primary: 'vbuffer'");
+    this.vbufferView = 'createView' in texture ? texture.createView() : texture;
+    this.ioGroup = null;
+  }
+
+  /** `primary: 'vbuffer'`: the sub-pixel offset the rasteriser used for the frame the next `encode` shades, in pixels, x right / y down, 0 = pixel centre, [-0.5, 0.5]. */
+  setVbufferJitter(x: number, y: number): void {
+    this.jitter = [x, y];
   }
 
   setFilm(width: number, height: number): void {
@@ -270,7 +290,9 @@ export class PtMegakernel {
     const f = new Float32Array(buffer);
     u.set([this.width, this.height, sampleIndex >>> 0, this.seed, this.limits.maxDepth >>> 0, (this.limits.rrStartDepth ?? 0) >>> 0, 0, 0]);
     f[6] = this.limits.textureConeScale ?? 1;
-    f.set([...basis.origin, 0, ...basis.right, 0, ...basis.up, 0, ...basis.forward, 0], 8);
+    // With a V-buffer the (otherwise unused) w lanes of origin and right carry the frame's sample position inside the pixel (0.5 + offset): `ptPath` reads them in place of pair 0.
+    const vb = this.options.integrator?.primary === 'vbuffer';
+    f.set([...basis.origin, vb ? 0.5 + this.jitter[0] : 0, ...basis.right, vb ? 0.5 + this.jitter[1] : 0, ...basis.up, 0, ...basis.forward, 0], 8);
     return buffer;
   }
 
@@ -279,6 +301,9 @@ export class PtMegakernel {
     if (!this.walkGroup || !this.sceneGroup) throw new Error('PtMegakernel: setScene() first');
     if (!this.accum) throw new Error('PtMegakernel: setFilm() first');
     if (passes > 256) throw new RangeError('PtMegakernel.encode: at most 256 passes per call');
+    const vbuffer = this.options.integrator?.primary === 'vbuffer';
+    if (vbuffer && passes !== 1) throw new RangeError("PtMegakernel.encode: with primary 'vbuffer' one encode is one frame (one V-buffer, one jitter): passes must be 1");
+    if (vbuffer && !this.vbufferView) throw new Error('PtMegakernel: setVbuffer() first');
     this.ioGroup ??= this.device.createBindGroup({
       label: 'pt io',
       layout: this.ioLayout,
@@ -287,6 +312,7 @@ export class PtMegakernel {
         { binding: 1, resource: { buffer: this.accum } },
         ...(this.fuzzTable ? [{ binding: 2, resource: { buffer: this.fuzzTable } }] : []),
         ...(this.counterBuffer ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, resource: { buffer: this.counterBuffer } }] : []),
+        ...(this.vbufferView ? [{ binding: PT_VBUFFER_BINDING, resource: this.vbufferView }] : []),
       ],
     });
     if (this.hookLayout && !this.hookGroup) {

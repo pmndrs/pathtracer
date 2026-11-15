@@ -12,8 +12,8 @@
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
-import { ALPHA_MODE, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, ptMaterialFeatures, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
+import { ALPHA_MODE, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
+import { PtMegakernel, PtWavefront, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -23,6 +23,7 @@ import { uvTangents } from '../../scenes/tangents.ts';
 import { setImageTextureLoader } from '../../scenes/textures.ts';
 import { readPFM } from '../../metrics/pfm.ts';
 import { fetchSceneGlb, readGlbMeshes } from '../shared/glb.ts';
+import { VbufferRaster } from '../shared/vbuffer-raster.ts';
 import type { GpuContext } from '../shared/gpu.ts';
 
 /** Experiment switches (page args `pt_*`); defaults are the reference configuration. */
@@ -156,6 +157,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
   private scene: SceneDesc | null = null;
   private lastStats: Record<string, number> = {};
   private limits: { maxDepth: number; rrStartDepth?: number } = { maxDepth: 1 };
+  /** `primary: 'vbuffer'`: the bench rasteriser that writes the V-buffer before each sample (not part of the library). */
+  private raster: VbufferRaster | null = null;
+  private lastLoad: { caps: Caps; copy: SceneCopy; input: SceneCopyInput } | null = null;
+  /** What the last `load` built, for checks that drive the primary-hit path themselves (`vbuffer-check`): the device's caps, the CPU scene copy and its input, the V-buffer rasteriser and the GPU buffers. */
+  get debug(): { caps: Caps; copy: SceneCopy; input: SceneCopyInput; raster: VbufferRaster | null; trace: TraceSceneBuffers; sceneBuffers: SceneCopyBuffers } {
+    if (!this.lastLoad || !this.trace || !this.sceneBuffers) throw new Error('pt-megakernel: load() first');
+    return { ...this.lastLoad, raster: this.raster, trace: this.trace, sceneBuffers: this.sceneBuffers };
+  }
 
   constructor(settings: PtAdapterSettings = {}, id?: string) {
     // OIDN needs albedo + normal.
@@ -170,6 +179,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         scheduler: settings.scheduler ?? 'megakernel',
         ...(settings.scheduler === 'wavefront' ? { refill: settings.refill === true ? 'inline' : settings.refill || 'off', refillThreshold: settings.refillThreshold ?? 0.25, layers: settings.layers ?? 1 } : {}),
         ...(settings.alphaPolicy && settings.alphaPolicy !== 'exact' ? { alphaPolicy: settings.alphaPolicy } : {}),
+        ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         nee: settings.nee ?? true,
         envSampling: settings.envSampling ?? 'auto',
@@ -262,6 +272,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     this.trace = uploadTraceScene(device, data, scene.name);
     const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
     this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene` });
+    this.lastLoad = { caps, copy, input };
     const loadMs = performance.now() - t0;
 
     // OpenPBR mode only when the scene has an `openpbr` material (the legacy adapter keeps the other scenes' kernel and images unchanged).
@@ -291,6 +302,12 @@ export class PtMegakernelAdapter implements RendererAdapter {
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
+    if (this.settings.primary === 'vbuffer') {
+      if ((this.settings.positions ?? 'barycentric') !== 'barycentric') throw new Error("pt-megakernel: primary 'vbuffer' needs positions 'barycentric'");
+      this.raster?.destroy();
+      this.raster = VbufferRaster.create(device, input, scene.film.width, scene.film.height);
+      this.kernel.setVbuffer(this.raster.texture);
+    }
     this.limits = { maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth };
     this.kernel.setLimits(this.limits);
     this.kernel.setSeed(this.settings.seed ?? 0);
@@ -323,7 +340,18 @@ export class PtMegakernelAdapter implements RendererAdapter {
       while (done < target) {
         const n = Math.min(perSubmit, target - done);
         const encoder = device.createCommandEncoder({ label: 'pt passes' });
-        kernel.encode(encoder, n);
+        if (this.raster && this.scene) {
+          // V-buffer primaries: one raster frame + one pass per sample; the frame's sub-pixel offset is the Owen-Sobol jitter pair of a fixed pixel seed (the engine owns the jitter).
+          const basis = ptCameraBasis(this.scene.camera, this.raster.width, this.raster.height);
+          const seed = ptPixelSeed(0, 0, this.settings.seed ?? 0);
+          for (let i = 0; i < n; i++) {
+            const [u, v] = ptSample2D('owen-sobol', seed, done + i, PT_PAIR.jitter);
+            const jitter = [u - 0.5, v - 0.5] as const;
+            this.raster.encode(encoder, basis, jitter);
+            kernel.setVbufferJitter(jitter[0], jitter[1]);
+            kernel.encode(encoder, 1);
+          }
+        } else kernel.encode(encoder, n);
         device.queue.submit([encoder.finish()]);
         done += n;
         await device.queue.onSubmittedWorkDone();
@@ -392,6 +420,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
 
   dispose(): void {
     this.kernel?.destroy();
+    this.raster?.destroy();
+    this.raster = null;
     this.trace?.destroy();
     this.sceneBuffers?.destroy();
     this.kernel = null;

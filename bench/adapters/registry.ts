@@ -8,7 +8,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer'] as const;
 /** Wavefront scheduling presets (P3.2): the same adapter with `refill` / `layers` set, so `matrix.ts --interleave` can A/B them in one run. `--extra pt_refill=...` still overrides. */
 const WAVEFRONT_PRESETS = {
   'pt-wf-refill': { refill: 'inline' },
@@ -26,6 +26,12 @@ const ALPHA_PRESETS = {
   'pt-wf-shadow': { alphaPolicy: 'opaqueShadow', scheduler: 'wavefront' },
   'pt-wf-indirect': { alphaPolicy: 'opaqueIndirect', scheduler: 'wavefront' },
   'pt-wf-secondary': { alphaPolicy: 'opaqueSecondary', scheduler: 'wavefront' },
+} as const;
+
+/** V-buffer primaries (P3.6): the same adapter with `primary: 'vbuffer'` (a bench rasteriser writes the V-buffer each sample), so `matrix.ts --interleave` can A/B it against traced primaries. */
+const VBUFFER_PRESETS = {
+  'pt-mk-vbuffer': { primary: 'vbuffer' },
+  'pt-wf-vbuffer': { primary: 'vbuffer', scheduler: 'wavefront' },
 } as const;
 
 export interface AdapterOptions {
@@ -66,6 +72,9 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
     case 'pt-wf-indirect':
     case 'pt-wf-secondary':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...ALPHA_PRESETS[id], ...options.pt }, id);
+    case 'pt-mk-vbuffer':
+    case 'pt-wf-vbuffer':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...VBUFFER_PRESETS[id], ...options.pt }, id);
     default:
       throw new Error(`unknown renderer "${id}" (have: ${[...ADAPTER_IDS, ...OWN_ADAPTER_IDS].join(', ')})`);
   }

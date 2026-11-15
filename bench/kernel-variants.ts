@@ -41,6 +41,9 @@ export function kernelVariants(caps: Caps): KernelVariants {
   variants['tex-mask'] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true } });
   // Alpha policy (R2): the exact kernel above is the default; these drop the cutout test for shadow rays and / or indirect extension rays.
   for (const alphaPolicy of ['opaqueShadow', 'opaqueIndirect', 'opaqueSecondary'] as const) variants[`tex-mask-${alphaPolicy}`] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy } });
+  // V-buffer primaries (P3.6): the first hit comes from a texture; the traced variants above are unchanged.
+  variants.vbuffer = () => ptMegakernelWgsl(caps, { format: {}, layout, integrator: { primary: 'vbuffer' } });
+  variants['tex-mask-vbuffer'] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, primary: 'vbuffer' } });
   return variants;
 }
 
@@ -69,6 +72,9 @@ export function wavefrontKernelVariants(caps: Caps): KernelVariants {
     'tex-mask-opaqueShadow': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueShadow' } },
     'tex-mask-opaqueIndirect': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueIndirect' } },
     'tex-mask-opaqueSecondary': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueSecondary' } },
+    // V-buffer primaries (P3.6): the camera kernel reads the jitter from the params, the intersect kernel resolves depth-0 paths from the V-buffer.
+    vbuffer: { format: {}, layout, integrator: { primary: 'vbuffer' } },
+    'tex-mask-vbuffer': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, primary: 'vbuffer' } },
     'pbr-albedo': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo' } } } },
     'pbr-stochastic-fuzz': { format: {}, layout, integrator: { materials: { features: { ...feat, fuzz: true }, layered: { layering: 'stochastic', maxDepth: 64 } } } },
   };
