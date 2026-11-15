@@ -89,23 +89,35 @@ export interface PtImage {
 /** Indentation and the spaces around `{ } ( ) , ;` removed; line breaks kept. Only safe on comment-free source. */
 export const minifyWgsl = rtMinifyWgsl;
 
-/** The kernel's source and the map that reads its compiler messages (`rtMapCompilationInfo`). `create` compiles `code`. */
-export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
+/** The scene-independent WGSL both schedulers append their integrator to: light sampling, Owen-Sobol, BSDF, layered / film / fuzz lobes, material adapter, sampler (in this order). */
+export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout' | 'integrator' | 'textures'>): { integratorOptions: PtIntegratorOptions; parts: string[] } {
   const integratorOptions: PtIntegratorOptions = { ...options.integrator, ...(options.textures ? { textures: true } : {}) };
   const integrator = resolveIntegratorOptions(integratorOptions);
-  const raytracer = rtModuleWgsl(caps, {
-    ...options.format,
-    rayMasks: false,
-    traceSlot: { group: 0, firstBinding: 0 },
-    scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}) },
-  });
   const mats = integrator.materials;
   if (mats?.features.aniso && !options.layout.tangents) throw new Error('ptMegakernelBuild: anisotropic materials (features.aniso) need a surface layout with tangents');
   const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}), ...(mats?.features.aniso ? { aniso: true } : {}), ...(mats?.features.thinFilm ? { thinFilm: true } : {}) };
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
   const film = mats?.features.thinFilm ? [stripWgslComments(ptThinFilmWgsl())] : [];
   const fuzz = mats?.features.fuzz ? [stripWgslComments(ptFuzzWgsl({ layered: !!mats.features.layered }))] : [];
-  const ours = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler), ptIntegratorWgsl(integratorOptions)].join('\n');
+  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler)];
+  return { integratorOptions, parts };
+}
+
+/** The raytracer module options both schedulers use for the walk (group 0) and the scene copy (group 1). */
+export function ptRaytracerModuleOptions(options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'textures'>): Parameters<typeof rtModuleWgsl>[1] {
+  return {
+    ...options.format,
+    rayMasks: false,
+    traceSlot: { group: 0, firstBinding: 0 },
+    scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}) },
+  };
+}
+
+/** The kernel's source and the map that reads its compiler messages (`rtMapCompilationInfo`). `create` compiles `code`. */
+export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'minify' | 'prune' | 'shortenNames'>): RtWgslBuild {
+  const { integratorOptions, parts } = ptShadingModulesWgsl(options);
+  const raytracer = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
+  const ours = [...parts, ptIntegratorWgsl(integratorOptions)].join('\n');
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
   return { code, map };

@@ -13,7 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type LightSelection, type SceneCopyBuffers } from '@pmndrs/raytracer';
-import { PtMegakernel, ptMaterialFeatures, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptMaterialFeatures, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -61,7 +61,9 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   tangent?: 'attribute' | 'uv';
   /** Scrambling seed base. */
   seed?: number;
-  /** Sample passes per submit. Default 8. */
+  /** Scheduler (P3.1): `megakernel` (default) or `wavefront` (queues + indirect dispatch; same estimator, no alpha MASK yet). The `pt-wavefront` renderer id sets it. */
+  scheduler?: 'megakernel' | 'wavefront';
+  /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
   /** Kernel text options (P2.10): drop unreachable declarations / shorten top-level names. Default true; false is the A/B baseline. */
   prune?: boolean;
@@ -92,6 +94,7 @@ function mergeMeshes(parts: readonly TriangleMesh[]): TriangleMesh {
 }
 
 export const PT_ADAPTER_ID = 'pt-megakernel';
+export const PT_WAVEFRONT_ADAPTER_ID = 'pt-wavefront';
 
 /** Why an `openpbr` material is not rendered exactly: the OpenPBR lobes the megakernel does not have yet (P2.23+, class C), or null. */
 export function openPbrUnsupported(desc: MaterialDesc): string | null {
@@ -127,7 +130,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
   gpuContext: GpuContext | null = null;
   approximations: string[] = [];
   private readonly settings: PtAdapterSettings;
-  private kernel: PtMegakernel | null = null;
+  private kernel: PtMegakernel | PtWavefront | null = null;
   private trace: TraceSceneBuffers | null = null;
   private sceneBuffers: SceneCopyBuffers | null = null;
   private scene: SceneDesc | null = null;
@@ -137,12 +140,13 @@ export class PtMegakernelAdapter implements RendererAdapter {
   constructor(settings: PtAdapterSettings = {}) {
     this.settings = settings;
     this.info = {
-      id: PT_ADAPTER_ID,
-      name: '@pmndrs/pathtracer megakernel',
+      id: settings.scheduler === 'wavefront' ? PT_WAVEFRONT_ADAPTER_ID : PT_ADAPTER_ID,
+      name: settings.scheduler === 'wavefront' ? '@pmndrs/pathtracer wavefront' : '@pmndrs/pathtracer megakernel',
       version: '0.0.0',
       commit: 'workspace',
       backend: 'webgpu',
       config: {
+        scheduler: settings.scheduler ?? 'megakernel',
         sampler: settings.sampler ?? 'owen-sobol',
         nee: settings.nee ?? true,
         envSampling: settings.envSampling ?? 'auto',
@@ -178,7 +182,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
-    const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter), { label: 'pt-megakernel' });
+    const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter), { label: this.info.id });
     // Imported here: page-client reads `location` when loaded, so the module must not load in Node (unit tests import this file).
     const { summarizeAdapter } = await import('../../runner/page-client.ts');
     this.gpuContext = { adapter, device, summary: summarizeAdapter(adapter) };
@@ -249,14 +253,15 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
-    this.kernel = await PtMegakernel.create(device, caps, { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: 'pt-megakernel' });
+    const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, integrator: { ...this.settings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, kernelOptions) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
     this.limits = { maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth };
     this.kernel.setLimits(this.limits);
     this.kernel.setSeed(this.settings.seed ?? 0);
-    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium, ...(materials.features.aniso ? { mat_aniso: 1 } : {}) } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
+    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(this.kernel instanceof PtWavefront ? { ...Object.fromEntries(Object.entries(this.kernel.kernelBytes).map(([k, v]) => [`kernel_bytes_${k}`, v])), path_state_bytes: this.kernel.memory().stateBytesPerPath, wavefront_bytes: this.kernel.memory().totalBytes } : {}), ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium, ...(materials.features.aniso ? { mat_aniso: 1 } : {}) } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
     return { loadMs, compileMs: performance.now() - t1 };
   }
 
@@ -266,7 +271,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     if (!kernel || !gpu) throw new Error('pt-megakernel: load() first');
     const spp = budget.spp ?? 64;
     const device = gpu.device;
-    const perSubmit = this.settings.passesPerSubmit ?? 8;
+    const perSubmit = Math.min(this.settings.passesPerSubmit ?? 8, kernel instanceof PtWavefront ? kernel.maxPassesPerEncode() : Infinity);
     if (budget.seed !== undefined) kernel.setSeed(budget.seed);
     const coneSetting = this.settings.textureConeScale ?? 'auto';
     kernel.setLimits({ ...this.limits, textureConeScale: coneSetting === 'auto' ? Math.max(0.125, 1 / Math.sqrt(spp)) : coneSetting });

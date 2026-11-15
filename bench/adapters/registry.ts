@@ -8,7 +8,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront'] as const;
 
 export interface AdapterOptions {
   /** three-gpu-pathtracer frame budget (path steps per renderSample call). */
@@ -33,6 +33,8 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
       return (await import('./mutracer/index.ts')).createMutracer(options.bounces, options.mutracer);
     case 'pt-megakernel':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel(options.pt);
+    case 'pt-wavefront':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...options.pt, scheduler: 'wavefront' });
     default:
       throw new Error(`unknown renderer "${id}" (have: ${[...ADAPTER_IDS, ...OWN_ADAPTER_IDS].join(', ')})`);
   }

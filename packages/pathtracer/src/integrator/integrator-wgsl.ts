@@ -88,6 +88,70 @@ struct PtParams {
 }
 `;
 
+/**
+ * The pieces of the integrator the wavefront scheduler (`../wavefront/`) shares with the megakernel, so both compile the same text:
+ * constants, ray-origin offset, MIS weight and the escaped-ray (environment / sun) term. Moving them here left the megakernel's text byte-identical.
+ */
+export function ptCommonHeadWgsl(o: ResolvedIntegratorOptions): string {
+  const tex = o.textures;
+  const mask = o.alphaMask;
+  return /* wgsl */ `const PT_FAR: f32 = 1.0e30;
+const PT_NEE: bool = ${o.nee};
+const PT_ENV_SAMPLING: bool = ${o.envSampling !== 'none'};
+const PT_SUN_VISIBLE: bool = ${o.sunVisible};
+const PT_ORIGIN: f32 = 0.03125;
+const PT_FLOAT_SCALE: f32 = 0.0000152587890625;
+const PT_INT_SCALE: f32 = 256.0;
+${mask ? `const PT_MASK_SKIPS: u32 = 64u;
+` : ''}${tex ? `const PT_TEX_CONE: bool = ${o.textureLod === 'cone'};
+const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
+` : ''}
+fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
+    let ofs = vec3i(PT_INT_SCALE * n);
+    let pi = bitcast<vec3f>(bitcast<vec3i>(p) + select(ofs, -ofs, p < vec3f(0.0)));
+    return select(pi, p + PT_FLOAT_SCALE * n, abs(p) < vec3f(PT_ORIGIN));
+}
+
+fn ptSideNormal(n: vec3f, w: vec3f) -> vec3f {
+    return select(-n, n, dot(n, w) > 0.0);
+}`;
+}
+
+export const PT_MIS_WGSL = /* wgsl */ `fn ptMis(pThis: f32, pOther: f32) -> f32 {
+    if (!(pThis > 0.0)) {
+        return 0.0;
+    }
+    let r = min(pOther / pThis, 1.0e18);
+    return 1.0 / (1.0 + r * r);
+}
+
+fn ptMax3(v: vec3f) -> f32 {
+    return max(v.x, max(v.y, v.z));
+}`;
+
+export const PT_ESCAPED_WGSL = /* wgsl */ `fn ptEscaped(dir: vec3f, direct: bool, prevPdf: f32) -> vec3f {
+    var le = vec3f(0.0);
+    if (rtHasEnvironment()) {
+        let e = rtEnvironment();
+        var w = 1.0;
+        if (!direct && PT_NEE && PT_ENV_SAMPLING) {
+            w = ptMis(prevPdf, e.pmf * rtEnvironmentPdf(e, dir));
+        }
+        le += rtEnvironmentLe(e, dir) * w;
+    }
+    if (rtHasSun()) {
+        let s = rtSun();
+        if (rtSunContains(s, dir) && (PT_SUN_VISIBLE || !direct)) {
+            var w = 1.0;
+            if (!direct && PT_NEE) {
+                w = ptMis(prevPdf, s.pmf / s.solidAngle);
+            }
+            le += rtSunRadiance(s) * w;
+        }
+    }
+    return le;
+}`;
+
 /** The integrator module text, to append after the raytracer module, the light sampling, the Owen-Sobol functions, the BSDF, its adapter and the sampler. */
 export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const o = resolveIntegratorOptions(options);
@@ -110,26 +174,7 @@ ${PT_PARAMS_WGSL}
 @group(2) @binding(0) var<uniform> ptParams: PtParams;
 @group(2) @binding(1) var<storage, read_write> ptAccum: array<vec4f>;
 
-const PT_FAR: f32 = 1.0e30;
-const PT_NEE: bool = ${o.nee};
-const PT_ENV_SAMPLING: bool = ${o.envSampling !== 'none'};
-const PT_SUN_VISIBLE: bool = ${o.sunVisible};
-const PT_ORIGIN: f32 = 0.03125;
-const PT_FLOAT_SCALE: f32 = 0.0000152587890625;
-const PT_INT_SCALE: f32 = 256.0;
-${mask ? `const PT_MASK_SKIPS: u32 = 64u;
-` : ''}${tex ? `const PT_TEX_CONE: bool = ${o.textureLod === 'cone'};
-const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
-` : ''}
-fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
-    let ofs = vec3i(PT_INT_SCALE * n);
-    let pi = bitcast<vec3f>(bitcast<vec3i>(p) + select(ofs, -ofs, p < vec3f(0.0)));
-    return select(pi, p + PT_FLOAT_SCALE * n, abs(p) < vec3f(PT_ORIGIN));
-}
-
-fn ptSideNormal(n: vec3f, w: vec3f) -> vec3f {
-    return select(-n, n, dot(n, w) > 0.0);
-}
+${ptCommonHeadWgsl(o)}
 
 ${mask ? `fn ptMaskedOut(hit: RtHit, ray: RtRay) -> bool {
     let m = rtMaterial(hit.material);
@@ -160,17 +205,7 @@ fn ptVisibleMasked(ray0: RtRay, mask: u32) -> bool {
     return false;
 }
 
-` : ''}fn ptMis(pThis: f32, pOther: f32) -> f32 {
-    if (!(pThis > 0.0)) {
-        return 0.0;
-    }
-    let r = min(pOther / pThis, 1.0e18);
-    return 1.0 / (1.0 + r * r);
-}
-
-fn ptMax3(v: vec3f) -> f32 {
-    return max(v.x, max(v.y, v.z));
-}
+` : ''}${PT_MIS_WGSL}
 
 fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32) -> vec3f {
     let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
@@ -211,28 +246,7 @@ fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
     return li.radiance * f * (w / pl);
 }
 
-fn ptEscaped(dir: vec3f, direct: bool, prevPdf: f32) -> vec3f {
-    var le = vec3f(0.0);
-    if (rtHasEnvironment()) {
-        let e = rtEnvironment();
-        var w = 1.0;
-        if (!direct && PT_NEE && PT_ENV_SAMPLING) {
-            w = ptMis(prevPdf, e.pmf * rtEnvironmentPdf(e, dir));
-        }
-        le += rtEnvironmentLe(e, dir) * w;
-    }
-    if (rtHasSun()) {
-        let s = rtSun();
-        if (rtSunContains(s, dir) && (PT_SUN_VISIBLE || !direct)) {
-            var w = 1.0;
-            if (!direct && PT_NEE) {
-                w = ptMis(prevPdf, s.pmf / s.solidAngle);
-            }
-            le += rtSunRadiance(s) * w;
-        }
-    }
-    return le;
-}
+${PT_ESCAPED_WGSL}
 
 fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     let dims = ptParams.dims;

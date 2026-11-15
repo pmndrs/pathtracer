@@ -37,6 +37,7 @@ What the next pass should measure. Add a row when something needs a quiet-machin
 | Item | What | Command | Decides |
 |---|---|---|---|
 | P2.3 | VNDF standard vs spherical cap (and maybe a branchless basis): cost per sample, noise at equal spp | not runnable yet: needs the integrator (P2.4); add the command here when it exists | `vndf` default, docs/design/bsdf.md choice 1 |
+| P3.1 | Wavefront (slice 1) vs megakernel: ms per sample at equal spp, both schedulers interleaved ABBA, 5 repeats, plus the per-stage split (camera / intersect / shade / shadow / args timestamps if the runner can wrap them) on Cornell 512x512 (maxDepth 32), sponza-white 1280x720 (maxDepth 8, RR 4), env-sphere, quad-light. Report paired wf/mk ratios min..max, never absolute across runs | `node bench/adapters/matrix.ts --renderers pt-megakernel,pt-wavefront --scenes cornell --spp 256 --snapshots 64 --repeat 5 --interleave --name p31-cornell` then the same with `--scenes sponza-white --spp 64 --append --name p31-cornell` (appended cells share the report); add `--scenes env-sphere,quad-light --spp 1024 --name p31-small` (a separate report). Skip furnace-dielectric (maxDepth 1000: the wavefront runs 4000 dispatches per sample, a launch-overhead test, not a speed test) | the P3 scheduler default (D11): megakernel or wavefront, and whether P3.2 (refill, compaction, binning) is worth building on this wavefront |
 
 ## Reported
 

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { getScene, allScenes, tier1GltfSceneDescs, tier1TexturedGltfSceneDescs } from '../scenes/index.ts';
 import { materialFromDesc, sceneDescToCopyInput } from '../scenes/to-scene-copy.ts';
 import { ADAPTER_IDS, OWN_ADAPTER_IDS, unsupportedReason } from './registry.ts';
-import { PT_ADAPTER_ID, PtMegakernelAdapter } from './pt-megakernel/index.ts';
+import { PT_ADAPTER_ID, PT_WAVEFRONT_ADAPTER_ID, PtMegakernelAdapter } from './pt-megakernel/index.ts';
 
 const adapter = new PtMegakernelAdapter();
 
@@ -12,6 +12,16 @@ describe('pt-megakernel adapter', () => {
   it('is registered as one of our own renderers and not in the default competitor set', () => {
     expect(OWN_ADAPTER_IDS).toContain(PT_ADAPTER_ID);
     expect([...ADAPTER_IDS]).not.toContain(PT_ADAPTER_ID);
+  });
+
+  it('the wavefront scheduler (P3.1) is the same adapter with scheduler=wavefront, registered as pt-wavefront', () => {
+    expect(OWN_ADAPTER_IDS).toContain(PT_WAVEFRONT_ADAPTER_ID);
+    expect([...ADAPTER_IDS]).not.toContain(PT_WAVEFRONT_ADAPTER_ID);
+    const wf = new PtMegakernelAdapter({ scheduler: 'wavefront' });
+    expect(wf.info.id).toBe('pt-wavefront');
+    expect(wf.info.config).toMatchObject({ scheduler: 'wavefront' });
+    expect(adapter.info.id).toBe('pt-megakernel');
+    expect(adapter.info.config).toMatchObject({ scheduler: 'megakernel' });
   });
 
   it('config records every setting that changes the image', () => {

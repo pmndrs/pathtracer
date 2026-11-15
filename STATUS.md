@@ -41,6 +41,8 @@ _Last updated 2026-11-14._
 - **Quiet pass.** Timing that decides defaults or passes a gate is batched into one run the maintainer starts from a CLI
   session with every app closed (docs/QUIET-PASS.md).
 
+- **Wavefront (P3.1, slice 1).** A second scheduler, `PtWavefront`, runs the same estimator as the megakernel over SoA path state with GPU-written indirect dispatch (camera / intersect / shade / shadow / args kernels, each under 50 KB even for the layered + fuzz + film combination that pushes the megakernel past it). It matches the megakernel per pixel on Tier 0, Sponza and 14 feature scenes (alpha MASK not yet). Provisional M5 timing: 1.6x faster on Cornell, 1.28x on Sponza, 1.4-1.7x slower on small films (quiet pass pending).
+
 **Next**
 - P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
 - Reflections onto the core (P1.5, the P1 gate): a separate session card is waiting.

@@ -386,3 +386,15 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   and 5.0e-3 with Mitsuba. `compareImages(test, ref)`; use the floor of the reference you judge against. Slope of 1/spp from `relMSE(snapshot s, own final)` reads k 1.1-1.3 (shared samples), not 1.
 - D24 default (`layering: 'albedo'`, base `'internal'`, `ptAlbedoBaseInternal`) is the library default only; the `pt-megakernel` adapter still defaults to `stochastic` (reference mode, the gate class B numbers).
   The internal base is +11-15% bright on a white rough base (AttenuationTest backdrop, SheenTestGrid), +2-3% on MetalRoughSpheres: do not take albedo/internal numbers as a Tier 1 result.
+- Wavefront (P3.1, `packages/pathtracer/src/wavefront/`): Chrome on Apple GPUs allows 10 storage buffers per stage whatever the device requests (the
+  caps ask for 16), and a declared binding counts even if the kernel never reads it. Walk 3 + scene 2 + the 7 wavefront buffers did not fit one
+  pipeline layout, so each kernel has its own layout with only the buffers it declares (empty group where it has no walk or scene), and the shade
+  module drops the walk's `@group(0)` lines (`stripWalkBindings`). The error text comes from a validation error scope around layout creation.
+  Switching pipelines in one pass invalidates groups with a different layout: set all of them again before each dispatch.
+- Wavefront state is `array<vec4u>` with floats as bit patterns: a small u32 (instance, triangle index) read back through an f32 array is a denormal
+  and a load may flush it. The indirect args buffer lives in its own group 3, bound only for the args kernel, so no dispatch uses it as storage and
+  as INDIRECT at once. The counter protocol (ping-pong of the extension queue and of the shadow counter, zeroing in the args kernel) is simulated in
+  `layout.test.ts`: change both together. `maxDepth` 1000 (furnace-dielectric) is 4000 dispatches per sample: 95 s per 1024 spp, not a speed test.
+- Wavefront vs megakernel agreement is per pixel (max relative difference <= 7e-5, mostly 1e-6): `node bench/adapters/pt-wavefront-agreement.ts --a <mk report> --b <wf report>`.
+  A difference above that is a bug in the wavefront port, not noise: both use the same sampler dimensions per pixel and vertex. The `pt-megakernel`
+  adapter config now carries `scheduler`, so its config hash differs from rows written before 2026-11-15.

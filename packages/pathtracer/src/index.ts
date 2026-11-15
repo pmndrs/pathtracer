@@ -14,3 +14,6 @@ export * from './integrator/integrator-wgsl.ts';
 export * from './integrator/megakernel.ts';
 export * from './bsdf/thinfilm.ts';
 export * from './bsdf/thinfilm-wgsl.ts';
+export * from './wavefront/layout.ts';
+export * from './wavefront/wavefront-wgsl.ts';
+export * from './wavefront/wavefront.ts';
