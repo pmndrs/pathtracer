@@ -24,7 +24,7 @@
  * 8. scenario=cold (damping A/B, N6f): only the fresh-network curves (ground floor, unseen corridor) and the cut into the corridor.
  *
  * Args: scenario=static|adapt|unseen|cold|all  refSpp=4096  refC=1 (load the saved corridor reference)
- *       outputInit=he|zero  warmupFrames=0  lrWarmupFrames=0  ema=off|plain|warmup (N6f)  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
+ *       outputInit=zero|he  warmupFrames=0  lrWarmupFrames=0  ema=warmup|plain|off (N6f; defaults zero + warmup)  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
  *       trainSelect=tile|pixel  queryDepth=1  lr=0.002  upload=1 (PFMs of the 16- and 256-frame images)  flip=1
  * Timing rows are wall clock per submit (best effort on a shared machine); the quality numbers are deterministic for a seed.
  */
@@ -123,10 +123,10 @@ try {
     queryDepth: numberArg(args, 'queryDepth', 1),
     stepsPerFrame: steps,
     seed: numberArg(args, 'seed', 1),
-    outputInit: args.outputInit === 'zero' ? 'zero' : 'he',
+    outputInit: args.outputInit === 'he' ? 'he' : 'zero',
     warmupFrames: numberArg(args, 'warmupFrames', 0),
     lrWarmupFrames: numberArg(args, 'lrWarmupFrames', 0),
-    ema: args.ema === 'plain' || args.ema === 'warmup' ? args.ema : 'off',
+    ema: args.ema === 'plain' || args.ema === 'off' ? args.ema : 'warmup',
     ...(args.lr ? { learningRate: numberArg(args, 'lr', 0.002) } : {}),
   });
 

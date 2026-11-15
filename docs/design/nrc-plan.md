@@ -107,6 +107,8 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-15 (Mac, session 8).** Fresh-cache damping (N6f): zero output layer + warm-up EMA are the defaults now; a fresh cache's
+  first frame is at the steady error (was 2-3× worse with +77% bias), and steady-state bias fell to +0.1-0.5%.
 - **2026-11-15 (Mac, session 7).** Unseen-region test: a cache trained only on the ground floor is at its steady error in the
   upper-gallery corridor from the first frame after a cut. Found and fixed: training tiles showed as noisy columns in the image
   (now display query + fix-up), plus a query-buffer overflow. Final windowed numbers: warm error 3.2-4.3× lower than plain at

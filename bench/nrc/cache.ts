@@ -404,13 +404,13 @@ export interface NrcSettings {
   learningRate: number;
   useEma: boolean;
   seed: number;
-  /** Damping a fresh cache (N6f). Output layer of a fresh network: 'he' (random, like the rest) or 'zero' (it predicts 0 at first). */
+  /** Damping a fresh cache (N6f). Output layer of a fresh network: 'zero' (default: it predicts 0 at first) or 'he' (random, like the rest). */
   outputInit: 'he' | 'zero';
   /** Plain path tracing in the image (no cache) until the cache has trained this many frames. */
   warmupFrames: number;
   /** Learning rate ramps linearly from 1/n to full over this many training frames. */
   lrWarmupFrames: number;
-  /** Inference weights: 'off' (the trained weights), 'plain' EMA, 'warmup' EMA (min(0.99, (1 + t) / (10 + t))). */
+  /** Inference weights: 'warmup' EMA (default; min(0.99, (1 + t) / (10 + t))), 'plain' EMA, or 'off' (the trained weights). */
   ema: 'off' | 'plain' | 'warmup';
 }
 
@@ -428,10 +428,12 @@ export const DEFAULT_NRC_SETTINGS: NrcSettings = {
   learningRate: DEFAULT_TRAIN.learningRate,
   useEma: false,
   seed: 1,
-  outputInit: 'he',
+  // N6f A/B (NRC-STUDY.md, 3 seeds): zero output layer + warm-up EMA brought a fresh cache's first-frame error to its steady level
+  // (2.36 vs 4.67 ground floor, 5.36 vs 11.0 unseen corridor) and bias to 3-4% by frame 8, with no lag after a cut.
+  outputInit: 'zero',
   warmupFrames: 0,
   lrWarmupFrames: 0,
-  ema: 'off',
+  ema: 'warmup',
 };
 
 type Stage = 'trainingPaths' | 'trainSteps' | 'renderPass' | 'inference';

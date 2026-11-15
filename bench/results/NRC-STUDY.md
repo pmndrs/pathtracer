@@ -74,6 +74,32 @@ building, a closed room) would be a harder test. A **fresh** network is the weak
 path tracing (+174% bias in the corridor). Damp it: EMA weights (N-D7), a learning-rate warm-up, or show plain path tracing
 until the loss settles.
 
+## Damping a fresh cache (N6f, 2026-11-15)
+
+A fresh network's first frames were the weak spot. Frame 1 renders before any training (render → inference → training is the
+frame order), so it used the randomly initialised network's output directly. Settings A/B'd (`nrc-study.html?scenario=cold`,
+640×360, 2 steps, windowed Chrome, 3 network seeds each; single-frame relMSE, mean |bias| in brackets):
+
+| Setting | Ground floor t1 | t4 | t8 | Unseen corridor t1 | t4 | t8 |
+|---|---|---|---|---|---|---|
+| Random output layer (before) | 4.67 (31%) | 3.37 (25%) | 2.57 (9%) | 11.0 (77%) | 6.47 (32%) | 5.46 (13%) |
+| Zero output layer | 2.36 (36%) | 2.61 (29%) | 2.17 (7%) | 5.36 (30%) | 5.46 (20%) | 5.13 (8%) |
+| Plain path tracing for the first 4 frames | 9.31 (1%) | 8.86 (1%) | 2.58 (9%) | 14.8 (2%) | 14.2 (2%) | 5.40 (11%) |
+| Learning rate ramped over 16 frames | 4.67 (31%) | 3.62 (27%) | 3.14 (23%) | 11.0 (77%) | 8.25 (52%) | 6.13 (31%) |
+| Warm-up EMA weights | 4.67 (31%) | 3.25 (26%) | 2.71 (15%) | 11.0 (77%) | 6.33 (31%) | 5.48 (14%) |
+| **Zero output layer + warm-up EMA (new default)** | **2.36 (36%)** | **2.45 (22%)** | **2.19 (3%)** | **5.36 (30%)** | **5.45 (19%)** | **5.14 (4%)** |
+| Zero output layer + learning-rate ramp | 2.36 (36%) | 2.26 (30%) | 2.33 (12%) | 5.36 (30%) | 5.29 (21%) | 5.29 (21%) |
+
+Steady state for comparison: about 2.4 (ground floor) and 5.4 (corridor); plain path tracing 8.6 / 14.5. With the new default a
+fresh cache's first frame is already at the steady error, and the bias that remains for frames 1-4 is a slight darkening (the
+cache starts at 0 and grows) instead of the old over-brightening (+77% in the corridor); it is down to 3-4% by frame 8. The cut
+into the corridor (a warm cache) is unaffected by every setting (5.3 at frame 1). Showing plain path tracing first is unbiased
+but 4× noisier for those frames; it stays a setting (`warmupFrames`). The warm-up EMA uses the decay min(0.99, (1 + t) / (10 + t))
+(TensorFlow's num_updates form), so it follows the weights closely early on and needs no bias correction.
+
+The defaults also help the steady state (640×360, warm cache): relMSE 0.116 vs 0.122 at 16 frames and 0.0092 vs 0.0113 at 256,
+bias +0.1-0.5% instead of +1-2.6%, LDR-FLIP at 256 frames 0.069 (plain 0.087; before 0.078), flicker 1.01 vs plain 1.61.
+
 ## Fixed during this study: training tiles visible in the image
 
 Training paths run past the cache vertex to depth M, so their pixels showed plain path tracing's noise: dark, speckled 8-pixel
