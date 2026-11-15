@@ -443,3 +443,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   the noise floor: cornell 0.07x). The distribution test is vbuffer(seed 2) vs traced(seed 0) against traced(seed 1) vs traced(seed 0): ratio 1.00.
 - A V-buffer hit on an alpha MASK cutout texel needs no alpha-tested raster: the kernel's own cutout step passes through and continues by TRACING (`primary` goes false after the first iteration), so images are exact; an engine
   that alpha-tests only saves those re-traces.
+- The runner's `loaded` gate is load1 > core count, so a 4-6 load (post-reboot Spotlight + fileproviderd at ~100% CPU each) is NOT marked: rows read `valid=1`
+  with `best effort (background apps: ...)`. After a reboot wait until `mds_stores`/`fileproviderd` settle (can take > 30 min) before a quiet pass; quote the
+  per-round load1 next to any number. `alpha-policy-ab.ts` reads the last N CSV rows of a cell, so later runs of the same cell corrupt its timing columns; use
+  `bench/adapters/paired-ratios.ts --report <name>` (per-round `run.json`) for paired ratios.
