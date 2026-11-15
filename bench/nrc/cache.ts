@@ -20,7 +20,7 @@
  * → `stepsPerFrame` training steps → render pass → inference → resolve.
  */
 
-import { MlpEngine, nrcEncodingWgsl, initWeights, DEFAULT_SHAPE, DEFAULT_TRAIN, type Precision, type MlpEngineOptions } from '@pathtracer/mlp';
+import { MlpEngine, nrcEncodingWgsl, initWeights, layerOffset, weightCount, DEFAULT_SHAPE, DEFAULT_TRAIN, type Precision, type MlpEngineOptions } from '@pathtracer/mlp';
 import { PtMegakernel, type PtHooksOptions, type PtLookAtCamera, type PtMegakernelOptions } from '@pmndrs/pathtracer';
 import type { Caps } from '@pmndrs/raytracer';
 
@@ -141,6 +141,8 @@ fn ptOnVertex(v: PtPathVertex) -> u32 {
         // The image gets the same estimate as every other pixel: a display query at the cache vertex (resolved into the
         // image), and the fix-up pass later removes what the path gathers beyond it. The path itself trains to vertex M.
         let display = nrcHook.stopDepth < nrcHook.trainDepth;
+        // Warm-up (no cache in the image yet: stopDepth = 0xffffffff): the tail is training-only and the path runs on.
+        let warm = nrcHook.stopDepth == 0xffffffffu;
         if (v.depth < nrcHook.trainDepth) {
             let b = (v.depth * nrcHook.slots + slot) * ${NRC_RECORD_VEC4}u;
             nrcTrain[b] = vec4f(v.position, f32(v.pixel));
@@ -153,8 +155,8 @@ fn ptOnVertex(v: PtPathVertex) -> u32 {
             return PT_HOOK_CONTINUE;
         }
         let s0 = slot * (nrcHook.trainDepth + 1u);
-        nrcSums[s0] = vec4f(nrcSums[s0].xyz, f32(nrcQuery(v, select(1.0, 2.0, display))));
-        return PT_HOOK_TERMINATE;
+        nrcSums[s0] = vec4f(nrcSums[s0].xyz, f32(nrcQuery(v, select(1.0, 2.0, display || warm))));
+        return select(PT_HOOK_TERMINATE, PT_HOOK_CONTINUE, warm);
     }
     if (v.depth < nrcHook.stopDepth) {
         return PT_HOOK_CONTINUE;
@@ -402,6 +404,14 @@ export interface NrcSettings {
   learningRate: number;
   useEma: boolean;
   seed: number;
+  /** Damping a fresh cache (N6f). Output layer of a fresh network: 'he' (random, like the rest) or 'zero' (it predicts 0 at first). */
+  outputInit: 'he' | 'zero';
+  /** Plain path tracing in the image (no cache) until the cache has trained this many frames. */
+  warmupFrames: number;
+  /** Learning rate ramps linearly from 1/n to full over this many training frames. */
+  lrWarmupFrames: number;
+  /** Inference weights: 'off' (the trained weights), 'plain' EMA, 'warmup' EMA (min(0.99, (1 + t) / (10 + t))). */
+  ema: 'off' | 'plain' | 'warmup';
 }
 
 export const DEFAULT_NRC_SETTINGS: NrcSettings = {
@@ -418,6 +428,10 @@ export const DEFAULT_NRC_SETTINGS: NrcSettings = {
   learningRate: DEFAULT_TRAIN.learningRate,
   useEma: false,
   seed: 1,
+  outputInit: 'he',
+  warmupFrames: 0,
+  lrWarmupFrames: 0,
+  ema: 'off',
 };
 
 type Stage = 'trainingPaths' | 'trainSteps' | 'renderPass' | 'inference';
@@ -541,13 +555,13 @@ export class NrcCache {
       precision: s.precision,
       capacity: s.batch,
       inferCapacity: Math.max(queryCapacity, trainPaths),
-      useEma: s.useEma,
-      train: { ...DEFAULT_TRAIN, learningRate: s.learningRate },
+      useEma: s.useEma || s.ema !== 'off',
+      train: { ...DEFAULT_TRAIN, learningRate: s.learningRate, emaWarmup: s.ema === 'warmup' },
       trainHooks: NRC_TRAIN_HOOKS,
       inferHooks: NRC_INFER_HOOKS,
       ...(s.sgm ? { sgm: s.sgm } : {}),
     });
-    mlp.uploadWeights(initWeights(DEFAULT_SHAPE, s.seed));
+    mlp.uploadWeights(NrcCache.freshWeights(s, s.seed));
     const tailInferGroup = inline
       ? null
       : device.createBindGroup({ layout: mlp.inferLayout, entries: [{ binding: 0, resource: { buffer: trainVerts, offset: M * trainPaths * RECORD_BYTES, size: trainPaths * RECORD_BYTES } }, { binding: 1, resource: { buffer: tailPred as GPUBuffer } }, { binding: 2, resource: { buffer: box } }] });
@@ -604,7 +618,30 @@ export class NrcCache {
 
   /** Forgets everything the network learned (fresh weights, Adam state). */
   resetNetwork(): void {
-    this.mlp.uploadWeights(initWeights(DEFAULT_SHAPE, this.settings.seed + this.frame));
+    this.mlp.uploadWeights(NrcCache.freshWeights(this.settings, this.settings.seed + this.frame));
+    this.trainedFrames = 0;
+  }
+
+  /** He-initialised weights; with outputInit 'zero' the output layer starts at 0, so a fresh cache predicts no light. */
+  static freshWeights(s: NrcSettings, seed: number): Float32Array {
+    const w = initWeights(DEFAULT_SHAPE, seed);
+    if (s.outputInit === 'zero') w.fill(0, layerOffset(DEFAULT_SHAPE, DEFAULT_SHAPE.hidden), weightCount(DEFAULT_SHAPE));
+    return w;
+  }
+
+  /** Frames trained since the network was (re)initialised. */
+  private trainedFrames = 0;
+  private stopWritten = -1;
+
+  /** The hook's stop depth for this frame: no cache (0xffffffff) during warm-up frames, else the query depth. */
+  private applyStopDepth(): void {
+    const s = this.settings;
+    const stop = this.trainedFrames < s.warmupFrames ? 0xffffffff : s.queryDepth;
+    if (stop === this.stopWritten) return;
+    this.stopWritten = stop;
+    const M = s.trainDepth;
+    this.device.queue.writeBuffer(this.hookParams, (M + 1) * HOOK_SLOT + 4, new Uint32Array([stop]));
+    if (this.fixupParams) this.device.queue.writeBuffer(this.fixupParams, 4, new Uint32Array([stop]));
   }
 
   setCamera(camera: PtLookAtCamera): void {
@@ -614,9 +651,9 @@ export class NrcCache {
 
   /** Vertex the render paths terminate into the cache at (0 = primary hit). Clear the image after a change. */
   setQueryDepth(depth: number): void {
-    const M = this.settings.trainDepth;
-    this.device.queue.writeBuffer(this.hookParams, (M + 1) * HOOK_SLOT + 4, new Uint32Array([depth]));
-    if (this.fixupParams) this.device.queue.writeBuffer(this.fixupParams, 4, new Uint32Array([depth]));
+    this.settings.queryDepth = depth;
+    this.stopWritten = -1;
+    this.applyStopDepth();
   }
 
   /**
@@ -658,8 +695,11 @@ export class NrcCache {
       this.mlp.encodeInfer(encoder, this.tailCount as GPUBuffer, 0, this.tailInferGroup as GPUBindGroup);
       this.encodeTargets(encoder);
     } else if (stage === 'trainSteps') {
+      if (s.lrWarmupFrames > 0) this.mlp.setLearningRate(s.learningRate * Math.min(1, (this.trainedFrames + 1) / s.lrWarmupFrames));
       for (let i = 0; i < s.stepsPerFrame; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
+      if (s.stepsPerFrame > 0) this.trainedFrames++;
     } else if (stage === 'renderPass') {
+      this.applyStopDepth();
       encoder.clearBuffer(this.queryCount, 0, 4); // word 1 is the frame counter
       if (inline) {
         encoder.clearBuffer(this.trainVerts);

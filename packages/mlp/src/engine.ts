@@ -97,7 +97,7 @@ export class MlpEngine {
   /** Per-split partial dW (tiled arm only). */
   readonly gradientPartials: GPUBuffer | null;
   private readonly sgmCount: number;
-  private readonly settings: TrainSettings;
+  private settings: TrainSettings;
   private readonly useEma: boolean;
 
   private constructor(device: GPUDevice, options: MlpEngineOptions, pipelines: MlpEngine['pipelines']) {
@@ -233,7 +233,13 @@ export class MlpEngine {
     f[8] = s.emaDecay;
     f[9] = s.lossEpsilon;
     u[10] = groupRecords;
+    u[11] = s.emaWarmup ? 1 : 0;
     this.device.queue.writeBuffer(buffer, 0, data);
+  }
+
+  /** Changes the learning rate from the next encoded training step on (it is part of the per-call params: a submit sees the last value set). */
+  setLearningRate(learningRate: number): void {
+    this.settings = { ...this.settings, learningRate };
   }
 
   /** Resets Adam (step 0, zero moments on the next sync). */

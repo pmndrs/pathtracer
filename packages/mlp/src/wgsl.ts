@@ -98,7 +98,7 @@ struct NnParams {
   emaDecay: f32,
   lossEpsilon: f32,
   groupRecords: u32, // records per workgroup of the kernel nnPrepare sizes
-  _pad1: f32,
+  emaWarmup: u32,    // 1: EMA decay min(emaDecay, (1 + step) / (10 + step))
 }
 
 `;
@@ -298,7 +298,9 @@ fn nnAdam(@builtin(global_invocation_id) gid: vec3u) {
   let vHat = mv.y / (1.0 - nnState.beta2t);
   let weight = nnMaster[w] - params.learningRate * mHat / (sqrt(vHat) + params.epsilon);
   nnMaster[w] = weight;
-  let ema = params.emaDecay * nnEma[w] + (1.0 - params.emaDecay) * weight;
+  let t = f32(nnState.step);
+  let decay = select(params.emaDecay, min(params.emaDecay, (1.0 + t) / (10.0 + t)), params.emaWarmup == 1u);
+  let ema = decay * nnEma[w] + (1.0 - decay) * weight;
   nnEma[w] = ema;
   nnTrainWeights[w] = T(weight);
   nnUseWeights[w] = T(select(weight, ema, params.useEma == 1u));

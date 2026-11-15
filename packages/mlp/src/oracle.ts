@@ -142,6 +142,7 @@ export class AdamState {
   apply(gradient: ArrayLike<number>): void {
     const { learningRate, beta1, beta2, epsilon, emaDecay } = this._settings;
     this.step++;
+    const decay = this._settings.emaWarmup ? Math.min(emaDecay, (1 + this.step) / (10 + this.step)) : emaDecay;
     const c1 = 1 - beta1 ** this.step;
     const c2 = 1 - beta2 ** this.step;
     for (let i = 0; i < this.weights.length; i++) {
@@ -152,7 +153,7 @@ export class AdamState {
       this.m[i] = m;
       this.v[i] = v;
       this.weights[i] = (this.weights[i] as number) - (learningRate * (m / c1)) / (Math.sqrt(v / c2) + epsilon);
-      this.ema[i] = emaDecay * (this.ema[i] as number) + (1 - emaDecay) * (this.weights[i] as number);
+      this.ema[i] = decay * (this.ema[i] as number) + (1 - decay) * (this.weights[i] as number);
     }
   }
 

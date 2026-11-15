@@ -21,7 +21,10 @@
  * 7. Unseen region (scenario=unseen or all): the upper gallery's corridor, which no ground-floor view shows; reference = our own
  *    plain path tracer at refSpp (4096). Single-frame error after a cut from a cache warmed on the ground floor, vs cold and steady.
  *
- * Args: scenario=static|adapt|unseen|all  refSpp=4096  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
+ * 8. scenario=cold (damping A/B, N6f): only the fresh-network curves (ground floor, unseen corridor) and the cut into the corridor.
+ *
+ * Args: scenario=static|adapt|unseen|cold|all  refSpp=4096  refC=1 (load the saved corridor reference)
+ *       outputInit=he|zero  warmupFrames=0  lrWarmupFrames=0  ema=off|plain|warmup (N6f)  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
  *       trainSelect=tile|pixel  queryDepth=1  lr=0.002  upload=1 (PFMs of the 16- and 256-frame images)  flip=1
  * Timing rows are wall clock per submit (best effort on a shared machine); the quality numbers are deterministic for a seed.
  */
@@ -119,6 +122,11 @@ try {
     trainSelect: args.trainSelect === 'pixel' ? 'pixel' : 'tile',
     queryDepth: numberArg(args, 'queryDepth', 1),
     stepsPerFrame: steps,
+    seed: numberArg(args, 'seed', 1),
+    outputInit: args.outputInit === 'zero' ? 'zero' : 'he',
+    warmupFrames: numberArg(args, 'warmupFrames', 0),
+    lrWarmupFrames: numberArg(args, 'lrWarmupFrames', 0),
+    ema: args.ema === 'plain' || args.ema === 'warmup' ? args.ema : 'off',
     ...(args.lr ? { learningRate: numberArg(args, 'lr', 0.002) } : {}),
   });
 
@@ -192,6 +200,7 @@ try {
   const scenario = args.scenario ?? 'static';
   const runStatic = scenario === 'static' || scenario === 'all';
   const runAdapt = scenario === 'adapt' || scenario === 'all';
+  const runCold = scenario === 'cold';
 
   // 2. Cold start: a fresh network.
   if (runStatic) {
@@ -329,17 +338,33 @@ try {
     await curve('adapt_fly', ref);
   }
 
-  // 7. Unseen region: the reference there is our own path tracer at refSpp (it matches Mitsuba on Sponza, P2.9).
-  if (scenario === 'unseen' || scenario === 'all') {
-    const refSpp = numberArg(args, 'refSpp', 4096);
-    plain.setCamera(viewC);
-    plain.setSeed(777);
-    await submit((e) => plain.reset(e));
-    for (let n = 0; n < refSpp; n += 64) await submit((e) => plain.encode(e, Math.min(64, refSpp - n)));
-    const refC = asImage(await plain.readImage());
-    metrics.unseen_ref_spp = refSpp;
-    if (doUpload) await uploadImage('unseen-reference', refC as never);
-    await steady('unseen', viewC, refC);
+  // 8. Cold start only (scenario=cold, the N6f damping A/B): fresh-network curves at the ground-floor view and in the unseen
+  // corridor, and the cut into the corridor (does damping slow a warm cache down?).
+  if (runCold) {
+    cache.resetNetwork();
+    setCam(viewB);
+    await curve('adapt_cold', ref);
+  }
+
+  // 7. Unseen region: the reference there is our own path tracer at refSpp (it matches Mitsuba on Sponza, P2.9); refC=1 loads
+  // the saved one (bench/references/sponza-white/ours-unseen-gallery-640x360-4096spp.pfm) instead of rendering it.
+  if (scenario === 'unseen' || scenario === 'all' || runCold) {
+    let refC: Image;
+    if (args.refC === '1') {
+      const saved = await fetchPfm('/bench/references/sponza-white/ours-unseen-gallery-640x360-4096spp.pfm');
+      if (saved.width % width !== 0) throw new Error(`refC=1: the saved corridor reference is ${saved.width} wide; run at a width that divides it`);
+      refC = downsample(saved, saved.width / width);
+    } else {
+      const refSpp = numberArg(args, 'refSpp', 4096);
+      plain.setCamera(viewC);
+      plain.setSeed(777);
+      await submit((e) => plain.reset(e));
+      for (let n = 0; n < refSpp; n += 64) await submit((e) => plain.encode(e, Math.min(64, refSpp - n)));
+      refC = asImage(await plain.readImage());
+      metrics.unseen_ref_spp = refSpp;
+      if (doUpload) await uploadImage('unseen-reference', refC as never);
+    }
+    if (!runCold) await steady('unseen', viewC, refC);
     cache.resetNetwork();
     setCam(viewC);
     await curve('unseen_cold', refC);
@@ -347,7 +372,7 @@ try {
     await warmAt(viewB);
     setCam(viewC);
     await curve('unseen_cut', refC);
-    if (doUpload) {
+    if (doUpload && !runCold) {
       const [a, b] = await Promise.all([plain.readImage(), cache.render.readImage()]);
       await uploadImage('unseen-cut-plain-t64', asImage(a) as never);
       await uploadImage('unseen-cut-nrc-t64', asImage(b) as never);

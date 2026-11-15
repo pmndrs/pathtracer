@@ -26,6 +26,11 @@ export interface TrainSettings {
   epsilon: number;
   /** EMA decay for the inference weights (0 disables the EMA copy). */
   emaDecay: number;
+  /**
+   * Warm-up EMA (TensorFlow's num_updates form): the decay at Adam step t is min(emaDecay, (1 + t) / (10 + t)), so the EMA follows
+   * the weights closely over the first steps instead of lingering near the initial weights (track N, N6f). Default false.
+   */
+  emaWarmup?: boolean;
   /** Relative-L2 denominator floor: loss = |p - t|² / (lum(p)² + lossEpsilon), lum(p) held constant. */
   lossEpsilon: number;
 }
