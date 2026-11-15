@@ -621,7 +621,12 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   Error: 87") until `C:\Windows\System32\vulkan-1.dll` is copied next to `dist/win32-x64/dawn.node`. Without `vulkan_enable_f16_on_nvidia`
   Dawn hides `shader-f16` on NVIDIA Vulkan (driver `storageInputOutput16 = false`) and with it every f16 matrix config (only int8 remain).
   dawn.node does not keep Node's event loop alive while GPU promises are pending (the host keeps a timer), and prints Tint compile logs to
-  stdout without a final newline (the host starts each record on a new line).
+  stdout without a final newline (the host starts each record on a new line). Dawn quantizes timestamps to 65 536 ns by default (a 0.6 ms
+  training step read 0.655 or 0.721): the host disables `timestamp_quantization` (the twin of Chrome's developer-features flag; NVIDIA then
+  steps at 1024 ns). dawn.node is not pinned by LUID: a page asking for the default adapter got the Intel iGPU, so the host forces the
+  power preference from `--gpu`. Stopping a background `sh` chain (TaskStop) leaves its `sh` and runner children running: kill the tree.
+- Windows: on NVIDIA the per-record MLP kernel (`infer=portable`) beats the tiled one in Chrome/D3D12 (17 vs 24 ms per M queries, f16), the
+  reverse of Apple, and the same per-record kernel is 3.5x slower on Dawn/Vulkan (60 ms): compare kernels within one backend.
 - Windows: Canary 160 ignores `--use-adapter-luid` and hands out the Intel UHD; `--gpu nvidia` then fails the run. Use Chrome stable.
 - Windows: the `caps` page used to set only `window.__benchResult`, so the runner always timed out on it; it now calls `reportResult`.
   Its subgroup-matrix probe compiles a result type the adapter lists (NVIDIA has no f32 or 8×8 config).

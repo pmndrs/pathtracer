@@ -32,9 +32,17 @@ export function defaultDawnNodePath(repoRoot: string, env: NodeJS.ProcessEnv = p
   return env.DAWN_NODE ? resolve(env.DAWN_NODE) : join(repoRoot, '.cache', 'dawn-node', 'node_modules', 'webgpu', 'index.js');
 }
 
-/** dawn.node `create()` flags for a backend and a toggle list. */
-export function dawnCreateFlags(backend: string, toggles: readonly string[]): string[] {
-  return [`backend=${backend}`, ...(toggles.length ? [`enable-dawn-features=${toggles.join(',')}`] : [])];
+/**
+ * dawn.node `create()` flags for a backend and a toggle list. Dawn quantizes timestamp queries by default (65 536 ns steps
+ * measured on the RTX 3060: a 0.6 ms training step read 0.655 or 0.721 ms); `timestamp_quantization` off is the twin of
+ * Chrome's --enable-webgpu-developer-features that the runner passes, and PT_NO_DEV_FEATURES=1 leaves it on in both.
+ */
+export function dawnCreateFlags(backend: string, toggles: readonly string[], env: NodeJS.ProcessEnv = process.env): string[] {
+  return [
+    `backend=${backend}`,
+    ...(toggles.length ? [`enable-dawn-features=${toggles.join(',')}`] : []),
+    ...(env.PT_NO_DEV_FEATURES === '1' ? [] : ['disable-dawn-features=timestamp_quantization']),
+  ];
 }
 
 /** One record per line. Dawn's native code prints compilation logs to stdout without a final newline, so start a fresh line. */
@@ -78,6 +86,14 @@ async function main(): Promise<void> {
   const dawn = (await import(pathToFileURL(dawnPath).href)) as { create: (flags: string[]) => GPU; globals: Record<string, unknown> };
   Object.assign(globalThis, dawn.globals);
   const gpu = dawn.create(dawnCreateFlags(values.backend ?? 'vulkan', toggles));
+  // Chrome is pinned to the --gpu adapter by LUID; dawn.node is not, and a page asking for the default adapter got the Intel
+  // iGPU on the 3060 laptop. Steer every request by power preference; the runner still checks the adapter each page reports.
+  const wanted = new URLSearchParams(values.query ?? '').get('gpu');
+  if (wanted) {
+    const request = gpu.requestAdapter.bind(gpu);
+    const powerPreference: GPUPowerPreference = wanted === 'intel' ? 'low-power' : 'high-performance';
+    (gpu as { requestAdapter: GPU['requestAdapter'] }).requestAdapter = (options?: GPURequestAdapterOptions) => request({ ...options, powerPreference });
+  }
 
   // Console output becomes runner messages (the runner judges errors the same way as Chrome's).
   for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
