@@ -10,6 +10,7 @@
  *     A hook with its own storage buffer (group 3) counts its terminations: pixels * spp. The two schedulers agree per pixel.
  *  2. Counters, same room: depth M, extension rays M + 1, shadow rays M with NEE, termination `maxDepth`; with the hook at vertex k: depth k + 1, reason `hook`;
  *     a Lambert sphere under a uniform sky: depth 1, 2 extension rays, reason `escaped`; the reasons always sum to 1; megakernel = wavefront per pixel.
+ *  4. The optional radiance callback (`ptOnRadiance`): per-vertex values in the closed room, and the sum of everything a path reports equals its pixel (checkRadiance).
  *  3. AOVs on a plane with a red mirror sphere above it: albedo = the plane's base colour (the mirror's red never shows: the guide follows the specular bounce),
  *     normal = the plane's exactly, viewZ of the plane equals the closed form per pixel, megakernel = wavefront.
  *
@@ -228,6 +229,77 @@ function expectCounters(label: string, c: PtCounters, expect: { depth: number; e
   if (Math.abs(reasonSum - 1) > 1e-9) bad.push(`reasons sum to ${reasonSum}`);
   metrics[`counters_${label}_mismatch`] = bad.length ? 1 : 0;
   if (bad.length) note(`counters ${label}: ${bad.join('; ')}`);
+}
+
+/**
+ * The optional radiance callback (`ptOnRadiance`, track N V84): a hook that sums every reported value per (pixel, vertex index) into its own buffer.
+ *  - Closed room, NEE off, no RR, maxDepth M: the emission of vertex j is rho^j E, so slot j holds spp * rho^j E (j = 0..M); with the cache hook
+ *    terminating at vertex K with value c, slots 0..K hold spp * rho^j E and slot K + 1 holds spp * rho^K c.
+ *  - Bookkeeping, any settings (NEE + MIS, RR): the slots of a pixel sum to its accumulated radiance.
+ * Megakernel only for now (the wavefront has no call sites yet: TASKS N6d).
+ */
+async function checkRadiance(spp: number, tol: number): Promise<void> {
+  const M = 6;
+  const K = 2;
+  const SLOTS = 16;
+  const wgsl = (terminateAt: number, cache: number) => `
+@group(3) @binding(0) var<storage, read_write> radSlots: array<f32>;
+fn ptOnRadiance(pixel: u32, sampleIndex: u32, index: u32, flags: u32, value: vec3f) {
+    let i = (pixel * ${SLOTS}u + min(index, ${SLOTS - 1}u)) * 3u;
+    radSlots[i] += value.x;
+    radSlots[i + 1u] += value.y;
+    radSlots[i + 2u] += value.z;
+}
+fn ptOnVertex(v: PtPathVertex) -> u32 {
+    return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= ${terminateAt}u);
+}
+fn ptTerminate(v: PtPathVertex) -> vec3f {
+    return vec3f(${cache});
+}`;
+  const bindings: GPUBindGroupLayoutEntry[] = [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }];
+  const cases: { name: string; settings: PtAdapterSettings; terminateAt: number; cache: number; expected?: (j: number) => number }[] = [
+    { name: 'closed', settings: {}, terminateAt: 1000, cache: 0, expected: (j) => (j <= M ? RHO ** j * E : 0) },
+    { name: 'closed_cache', settings: {}, terminateAt: K, cache: 0.75, expected: (j) => (j <= K ? RHO ** j * E : j === K + 1 ? RHO ** K * 0.75 : 0) },
+    { name: 'nee_rr_sum', settings: { nee: true, rrStartDepth: 2 }, terminateAt: 1000, cache: 0 },
+  ];
+  for (const c of cases) {
+    const adapter = new PtMegakernelAdapter({ nee: false, rrStartDepth: 0, passesPerSubmit: 4, ...c.settings, hooks: { wgsl: wgsl(c.terminateAt, c.cache), bindings } });
+    await adapter.load(room(M));
+    const device = adapter.gpuContext!.device;
+    const kernel = adapter.renderer!;
+    const pixels = 32 * 32;
+    const slots = device.createBuffer({ size: pixels * SLOTS * 12, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    kernel.setHookBindGroup(device.createBindGroup({ layout: kernel.hookBindGroupLayout!, entries: [{ binding: 0, resource: { buffer: slots } }] }));
+    const result = await adapter.render({ spp });
+    const staging = device.createBuffer({ size: slots.size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(slots, 0, staging, 0, slots.size);
+    device.queue.submit([enc.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const v = new Float32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    let worst = 0;
+    for (let p = 0; p < pixels; p++) {
+      for (let ch = 0; ch < 3; ch++) {
+        let sum = 0;
+        for (let j = 0; j < SLOTS; j++) {
+          const got = (v[(p * SLOTS + j) * 3 + ch] as number) / spp;
+          sum += got;
+          if (c.expected) {
+            const want = c.expected(j);
+            worst = Math.max(worst, Math.abs(got - want) / Math.max(want, 1e-3));
+          }
+        }
+        const pixel = result.image.data[p * 4 + ch] as number;
+        worst = Math.max(worst, Math.abs(sum - pixel) / Math.max(pixel, 1e-3));
+      }
+    }
+    metrics[`radiance_megakernel_${c.name}_max_rel_dev`] = worst;
+    metrics[`radiance_megakernel_${c.name}_mismatch`] = worst > tol ? 1 : 0;
+    if (worst > tol) note(`radiance callback ${c.name}: max rel dev ${worst}`);
+    slots.destroy();
+    adapter.dispose();
+  }
 }
 
 async function checkCounters(spp: number): Promise<void> {
@@ -462,12 +534,13 @@ try {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
   adapterSummary = summarizeAdapter(adapter);
-  const only = args.check ? args.check.split(',') : ['hooks', 'counters', 'aovs'];
+  const only = args.check ? args.check.split(',') : ['hooks', 'counters', 'aovs', 'radiance'];
   if (only.includes('hooks')) await checkHooks(spp, tol);
   if (only.includes('counters')) await checkCounters(spp);
   if (only.includes('aovs')) await checkAovs();
   if (only.includes('aovs')) await checkCornell();
   if (only.includes('budget')) await checkBudget();
+  if (only.includes('radiance')) await checkRadiance(spp, tol);
   void drainDevice;
   void watchDevice;
   const total = Object.entries(metrics).filter(([k]) => k.endsWith('_mismatch')).reduce((sum, [, v]) => sum + v, 0);

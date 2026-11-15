@@ -86,6 +86,19 @@ export function ptHookIsUpdate(x: number, y: number, sample: number, block: numb
 }
 
 const HAS_ON_VERTEX = /\bfn\s+ptOnVertex\b/;
+const HAS_ON_RADIANCE = /\bfn\s+ptOnRadiance\b/;
+
+/**
+ * Does the hook text define the optional radiance callback `fn ptOnRadiance(pixel: u32, sampleIndex: u32, index: u32, flags: u32, value: vec3f)`?
+ * Only then do the integrators emit its call sites (every other kernel, hooked or not, keeps its exact text). It is called wherever the path adds
+ * radiance, with the added value (throughput included, exactly what goes into the pixel) and the index of the vertex whose outgoing light it is
+ * part of: emission and next-event estimation at vertex j report j; light arriving along the ray that leaves vertex j (the environment on an
+ * escape, `ptTerminate`'s cache value) reports j + 1. So the radiance a path gathers after vertex k's own emission and NEE is the sum of the
+ * values with index > k: what a cache's training targets need (track N, V84). `flags` is `PtPathVertex.flags` of the path (`PT_VERTEX_UPDATE`).
+ */
+export function ptHookWantsRadiance(hooks: PtHooksOptions | null | undefined): boolean {
+  return !!hooks && HAS_ON_RADIANCE.test(hooks.wgsl);
+}
 const HAS_TERMINATE = /\bfn\s+ptTerminate\b/;
 
 /** The hook interface: struct, constants, the user's text and defaults for the functions it leaves out. Empty without hooks. */

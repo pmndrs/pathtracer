@@ -14,7 +14,7 @@
 import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dimensions.ts';
-import { ptHookVertexExpr, type PtHooksOptions } from './outputs-wgsl.ts';
+import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
 import { PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
@@ -315,6 +315,10 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const lodS = ptLodSnippets(o, '        ');
   const mixU = mats?.features.mix || (o.lod !== 'off' && mats) ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
   const hooks = !!o.hooks;
+  // The optional radiance callback (`ptOnRadiance`): call sites only when the hook text defines it, so every other kernel keeps its exact text.
+  const onRadiance = ptHookWantsRadiance(o.hooks);
+  const addRadiance = (value: string, index: string, indent: string): string =>
+    onRadiance ? `${indent}{\n${indent}    let ptAdded = ${value};\n${indent}    radiance += ptAdded;\n${indent}    ptOnRadiance(pxIndex, sampleIndex, ${index}, ptHookFlags, ptAdded);\n${indent}}\n` : `${indent}radiance += ${value};\n`;
   const counters = o.counters;
   const aovs = o.aovs;
   const restir = o.restir;
@@ -436,7 +440,8 @@ ${counters || aovs || hooks || restir || frame ? `    let pxIndex = px.y * dims.
     var fAlbedo = vec3f(1.0);
     var fSpec = vec3f(1.0);
 ` : ''}    var radiance = vec3f(0.0);
-    var beta = vec3f(1.0);
+${onRadiance ? `    let ptHookFlags = ptHookUpdateFlag(px.x, px.y, sampleIndex);
+` : ''}    var beta = vec3f(1.0);
     var specularBounce = false;
     var depth = 0u;
     var etaScale = 1.0;
@@ -459,8 +464,7 @@ ${counters ? `            ptCountRay(pxIndex, 1u, 0u);
 ` : `        let hit = rtClosest(ray, RT_MASK_ALL);
 ${counters ? `        ptCountRay(pxIndex, 1u, 0u);
 ` : ''}`}        if (hit.t < 0.0) {
-            radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
-            break;
+${addRadiance('beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf)', 'depth', '            ')}            break;
         }
 ${frame ? `        if (depth == 1u && fBounce == 0.0) {
             fBounce = hit.t;
@@ -499,8 +503,7 @@ ${hooks ? `        var hookEmitted = vec3f(0.0);
                     w = ptMis(prevPdf, light.pmf * rtTriangleSolidAnglePdf(light.area, dist, cosLight));
                 }
             }
-            radiance += beta * mat.emissionColor * w;
-${frame ? `            if (depth == 0u) {
+${addRadiance('beta * mat.emissionColor * w', 'depth', '            ')}${frame ? `            if (depth == 0u) {
                 fDirect = beta * mat.emissionColor * w;
             }
 ` : ''}${hooks ? `            hookEmitted = beta * mat.emissionColor * w;
@@ -542,13 +545,11 @@ ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
 ` : `        let frame = ptFrameFromNormal(${shadingNormal});
 `}        let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
-            radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters || restir ? ', pxIndex' : ''});
-        }
+${addRadiance(`beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters || restir ? ', pxIndex' : ''})`, 'vertex', '            ')}        }
 
 ${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' })};
         if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
-            radiance += beta * ptTerminate(hv);
-${term(4)}            break;
+${addRadiance('beta * ptTerminate(hv)', 'vertex + 1u', '            ')}${term(4)}            break;
         }
 
 ` : ''}        let dirU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION));
