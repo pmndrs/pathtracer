@@ -5,13 +5,17 @@
  *  3. master weights after `steps` Adam steps (the oracle re-derives its gradient from its own f32 weights each step).
  * Errors are relative to the largest magnitude of each quantity. Fails when a check exceeds its tolerance.
  *
+ * Inference arm: infer=portable (default) | sgm (subgroup matrices; config from the adapter, sets precision) |
+ * sgm-emu (the same kernel with plain-WGSL stand-ins, f32: runs anywhere). sgm options: tile=8|16 (sgm-emu only),
+ * subgroups=1|4, sgmRecords=64.
+ *
  * Args: precision=f32|f16 (default f32) records=256 steps=5 seed=1
  */
 
 import { AdamState, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
+import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
 
 // Tolerances relative to max |value|. f16 activations/weights carry ~1e-3 relative rounding.
 const TOLERANCE: Record<Precision, { infer: number; gradient: number; weights: number }> = {
@@ -39,8 +43,11 @@ function maxRelError(gpu: ArrayLike<number>, cpu: ArrayLike<number>, n = cpu.len
 
 try {
   const args = getArgs();
-  const precision = (args.precision ?? 'f32') as Precision;
+  let precision = (args.precision ?? 'f32') as Precision;
   if (precision !== 'f32' && precision !== 'f16') throw new Error(`precision must be f32 or f16, got ${precision}`);
+  const inferArm = args.infer ?? 'portable';
+  const subgroups = numberArg(args, 'subgroups', 1);
+  const sgmRecords = numberArg(args, 'sgmRecords', 64);
   const n = numberArg(args, 'records', 256);
   const steps = numberArg(args, 'steps', 5);
   const seed = numberArg(args, 'seed', 1);
@@ -62,7 +69,10 @@ try {
   }
   const weights = initWeights(shape, seed);
 
-  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER });
+  const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8) });
+  precision = arm.precision;
+  const sgm = arm.sgm;
+  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, ...(sgm ? { sgm } : {}) });
   const inputBuffer = storageBuffer(device, inputs, 'inputs');
   const targetBuffer = storageBuffer(device, targets, 'targets');
   const outputBuffer = storageBuffer(device, n * 3 * 4, 'outputs');
@@ -118,15 +128,15 @@ try {
   reportResult(
     {
       scene: 'mlp-random',
-      renderer: `wgsl-${precision}`,
-      config: { precision, records: n, steps, seed, shape },
+      renderer: inferArm === 'portable' ? `wgsl-${precision}` : `wgsl-${inferArm}`,
+      config: { precision, records: n, steps, seed, shape, infer: inferArm, sgm: sgm ?? null },
       metrics: {
         infer_rel_error: infer.rel,
         gradient_rel_error: gradient.rel,
         update_rel_error: update.rel,
         loss_first: first.loss,
       },
-      notes: { inferScale: infer.scale, gradientScale: gradient.scale, updateScale: update.scale, updateP99, worstUpdateIndex: update.worstIndex, worstUpdateRelGradient: worstGrad },
+      notes: { arm: arm.description, inferScale: infer.scale, gradientScale: gradient.scale, updateScale: update.scale, updateP99, worstUpdateIndex: update.worstIndex, worstUpdateRelGradient: worstGrad },
     },
     { adapter: adapterSummary, deviceErrors },
   );

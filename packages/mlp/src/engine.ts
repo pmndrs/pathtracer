@@ -12,6 +12,7 @@
 
 import { DEFAULT_SHAPE, DEFAULT_TRAIN, weightCount, type MlpShape, type TrainSettings } from './config.ts';
 import { NN_WORKGROUP, adamWgsl, inferWgsl, prepareWgsl, rowStride, trainWgsl, weightGradientWgsl, type Precision } from './wgsl.ts';
+import { inferSgmWgsl, packSgmWgsl, sgmWeightCount, sgmWorkgroupBytes, type SgmOptions } from './wgsl-sgm.ts';
 
 export interface MlpEngineOptions {
   shape?: MlpShape;
@@ -27,6 +28,11 @@ export interface MlpEngineOptions {
   trainHooks: string;
   /** Group-1 WGSL for inference (defines nnInferLoad / nnInferStore and their bindings). */
   inferHooks: string;
+  /**
+   * Inference on subgroup matrices (N3a) instead of the portable kernel. Training stays portable. The operand type
+   * must equal `precision` (emulation: f32).
+   */
+  sgm?: Omit<SgmOptions, 'shape'>;
 }
 
 const PARAMS_BYTES = 48;
@@ -60,8 +66,15 @@ export class MlpEngine {
   private readonly trainParams: GPUBuffer;
   private readonly inferParams: GPUBuffer;
 
-  private readonly pipelines: Record<'prepare' | 'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUComputePipeline>;
-  private readonly groups: Record<'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUBindGroup>;
+  /** Padded inference weights for the sgm arm (null on the portable arm). */
+  readonly sgmWeights: GPUBuffer | null;
+  /** Records per workgroup of the inference kernel. */
+  readonly inferGroupRecords: number;
+  readonly inferBackend: 'portable' | 'sgm' | 'sgm-emulated';
+
+  private readonly pipelines: Record<'prepare' | 'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUComputePipeline> & { pack?: GPUComputePipeline };
+  private readonly groups: Record<'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUBindGroup> & { pack?: GPUBindGroup };
+  private readonly sgmCount: number;
   private readonly settings: TrainSettings;
   private readonly useEma: boolean;
 
@@ -97,17 +110,23 @@ export class MlpEngine {
     this.inferArgs = buffer('inferArgs', 16, storage | GPUBufferUsage.INDIRECT);
     this.trainParams = buffer('trainParams', PARAMS_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.inferParams = buffer('inferParams', PARAMS_BYTES, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const sgm = options.sgm;
+    this.inferBackend = sgm ? (sgm.emulate ? 'sgm-emulated' : 'sgm') : 'portable';
+    this.inferGroupRecords = sgm ? sgm.records : NN_WORKGROUP;
+    this.sgmCount = sgm ? sgmWeightCount(this.shape, sgm.config) : 0;
+    this.sgmWeights = sgm ? buffer('sgmWeights', this.sgmCount * bpe) : null;
     this.resetOptimizer();
 
     // 'auto' layouts keep only the bindings a kernel uses, so nnSync gets just its own five.
     const bg = (pipeline: GPUComputePipeline, buffers: GPUBuffer[], first = 0) =>
       device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: buffers.map((b, i) => ({ binding: first + i, resource: { buffer: b } })) });
     this.groups = {
-      infer: bg(pipelines.infer, [this.useWeights, this.inferState]), // nnInfer reads no params
+      infer: bg(pipelines.infer, [this.sgmWeights ?? this.useWeights, this.inferState]), // the infer kernels read no params
       forwardBackward: bg(pipelines.forwardBackward, [this.trainWeights, this.trainState, this.trainParams, this.activations, this.deltas, this.loss]),
       weightGradient: bg(pipelines.weightGradient, [this.trainState, this.trainParams, this.activations, this.deltas, this.gradient]),
       adam: bg(pipelines.adam, [this.trainState, this.trainParams, this.gradient, this.master, this.moments, this.ema, this.trainWeights, this.useWeights]),
       sync: bg(pipelines.sync, [this.master, this.moments, this.ema, this.trainWeights, this.useWeights], 3),
+      ...(pipelines.pack && this.sgmWeights ? { pack: bg(pipelines.pack, [this.useWeights, this.sgmWeights]) } : {}),
     };
   }
 
@@ -123,15 +142,23 @@ export class MlpEngine {
       return device.createComputePipelineAsync({ label: `nn ${label}`, layout: 'auto', compute: { module, entryPoint } });
     };
     const adam = adamWgsl(o);
-    const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync] = await Promise.all([
+    const sgm = options.sgm ? { ...options.sgm, shape } : null;
+    if (sgm) {
+      const operand = sgm.emulate ? 'f32' : sgm.config.componentType;
+      if (operand !== options.precision) throw new Error(`MlpEngine: sgm operand type ${operand} must equal precision ${options.precision}`);
+      const need = sgmWorkgroupBytes(sgm);
+      if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: sgm needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower sgm.records`);
+    }
+    const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync, pack] = await Promise.all([
       make('prepare', prepareWgsl(o), 'nnPrepare'),
-      make('infer', inferWgsl(o, options.inferHooks), 'nnInfer'),
+      sgm ? make('inferSgm', inferSgmWgsl(sgm, options.inferHooks), 'nnInferSgm') : make('infer', inferWgsl(o, options.inferHooks), 'nnInfer'),
       make('forwardBackward', trainWgsl(o, options.trainHooks), 'nnForwardBackward'),
       make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
       make('adam', adam, 'nnAdam'),
       make('sync', adam, 'nnSync'),
+      sgm ? make('packSgm', packSgmWgsl(sgm), 'nnPackSgm') : Promise.resolve(undefined),
     ]);
-    return new MlpEngine(device, options, { prepare, infer, forwardBackward, weightGradient, adam: adamPipeline, sync });
+    return new MlpEngine(device, options, { prepare, infer, forwardBackward, weightGradient, adam: adamPipeline, sync, ...(pack ? { pack } : {}) });
   }
 
   /** Layout for the caller's group-1 bind group (training hooks). */
@@ -144,7 +171,7 @@ export class MlpEngine {
     return this.pipelines.infer.getBindGroupLayout(1);
   }
 
-  private writeParams(buffer: GPUBuffer, capacity: number, countWord: number, train: boolean): void {
+  private writeParams(buffer: GPUBuffer, capacity: number, countWord: number, train: boolean, groupRecords: number): void {
     const s = this.settings;
     const data = new ArrayBuffer(PARAMS_BYTES);
     const u = new Uint32Array(data);
@@ -159,6 +186,7 @@ export class MlpEngine {
     f[7] = s.epsilon;
     f[8] = s.emaDecay;
     f[9] = s.lossEpsilon;
+    u[10] = groupRecords;
     this.device.queue.writeBuffer(buffer, 0, data);
   }
 
@@ -206,7 +234,7 @@ export class MlpEngine {
    * Adam. `counts[countWord]` is the number of records; `hooks` is the caller's group-1 bind group.
    */
   encodeTrainStep(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites): void {
-    this.writeParams(this.trainParams, this.capacity, countWord, true);
+    this.writeParams(this.trainParams, this.capacity, countWord, true, NN_WORKGROUP);
     const pass = encoder.beginComputePass({ label: 'nn train', timestampWrites });
     pass.setPipeline(this.pipelines.prepare);
     pass.setBindGroup(0, this.prepareGroup('train', counts));
@@ -226,8 +254,14 @@ export class MlpEngine {
 
   /** Inference over `counts[countWord]` records (clamped to inferCapacity). */
   encodeInfer(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites): void {
-    this.writeParams(this.inferParams, this.inferCapacity, countWord, false);
-    const pass = encoder.beginComputePass({ label: 'nn infer', timestampWrites });
+    this.writeParams(this.inferParams, this.inferCapacity, countWord, false, this.inferGroupRecords);
+    const pass = encoder.beginComputePass({ label: `nn infer (${this.inferBackend})`, timestampWrites });
+    if (this.pipelines.pack && this.groups.pack) {
+      // Repack the current inference weights into the padded sgm layout (~21k threads; part of the timed pass).
+      pass.setPipeline(this.pipelines.pack);
+      pass.setBindGroup(0, this.groups.pack);
+      pass.dispatchWorkgroups(Math.ceil(this.sgmCount / 64));
+    }
     pass.setPipeline(this.pipelines.prepare);
     pass.setBindGroup(0, this.prepareGroup('infer', counts));
     pass.dispatchWorkgroups(1);
@@ -240,5 +274,6 @@ export class MlpEngine {
 
   destroy(): void {
     for (const b of [this.master, this.trainWeights, this.useWeights, this.ema, this.moments, this.gradient, this.activations, this.deltas, this.loss, this.trainState, this.inferState, this.trainArgs, this.inferArgs, this.trainParams, this.inferParams]) b.destroy();
+    this.sgmWeights?.destroy();
   }
 }

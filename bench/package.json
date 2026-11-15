@@ -18,7 +18,8 @@
     "assets:generate": "node scenes/tier0/generate-assets.ts",
     "assets:fetch": "node assets/fetch.ts",
     "adapters:export": "node adapters/export-scenes.ts",
-    "competitors": "node adapters/matrix.ts"
+    "competitors": "node adapters/matrix.ts",
+    "mlp:live": "vite .. --port 5293 --open /bench/pages/mlp-live.html"
   },
   "devDependencies": {
     "@meimu/mutracer": "0.3.1",

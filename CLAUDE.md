@@ -180,4 +180,13 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - gpuweb issue bodies (not comments) are readable through `gh api -X GET search/issues -f q='repo:gpuweb/gpuweb <n>
   in:number'`; proposal files through raw.githubusercontent.com. developer.chrome.com and googlesource are not
   reachable from cloud sessions; use WebSearch summaries for those.
+- WebGPU **canvas presentation** kills the GPU instance on headless SwiftShader in cloud containers ("A valid external
+  Instance reference no longer exists"), with every flag combination tried; compute-only pages are fine. Render to a
+  texture instead (`mlp-live.html?offscreen=1`).
+- Headless `requestAnimationFrame` does not wait for the GPU: a page that encodes work per frame must cap frames in
+  flight (`onSubmittedWorkDone`), or the queue grows without bound and later waits never return.
+- SwiftShader reports subgroup size 4. A kernel laid out for 32-wide subgroups still runs there only in the emulated
+  sgm form (`infer=sgm-emu`), which assumes nothing about subgroup size.
+- Vite's dependency scan at the repo root (`mlp:live`) logs an error for `@pmndrs/bvh` when the sibling is missing;
+  pages that do not import it still load.
 

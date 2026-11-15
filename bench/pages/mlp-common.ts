@@ -1,4 +1,6 @@
-/** Shared helpers for the research-track-N pages (mlp-check, mlp-fit). */
+/** Shared helpers for the research-track-N pages (mlp-check, mlp-fit, mlp-timing, mlp-live, mlp-sgm-probe). */
+
+import { pickSubgroupMatrixConfig, type MlpEngineOptions, type MlpShape, type Precision } from '@pathtracer/mlp';
 
 /** A device with every adapter feature and the adapter's max limits (the MLP wants 16-32 KiB of workgroup memory). */
 export async function requestMlpDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice }> {
@@ -42,4 +44,48 @@ export function halfToFloat(h: number): number {
   if (e === 0) return s * f * 2 ** -24;
   if (e === 31) return f ? NaN : s * Infinity;
   return s * (1 + f / 1024) * 2 ** (e - 15);
+}
+
+
+export type InferArm = 'portable' | 'sgm' | 'sgm-emu';
+
+export function hasSubgroupMatrix(device: GPUDevice): boolean {
+  return device.features.has('chromium-experimental-subgroup-matrix' as GPUFeatureName) || device.features.has('subgroup-matrix' as GPUFeatureName);
+}
+
+/**
+ * Engine precision + sgm options for an inference arm. `sgm` picks a config from the adapter (operand type decides
+ * the precision); `sgm-emu` is the plain-WGSL stand-in (f32, any device, correctness only).
+ */
+export function inferArmOptions(
+  arm: string,
+  adapter: GPUAdapter,
+  device: GPUDevice,
+  shape: MlpShape,
+  precision: Precision,
+  opts: { records?: number; subgroups?: number; tile?: number } = {},
+): { precision: Precision; sgm?: MlpEngineOptions['sgm']; description: string } {
+  const records = opts.records ?? 64;
+  const subgroups = opts.subgroups ?? 1;
+  if (arm === 'portable') return { precision, description: `portable ${precision}` };
+  if (arm === 'sgm-emu') {
+    const t = opts.tile ?? 8;
+    return {
+      precision: 'f32',
+      sgm: { config: { componentType: 'f32', resultComponentType: 'f32', M: t, N: t, K: t, minSubgroupSize: 32, maxSubgroupSize: 32 }, records, subgroups, emulate: true },
+      description: `sgm emulated ${t}³ f32, ${records} rec × ${subgroups} sg`,
+    };
+  }
+  if (arm === 'sgm') {
+    if (!hasSubgroupMatrix(device)) throw new Error('infer=sgm needs chromium-experimental-subgroup-matrix (Chrome with --enable-unsafe-webgpu)');
+    const config = pickSubgroupMatrixConfig(adapter.info, shape, precision === 'f16' && device.features.has('shader-f16'));
+    if (!config) throw new Error('no usable subgroupMatrixConfigs entry on this adapter');
+    const enableName = device.features.has('subgroup-matrix' as GPUFeatureName) ? 'subgroup_matrix' : 'chromium_experimental_subgroup_matrix';
+    return {
+      precision: config.componentType,
+      sgm: { config, records, subgroups, enableName },
+      description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→${config.resultComponentType}, ${records} rec × ${subgroups} sg`,
+    };
+  }
+  throw new Error(`infer must be portable, sgm or sgm-emu, got ${arm}`);
 }

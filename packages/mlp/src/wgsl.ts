@@ -60,12 +60,14 @@ fn nnDotRow(o: u32, nIn4: u32, a: ptr<function, array<T4, NN_S4>>) -> f32 {
 `;
 }
 
-function header(o: MlpWgslOptions): string {
+/** Shared module header. `directives` (enable / diagnostic lines) must come first in WGSL, so callers pass them here. */
+export function header(o: MlpWgslOptions, directives: string[] = []): string {
   const { shape, precision } = o;
   validateShape(shape);
   const T = precision;
   const S = rowStride(shape);
-  return /* wgsl */ `${precision === 'f16' ? 'enable f16;\n' : ''}
+  const lines = [...(precision === 'f16' ? ['enable f16;'] : []), ...directives];
+  return /* wgsl */ `${lines.join('\n')}${lines.length ? '\n' : ''}
 // @pathtracer/mlp: ${shape.inputs} → ${shape.hidden}×${shape.width} → ${shape.outputs}, ${precision}
 alias T = ${T};
 alias T4 = vec4<${T}>;
@@ -95,7 +97,7 @@ struct NnParams {
   epsilon: f32,
   emaDecay: f32,
   lossEpsilon: f32,
-  _pad0: f32,
+  groupRecords: u32, // records per workgroup of the kernel nnPrepare sizes
   _pad1: f32,
 }
 
@@ -227,7 +229,8 @@ fn nnPrepare() {
   let count = min(nnCounts[params.countWord], params.capacity);
   nnState.count = count;
   // 2D grid past 65535 workgroups.
-  let groups = (count + NN_WG - 1u) / NN_WG;
+  let per = max(params.groupRecords, 1u);
+  let groups = (count + per - 1u) / per;
   let gx = min(groups, 65535u);
   nnArgs[0] = gx;
   nnArgs[1] = select(1u, (groups + gx - 1u) / max(gx, 1u), gx > 0u);

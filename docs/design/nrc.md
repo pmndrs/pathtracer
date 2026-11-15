@@ -248,22 +248,45 @@ Rows are in [TASKS.md](../../TASKS.md) section N. Each stage ends with a bench o
 Order matters: N2 can kill the track cheaply. If `wgsl-sgm` gives nothing on any device we can run, the demo still
 works on `wgsl-f16` at the upscaler's resolution, and the write-up says so.
 
-### Status and how to run (2026-11-14)
+### Status and how to run (2026-11-15)
 
-N1's engine exists: `packages/mlp` (`@pathtracer/mlp`, private, WGSL prefix `nn`). Portable kernels (V28): one thread
-per record, one layer's weights staged in workgroup memory, activations and deltas stored, a deterministic per-weight
-gradient pass, Adam/EMA, GPU-side counts and indirect dispatch. Verified for f32 against the oracle on SwiftShader in a
-cloud session (see TASKS N1); f16 and every timing need a real GPU:
+Built (`packages/mlp`, `@pathtracer/mlp`, private, WGSL prefix `nn`):
+- **Portable arms** `wgsl-f32` / `wgsl-f16`: inference, forward/backward, deterministic weight-gradient pass, Adam/EMA,
+  GPU-side counts and indirect dispatch (V28). f32 verified against the oracle on SwiftShader.
+- **Subgroup-matrix inference** `wgsl-sgm` (N3a, `wgsl-sgm.ts`): tiles from the adapter's config, weights read as a
+  transposed column-major view, ReLU/convert round trip through workgroup memory, 1 or N subgroups per workgroup
+  (rows split by `subgroup_id`). The same generator emits an **emulated** form in plain WGSL; that form matches the
+  oracle on SwiftShader for 8³ and 16³ tiles, 1/2/4 subgroups and ragged counts (inference 3–4e-7 rel). The native
+  form has never been compiled (no device here). Training on subgroup matrices is N3b, not started.
+- **Pages:** `mlp-check` (GPU vs oracle, `infer=portable|sgm|sgm-emu`), `mlp-fit` (learn an HDR image, PFM snapshots,
+  `oracleSteps` replay), `mlp-timing` (GPU ms per inference pass and training step for one arm), `mlp-sgm-probe`
+  (configs + which kernel forms compile), `mlp-live` (interactive demo, below).
+
+**Mac session checklist** (each line is one command from the repo root; quiet-machine rules for the timing lines):
 
 ```sh
-node bench/runner/run.ts --page mlp-check --ab precision=f32,f16
+pnpm install && pnpm test                                                   # 22 mlp tests + the rest
+node bench/runner/run.ts --page mlp-sgm-probe --json probe.json              # N0.2: configs, which forms compile
+node bench/runner/run.ts --page mlp-check --ab precision=f32,f16             # portable arms vs oracle
+node bench/runner/run.ts --page mlp-check --args infer=sgm                   # native sgm vs oracle (first compile!)
+node bench/runner/run.ts --page mlp-check --args infer=sgm subgroups=4       # only if the probe says subgroup-id x4 compiles
 node bench/runner/run.ts --page mlp-fit --args oracleSteps=8 batch=1024 precision=f16
-node bench/runner/run.ts --page mlp-fit --ab precision=f32,f16 --repeat 2   # 256², batch 16384, snapshots to 1024 steps
+node bench/runner/run.ts --page mlp-fit --ab precision=f32,f16 --repeat 2    # 256², batch 16384, 1024 steps; viewer A/B
+node bench/runner/run.ts --page mlp-timing --ab infer=portable,sgm --args precision=f16 --repeat 3
+node bench/runner/run.ts --page mlp-timing --ab precision=f32,f16 --repeat 3
+pnpm --filter @pathtracer/bench mlp:live                                     # live demo in Chrome (see below)
 ```
 
+**Live demo** (`bench/pages/mlp-live.html`): the network learns the HDR image while you watch, target left, network
+right; backend picker (portable f32/f16, subgroup matrix when Chrome exposes it, emulated), steps per frame, batch,
+learning rate, EMA, image/relative-error view, exposure, Reset, and **Benchmark** (pauses, runs a timestamped burst,
+reads back once, shows ms per step, ms per million queries and TFLOP/s). Open in a Chrome started with
+`--enable-unsafe-webgpu` to get the subgroup-matrix backend. `?offscreen=1` renders to a texture and exposes
+`window.__mlpLive.snapshot()` for headless checks; that is how it was verified here, because WebGPU canvas
+presentation crashes headless SwiftShader in cloud containers.
+
 Without a GPU (correctness only): `PT_CHROME_FLAGS="--no-sandbox --use-webgpu-adapter=swiftshader
---use-angle=swiftshader --enable-unsafe-swiftshader --enable-unsafe-webgpu"` and `--allow-software`, with small sizes
-(`size=64 batch=1024`; SwiftShader takes ~150 ms per step).
+--use-angle=swiftshader --enable-unsafe-swiftshader --enable-unsafe-webgpu"` and `--allow-software`, small sizes.
 
 ## 7. Open choices (each one settled by an A/B, not here)
 
