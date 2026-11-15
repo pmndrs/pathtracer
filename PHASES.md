@@ -73,6 +73,8 @@ preview mode; gi moves onto the core. Real-time termination policy, light grid, 
 in motion than preview mode on the Denoiser scorecard metrics.
 
 Already done early: our own blue-noise textures (P0.17, D16).
+**Progress (2026-11-15):** P4.1 built (megakernel): mode presets, the blue-noise sampler, per-frame denoiser inputs (demodulated diffuse / specular, normal, viewZ, camera motion, roughness), `realtime-check` page
+(`docs/design/realtime.md`). Left: the temporal filter integration (P4.5), upscaler (P4.6), preview pipeline (P4.7), wavefront frame mode (P4.1b), ReSTIR DI, R3, R6-R9.
 
 ## ⬜ P5 — Breadth
 

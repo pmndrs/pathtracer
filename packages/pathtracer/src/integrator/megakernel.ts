@@ -12,10 +12,16 @@
  * gets its own record in a ring of uniform slots (dynamic offsets): `queue.writeBuffer` is ordered with `submit`, so a slot
  * is never rewritten before the pass that read it ran, as long as no more than `PT_PARAM_SLOTS` passes are outstanding.
  * Accumulation is f32 `array<vec4f>` (sum of radiance, w = samples); `readImage` divides. Nothing here reads back unless you call it.
+ *
+ * Real-time frames (P4.1, `docs/design/realtime.md`): `mode: 'realtime'` (or `integrator: { frame: true, sampler: 'bluenoise' }` + `blueNoise`) turns a pass into ONE 1 spp frame
+ * that overwrites the accumulator and writes the denoiser guides:
+ *     const pt = await PtMegakernel.create(device, caps, { format, layout, mode: 'realtime', blueNoise, integrator: { ... } });
+ *     pt.setCamera(cam0);  encode(1);  ...  pt.nextFrame(cam1);  pt.encode(encoder, 1);     // the old camera is the previous one (motion)
+ *     const { accum, planes } = pt.frameBuffers;                                              // or: const frame = await pt.readFrame();
  */
 import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
-import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
+import type { BlueNoiseTexture, Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl, ptBsdfReducedWgsl, ptLayeredDispatchWgsl, ptReducedKernelFeatures } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
 import { ptLayeredWgsl } from '../bsdf/layered-wgsl.ts';
@@ -24,12 +30,13 @@ import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { ptFuzzWgsl } from '../bsdf/fuzz-wgsl.ts';
 import { ptThinFilmWgsl } from '../bsdf/thinfilm-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
-import { ptSamplerWgsl } from './dimensions.ts';
+import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
+import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { PtRestirPasses } from '../restir/restir.ts';
 import { PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
-import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from './outputs-wgsl.ts';
+import { PT_AOV_VEC4, PT_COUNTER_WORDS, PT_FRAME_BINDING, PT_FRAME_PARAMS_BINDING, PT_FRAME_PARAMS_BYTES, PT_FRAME_PLANES, ptDecodeAovs, ptDecodeFrame, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters, type PtFrame } from './outputs-wgsl.ts';
 
 // GPUBufferUsage bits spelled out so this file loads in Node (tests).
 const STORAGE = 0x80;
@@ -62,6 +69,17 @@ export interface PtMegakernelOptions {
   /** Surface layout of the scene copy (`copy.layout`). */
   layout: SurfaceLayout;
   integrator?: PtIntegratorOptions;
+  /**
+   * Mode preset (P4.1, `modes.ts`): `'reference'` (today's defaults), `'preview'`, `'realtime'`. Fills the integrator settings the caller left undefined (explicit options win),
+   * merges the D24 layering into layered materials, and `setLimits` starts from the mode's depth. `scenePacking` is NOT changed: pass `ptModePreset(mode).scenePacking` to both
+   * `uploadSceneCopy` and this option if you want the mode's binding.
+   */
+  mode?: PtMode;
+  /**
+   * `integrator.sampler: 'bluenoise'` only (and the realtime mode, which uses the sampler when this is given): the blue-noise texture, a vec2 one (`gf-vec2-64` / `gf-vec2-128`,
+   * `fetchBlueNoise` / `decodeBlueNoisePng`; D16, our own textures), power-of-two sides. Uploaded as an `rg32float` texture at group 2 binding `PT_BLUENOISE_BINDING`.
+   */
+  blueNoise?: BlueNoiseTexture;
   /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
   textures?: TextureLayout | null;
   /**
@@ -107,13 +125,14 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
   const integratorOptions: PtIntegratorOptions = { ...options.integrator, ...(options.textures ? { textures: true } : {}) };
   const integrator = resolveIntegratorOptions(integratorOptions);
   const mats = integrator.materials;
+  if (integrator.sampler === 'bluenoise' && integrator.primary === 'vbuffer') throw new Error("ptMegakernelBuild: sampler 'bluenoise' with primary 'vbuffer' is allowed (the jitter pair is not consumed) only through the engine's own jitter; remove one");
   if (integrator.primary === 'vbuffer' && !options.layout.positions) throw new Error("ptMegakernelBuild: integrator.primary 'vbuffer' needs a surface layout with positions (the hit position comes from the barycentrics)");
   if (mats?.features.aniso && !options.layout.tangents) throw new Error('ptMegakernelBuild: anisotropic materials (features.aniso) need a surface layout with tangents');
   const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}), ...(mats?.features.aniso ? { aniso: true } : {}), ...(mats?.features.thinFilm ? { thinFilm: true } : {}) };
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
   const film = mats?.features.thinFilm ? [stripWgslComments(ptThinFilmWgsl())] : [];
   const fuzz = mats?.features.fuzz ? [stripWgslComments(ptFuzzWgsl({ layered: !!mats.features.layered }))] : [];
-  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler)];
+  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler, integrator.blueNoise)];
   return { integratorOptions, parts };
 }
 
@@ -155,6 +174,22 @@ export function ptMegakernelWgsl(caps: Caps, options: Pick<PtMegakernelOptions, 
   return ptMegakernelBuild(caps, options).code;
 }
 
+/** The blue-noise texture must be a vec2 one with power-of-two sides (the lookup wraps with a mask). */
+export function validateBlueNoise(tex: BlueNoiseTexture | undefined): asserts tex is BlueNoiseTexture {
+  if (!tex) throw new Error("PtMegakernel: integrator.sampler 'bluenoise' needs the `blueNoise` option (a vec2 texture such as gf-vec2-64: fetchBlueNoise / decodeBlueNoisePng)");
+  const { width, height, channels, depth } = tex.meta;
+  if (channels !== 2 || depth !== 1) throw new Error(`PtMegakernel: blue noise '${tex.meta.name}' must be a vec2 texture of one slice (channels ${channels}, depth ${depth})`);
+  if ((width & (width - 1)) !== 0 || (height & (height - 1)) !== 0) throw new Error(`PtMegakernel: blue noise '${tex.meta.name}' must have power-of-two sides, got ${width} x ${height}`);
+}
+
+/** `rg32float` texture of the blue-noise data (textureLoad, `unfilterable-float`). */
+export function createBlueNoiseTexture(device: GPUDevice, tex: BlueNoiseTexture, label: string): GPUTexture {
+  const { width, height } = tex.meta;
+  const texture = device.createTexture({ label: `${label} blue noise`, size: [width, height], format: 'rg32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
+  device.queue.writeTexture({ texture }, tex.data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * 8, rowsPerImage: height }, [width, height]);
+  return texture;
+}
+
 export class PtMegakernel {
   readonly device: GPUDevice;
   readonly options: PtMegakernelOptions;
@@ -171,6 +206,11 @@ export class PtMegakernel {
   private readonly hookLayout: GPUBindGroupLayout | null;
   private hookGroup: GPUBindGroup | null = null;
   private vbufferView: GPUTextureView | null = null;
+  /** P4.1: the blue-noise texture (`sampler: 'bluenoise'`), the previous-camera ring and the per-frame planes (`integrator.frame`). */
+  private blueTexture: GPUTexture | null = null;
+  private frameParamsBuffer: GPUBuffer | null = null;
+  private frameBuffer: GPUBuffer | null = null;
+  private prevCamera: PtLookAtCamera | null = null;
   private jitter: [number, number] = [0, 0];
   /** ReSTIR DI passes (`integrator.restir`, P4): run before every sample dispatch. */
   restir: PtRestirPasses | null = null;
@@ -194,6 +234,10 @@ export class PtMegakernel {
     this.hookLayout = layouts[3] ?? null;
     this.device = device;
     this.options = options;
+    if (options.mode) {
+      const lim = ptModePreset(options.mode).limits;
+      if (lim) this.limits = { maxDepth: lim.maxDepth, ...(lim.rrStartDepth ? { rrStartDepth: lim.rrStartDepth } : {}), ...(lim.textureConeScale !== undefined ? { textureConeScale: lim.textureConeScale } : {}) };
+    }
     this.pipeline = pipeline;
     this.walkLayout = layouts[0] as GPUBindGroupLayout;
     this.sceneLayout = layouts[1] as GPUBindGroupLayout;
@@ -201,10 +245,15 @@ export class PtMegakernel {
     this.wgslBytes = wgslBytes;
     this.slotBytes = Math.max(PT_PARAMS_BYTES, device.limits.minUniformBufferOffsetAlignment);
     this.paramsBuffer = device.createBuffer({ label: 'pt params', size: this.slotBytes * PT_PARAM_SLOTS, usage: UNIFORM | COPY_DST });
+    if (options.integrator?.frame) this.frameParamsBuffer = device.createBuffer({ label: 'pt frame params', size: this.slotBytes * PT_PARAM_SLOTS, usage: UNIFORM | COPY_DST });
   }
 
-  static async create(device: GPUDevice, caps: Caps, options: PtMegakernelOptions): Promise<PtMegakernel> {
+  static async create(device: GPUDevice, caps: Caps, requested: PtMegakernelOptions): Promise<PtMegakernel> {
+    const options = ptApplyMode(requested);
     const label = options.label ?? 'pt megakernel';
+    const bn = options.integrator?.sampler === 'bluenoise';
+    if (bn) validateBlueNoise(options.blueNoise);
+    if (bn && options.integrator?.restir) throw new Error("PtMegakernel: integrator.sampler 'bluenoise' with integrator.restir is not supported yet (the ReSTIR passes compile the sampler text but do not bind the blue-noise texture: TASKS P4.2e)");
     const { code, map } = ptMegakernelBuild(caps, options);
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
     const layouts = [
@@ -220,6 +269,8 @@ export class PtMegakernel {
           ...(options.integrator?.primary === 'vbuffer' ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
           ...(corrTexture ? [ptLayerCorrLayoutEntry()] : []),
           ...(options.integrator?.restir ? [{ binding: PT_RESTIR_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
+          ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
+          ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
       }),
       ...(options.integrator?.hooks ? [device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] })] : []),
@@ -235,6 +286,7 @@ export class PtMegakernel {
     const kernel = new PtMegakernel(device, options, pipeline, layouts, code.length, fuzzTable);
     if (options.integrator?.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, layouts[0] as GPUBindGroupLayout, layouts[1] as GPUBindGroupLayout);
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
+    if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     return kernel;
   }
 
@@ -283,9 +335,16 @@ export class PtMegakernel {
     this.accum?.destroy();
     this.counterBuffer?.destroy();
     this.counterBuffer = null;
+    this.frameBuffer?.destroy();
+    this.frameBuffer = null;
     // The AOVs (when on) live in the tail of the accumulator: width * height radiance sums, then PT_AOV_VEC4 vec4 per pixel.
     const vec4PerPixel = this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : 1;
     this.accum = this.device.createBuffer({ label: 'pt accum', size: width * height * 16 * vec4PerPixel, usage: STORAGE | COPY_SRC | COPY_DST });
+    if (this.options.integrator?.frame) {
+      const bytes = width * height * 16 * PT_FRAME_PLANES;
+      if (bytes > this.device.limits.maxStorageBufferBindingSize) throw new RangeError(`PtMegakernel.setFilm: the per-frame planes need ${bytes} bytes, past maxStorageBufferBindingSize (${this.device.limits.maxStorageBufferBindingSize}); render a smaller film`);
+      this.frameBuffer = this.device.createBuffer({ label: 'pt frame planes', size: bytes, usage: STORAGE | COPY_SRC | COPY_DST });
+    }
     if (this.options.integrator?.counters) this.counterBuffer = this.device.createBuffer({ label: 'pt counters', size: width * height * PT_COUNTER_WORDS * 4, usage: STORAGE | COPY_SRC | COPY_DST });
     this.restir?.setFilm(width, height);
     this.ioGroup = null;
@@ -294,6 +353,25 @@ export class PtMegakernel {
 
   setCamera(camera: PtLookAtCamera): void {
     this.camera = camera;
+  }
+
+  /**
+   * `integrator.frame`: the camera of the PREVIOUS frame, which the motion vectors reproject to (static scenes: both cameras describe the same world). Unset or null = the
+   * current camera (zero motion). Both cameras are the unjittered ones.
+   */
+  setPrevCamera(camera: PtLookAtCamera | null): void {
+    this.prevCamera = camera;
+  }
+
+  /** `integrator.frame`: one call per frame: the old camera becomes the previous one and `camera` the current. Not for the first frame: use `setCamera`. */
+  nextFrame(camera: PtLookAtCamera): void {
+    this.prevCamera = this.camera;
+    this.camera = camera;
+  }
+
+  /** The frame index the sampler sees (`sampleIndex`). In `frame` mode it counts frames (it advances with every `encode`); set it to replay a frame. */
+  setFrameIndex(index: number): void {
+    this.samples = index >>> 0;
   }
 
   setLimits(limits: PtLimits): void {
@@ -310,6 +388,7 @@ export class PtMegakernel {
     if (this.accum) encoder.clearBuffer(this.accum);
     if (this.counterBuffer) encoder.clearBuffer(this.counterBuffer);
     this.restir?.reset(encoder);
+    if (this.frameBuffer) encoder.clearBuffer(this.frameBuffer);
     this.samples = 0;
   }
 
@@ -327,6 +406,13 @@ export class PtMegakernel {
     return buffer;
   }
 
+  private frameParamsRecord(): ArrayBuffer {
+    const basis = ptCameraBasis(this.prevCamera ?? (this.camera as PtLookAtCamera), this.width, this.height);
+    const buffer = new ArrayBuffer(PT_FRAME_PARAMS_BYTES);
+    new Float32Array(buffer).set([...basis.origin, 0, ...basis.right, 0, ...basis.up, 0, ...basis.forward, 0]);
+    return buffer;
+  }
+
   /** Records `passes` sample passes (one dispatch each) into `encoder`. At most 256 per call; at most `PT_PARAM_SLOTS` outstanding. */
   encode(encoder: GPUCommandEncoder, passes: number, timestampWrites?: GPUComputePassTimestampWrites): void {
     if (!this.walkGroup || !this.sceneGroup) throw new Error('PtMegakernel: setScene() first');
@@ -335,6 +421,8 @@ export class PtMegakernel {
     const vbuffer = this.options.integrator?.primary === 'vbuffer';
     if (vbuffer && passes !== 1) throw new RangeError("PtMegakernel.encode: with primary 'vbuffer' one encode is one frame (one V-buffer, one jitter): passes must be 1");
     if (vbuffer && !this.vbufferView) throw new Error('PtMegakernel: setVbuffer() first');
+    const frame = !!this.options.integrator?.frame;
+    if (frame && passes !== 1) throw new RangeError('PtMegakernel.encode: with integrator.frame one encode is one frame (one sample, one previous camera): passes must be 1');
     this.ioGroup ??= this.device.createBindGroup({
       label: 'pt io',
       layout: this.ioLayout,
@@ -346,6 +434,8 @@ export class PtMegakernel {
         ...(this.vbufferView ? [{ binding: PT_VBUFFER_BINDING, resource: this.vbufferView }] : []),
         ...(this.corrTexture ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.corrTexture.createView() }] : []),
         ...(this.restir?.reservoirs ? [{ binding: PT_RESTIR_SHADE_BINDING, resource: { buffer: this.restir.reservoirs } }] : []),
+        ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueTexture.createView() }] : []),
+        ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),
       ],
     });
     if (this.hookLayout && !this.hookGroup) {
@@ -373,7 +463,8 @@ export class PtMegakernel {
       const offset = (this.slot % PT_PARAM_SLOTS) * this.slotBytes;
       this.slot++;
       this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(this.samples, finalRegion));
-      pass.setBindGroup(2, this.ioGroup, [offset]);
+      if (frame && this.frameParamsBuffer) this.device.queue.writeBuffer(this.frameParamsBuffer, offset, this.frameParamsRecord());
+      pass.setBindGroup(2, this.ioGroup, frame ? [offset, offset] : [offset]);
       pass.dispatchWorkgroups(gx, gy);
       this.samples++;
     }
@@ -392,7 +483,8 @@ export class PtMegakernel {
     const sums = new Float32Array(staging.getMappedRange().slice(0));
     staging.unmap();
     staging.destroy();
-    const n = Math.max(1, this.samples);
+    const resolved = resolveIntegratorOptions(this.options.integrator ?? {});
+    const n = resolved.accumulate ? Math.max(1, this.samples) : 1;
     const data = new Float32Array(sums.length);
     for (let i = 0; i < sums.length; i += 4) {
       data[i] = (sums[i] as number) / n;
@@ -423,6 +515,24 @@ export class PtMegakernel {
     return ptDecodeAovs(sums, this.width, this.height, this.samples);
   }
 
+  /** `integrator.frame`: the last frame's beauty and guide planes, read back (outside any timed region). The GPU buffers themselves: `frameBuffers`. */
+  async readFrame(): Promise<PtFrame> {
+    if (!this.accum || !this.frameBuffer) throw new Error('PtMegakernel.readFrame: the kernel was built without integrator.frame (or setFilm() was not called)');
+    const n = this.width * this.height;
+    const radiance = new Float32Array(await this.readBuffer(this.accum, 0, n * 16));
+    const planes = new Float32Array(await this.readBuffer(this.frameBuffer, 0, n * 16 * PT_FRAME_PLANES));
+    return ptDecodeFrame(radiance, planes, this.width, this.height);
+  }
+
+  /**
+   * `integrator.frame`: the GPU buffers a temporal filter reads. `accum` is the beauty (vec4f per pixel, the last dispatch's sample, a = 1); `planes` holds `PT_FRAME_PLANES` planes of
+   * `width * height` vec4f each, plane-major (plane p starts at byte `p * width * height * 16`; `PtFrame` names them). Valid until the next `encode` writes them.
+   */
+  get frameBuffers(): { accum: GPUBuffer; planes: GPUBuffer; width: number; height: number } {
+    if (!this.accum || !this.frameBuffer) throw new Error('PtMegakernel.frameBuffers: the kernel was built without integrator.frame (or setFilm() was not called)');
+    return { accum: this.accum, planes: this.frameBuffer, width: this.width, height: this.height };
+  }
+
   /** The debug counters (`integrator.counters`) summed over the samples so far. Outside any timed region. */
   async readCounters(): Promise<PtCounters> {
     if (!this.counterBuffer) throw new Error('PtMegakernel.readCounters: the kernel was built without integrator.counters');
@@ -436,6 +546,9 @@ export class PtMegakernel {
     this.fuzzTable?.destroy();
     this.corrTexture?.destroy();
     this.restir?.destroy();
+    this.blueTexture?.destroy();
+    this.frameParamsBuffer?.destroy();
+    this.frameBuffer?.destroy();
     this.accum?.destroy();
     this.accum = null;
   }

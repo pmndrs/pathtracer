@@ -28,6 +28,8 @@ import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PT
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
 export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   const o = resolveIntegratorOptions(options);
+  if (o.sampler === 'bluenoise') return "integrator.sampler 'bluenoise' (P4.1: the blue-noise texture is bound by the megakernel only)";
+  if (o.frame) return 'integrator.frame (P4.1: the per-frame guide outputs are written by the megakernel only)';
   if (o.alphaMask && o.counters) return 'integrator.counters with alpha MASK (the cutout re-traces happen in the intersect kernel, which has no counter buffer)';
   return null;
 }

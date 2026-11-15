@@ -47,6 +47,12 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   // V-buffer primaries (P3.6): the first hit comes from a texture; the traced variants above are unchanged.
   variants.vbuffer = () => mk(caps, { format: {}, layout, integrator: { primary: 'vbuffer' } });
   variants['tex-mask-vbuffer'] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, primary: 'vbuffer' } });
+  // Real-time mode (P4.1, megakernel only): per-frame outputs, the blue-noise sampler, both, and the whole realtime preset on a textured layered scene.
+  variants['rt-frame'] = () => mk(caps, { format: {}, layout, integrator: { frame: true } } as never);
+  variants['rt-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { sampler: 'bluenoise' } } as never);
+  variants['rt-bluenoise-kronecker'] = () => mk(caps, { format: {}, layout, integrator: { sampler: 'bluenoise', blueNoiseShift: 'kronecker' } } as never);
+  variants['rt-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } } as never);
+  variants['rt-pbr-albedo-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } } } } as never);
   return variants;
 }
 

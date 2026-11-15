@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false });
   });
 
   it('bakes the settings in as module constants', () => {

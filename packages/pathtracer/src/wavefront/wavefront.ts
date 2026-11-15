@@ -20,6 +20,7 @@ import type { Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
+import { ptApplyMode } from '../integrator/modes.ts';
 import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
@@ -214,7 +215,8 @@ export class PtWavefront {
     this.argsBuffer = device.createBuffer({ label: 'ptwf args', size: PTWF_ARGS_BYTES, usage: STORAGE | INDIRECT });
   }
 
-  static async create(device: GPUDevice, caps: Caps, options: PtWavefrontOptions): Promise<PtWavefront> {
+  static async create(device: GPUDevice, caps: Caps, requested: PtWavefrontOptions): Promise<PtWavefront> {
+    const options = ptApplyMode(requested, 'wavefront');
     const label = options.label ?? 'pt wavefront';
     const build = ptWavefrontBuild(caps, options);
     const wf = scheduling(options);

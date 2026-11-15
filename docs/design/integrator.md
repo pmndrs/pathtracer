@@ -293,3 +293,7 @@ refilled slot mixes depths in one queue: the class would have to travel in the q
     `albedo` table. Ideas if DXC compile time says so: split the stochastic walk's pdf function out of the albedo variant, a smaller table (8x8), drop `ptLayeredPdf` when `exitMis: 'none'`, a wavefront kernel for
     the layered scenes. Settle: `compile_ms` on Windows for `PT_NO_FEATURES`, albedo and stochastic (`wgsl-map`/`competitor` pages report `compile_ms`).
 12. **Thin-walled tint and thick-glass tint at depth 0.** Thin glass applies `transmission_color`; thick glass ignores it at `transmission_depth` 0. OpenPBR applies the tint at each transmission event; the references apply none. A/B: `pt_tint=0` vs 1 on AttenuationTest R1 (tinted thin samples).
+
+## Real-time mode (P4.1)
+
+Mode presets, the blue-noise sampler and the per-frame guide outputs (`integrator.frame`) are specified in [realtime.md](realtime.md). Both are megakernel-only and compiled only when asked (every other kernel is byte-identical).

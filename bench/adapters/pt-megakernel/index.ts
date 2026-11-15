@@ -12,8 +12,8 @@
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
-import { ALPHA_MODE, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
+import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
+import { PtMegakernel, PtWavefront, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -81,6 +81,10 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   denoise?: 'oidn';
   /** OIDN weights base URL for the Denoiser package (`.tza` files); default `/@fs/<Denoiser checkout>/packages/denoiser/tzas` of the bench server. */
   denoiseTzaUrl?: string;
+  /** P4.1: mode preset (`reference | preview | realtime`, `modes.ts`); explicit settings win. Not for the progressive matrix runs of `realtime` (its `frame` outputs need one encode per frame: `realtime-check` drives those). */
+  mode?: PtMode;
+  /** P4.1: name of the blue-noise texture the `bluenoise` sampler reads (default `gf-vec2-64`; our own textures, `packages/raytracer/assets/bluenoise`). */
+  blueNoise?: string;
   /** Kernel text options (P2.10): drop unreachable declarations / shorten top-level names. Default true; false is the A/B baseline. */
   prune?: boolean;
   shortenNames?: boolean;
@@ -186,6 +190,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
+        ...(settings.mode ? { mode: settings.mode } : {}),
+        ...(settings.sampler === 'bluenoise' || settings.mode === 'realtime' ? { blueNoise: settings.blueNoise ?? 'gf-vec2-64', ...(settings.blueNoiseShift ? { blueNoiseShift: settings.blueNoiseShift } : {}), ...(settings.blueNoisePairs ? { blueNoisePairs: settings.blueNoisePairs } : {}) } : {}),
+        ...(settings.frame ? { frame: true } : {}),
         nee: settings.nee ?? true,
         envSampling: settings.envSampling ?? 'auto',
         sunVisible: settings.sunVisible ?? false,
@@ -287,7 +294,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
     // A metallic-roughness texture decides metalness per texel (factor x B in [0, factor]): the kernel needs both lobes and the stochastic mix, whatever the factor says.
     let materials: PtMaterialOptions | null = null;
     if (Object.values(scene.materials).some((m) => m.type === 'openpbr')) {
-      const layered: PtLayeredOptions = { layering: this.settings.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...(this.settings.albedoBase ? { albedoBase: this.settings.albedoBase } : {}), ...(this.settings.albedoCorrection ? { albedoCorrection: this.settings.albedoCorrection } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
+      const modeLayered = this.settings.mode ? ptModePreset(this.settings.mode).layered : null;
+      const layered: PtLayeredOptions = { layering: this.settings.layering ?? modeLayered?.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...((this.settings.albedoBase ?? modeLayered?.albedoBase) ? { albedoBase: (this.settings.albedoBase ?? modeLayered?.albedoBase) as 'openpbr' | 'internal' } : {}), ...(this.settings.albedoCorrection ? { albedoCorrection: this.settings.albedoCorrection } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
       const features = ptMaterialFeatures(input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m)));
       // The thin film (P2.27) lives in the albedo layering's Fresnel; the stochastic walk has no film (DIVERGES V82).
       if (features.thinFilm && layered.layering === 'stochastic') {
@@ -299,13 +307,17 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
     if (alphaMask && this.settings.alphaPolicy && this.settings.alphaPolicy !== 'exact') this.approximations.push(`alpha policy ${this.settings.alphaPolicy}: cutouts ignored for some ray classes (biased, not a reference)`);
-    const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, ...integratorSettings } = this.settings;
+    const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, mode: _mode, blueNoise: _bnName, ...integratorSettings } = this.settings;
+    void _mode;
+    void _bnName;
+    const needsBlueNoise = integratorSettings.sampler === 'bluenoise' || (this.settings.mode === 'realtime' && this.settings.scheduler !== 'wavefront');
+    const blueNoise = needsBlueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', this.settings.blueNoise ?? 'gf-vec2-64') : undefined;
     void _denoise;
     void _tza;
     void _refill;
     void _thr;
     void _layers;
-    const kernelOptions = { format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
