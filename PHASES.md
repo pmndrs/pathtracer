@@ -55,14 +55,16 @@ switch-over for the siblings.
 ## ⬜ P3 — Speed
 
 Wavefront vs megakernel (both kept as settings until measured); wide BVH if it passed; coherence tricks; visibility-
-buffer primaries; NVIDIA/AMD timing on Windows.
+buffer primaries; NVIDIA/AMD timing on Windows; ray-class material LOD, alpha policy, cache hooks and debug views (R1, R2, R4,
+R10 from research note 12).
 **Exit gate:** faster time-to-equal-quality than every web competitor on every Tier 2 scene (M5, 3060L); ≥150 Mrays/s
 incoherent on 3060L.
 
 ## ⬜ P4 — Real time
 
 Blue-noise sampler, demodulated AOVs, SVGF-class filter → upscaler, ReSTIR DI, cache hooks with gi's hash cache,
-preview mode; gi moves onto the core.
+preview mode; gi moves onto the core. Real-time termination policy, light grid, history confidence and gate scenes
+(R3, R5-R9). Real-time quality is judged against our own reference-mode image plus temporal stability (R9).
 **Exit gate:** ~30 fps on 3060L-class (half-res → 1080p, 2 bounces + ReSTIR DI; estimate to confirm in P3); steadier
 in motion than preview mode on the Denoiser scorecard metrics.
 

@@ -17,6 +17,7 @@ unverified and the license register. The decisions drawn from it are in [../spec
 | 09 | Materials and transport | [09-materials-transport.md](notes/09-materials-transport.md) | Packed OpenPBR-subset uber BSDF, VNDF sampling, NEE+MIS; carry vec4 radiance now, spectral in v2 |
 | 10 | Benchmarks | [10-benchmarks.md](notes/10-benchmarks.md) | Compare in linear HDR; time-to-equal-quality is the headline metric; furnace tests gate merges; siblings supply ~70% of the harness |
 | 11 | AMD Capsaicin | [11-capsaicin.md](notes/11-capsaicin.md) | MIT, D3D12 DXR only. Reference PT is opaque glTF-PBR only (no glass, f16 EXR dump), good as a Windows GPU cross-check, not a third reference; GI-1.2 hash-grid cache + world ReSTIR are portable ideas with a permissive licence |
+| 12 | NVIDIA PT performance whitepaper (2026-06) | [12-nvidia-pt-performance.md](notes/12-nvidia-pt-performance.md) | Real-time "PT" is GI + specular with controlled bias: raster primaries, one shallow diffuse bounce + world cache, reduced materials past bounce 1, no naive RR. Qualitative; one measured table (SHaRC 1.17x, force-opaque cache rays 0.69 -> 0.31 ms) |
 
 Local material: ~50 shallow clones in `sources/` (5.5 GB, git-ignored, listed in [sources/MANIFEST.md](sources/MANIFEST.md))
 and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
