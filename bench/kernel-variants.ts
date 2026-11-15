@@ -39,6 +39,8 @@ export function kernelVariants(caps: Caps): KernelVariants {
   variants.tex = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures });
   // Alpha MASK (P1.4c5): the textured kernel + the cutout pass-through and the masked shadow-ray loop (only compiled for scenes with a MASK material).
   variants['tex-mask'] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true } });
+  // Alpha policy (R2): the exact kernel above is the default; these drop the cutout test for shadow rays and / or indirect extension rays.
+  for (const alphaPolicy of ['opaqueShadow', 'opaqueIndirect', 'opaqueSecondary'] as const) variants[`tex-mask-${alphaPolicy}`] = () => ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy } });
   return variants;
 }
 
@@ -62,6 +64,11 @@ export function wavefrontKernelVariants(caps: Caps): KernelVariants {
     env: { format: {}, layout, integrator: { envMap: true, envSampling: 'importance' } },
     pcg: { format: {}, layout, integrator: { sampler: 'pcg', nee: false } },
     tex: { format: {}, layout: texLayout, textures },
+    // Alpha MASK (P3.7, R2): cutout pass-through in intersect, masked shadow loop; the policy variants drop one or both.
+    'tex-mask': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true } },
+    'tex-mask-opaqueShadow': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueShadow' } },
+    'tex-mask-opaqueIndirect': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueIndirect' } },
+    'tex-mask-opaqueSecondary': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueSecondary' } },
     'pbr-albedo': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo' } } } },
     'pbr-stochastic-fuzz': { format: {}, layout, integrator: { materials: { features: { ...feat, fuzz: true }, layered: { layering: 'stochastic', maxDepth: 64 } } } },
   };

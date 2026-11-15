@@ -14,18 +14,21 @@
  * Bindings: group 0 bvh walk and group 1 scene copy as the megakernel (a kernel that does not use a group declares none of it),
  * group 2 params + accumulator (+ fuzz table at 2) + the wavefront buffers, group 3 (args kernel only) the indirect args.
  *
- * Not yet (P3.3+): alpha MASK materials (the megakernel passes a masked hit without a bounce; here it would need extra iterations
- * or a loop in intersect), compaction, octant binning, material sorting, subgroup-aggregated appends. Refill and layers (P3.2) are the `PtwfConfig` variants of the
+ * Alpha MASK (P3.7): the intersect kernel loops over cutout hits like the megakernel's bounce loop does (a masked-out hit moves the ray origin past it, updates
+ * the cone and the medium attenuation in the path state, costs no depth), so shade only ever sees a solid hit, a miss or a path that overran `PT_MASK_SKIPS`
+ * (`hit.w` = 1: the path ends without radiance); the shadow kernel is `ptVisibleMasked`. Both then bind the scene copy (walk 3 + scene 2 + 4 buffers = 9 <= 10).
+ *
+ * Not yet (P3.3+): compaction, octant binning, material sorting, subgroup-aggregated appends. Refill and layers (P3.2) are the `PtwfConfig` variants of the
  * kernels: inline refill restarts a finished slot in the shade kernel, batch refill dispatches the camera kernel over the film from the args kernel's decision.
  */
-import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptMaskIndirect, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptHookVertexExpr } from '../integrator/outputs-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
 export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   const o = resolveIntegratorOptions(options);
-  if (o.alphaMask) return 'alpha MASK materials (P3.x: the megakernel passes a masked hit without a bounce; the wavefront loop has no place for that yet)';
+  if (o.alphaMask && o.counters) return 'integrator.counters with alpha MASK (the cutout re-traces happen in the intersect kernel, which has no counter buffer)';
   return null;
 }
 
@@ -231,9 +234,13 @@ ${o.aovs ? `    p.aovDone = false;
 `;
 }
 
-/** Intersect kernel: closest hit of every ray in `Q[iter & 1]`. Needs the raytracer module (walk, no scene). */
+/**
+ * Intersect kernel: closest hit of every ray in `Q[iter & 1]`. Needs the raytracer module (walk, no scene), or with alpha MASK the module with the scene copy
+ * (cutouts are decided here, so shade never sees a masked-out hit).
+ */
 export function ptwfIntersectWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
   const o = resolveIntegratorOptions(options);
+  if (o.alphaMask) return ptwfIntersectMaskWgsl(o, wf);
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'state', 'hit', 'count', 'queue'])}
@@ -259,13 +266,81 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
 `;
 }
 
-/** Shadow kernel: visibility of every shadow ray; a visible one adds its contribution to the pixel. Needs the raytracer module (walk, no scene). */
+/**
+ * Intersect with alpha MASK: the megakernel's skip step (`ptPath`: a hit whose base-colour alpha times opacity is below the cutoff is passed through) as a loop
+ * around the closest-hit query. The path state (origin, ray cone, medium attenuation of the skipped segment) is updated like the megakernel's locals; the
+ * skip count is per ray here (per path there), the one visible difference, and only past 64 skips. Depth 0 always tests the cutout; deeper rays only when
+ * the alpha policy says so (`ptMaskIndirect`). A path over the skip limit is marked in `hit.w` (1) and ends in shade.
+ */
+function ptwfIntersectMaskWgsl(o: ResolvedIntegratorOptions, wf: PtwfConfig): string {
+  const medium = !!o.materials?.features.medium;
+  const indirect = ptMaskIndirect(o);
+  return /* wgsl */ `
+${PT_PARAMS_WGSL}
+${bindings(['params', 'state', 'hit', 'count', 'queue'])}
+${ptCommonHeadWgsl(o)}
+${commonWgsl(wf)}${stateWgsl(o)}
+@compute @workgroup_size(${PTWF_WORKGROUP})
+fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+    let iter = ptParams.limits.w;
+    let q = iter & 1u;
+    let slot = ptwfSlot(wid, li);
+    if (slot >= atomicLoad(&ptwfCount[q])) {
+        return;
+    }
+    let n = ptwfSlots(ptParams.dims);
+    let path = ptwfQueue[q * n + slot];
+    var st = ptwfLoadPath(path, n);
+    var ray = RtRay(st.origin, 0.0, st.dir, PT_FAR);
+    var hit = rtClosest(ray, RT_MASK_ALL);
+    var skips = 0u;
+    var over = 0u;
+    var moved = false;
+    loop {
+        if (hit.t < 0.0${indirect ? '' : ' || st.depth > 0u'}) {
+            break;
+        }
+        let m = rtMaterial(hit.material);
+        if (m.alphaMode != RT_ALPHA_MASK) {
+            break;
+        }
+        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_UV | RT_SURF_TEXFRAME);
+        let coneW = rtConeAt(RtCone(st.coneWidth, st.coneSpread), hit.t);
+        let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
+        let a = rtApplyMaterialTextures(m, surf.uv, fp);
+        if (!(a.opacity < a.alphaCutoff)) {
+            break;
+        }
+${medium ? `        st.beta = st.beta * exp(-st.sigma * hit.t);
+` : ''}        skips += 1u;
+        if (skips > PT_MASK_SKIPS) {
+            over = 1u;
+            break;
+        }
+        st.coneWidth = coneW;
+        st.origin = ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, ray.direction));
+        moved = true;
+        ray = RtRay(st.origin, 0.0, ray.direction, PT_FAR);
+        hit = rtClosest(ray, RT_MASK_ALL);
+    }
+    if (moved) {
+        ptwfStorePath(path, n, st);
+    }
+    ptwfHit[path] = vec4u(bitcast<u32>(hit.t), hit.instance, hit.triangle, hit.material);
+    ptwfHit[n + path] = vec4u(bitcast<vec2u>(hit.bary), select(0u, 1u, hit.frontFace), over);
+    ptwfHit[2u * n + path] = vec4u(bitcast<vec3u>(hit.normal), 0u);
+}
+`;
+}
+
+/** Shadow kernel: visibility of every shadow ray; a visible one adds its contribution to the pixel. Needs the raytracer module (walk; the scene copy with `ptVisibleMasked`, alpha MASK with an exact shadow policy). */
 export function ptwfShadowWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
-  void options;
+  const masked = ptMaskShadow(resolveIntegratorOptions(options));
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'count', 'queue', 'shadow'])}
-${commonWgsl(wf)}
+${masked ? `${ptCommonHeadWgsl(resolveIntegratorOptions(options))}
+${PT_VISIBLE_MASKED_WGSL}` : ''}${commonWgsl(wf)}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -278,7 +353,7 @@ fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index
     let r0 = ptwfShadowRay[path];
     let r1 = ptwfShadowRay[n + path];
     let r2 = ptwfShadowRay[2u * n + path];
-    if (rtVisible(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), RT_MASK_ALL)) {
+    if (${masked ? 'ptVisibleMasked' : 'rtVisible'}(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), RT_MASK_ALL)) {
         ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2), 0.0);
     }
 }
@@ -487,7 +562,10 @@ ${medium ? `    var sigma = st.sigma;
     let h1 = ptwfHit[n + path];
     let h2 = ptwfHit[2u * n + path];
     let hit = RtHit(bitcast<f32>(h0.x), h0.y, h0.z, h1.z != 0u, bitcast<vec2f>(h1.xy), h0.w, ptwfF3(h2), 0.0);
-    if (hit.t < 0.0) {
+${o.alphaMask ? `    if (h1.w != 0u) {
+        return; // the intersect kernel ran out of cutout skips (PT_MASK_SKIPS): the path ends, as in the megakernel
+    }
+` : ''}    if (hit.t < 0.0) {
         radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
         ptwfAddRadiance(path, radiance);
 ${counters ? `        ptCountRay(path, 1u, 0u);

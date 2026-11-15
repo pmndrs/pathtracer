@@ -50,6 +50,18 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   alphaMask?: boolean;
   /**
+   * Which rays honour the cutout of an alpha MASK hit (R2; only with `alphaMask`). `'exact'` (default): all of them, the reference behaviour.
+   * The other three are BIASED speed settings, never for reference renders: a masked-out texel is treated as solid for the named ray class,
+   * so those rays stop at the leaf card instead of passing through its holes.
+   *  - `'opaqueShadow'`: shadow rays (next-event visibility) are plain any-hit walks (`rtVisible`, no closest-hit loop, no texture fetch). Foliage
+   *    shadows become the shadows of the whole card (darker, too much shadow); camera and bounce rays are exact.
+   *  - `'opaqueIndirect'`: extension rays after the first scattering vertex (depth >= 1: bounce, mirror and glass chains) stop at a cutout card.
+   *    Camera rays (depth 0) and shadow rays stay exact (holes are still seen, shadows still pass through them).
+   *  - `'opaqueSecondary'`: both.
+   * Without `alphaMask` the setting has no effect and the kernel text is unchanged; `'exact'` keeps every kernel byte-identical.
+   */
+  alphaPolicy?: PtAlphaPolicy;
+  /**
    * OpenPBR mode (P2.21, P2.22, P2.30): the scene has `openpbr` materials. Selects the OpenPBR material adapter (`ptBsdfFromOpenPbr`) and compiles
    * only the lobes `features` names: stochastic metal/dielectric mix, thin-walled dielectric, layered dielectric-over-diffuse
    * (`layered.layering` albedo | stochastic) and the absorbing interior medium (path state: Beer's law over the distance to the exit
@@ -68,6 +80,8 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   aovs?: boolean;
 }
 
+export type PtAlphaPolicy = 'exact' | 'opaqueShadow' | 'opaqueIndirect' | 'opaqueSecondary';
+
 export interface ResolvedIntegratorOptions {
   sampler: PtSamplerKind;
   nee: boolean;
@@ -77,6 +91,8 @@ export interface ResolvedIntegratorOptions {
   textures: boolean;
   textureLod: 'cone' | 0;
   alphaMask: boolean;
+  /** Always 'exact' without `alphaMask`. */
+  alphaPolicy: PtAlphaPolicy;
   materials: PtMaterialOptions | null;
   hooks: PtHooksOptions | null;
   counters: boolean;
@@ -84,8 +100,13 @@ export interface ResolvedIntegratorOptions {
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false };
 }
+
+/** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
+export const ptMaskShadow = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && (o.alphaPolicy === 'exact' || o.alphaPolicy === 'opaqueIndirect');
+/** Extension rays after the first scattering vertex honour cutouts. Camera rays always do. */
+export const ptMaskIndirect = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && (o.alphaPolicy === 'exact' || o.alphaPolicy === 'opaqueShadow');
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
 export const PT_PARAMS_BYTES = 96;
@@ -166,36 +187,8 @@ export const PT_ESCAPED_WGSL = /* wgsl */ `fn ptEscaped(dir: vec3f, direct: bool
     return le;
 }`;
 
-/** The integrator module text, to append after the raytracer module, the light sampling, the Owen-Sobol functions, the BSDF, its adapter and the sampler. */
-export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
-  const o = resolveIntegratorOptions(options);
-  const tex = o.textures;
-  const mask = o.alphaMask;
-  const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
-  const mats = o.materials;
-  const layered = !!mats?.features.layered;
-  const stochastic = layered && (mats?.layered?.layering ?? 'albedo') === 'stochastic';
-  const medium = !!mats?.features.medium;
-  const aniso = !!mats?.features.aniso;
-  const fuzz = !!mats?.features.fuzz;
-  const film = !!mats?.features.thinFilm;
-  const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
-  const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
-  const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
-  const hooks = !!o.hooks;
-  const counters = o.counters;
-  const aovs = o.aovs;
-  const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
-  const term = (reason: number): string => (counters ? `            termReason = ${reason}u;\n` : '');
-  return /* wgsl */ `
-alias PtRadiance = vec4f;
-${PT_PARAMS_WGSL}
-@group(2) @binding(0) var<uniform> ptParams: PtParams;
-@group(2) @binding(1) var<storage, read_write> ptAccum: array<vec4f>;
-
-${ptCommonHeadWgsl(o)}
-
-${mask ? `fn ptMaskedOut(hit: RtHit, ray: RtRay) -> bool {
+/** Shadow-ray visibility through cutouts (alpha MASK): closest-hit loop that steps over masked-out texels. Shared by the megakernel and the wavefront shadow kernel. */
+export const PT_VISIBLE_MASKED_WGSL = /* wgsl */ `fn ptMaskedOut(hit: RtHit, ray: RtRay) -> bool {
     let m = rtMaterial(hit.material);
     if (m.alphaMode != RT_ALPHA_MASK) {
         return false;
@@ -224,7 +217,40 @@ fn ptVisibleMasked(ray0: RtRay, mask: u32) -> bool {
     return false;
 }
 
-` : ''}${PT_MIS_WGSL}
+`;
+
+/** The integrator module text, to append after the raytracer module, the light sampling, the Owen-Sobol functions, the BSDF, its adapter and the sampler. */
+export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
+  const o = resolveIntegratorOptions(options);
+  const tex = o.textures;
+  const mask = o.alphaMask;
+  const maskShadow = ptMaskShadow(o);
+  const maskIndirect = ptMaskIndirect(o);
+  const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
+  const mats = o.materials;
+  const layered = !!mats?.features.layered;
+  const stochastic = layered && (mats?.layered?.layering ?? 'albedo') === 'stochastic';
+  const medium = !!mats?.features.medium;
+  const aniso = !!mats?.features.aniso;
+  const fuzz = !!mats?.features.fuzz;
+  const film = !!mats?.features.thinFilm;
+  const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
+  const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
+  const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
+  const hooks = !!o.hooks;
+  const counters = o.counters;
+  const aovs = o.aovs;
+  const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
+  const term = (reason: number): string => (counters ? `            termReason = ${reason}u;\n` : '');
+  return /* wgsl */ `
+alias PtRadiance = vec4f;
+${PT_PARAMS_WGSL}
+@group(2) @binding(0) var<uniform> ptParams: PtParams;
+@group(2) @binding(1) var<storage, read_write> ptAccum: array<vec4f>;
+
+${ptCommonHeadWgsl(o)}
+
+${maskShadow ? PT_VISIBLE_MASKED_WGSL : ''}${PT_MIS_WGSL}
 
 fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters ? ', pxIndex: u32' : ''}) -> vec3f {
     let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
@@ -255,7 +281,7 @@ fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);
     }
 ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
-` : ''}    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
+` : ''}    if (!${maskShadow ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
         return vec3f(0.0);
     }
     let pl = pick.pmf * li.pdf;
@@ -310,7 +336,7 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
         }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
         let mat = rtMaterial(hit.material);`}
 ${medium ? `        beta = beta * exp(-sigma * hit.t);
-` : ''}${mask ? `        if (mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff) {
+` : ''}${mask ? `        if (${maskIndirect ? '' : 'depth == 0u && '}mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff) {
             skips += 1u;
             if (skips > PT_MASK_SKIPS) {
 ${counters ? `                termReason = 6u;

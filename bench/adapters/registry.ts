@@ -8,7 +8,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary'] as const;
 /** Wavefront scheduling presets (P3.2): the same adapter with `refill` / `layers` set, so `matrix.ts --interleave` can A/B them in one run. `--extra pt_refill=...` still overrides. */
 const WAVEFRONT_PRESETS = {
   'pt-wf-refill': { refill: 'inline' },
@@ -16,6 +16,16 @@ const WAVEFRONT_PRESETS = {
   'pt-wf-refill-l2': { refill: 'inline', layers: 2 },
   'pt-wf-refill-l4': { refill: 'inline', layers: 4 },
   'pt-wf-batch-l2': { refill: 'batch', layers: 2 },
+} as const;
+
+/** Alpha-policy presets (R2): the same adapter with `alphaPolicy` set, so `matrix.ts --interleave` can A/B the policies in one run. BIASED: never a reference. */
+const ALPHA_PRESETS = {
+  'pt-mk-shadow': { alphaPolicy: 'opaqueShadow' },
+  'pt-mk-indirect': { alphaPolicy: 'opaqueIndirect' },
+  'pt-mk-secondary': { alphaPolicy: 'opaqueSecondary' },
+  'pt-wf-shadow': { alphaPolicy: 'opaqueShadow', scheduler: 'wavefront' },
+  'pt-wf-indirect': { alphaPolicy: 'opaqueIndirect', scheduler: 'wavefront' },
+  'pt-wf-secondary': { alphaPolicy: 'opaqueSecondary', scheduler: 'wavefront' },
 } as const;
 
 export interface AdapterOptions {
@@ -49,6 +59,13 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
     case 'pt-wf-refill-l4':
     case 'pt-wf-batch-l2':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...WAVEFRONT_PRESETS[id], ...options.pt, scheduler: 'wavefront' }, id);
+    case 'pt-mk-shadow':
+    case 'pt-mk-indirect':
+    case 'pt-mk-secondary':
+    case 'pt-wf-shadow':
+    case 'pt-wf-indirect':
+    case 'pt-wf-secondary':
+      return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...ALPHA_PRESETS[id], ...options.pt }, id);
     default:
       throw new Error(`unknown renderer "${id}" (have: ${[...ADAPTER_IDS, ...OWN_ADAPTER_IDS].join(', ')})`);
   }

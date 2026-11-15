@@ -61,7 +61,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   tangent?: 'attribute' | 'uv';
   /** Scrambling seed base. */
   seed?: number;
-  /** Scheduler (P3.1): `megakernel` (default) or `wavefront` (queues + indirect dispatch; same estimator, no alpha MASK yet). The `pt-wavefront` renderer id sets it. */
+  /** Scheduler (P3.1): `megakernel` (default) or `wavefront` (queues + indirect dispatch; same estimator, alpha MASK in intersect and shadow (P3.7)). The `pt-wavefront` renderer id sets it. */
   scheduler?: 'megakernel' | 'wavefront';
   /** Wavefront scheduling (P3.2): `refill` starts a slot's next sample inline when its path ends (A/B; `finish()` drains the tail inside the timed region), `layers` = slots per pixel (needs refill). */
   refill?: boolean | 'inline' | 'batch';
@@ -169,6 +169,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
       config: {
         scheduler: settings.scheduler ?? 'megakernel',
         ...(settings.scheduler === 'wavefront' ? { refill: settings.refill === true ? 'inline' : settings.refill || 'off', refillThreshold: settings.refillThreshold ?? 0.25, layers: settings.layers ?? 1 } : {}),
+        ...(settings.alphaPolicy && settings.alphaPolicy !== 'exact' ? { alphaPolicy: settings.alphaPolicy } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         nee: settings.nee ?? true,
         envSampling: settings.envSampling ?? 'auto',
@@ -278,6 +279,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
+    if (alphaMask && this.settings.alphaPolicy && this.settings.alphaPolicy !== 'exact') this.approximations.push(`alpha policy ${this.settings.alphaPolicy}: cutouts ignored for some ray classes (biased, not a reference)`);
     const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, ...integratorSettings } = this.settings;
     void _denoise;
     void _tza;

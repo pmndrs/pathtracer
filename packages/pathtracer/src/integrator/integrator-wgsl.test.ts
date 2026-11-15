@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, materials: null, hooks: null, counters: false, aovs: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', materials: null, hooks: null, counters: false, aovs: false });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -135,6 +135,24 @@ describe('integrator WGSL', () => {
       // without textures there is no base colour alpha to read: the option is ignored and the kernel text is the plain one
       const untex = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
       expect(ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false, integrator: { alphaMask: true } })).toBe(untex);
+    });
+
+    it('alpha policy (R2): exact is the default text; the opaque policies drop the shadow loop and / or the indirect cutout test', () => {
+      const o = { minify: false, shortenNames: false };
+      const exact = build({ ...o, integrator: { alphaMask: true } });
+      expect(build({ ...o, integrator: { alphaMask: true, alphaPolicy: 'exact' } })).toBe(exact);
+      const shadow = build({ ...o, integrator: { alphaMask: true, alphaPolicy: 'opaqueShadow' } });
+      expect(shadow).not.toContain('ptVisibleMasked');
+      expect(shadow).toContain('rtVisible(ray, RT_MASK_ALL)');
+      expect(shadow).toContain('if (mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff)');
+      const indirect = build({ ...o, integrator: { alphaMask: true, alphaPolicy: 'opaqueIndirect' } });
+      expect(indirect).toContain('ptVisibleMasked(ray, RT_MASK_ALL)');
+      expect(indirect).toContain('if (depth == 0u && mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff)');
+      const both = build({ ...o, integrator: { alphaMask: true, alphaPolicy: 'opaqueSecondary' } });
+      expect(both).not.toContain('ptVisibleMasked');
+      expect(both).toContain('depth == 0u && mat.alphaMode == RT_ALPHA_MASK');
+      // no alphaMask: the policy is ignored
+      expect(build({ ...o, integrator: { alphaPolicy: 'opaqueSecondary' } })).toBe(build(o));
     });
 
     it('binds the arrays then their samplers after the two scene buffers, in group 1', () => {

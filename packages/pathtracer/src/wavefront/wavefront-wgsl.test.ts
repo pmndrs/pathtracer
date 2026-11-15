@@ -78,10 +78,26 @@ describe('wavefront WGSL (P3.1)', () => {
     expect(() => ptWavefrontBuild(caps, { ...variants.plain!, refill: true, layers: 0 })).toThrow(RangeError);
   });
 
-  it('alpha MASK throws a clear error', () => {
-    expect(ptwfUnsupported({ alphaMask: true, textures: true })).toMatch(/alpha MASK/);
-    expect(() => ptWavefrontBuild(caps, { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { alphaMask: true } })).toThrow(/alpha MASK/);
-    expect(ptwfUnsupported({})).toBeNull();
+  it('alpha MASK: cutout loop in intersect, masked shadow loop, policies drop them', () => {
+    const tex = { format: {}, layout: texLayout, textures: { buckets: [bucket] }, prune: false, shortenNames: false, minify: false };
+    const exact = ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true } });
+    expect(exact.intersect.code).toContain('PT_MASK_SKIPS');
+    expect(exact.intersect.code).toContain('@group(1) @binding(0)'); // scene copy bound for the cutout test
+    expect(exact.intersect.code).not.toContain('st.depth > 0u');
+    expect(exact.shadow.code).toContain('ptVisibleMasked(RtRay(');
+    expect(exact.shade.code).toContain('h1.w != 0u');
+    const shadow = ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, alphaPolicy: 'opaqueShadow' } });
+    expect(shadow.shadow.code).not.toContain('ptVisibleMasked');
+    expect(shadow.shadow.code).not.toContain('@group(1)');
+    expect(shadow.intersect.code).toContain('PT_MASK_SKIPS');
+    const indirect = ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, alphaPolicy: 'opaqueIndirect' } });
+    expect(indirect.intersect.code).toContain('st.depth > 0u');
+    expect(indirect.shadow.code).toContain('ptVisibleMasked(RtRay(');
+    // the policy means nothing without alphaMask: kernels are the plain textured ones
+    expect(ptWavefrontBuild(caps, { ...tex, integrator: { alphaPolicy: 'opaqueSecondary' } }).intersect.code).toBe(ptWavefrontBuild(caps, tex).intersect.code);
+    expect(ptwfUnsupported({ alphaMask: true, textures: true })).toBeNull();
+    expect(ptwfUnsupported({ alphaMask: true, textures: true, counters: true })).toMatch(/counters/);
+    expect(() => ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, counters: true } })).toThrow(/counters/);
   });
 
   it('the shade kernel carries the same estimator constants and sampler pairs as the megakernel', () => {

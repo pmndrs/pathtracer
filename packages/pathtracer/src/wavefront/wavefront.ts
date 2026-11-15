@@ -9,7 +9,7 @@
  * Same surface as the megakernel (create / setScene / setFilm / setCamera / setLimits / setSeed / reset / encode / readImage / destroy).
  * One sample pass = camera + args(INIT) + for each depth `intersect, shade, args, shadow`, with GPU-written indirect dispatch args:
  * no readback and no CPU decision inside the frame. The queue protocol and buffer layout are in `layout.ts`. Slice 1: one sample in
- * flight, one path per pixel, no sorting / compaction (P3.3+), no alpha MASK (`ptwfUnsupported`). P3.2 adds the opt-in refill modes and `layers` (see `PtWavefrontOptions`);
+ * flight, one path per pixel, no sorting / compaction (P3.3+); alpha MASK is handled in the intersect and shadow kernels (P3.7, R2 `alphaPolicy`). P3.2 adds the opt-in refill modes and `layers` (see `PtWavefrontOptions`);
  * with `refill`, `encode` does not wait for its paths: `await finish()` before `readImage`.
  *
  * The params uniform is a ring of dynamic-offset slots like the megakernel's, with one record per depth iteration
@@ -19,7 +19,7 @@ import { rtCreateComputePipelineAsync, rtModuleWgsl, rtSceneBindGroupEntries, rt
 import type { Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
-import { PT_PARAMS_BYTES, resolveIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { ptRaytracerModuleOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
@@ -61,7 +61,12 @@ export const PTWF_KERNELS = ['camera', 'intersect', 'shade', 'shadow', 'args'] a
 /** Group 2 bindings each kernel declares (`PTWF_BINDING` numbers; 2 = fuzz table, only with `features.fuzz`). Must match the `bindings([...])` of the WGSL. */
 const IO_BINDINGS: Record<(typeof PTWF_KERNELS)[number], readonly number[]> = { camera: [0, 1, 3, 6], intersect: [0, 3, 4, 5, 6], shade: [0, 1, 2, 3, 4, 5, 6, 7], shadow: [0, 1, 5, 6, 7], args: [0, 5] };
 const USES_WALK: Record<(typeof PTWF_KERNELS)[number], boolean> = { camera: false, intersect: true, shade: false, shadow: true, args: false };
-const USES_SCENE: Record<(typeof PTWF_KERNELS)[number], boolean> = { camera: false, intersect: false, shade: true, shadow: false, args: false };
+/** Kernels that bind the scene copy (group 1): shade always; with alpha MASK also intersect (cutout loop) and, for an exact shadow policy, shadow (`ptVisibleMasked`). */
+function usesScene(kernel: (typeof PTWF_KERNELS)[number], integrator: PtIntegratorOptions | undefined, textures: unknown): boolean {
+  if (kernel === 'shade') return true;
+  const o = resolveIntegratorOptions({ ...integrator, ...(textures ? { textures: true } : {}) });
+  return o.alphaMask && (kernel === 'intersect' || (kernel === 'shadow' && ptMaskShadow(o)));
+}
 export type PtwfKernel = (typeof PTWF_KERNELS)[number];
 export type PtWavefrontBuild = Record<PtwfKernel, RtWgslBuild>;
 
@@ -91,9 +96,9 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   const sampler = parts.slice(1, 2).concat(parts.slice(-1)).join('\n'); // Owen-Sobol + the sampler's ptSample2D
   return {
     camera: rtTransformWgsl(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfCamera'] }),
-    intersect: rtTransformWgsl(`${walk}\n${ptwfIntersectWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfIntersect'] }),
+    intersect: rtTransformWgsl(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${ptwfIntersectWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfIntersect'] }),
     shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShade'] }),
-    shadow: rtTransformWgsl(`${walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShadow'] }),
+    shadow: rtTransformWgsl(`${usesScene('shadow', integratorOptions, null) ? full : walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShadow'] }),
     args: rtTransformWgsl(ptwfArgsWgsl(wf), { ...t, keep: ['ptwfArgsMain'] }),
   };
 }
@@ -110,6 +115,8 @@ interface PtwfLayouts {
   scene: GPUBindGroupLayout;
   io: Record<PtwfKernel, GPUBindGroupLayout>;
   args: GPUBindGroupLayout;
+  /** Which kernels bind the scene copy (`usesScene`). */
+  scene_: Record<PtwfKernel, boolean>;
 }
 
 /** Group 2 bindings of a kernel for this build: the fuzz table (2) only with fuzz, the debug counters (8) only with counters (shade kernel). */
@@ -193,9 +200,10 @@ export class PtWavefront {
     const io = Object.fromEntries(PTWF_KERNELS.map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
     const hooks = options.integrator?.hooks ? device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] }) : null;
-    const layouts = { hooks, empty, walk, scene, io, args: argsLayout };
+    const scenePerKernel = Object.fromEntries(PTWF_KERNELS.map((k) => [k, usesScene(k, options.integrator, options.textures)])) as Record<PtwfKernel, boolean>;
+    const layouts = { hooks, empty, walk, scene, io, args: argsLayout, scene_: scenePerKernel };
     const pipelineLayout = (k: PtwfKernel): GPUPipelineLayout =>
-      device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, USES_SCENE[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : []), ...(k === 'shade' && hooks ? [hooks] : [])] });
+      device.createPipelineLayout({ label: `${label} ${k}`, bindGroupLayouts: [USES_WALK[k] ? walk : empty, scenePerKernel[k] ? scene : empty, io[k], ...(k === 'args' ? [argsLayout] : []), ...(k === 'shade' && hooks ? [hooks] : [])] });
     const pipelineLayouts = Object.fromEntries(PTWF_KERNELS.map((k) => [k, pipelineLayout(k)])) as Record<PtwfKernel, GPUPipelineLayout>;
     const layoutError = await device.popErrorScope();
     if (layoutError) throw new Error(`PtWavefront: invalid bind group / pipeline layout: ${layoutError.message}`);
@@ -348,7 +356,7 @@ export class PtWavefront {
     const use = (kernel: PtwfKernel): void => {
       pass.setPipeline(this.pipelines[kernel]);
       pass.setBindGroup(0, USES_WALK[kernel] ? walkGroup : emptyGroup);
-      pass.setBindGroup(1, USES_SCENE[kernel] ? sceneGroup : emptyGroup);
+      pass.setBindGroup(1, this.layouts.scene_[kernel] ? sceneGroup : emptyGroup);
       pass.setBindGroup(2, ioGroups[kernel], [offset]);
       if (kernel === 'args') pass.setBindGroup(3, argsGroup);
       else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
@@ -414,7 +422,7 @@ export class PtWavefront {
     const use = (kernel: PtwfKernel, offset: number): void => {
       pass.setPipeline(this.pipelines[kernel]);
       pass.setBindGroup(0, USES_WALK[kernel] ? walkGroup : emptyGroup);
-      pass.setBindGroup(1, USES_SCENE[kernel] ? sceneGroup : emptyGroup);
+      pass.setBindGroup(1, this.layouts.scene_[kernel] ? sceneGroup : emptyGroup);
       pass.setBindGroup(2, ioGroups[kernel], [offset]);
       if (kernel === 'args') pass.setBindGroup(3, argsGroup);
       else if (kernel === 'shade' && hookGroup) pass.setBindGroup(3, hookGroup);
