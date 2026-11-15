@@ -73,7 +73,6 @@ interface Live {
   bounds: { min: [number, number, number]; max: [number, number, number] };
   display: { pipeline: GPURenderPipeline; params: GPUBuffer; group: GPUBindGroup };
   context: GPUCanvasContext;
-  querySet: GPUQuerySet | null;
 }
 
 let live: Live | null = null;
@@ -83,6 +82,8 @@ let needsReset = true;
 let split = 0.5;
 let lastFrameMs = 0;
 let lastFrameEnd = 0;
+let paused = false;
+let fps = 0;
 const keys = new Set<string>();
 const cam = { position: [0, 0, 0] as [number, number, number], yaw: 0, pitch: 0, yFovDeg: 60, speed: 1 };
 
@@ -208,8 +209,7 @@ async function build(full: boolean): Promise<void> {
       const module = device.createShaderModule({ label: 'nrc display', code: DISPLAY_WGSL });
       const pipeline = await device.createRenderPipelineAsync({ label: 'nrc display', layout: 'auto', vertex: { module, entryPoint: 'vs' }, fragment: { module, entryPoint: 'fs', targets: [{ format }] }, primitive: { topology: 'triangle-list' } });
       const params = device.createBuffer({ label: 'nrc display params', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      const querySet = device.features.has('timestamp-query') ? device.createQuerySet({ type: 'timestamp', count: 10 }) : null;
-      live = { adapter, device, plain, cache, scene, width: w, height: h, bounds, display: { pipeline, params, group: displayGroup({ device, plain, cache }, pipeline, params) }, context, querySet };
+      live = { adapter, device, plain, cache, scene, width: w, height: h, bounds, display: { pipeline, params, group: displayGroup({ device, plain, cache }, pipeline, params) }, context };
     } else {
       setStatus('Rebuilding the cache…');
       const old = live.cache;
@@ -275,9 +275,10 @@ function moveCamera(dt: number): boolean {
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const l = live;
-  if (!l || busy || building) return;
+  if (!l || busy || building || paused) return;
   const dt = lastFrameEnd ? Math.min(0.1, (now - lastFrameEnd) / 1000) : 0;
   if (moveCamera(dt)) needsReset = true;
+  const view = value('view');
   const encoder = l.device.createCommandEncoder({ label: 'nrc live frame' });
   if (needsReset || !checked('accumulate')) {
     l.plain.setCamera(camera());
@@ -286,66 +287,72 @@ function frame(now: number): void {
     l.cache.reset(encoder);
     needsReset = false;
   }
-  l.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
-  l.cache.encodeFrame(encoder, { train: checked('train') && l.cache.settings.stepsPerFrame > 0 });
-  l.plain.encode(encoder, plainSpp());
+  // Only the side on screen renders, so "With NRC only" and "Path tracing only" show each side's own frame time.
+  if (view !== 'plain') {
+    l.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
+    l.cache.encodeFrame(encoder, { train: checked('train') && l.cache.settings.stepsPerFrame > 0 });
+  }
+  if (view !== 'nrc') l.plain.encode(encoder, plainSpp());
   encodeDisplay(l, encoder);
   l.device.queue.submit([encoder.finish()]);
   busy = true;
   const t0 = performance.now();
   void l.device.queue.onSubmittedWorkDone().then(() => {
     busy = false;
-    lastFrameMs = performance.now() - t0;
-    lastFrameEnd = performance.now();
-    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.width} × ${l.height} · plain ${l.plain.samples} spp · NRC ${l.cache.samples} spp · ${l.cache.mlp.inferBackend} ${l.cache.mlp.precision} · last frame ${lastFrameMs.toFixed(1)} ms wall`);
+    const end = performance.now();
+    lastFrameMs = end - t0;
+    if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
+    lastFrameEnd = end;
+    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.width} × ${l.height} · ${fps.toFixed(0)} fps (GPU ${lastFrameMs.toFixed(1)} ms) · plain ${l.plain.samples} spp · NRC ${l.cache.samples} spp · ${l.cache.mlp.inferBackend} ${l.cache.mlp.precision}`);
   });
 }
 
+/**
+ * Times each stage by submitting it alone and waiting for it (wall clock per submit, about ±0.3 ms; GPU timestamps on
+ * ~20 passes per frame lost the Metal device). Median of 20 frames after 3 warm-up frames.
+ */
 async function benchmark(): Promise<void> {
   const l = live;
   if (!l) return;
   const table = $('timings').querySelector('tbody') as HTMLTableSectionElement;
-  if (!l.querySet) {
-    table.replaceChildren(row('This GPU has no timestamp queries.', ''));
-    return;
-  }
   building = true;
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
-    const frames = 30;
-    const resolve = l.device.createBuffer({ size: frames * 256, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
-    const staging = l.device.createBuffer({ size: frames * 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const train = checked('train') && l.cache.settings.stepsPerFrame > 0;
-    for (let f = 0; f < frames; f++) {
-      const encoder = l.device.createCommandEncoder({ label: 'nrc benchmark' });
-      l.cache.encodeFrame(encoder, { train, times: { querySet: l.querySet, first: 0 } });
-      l.plain.encode(encoder, plainSpp(), { querySet: l.querySet, beginningOfPassWriteIndex: 8, endOfPassWriteIndex: 9 });
-      encoder.resolveQuerySet(l.querySet, 0, 10, resolve, f * 256);
-      l.device.queue.submit([encoder.finish()]);
+    const stages = NrcCache.STAGES.filter((st) => train || (st !== 'trainingPaths' && st !== 'trainSteps'));
+    const times: Record<string, number[]> = { plain: [] };
+    for (const st of stages) times[st] = [];
+    const run = async (encode: (e: GPUCommandEncoder) => void): Promise<number> => {
+      const e = l.device.createCommandEncoder({ label: 'nrc benchmark' });
+      encode(e);
+      const t0 = performance.now();
+      l.device.queue.submit([e.finish()]);
       await l.device.queue.onSubmittedWorkDone();
-    }
-    const enc = l.device.createCommandEncoder();
-    enc.copyBufferToBuffer(resolve, 0, staging, 0, frames * 256);
-    l.device.queue.submit([enc.finish()]);
-    await staging.mapAsync(GPUMapMode.READ);
-    const all = new BigUint64Array(staging.getMappedRange().slice(0));
-    staging.unmap();
-    staging.destroy();
-    resolve.destroy();
-    const med = (a: number, b: number) => {
-      const v: number[] = [];
-      for (let f = 2; f < frames; f++) v.push(Number(all[f * 32 + b]! - all[f * 32 + a]!) / 1e6);
-      v.sort((x, y) => x - y);
-      return v[Math.floor(v.length / 2)] as number;
+      return performance.now() - t0;
     };
-    const trainerMs = train ? med(0, 1) : 0;
-    const trainMs = train ? med(2, 3) : 0;
-    const renderMs = med(4, 5);
-    const inferMs = med(6, 7);
-    const plainMs = med(8, 9);
+    for (let f = 0; f < 23; f++) {
+      l.cache.nextFrame();
+      for (const st of stages) {
+        const ms = await run((e) => l.cache.encodeStage(e, st));
+        if (f >= 3) times[st]!.push(ms);
+      }
+      const ms = await run((e) => l.plain.encode(e, plainSpp()));
+      if (f >= 3) times.plain!.push(ms);
+    }
+    const med = (v: number[] | undefined) => {
+      if (!v || !v.length) return 0;
+      const s = [...v].sort((x, y) => x - y);
+      return s[Math.floor(s.length / 2)] as number;
+    };
+    const trainerMs = med(times.trainingPaths);
+    const trainMs = med(times.trainSteps);
+    const renderMs = med(times.renderPass);
+    const inferMs = med(times.inference);
+    const plainMs = med(times.plain);
     const nrcMs = trainerMs + trainMs + renderMs + inferMs;
     const perSpp = plainMs / plainSpp();
     const equal = Math.max(1, Math.round(nrcMs / perSpp));
+    (window as unknown as { __nrcBench: unknown }).__nrcBench = { trainerMs, trainMs, renderMs, inferMs, nrcMs, plainMs, perSpp, equal, backend: `${l.cache.mlp.inferBackend} ${l.cache.mlp.precision}` };
     table.replaceChildren(
       row('Training paths + targets', trainerMs),
       row('Training steps', trainMs),
@@ -432,6 +439,24 @@ $('resetView').addEventListener('click', () => {
   needsReset = true;
 });
 $('bench').addEventListener('click', () => void benchmark());
+$('pause').addEventListener('click', () => {
+  paused = !paused;
+  $('pause').textContent = paused ? 'Resume' : 'Pause';
+  lastFrameEnd = 0;
+  fps = 0;
+});
+/** A setup that runs at interactive rates on the M5 Pro: 640 × 360, the cache's view only, 2 training steps per frame. */
+$('realtime').addEventListener('click', () => {
+  const res = $<HTMLSelectElement>('res');
+  const rebuild = res.value !== '640x360';
+  res.value = '640x360';
+  $<HTMLSelectElement>('view').value = 'nrc';
+  $<HTMLInputElement>('steps').value = '2';
+  const backend = $<HTMLSelectElement>('backend');
+  if ([...backend.options].some((o) => o.value === 'sgm-4')) backend.value = 'sgm-4';
+  if (rebuild) void build(true);
+  else void build(false);
+});
 $('save').addEventListener('click', () => void saveAB());
 
 const args = new URLSearchParams(location.search);
@@ -458,4 +483,4 @@ async function means(): Promise<Record<string, number> | null> {
     building = false;
   }
 }
-(window as unknown as { __nrcLive: unknown }).__nrcLive = { benchmark, means, get samples() { return live ? { plain: live.plain.samples, nrc: live.cache.samples } : null; }, status: () => statusEl.textContent };
+(window as unknown as { __nrcLive: unknown }).__nrcLive = { benchmark, means, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, get samples() { return live ? { plain: live.plain.samples, nrc: live.cache.samples } : null; }, status: () => statusEl.textContent };

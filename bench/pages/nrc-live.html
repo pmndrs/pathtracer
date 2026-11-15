@@ -80,6 +80,8 @@
           <label>Cache at <select id="queryDepth"><option value="0">first hit (cache only)</option><option value="1" selected>second hit</option><option value="2">third hit</option><option value="3">fourth hit</option></select></label>
           <label>Exposure <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
           <label class="check"><input id="accumulate" type="checkbox" checked /> Accumulate while still</label>
+          <div class="row"><button id="pause">Pause</button><button id="realtime">Real-time setup</button></div>
+          <p class="note">Only the side on screen renders: "With NRC only" shows the cache's own frame rate.</p>
         </fieldset>
         <fieldset>
           <h2>Time per frame</h2>
@@ -98,7 +100,7 @@
         <fieldset>
           <h2>Measure</h2>
           <div class="row"><button class="primary" id="bench">Benchmark</button><button id="save">Save A/B</button></div>
-          <table id="timings" aria-label="Benchmark results"><tbody><tr><td>Press Benchmark for GPU times.</td><td class="v"></td></tr></tbody></table>
+          <table id="timings" aria-label="Benchmark results"><tbody><tr><td>Press Benchmark to time each stage.</td><td class="v"></td></tr></tbody></table>
           <p class="note" id="saveNote"></p>
         </fieldset>
       </aside>

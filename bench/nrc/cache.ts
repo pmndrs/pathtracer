@@ -215,12 +215,6 @@ export const DEFAULT_NRC_SETTINGS: NrcSettings = {
   seed: 1,
 };
 
-export interface NrcStageTimes {
-  querySet: GPUQuerySet;
-  /** 8 slots from `first`: trainer (runs + tail inference + targets), training, render pass, inference + resolve. */
-  first: number;
-}
-
 export class NrcCache {
   readonly device!: GPUDevice;
   readonly render!: PtMegakernel;
@@ -384,29 +378,40 @@ export class NrcCache {
     this.device.queue.writeBuffer(this.hookParams, (M + 1) * HOOK_SLOT, new Uint32Array([0, depth, 0, this.width * this.height]));
   }
 
+  /** The stages of a frame, in order. `encodeFrame` runs them all; a benchmark can submit them one at a time. */
+  static readonly STAGES = ['trainingPaths', 'trainSteps', 'renderPass', 'inference'] as const;
+
   /**
    * One frame: train (unless `train` is false), then one render sample pass with the cache. No readback.
-   * `times`: 8 timestamp slots (trainer, training, render pass, inference + resolve).
+   * (No timestamp writes: about 20 timestamped passes per frame lost the Metal device with "Insufficient Memory"
+   * about half the time; time stages by submitting them one at a time instead, `encodeStage`.)
    */
-  encodeFrame(encoder: GPUCommandEncoder, options: { train?: boolean; times?: NrcStageTimes } = {}): void {
-    const { device, settings: s, npix } = this;
-    const M = s.trainDepth;
-    const t = options.times;
-    const stamp = (i: number): GPUComputePassTimestampWrites | undefined => (t ? { querySet: t.querySet, beginningOfPassWriteIndex: t.first + i, endOfPassWriteIndex: t.first + i + 1 } : undefined);
+  encodeFrame(encoder: GPUCommandEncoder, options: { train?: boolean } = {}): void {
     this.frame++;
     if (options.train !== false) {
+      this.encodeStage(encoder, 'trainingPaths');
+      this.encodeStage(encoder, 'trainSteps');
+    }
+    this.encodeStage(encoder, 'renderPass');
+    this.encodeStage(encoder, 'inference');
+  }
+
+  /** One stage of a frame. Call them in `STAGES` order; `trainingPaths` starts a new frame's training data. */
+  encodeStage(encoder: GPUCommandEncoder, stage: (typeof NrcCache.STAGES)[number]): void {
+    const { settings: s, npix } = this;
+    const M = s.trainDepth;
+    if (stage === 'trainingPaths') {
       encoder.clearBuffer(this.trainVerts);
       encoder.clearBuffer(this.trainCount);
       this.trainer.setSeed(s.seed * 7919 + this.frame);
       for (let k = 0; k <= M; k++) {
         this.trainer.reset(encoder);
         this.trainer.setHookBindGroup(this.trainGroups[k] as GPUBindGroup);
-        // The start stamp rides on the first trainer pass (Dawn drops an empty pass's timestamps).
-        this.trainer.encode(encoder, 1, t && k === 0 ? { querySet: t.querySet, beginningOfPassWriteIndex: t.first } : undefined);
+        this.trainer.encode(encoder, 1);
         encoder.copyBufferToBuffer(this.trainer.accumulator as GPUBuffer, 0, this.trainRadiance, k * npix * 16, npix * 16);
       }
       this.mlp.encodeInfer(encoder, this.tailCount, 0, this.tailInferGroup);
-      const pass = encoder.beginComputePass({ label: 'nrc targets', ...(t ? { timestampWrites: { querySet: t.querySet, endOfPassWriteIndex: t.first + 1 } } : {}) });
+      const pass = encoder.beginComputePass({ label: 'nrc targets' });
       pass.setPipeline(this.targetsPipeline);
       pass.setBindGroup(0, this.targetsGroup);
       pass.dispatchWorkgroups(Math.ceil((npix * M) / 64));
@@ -414,20 +419,24 @@ export class NrcCache {
       pass.setBindGroup(0, this.finishGroup);
       pass.dispatchWorkgroups(1);
       pass.end();
-      for (let i = 0; i < s.stepsPerFrame; i++) {
-        const ts = t && (i === 0 || i === s.stepsPerFrame - 1) ? { querySet: t.querySet, ...(i === 0 ? { beginningOfPassWriteIndex: t.first + 2 } : {}), ...(i === s.stepsPerFrame - 1 ? { endOfPassWriteIndex: t.first + 3 } : {}) } : undefined;
-        this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup, ts);
-      }
+    } else if (stage === 'trainSteps') {
+      for (let i = 0; i < s.stepsPerFrame; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
+    } else if (stage === 'renderPass') {
+      encoder.clearBuffer(this.queryCount);
+      this.render.encode(encoder, 1);
+    } else {
+      this.mlp.encodeInfer(encoder, this.queryCount, 0, this.renderInferGroup);
+      const pass = encoder.beginComputePass({ label: 'nrc resolve' });
+      pass.setPipeline(this.resolvePipeline);
+      pass.setBindGroup(0, this.resolveGroup);
+      pass.dispatchWorkgroups(Math.ceil((this.width * this.height) / 64));
+      pass.end();
     }
-    encoder.clearBuffer(this.queryCount);
-    this.render.encode(encoder, 1, stamp(4));
-    this.mlp.encodeInfer(encoder, this.queryCount, 0, this.renderInferGroup, t ? { querySet: t.querySet, beginningOfPassWriteIndex: t.first + 6 } : undefined);
-    const pass = encoder.beginComputePass({ label: 'nrc resolve', ...(t ? { timestampWrites: { querySet: t.querySet, endOfPassWriteIndex: t.first + 7 } } : {}) });
-    pass.setPipeline(this.resolvePipeline);
-    pass.setBindGroup(0, this.resolveGroup);
-    pass.dispatchWorkgroups(Math.ceil((this.width * this.height) / 64));
-    pass.end();
-    void device;
+  }
+
+  /** Starts a frame for `encodeStage` callers (the trainer's seed advances per frame). */
+  nextFrame(): void {
+    this.frame++;
   }
 
   /** Debug only (never in a frame loop): training records of the last frame, and render queries. */
