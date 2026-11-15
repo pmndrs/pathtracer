@@ -162,6 +162,8 @@ async function buildCache(l: Pick<Live, 'adapter' | 'device' | 'plain' | 'width'
     trainDepth: num('trainDepth'),
     trainWidth,
     trainHeight,
+    training: value('training') === 'replay' ? 'replay' : 'inline',
+    trainSelect: value('trainSelect') === 'pixel' ? 'pixel' : 'tile',
     stepsPerFrame: num('steps'),
     learningRate: num('lr'),
   });
@@ -319,7 +321,7 @@ async function benchmark(): Promise<void> {
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
     const train = checked('train') && l.cache.settings.stepsPerFrame > 0;
-    const stages = NrcCache.STAGES.filter((st) => train || (st !== 'trainingPaths' && st !== 'trainSteps'));
+    const stages = l.cache.stages.filter((st) => train || (st !== 'trainingPaths' && st !== 'trainSteps'));
     const times: Record<string, number[]> = { plain: [] };
     for (const st of stages) times[st] = [];
     const run = async (encode: (e: GPUCommandEncoder) => void): Promise<number> => {
@@ -422,7 +424,7 @@ window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
 for (const id of ['scene', 'res', 'maxDepth']) $(id).addEventListener('change', () => void build(true));
-for (const id of ['backend', 'lr', 'trainDepth']) $(id).addEventListener('change', () => void build(false));
+for (const id of ['backend', 'lr', 'trainDepth', 'training', 'trainSelect']) $(id).addEventListener('change', () => void build(false));
 $('queryDepth').addEventListener('change', () => {
   live?.cache.setQueryDepth(Number(value('queryDepth')));
   needsReset = true;
@@ -464,6 +466,33 @@ if (args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElemen
 await build(true);
 requestAnimationFrame(frame);
 // Headless checks and the runner: frame count and a benchmark hook.
+/** Debug and headless use: renders n frames of the current view without requestAnimationFrame (a hidden window pauses rAF). */
+async function step(n: number): Promise<void> {
+  const l = live;
+  if (!l) return;
+  building = true;
+  try {
+    while (busy) await new Promise((r) => setTimeout(r, 5));
+    const view = value('view');
+    for (let i = 0; i < n; i++) {
+      const encoder = l.device.createCommandEncoder({ label: 'nrc step' });
+      if (needsReset || !checked('accumulate')) {
+        l.plain.setCamera(camera());
+        l.cache.setCamera(camera());
+        l.plain.reset(encoder);
+        l.cache.reset(encoder);
+        needsReset = false;
+      }
+      if (view !== 'plain') l.cache.encodeFrame(encoder, { train: checked('train') && l.cache.settings.stepsPerFrame > 0 });
+      if (view !== 'nrc') l.plain.encode(encoder, plainSpp());
+      l.device.queue.submit([encoder.finish()]);
+      await l.device.queue.onSubmittedWorkDone();
+    }
+  } finally {
+    building = false;
+  }
+}
+
 /** Debug only (pauses the loop, one readback): mean radiance of both images and the cache's record counts. */
 async function means(): Promise<Record<string, number> | null> {
   const l = live;
@@ -483,4 +512,4 @@ async function means(): Promise<Record<string, number> | null> {
     building = false;
   }
 }
-(window as unknown as { __nrcLive: unknown }).__nrcLive = { benchmark, means, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, get samples() { return live ? { plain: live.plain.samples, nrc: live.cache.samples } : null; }, status: () => statusEl.textContent };
+(window as unknown as { __nrcLive: unknown }).__nrcLive = { benchmark, means, step, reset: () => { needsReset = true; }, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, get samples() { return live ? { plain: live.plain.samples, nrc: live.cache.samples } : null; }, status: () => statusEl.textContent };

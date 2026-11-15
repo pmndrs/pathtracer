@@ -51,7 +51,8 @@ Target frame: 16.7 ms on the M5 Pro at 960×540 (upscaled to 1080p), path tracin
 |---|---|---|
 | Inference, 518k queries (960×540) | 4.4 ms (subgroup matrix f16, 4 subgroups); 49 ms portable f16 (quiet) | ≤ 4 ms |
 | Training, 4 × 16k records | 2.0 ms (portable f16, 0.51 ms per step: tiled gradient + tiled forward-backward; was 27.5) | ≤ 4 ms ✅ |
-| Path tracing, ~2 short paths per pixel | not measured for this scene and resolution | rest of the frame |
+| Path tracing, ~2 short paths per pixel | 640×360: 5.6 ms with training paths (960×540: ~13.5) | rest of the frame |
+| **Cache side, 640×360 total** | **9.0 ms** (render 5.6, 2 steps 1.3, inference 2.1; subgroup matrix f16, flagged Chrome) | 16.7 ms ✅ |
 
 Training met its budget on 2026-11-15 (0.51 ms per step); the path tracer's own passes are now the larger part of a frame.
 
@@ -106,6 +107,9 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-15 (Mac, session 4).** Training step 6.9 → 0.51 ms (tiled forward-backward). Opt-in `ptOnRadiance` hook in main's
+  integrator (other kernels byte-identical); training paths now ride in the render pass as whole 8 × 8 tiles: the cache side of a
+  640×360 Sponza frame is 9.0 ms. Demo runs in flagged Chrome.
 - **2026-11-15 (Mac, session 3).** The cache runs on main's path tracer (`bench/nrc/cache.ts`): passes the closed-room gate
   on every backend; `nrc-live` demo built (`pnpm --filter @pathtracer/bench nrc:live`). On the portable network inference is
   the big per-frame cost (59 ms for 500k queries), so the subgroup-matrix backend matters for the demo. Progress page published.

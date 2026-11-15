@@ -8,7 +8,7 @@
  * E (1 - rho^(M+1)) / (1 - rho)). Reports the mean and worst pixel error, the training records and queries per frame.
  *
  * Args: frames=300  queryDepth=1  trainDepth=4  precision=f32|f16  infer=portable|sgm|sgm-emu  subgroups=4  steps=4  batch=4096  lr=0.01  spp=16
- *       tol=0.03 (mean)  tolMax=0.1
+ *       training=inline|replay  updateBlock=2  trainSelect=tile|pixel (inline)  tol=0.03 (mean)  tolMax=0.1
  */
 import type { AdapterSummary } from '../runner/contract.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, watchDevice } from '../runner/page-client.ts';
@@ -70,6 +70,9 @@ try {
   const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width: WIDTH, height: WIDTH, camera, maxDepth }, { min: [-1, -1, -1], max: [1, 1, 1] }, {
     precision,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
+    training: args.training === 'replay' ? 'replay' : 'inline',
+    updateBlock: numberArg(args, 'updateBlock', 2),
+    trainSelect: args.trainSelect === 'pixel' ? 'pixel' : 'tile',
     queryDepth,
     trainDepth,
     trainWidth: WIDTH,
@@ -119,9 +122,9 @@ try {
     {
       scene: 'nrc-check',
       renderer: 'ours',
-      config: { frames, queryDepth, trainDepth, precision, spp, infer: arm.description },
+      config: { frames, queryDepth, trainDepth, precision, spp, infer: arm.description, training: cache.settings.training, updateBlock: cache.settings.updateBlock, trainSelect: cache.settings.trainSelect },
       valid: ok,
-      metrics: { mean, expected, mean_rel_error: meanRel, max_rel_error: worst, plain_depth_limited: plainDepthLimited, train_records: trainCounts.records, train_batch: trainCounts.batch, queries_last_pass: queries },
+      metrics: { train_paths: cache.trainPaths, mean, expected, mean_rel_error: meanRel, max_rel_error: worst, plain_depth_limited: plainDepthLimited, train_records: trainCounts.records, train_batch: trainCounts.batch, queries_last_pass: queries },
       notes: { infer: cache.mlp.inferBackend },
     },
     { adapter: adapterSummary, deviceErrors },

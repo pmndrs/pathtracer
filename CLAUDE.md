@@ -584,3 +584,9 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   fails. Unrolled tiled kernels pass the ~50 KB guideline quickly (tiled forward with 128 records: 50.4 KB); keep R ≤ 64.
 - `mlp-check`'s `update_rel_error` is the max over weights and is dominated by near-zero gradients where Adam's sign decides
   a full step; compare `updateP99` and the `mlp-fit oracleSteps=` replay instead.
+- A hook that marks scattered pixels for long work (training paths, update paths) makes every 8×8 megakernel workgroup wait
+  on its longest path: NRC per-pixel training cost 2 ms more per 640×360 frame than whole-tile training. Select whole tiles.
+- `bench/live.ts` picks the first free port from 5291 (the runner may hold 5291): read the URL it prints. A hidden or
+  minimised Chrome window pauses `requestAnimationFrame`; drive headless measurements through `__nrcLive.step(n)`.
+- BSD `grep -E` rejects `{0,300}` ("maximum repetition exceeds 255") and the broken pipe can leave the runner hanging; keep
+  repetition counts under 256 when filtering runner output.
