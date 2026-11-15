@@ -162,6 +162,8 @@ try {
     }
   };
   const series = async (tag: string): Promise<void> => {
+    plain.setSeed(1);
+    cache.render.setSeed(1);
     await submit((e) => {
       plain.reset(e);
       cache.reset(e);
@@ -185,6 +187,7 @@ try {
 
   // 3. Warm cache: keep training without accumulating, then restart both images.
   for (let i = 0; i < warm; i++) {
+    cache.render.setSeed(2000 + i); // each cleared frame draws new samples (a clear restarts the sample index)
     await submit((e) => {
       cache.reset(e);
       cache.encodeFrame(e);

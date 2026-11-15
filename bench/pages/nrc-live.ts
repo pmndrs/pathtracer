@@ -83,6 +83,8 @@ let split = 0.5;
 let lastFrameMs = 0;
 let lastFrameEnd = 0;
 let paused = false;
+/** A new seed on every clear: clearing restarts the sample index, so without it every restarted image would show the same noise. */
+let seed = 1;
 let fps = 0;
 const keys = new Set<string>();
 const cam = { position: [0, 0, 0] as [number, number, number], yaw: 0, pitch: 0, yFovDeg: 60, speed: 1 };
@@ -285,6 +287,9 @@ function frame(now: number): void {
   if (needsReset || !checked('accumulate')) {
     l.plain.setCamera(camera());
     l.cache.setCamera(camera());
+    seed++;
+    l.plain.setSeed(seed);
+    l.cache.render.setSeed(seed);
     l.plain.reset(encoder);
     l.cache.reset(encoder);
     needsReset = false;

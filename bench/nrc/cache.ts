@@ -96,17 +96,20 @@ fn nrcSpherical(d: vec3f) -> vec2f {
 // none (no lane waits on a long training path; VkNRC picks whole subgroups for the same reason). Pixels: one pixel per
 // block x block, rotating (main's updateBlock rule).
 fn nrcTrainSlot(pixel: u32, sampleIndex: u32) -> u32 {
+    // Rotate with the cache's own frame counter (nrcCount[1], bumped by the resolve pass), not the sample index: clearing the
+    // image restarts the sample index, which would pin training to the same tiles while the camera moves.
+    let frame = atomicLoad(&nrcCount[1]);
     let x = pixel % nrcHook.width;
     let y = pixel / nrcHook.width;
     if (nrcHook.tileEvery > 0u) {
         let tile = (y / 8u) * nrcHook.tilesX + x / 8u;
-        if (tile % nrcHook.tileEvery != sampleIndex % nrcHook.tileEvery) {
+        if (tile % nrcHook.tileEvery != frame % nrcHook.tileEvery) {
             return 0u;
         }
         return (tile / nrcHook.tileEvery) * 64u + (y % 8u) * 8u + x % 8u + 1u;
     }
     let b = nrcHook.block;
-    if ((x % b) + (y % b) * b != sampleIndex % (b * b)) {
+    if ((x % b) + (y % b) * b != frame % (b * b)) {
         return 0u;
     }
     return (y / b) * nrcHook.slotsX + x / b + 1u;
@@ -316,12 +319,15 @@ struct P { capacity: u32, _a: u32, _b: u32, _c: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> queries: array<vec4f>;
 @group(0) @binding(2) var<storage, read> preds: array<vec4f>;
-@group(0) @binding(3) var<storage, read> count: array<u32>;
+@group(0) @binding(3) var<storage, read_write> count: array<u32>;
 @group(0) @binding(4) var<storage, read_write> accum: array<vec4f>;
 
 @compute @workgroup_size(64)
 fn nrcResolve(@builtin(global_invocation_id) gid: vec3u) {
   let r = gid.x;
+  if (r == 0u) {
+    count[1] = count[1] + 1u; // the frame counter the hook rotates training tiles with
+  }
   if (r >= min(count[0], p.capacity)) { return; }
   let b = r * ${NRC_RECORD_VEC4}u;
   let px = u32(queries[b].w);
@@ -600,7 +606,7 @@ export class NrcCache {
     } else if (stage === 'trainSteps') {
       for (let i = 0; i < s.stepsPerFrame; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
     } else if (stage === 'renderPass') {
-      encoder.clearBuffer(this.queryCount);
+      encoder.clearBuffer(this.queryCount, 0, 4); // word 1 is the frame counter
       if (inline) {
         encoder.clearBuffer(this.trainVerts);
         encoder.clearBuffer(this.trainSums as GPUBuffer);

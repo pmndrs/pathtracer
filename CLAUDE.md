@@ -590,3 +590,8 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   minimised Chrome window pauses `requestAnimationFrame`; drive headless measurements through `__nrcLive.step(n)`.
 - BSD `grep -E` rejects `{0,300}` ("maximum repetition exceeds 255") and the broken pipe can leave the runner hanging; keep
   repetition counts under 256 when filtering runner output.
+- Clearing a megakernel's image (`reset`) restarts its sample index: anything keyed on `sampleIndex` (training-tile rotation,
+  `updateBlock` update pixels) then repeats while the camera moves or accumulation is off. NRC rotates on its own GPU frame
+  counter, and every clear gets a new seed (else each restarted image repeats the same noise).
+- NRC wall-clock frame times from the runner's headless Chrome were 2-4x the windowed flagged Chrome's (640×360 cache frame
+  37.9 vs 9.0 ms) and not in the same ratio to plain path tracing: do not mix the two; the cause is open.
