@@ -23,7 +23,12 @@
  *
  * 8. scenario=cold (damping A/B, N6f): only the fresh-network curves (ground floor, unseen corridor) and the cut into the corridor.
  *
- * Args: scenario=static|adapt|unseen|cold|all  refSpp=4096  refC=1 (load the saved corridor reference)
+ * 9. lighting=vknrc (N6.2, WN6): the same study on `sponza-white-vknrc`, sponza-white under VkNRC's fixed lighting (constant sky 10, no sun,
+ *    7 scattering vertices, no RR), so the images compare with the native VkNRC baseline. References come from
+ *    bench/references/sponza-white-vknrc/ when rendered there; until then the static reference is our own path tracer at refSpp at the
+ *    study's film (no pbrt-vs-Mitsuba floor in that case).
+ *
+ * Args: scenario=static|adapt|unseen|cold|all  lighting=scene|vknrc  refSpp=4096  refC=1 (load the saved corridor reference)
  *       outputInit=zero|he  warmupFrames=0  lrWarmupFrames=0  ema=warmup|plain|off (N6f; defaults zero + warmup)  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
  *       trainSelect=tile|pixel  queryDepth=1  lr=0.002  upload=1 (PFMs of the 16- and 256-frame images)  flip=1
  * Timing rows are wall clock per submit (best effort on a shared machine); the quality numbers are deterministic for a seed.
@@ -37,7 +42,7 @@ import { readPFM } from '../metrics/pfm.ts';
 import type { Image } from '../src/adapter.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
-import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
+import { sponzaWhite, sponzaWhiteVknrc } from '../scenes/tier2/sponza-white.ts';
 import { NrcCache } from '../nrc/cache.ts';
 import { inferArmOptions } from './mlp-common.ts';
 
@@ -69,6 +74,14 @@ async function fetchPfm(path: string): Promise<Image> {
   return readPFM(new Uint8Array(await r.arrayBuffer())) as Image;
 }
 
+/** Like `fetchPfm`, but null when the file is not there (a scene whose references were not rendered yet). */
+async function fetchPfmOrNull(path: string): Promise<Image | null> {
+  const r = await fetch(path);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  return readPFM(new Uint8Array(await r.arrayBuffer())) as Image;
+}
+
 try {
   const args = getArgs();
   const [width, height] = (args.res ?? '1280x720').split('x').map(Number) as [number, number];
@@ -81,7 +94,9 @@ try {
   const factor = 1280 / width;
   if (!Number.isInteger(factor) || 720 / height !== factor) throw new Error('res must be 1280x720 divided by an integer (640x360, 320x180)');
 
-  const scene = sponzaWhite;
+  const lighting = args.lighting === 'vknrc' ? 'vknrc' : 'scene';
+  const scene = lighting === 'vknrc' ? sponzaWhiteVknrc : sponzaWhite;
+  const refDir = `/bench/references/${scene.name}`;
   const adapter = new PtMegakernelAdapter();
   await adapter.load(scene);
   const gpu = adapter.gpuContext!;
@@ -131,10 +146,11 @@ try {
     ...(args.lr ? { learningRate: numberArg(args, 'lr', 0.002) } : {}),
   });
 
-  const refFull = await fetchPfm('/bench/references/sponza-white/mitsuba3-llvm_ad_rgb-4096spp.pfm');
-  const pbrtFull = await fetchPfm('/bench/references/sponza-white/pbrt-v4-cpu-4096spp.pfm');
-  const ref = downsample(refFull, factor);
-  const pbrt = downsample(pbrtFull, factor);
+  // sponza-white must have its references; sponza-white-vknrc falls back to our own path tracer at refSpp until they are rendered.
+  const refFull = lighting === 'vknrc' ? await fetchPfmOrNull(`${refDir}/mitsuba3-llvm_ad_rgb-4096spp.pfm`) : await fetchPfm(`${refDir}/mitsuba3-llvm_ad_rgb-4096spp.pfm`);
+  const pbrtFull = refFull ? await fetchPfmOrNull(`${refDir}/pbrt-v4-cpu-4096spp.pfm`) : null;
+  if (lighting !== 'vknrc' && !pbrtFull) throw new Error(`${refDir}/pbrt-v4-cpu-4096spp.pfm: missing (copy the git-ignored references into this checkout)`);
+  const pbrt = pbrtFull ? downsample(pbrtFull, factor) : null;
 
   const submit = async (encode: (e: GPUCommandEncoder) => void): Promise<number> => {
     const e = device.createCommandEncoder();
@@ -148,8 +164,21 @@ try {
   const metrics: Record<string, number> = {};
   const notes: Record<string, unknown> = { infer: arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, trainPaths: cache.trainPaths };
 
-  // 5. Floors.
-  {
+  let ref: Image;
+  if (refFull) ref = downsample(refFull, factor);
+  else {
+    const refSpp = numberArg(args, 'refSpp', 4096);
+    plain.setSeed(778);
+    await submit((e) => plain.reset(e));
+    for (let n = 0; n < refSpp; n += 64) await submit((e) => plain.encode(e, Math.min(64, refSpp - n)));
+    ref = asImage(await plain.readImage());
+    metrics.static_ref_ours_spp = refSpp;
+    notes.reference = `ours at ${refSpp} spp (no ${refDir}/mitsuba3-llvm_ad_rgb-4096spp.pfm)`;
+    if (doUpload) await uploadImage('static-reference', ref as never);
+  }
+
+  // 5. Floors (only with both native references).
+  if (pbrt) {
     const m = compareImages(pbrt, ref);
     metrics.floor_relmse_pbrt_vs_mitsuba = m.relMse;
     if (doFlip) metrics.floor_flip_pbrt_vs_mitsuba = flipLdr(pbrt, ref).mean;
@@ -352,7 +381,7 @@ try {
   if (scenario === 'unseen' || scenario === 'all' || runCold) {
     let refC: Image;
     if (args.refC === '1') {
-      const saved = await fetchPfm('/bench/references/sponza-white/ours-unseen-gallery-640x360-4096spp.pfm');
+      const saved = await fetchPfm(`${refDir}/ours-unseen-gallery-640x360-4096spp.pfm`);
       if (saved.width % width !== 0) throw new Error(`refC=1: the saved corridor reference is ${saved.width} wide; run at a width that divides it`);
       refC = downsample(saved, saved.width / width);
     } else {
@@ -381,7 +410,7 @@ try {
   }
 
   reportResult(
-    { scene: 'sponza-white', renderer: 'nrc-study', config: { width, height, checkpoints, warm, steps, precision, infer: arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, queryDepth: cache.settings.queryDepth }, valid: deviceErrors.length === 0, metrics, notes },
+    { scene: scene.name, renderer: 'nrc-study', config: { lighting, width, height, checkpoints, warm, steps, precision, infer: arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, queryDepth: cache.settings.queryDepth }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },
   );
 } catch (error) {

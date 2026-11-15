@@ -8,6 +8,8 @@
  * plain side renders `plain samples / frame`. Benchmark times both with GPU timestamps (one readback at the end) and
  * sets the plain side's samples to equal time. Save A/B uploads both images as PFM next to the run (bench viewer).
  * No readback in the frame loop; at most one frame in flight.
+ * Scenes: Sponza (sun + sky), Sponza with VkNRC lighting (`scene=sponza-white-vknrc`; export its glb first:
+ * `node bench/adapters/export-scenes.ts sponza-white-vknrc`), Cornell.
  */
 import { DEFAULT_SHAPE, type Precision } from '@pathtracer/mlp';
 import { PtMegakernel, type PtLookAtCamera } from '@pmndrs/pathtracer';
@@ -15,7 +17,7 @@ import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { uploadImage } from '../runner/page-client.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { cornell } from '../scenes/tier0/index.ts';
-import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
+import { sponzaWhite, sponzaWhiteVknrc } from '../scenes/tier2/sponza-white.ts';
 import { NrcCache } from '../nrc/cache.ts';
 import { hasSubgroupMatrix, inferArmOptions } from './mlp-common.ts';
 
@@ -26,7 +28,8 @@ const num = (id: string) => Number($<HTMLInputElement>(id).value);
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 const value = (id: string) => $<HTMLSelectElement>(id).value;
 
-const SCENES: Record<string, SceneDesc> = { 'sponza-white': sponzaWhite, cornell };
+// sponza-white-vknrc: VkNRC's lighting (sky 10, no sun, 7 scattering vertices), for side-by-side views with the native baseline (N6.2).
+const SCENES: Record<string, SceneDesc> = { 'sponza-white': sponzaWhite, 'sponza-white-vknrc': sponzaWhiteVknrc, cornell };
 
 const DISPLAY_WGSL = /* wgsl */ `
 struct D { size: vec2u, canvas: vec2f, split: f32, exposure: f32, mode: u32, _p: u32 }
@@ -432,6 +435,11 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
+// A scene brings its own path length (sponza-white 8, the VkNRC-lit variant 7); the field can still be changed after.
+const sceneDepth = (): void => {
+  $<HTMLInputElement>('maxDepth').value = String((SCENES[$<HTMLSelectElement>('scene').value] as SceneDesc).integrator.maxDepth);
+};
+$('scene').addEventListener('change', sceneDepth);
 for (const id of ['scene', 'res', 'maxDepth']) $(id).addEventListener('change', () => void build(true));
 for (const id of ['backend', 'lr', 'trainDepth', 'training', 'trainSelect']) $(id).addEventListener('change', () => void build(false));
 $('queryDepth').addEventListener('change', () => {
@@ -471,7 +479,10 @@ $('realtime').addEventListener('click', () => {
 $('save').addEventListener('click', () => void saveAB());
 
 const args = new URLSearchParams(location.search);
-if (args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
+if (args.get('scene') && SCENES[args.get('scene') as string]) {
+  $<HTMLSelectElement>('scene').value = args.get('scene') as string;
+  sceneDepth();
+}
 await build(true);
 requestAnimationFrame(frame);
 // Headless checks and the runner: frame count and a benchmark hook.

@@ -37,3 +37,19 @@ export const sponzaWhite: SceneDesc = {
   lights: [{ type: 'directional', direction: sunDir, irradiance: [50, 46, 40], angularRadius: 0.00465 }],
   environment: { type: 'uniform', radiance: [2.0, 2.3, 3.0] },
 };
+
+/**
+ * sponza-white under VkNRC's fixed lighting (track N, N6.2 / WN6): the same geometry, material and camera, lit only by a constant white
+ * sky of radiance 10 (no sun), at most 7 scattering vertices (VkNRC traces 8 hits and the 8th only adds emission) and no Russian
+ * roulette, so our NRC pages and the native VkNRC baseline (bench/exporters/obj.ts writes its OBJ) render the same image. VkNRC has no
+ * NEE; ours samples the sky with MIS, which changes the noise, not the expectation. Its own references are git-ignored like the others
+ * (`node bench/references/render.ts --scenes sponza-white-vknrc`).
+ */
+export const sponzaWhiteVknrc: SceneDesc = {
+  ...sponzaWhite,
+  name: 'sponza-white-vknrc',
+  purpose: 'sponza-white lit like VkNRC (constant sky 10, no sun, 7 scattering vertices, no RR): the like-for-like scene for the native NRC baseline (N6.2).',
+  integrator: { maxDepth: 7 },
+  lights: [],
+  environment: { type: 'uniform', radiance: [10, 10, 10] },
+};

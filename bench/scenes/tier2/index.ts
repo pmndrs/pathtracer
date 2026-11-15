@@ -1,6 +1,6 @@
 import type { SceneDesc } from '../schema.ts';
-import { sponzaWhite } from './sponza-white.ts';
+import { sponzaWhite, sponzaWhiteVknrc } from './sponza-white.ts';
 
-export { sponzaWhite };
+export { sponzaWhite, sponzaWhiteVknrc };
 
-export const tier2Scenes: readonly SceneDesc[] = [sponzaWhite];
+export const tier2Scenes: readonly SceneDesc[] = [sponzaWhite, sponzaWhiteVknrc];

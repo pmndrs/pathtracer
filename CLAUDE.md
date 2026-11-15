@@ -513,6 +513,13 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - The scratchpad directory is SHARED by the agents of all worktrees: a helper named `edit1.py` was overwritten by another agent between my Write and my run, and ran their edit script (with its own `os.chdir`) in their worktree.
   Put scripts in a private subdirectory (`scratchpad/<task>/`), never in the scratchpad root; and `snap-before` style output directories are shared too.
 - Worktree agents: the harness refuses a Bash command that mixes a heredoc, `cd` elsewhere or several git invocations ("too complex to verify"); write the file with the Write tool, then run it in a plain command.
+- Windows (track N): a cloud session that starts the Windows handoff is Linux with no GPU and no route to the laptop (Desktop Commander runs in the same VM): only code tasks
+  (WN6) and SwiftShader correctness run there. SwiftShader in the runner: `CHROME_PATH=/opt/pw-browsers/chromium-*/chrome-linux64/chrome PT_ALLOW_SOFTWARE_ADAPTER=1
+  PT_CHROME_FLAGS="--no-sandbox --enable-unsafe-webgpu --use-webgpu-adapter=swiftshader --use-angle=swiftshader --enable-unsafe-swiftshader"`; never timings from it.
+  The bvh sibling clones anonymously (`git clone https://github.com/pmndrs/bvh ../bvh`, then `pnpm install && pnpm build` there); the Denoiser sibling does not, so `pnpm typecheck` keeps one error in `oidn.ts`.
+- Windows (VkNRC, WN7): its OBJ loader refuses a file without a material (every face needs `usemtl`), reads no normals (flat geometric, two-sided) and rescales the model to [-1, 1];
+  its sky (10), path length (8 hits) and BRDF (Cook-Torrance, `Ks 0` = Lambert) are compiled in. Use `node bench/exporters/export-obj.ts` (not a hand-made OBJ) and take the camera pose from
+  its `vknrc.json` (normalised position, yaw, pitch); our matching scene is `sponza-white-vknrc` (maxDepth 7, no RR).
 - Cloud sessions reach GitHub (raw.githubusercontent.com included) but not arXiv, research.nvidia.com or author pages
   (proxy 403). Paper numbers have to be checked against `research/papers/` on the Mac.
 - `subgroup-matrix` (gpuweb proposal) has no element-wise ops besides scalar add/sub/mul: activations such as ReLU need a

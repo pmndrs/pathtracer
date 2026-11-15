@@ -96,6 +96,12 @@ laptop.
 
 If time is short, do WN1-WN4 first: they answer Q3. WN5 shows the demo on NVIDIA. WN6-WN7 give the native comparison.
 
+**Status 2026-11-15 (cloud session, no GPU):** WN6 is done (TASKS N6.2). `node bench/exporters/export-obj.ts` writes
+`bench/assets/generated/vknrc/sponza-white-vknrc/{scene.obj, scene.mtl, vknrc.json}`; the JSON has the camera pose in VkNRC's
+frame for the fixed-camera patch. Our side of the comparison is the scene `sponza-white-vknrc` (export its glb with
+`node bench/adapters/export-scenes.ts sponza-white-vknrc`; `nrc-live` scene menu, `nrc-study --args lighting=vknrc`).
+WN1-WN5 and WN7 still need the laptop.
+
 ## Things that will probably bite
 
 - **Tile size:** the sgm kernels assume 8×8 tiles in places only the emulated twin has tested at 16. If the native
