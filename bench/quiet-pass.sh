@@ -54,4 +54,31 @@ if [ -z "$ONLY" ] || [ "$ONLY" = "baseline" ]; then
   note "baseline table: $OUT/baseline.md (report bench/results/reports/$NAME)"
 fi
 
+if [ "$ONLY" = "p3" ]; then
+  # P3 queue items (docs/QUIET-PASS.md rows P3.1/P3.2, R2/P3.7, P3.6). Not in the default run: --only p3.
+  # P3.2's renderer set includes the megakernel and the slice-1 wavefront, so it also answers P3.1.
+  R=pt-megakernel,pt-wavefront,pt-wf-refill,pt-wf-batch,pt-wf-refill-l2,pt-wf-refill-l4
+  note "p3 1/6 schedulers: cornell + furnace-dielectric"
+  node bench/adapters/matrix.ts --renderers $R --scenes cornell,furnace-dielectric --spp 256 --repeat 5 --interleave --name "p32-big-$STAMP" >> "$LOG" 2>&1 || note "FAILED p32 big"
+  note "p3 2/6 schedulers: sponza-white"
+  node bench/adapters/matrix.ts --renderers $R --scenes sponza-white --spp 128 --repeat 5 --interleave --name "p32-sponza-$STAMP" >> "$LOG" 2>&1 || note "FAILED p32 sponza"
+  note "p3 3/6 schedulers: env-sphere + quad-light"
+  node bench/adapters/matrix.ts --renderers $R --scenes env-sphere,quad-light --spp 1024 --repeat 5 --interleave --name "p32-small-$STAMP" >> "$LOG" 2>&1 || note "FAILED p32 small"
+  note "p3 4/6 layers sweep (env-sphere) and refill threshold (sponza-white)"
+  for L in 1 2 4 8 16 32 64; do
+    node bench/adapters/matrix.ts --renderers pt-megakernel,pt-wf-refill --scenes env-sphere --spp 1024 --repeat 3 --interleave --extra pt_layers=$L --name "p32-layers$L-$STAMP" >> "$LOG" 2>&1 || note "FAILED layers $L"
+  done
+  for T in 0.1 0.25 0.5; do
+    node bench/adapters/matrix.ts --renderers pt-megakernel,pt-wf-batch --scenes sponza-white --spp 64 --repeat 3 --interleave --extra pt_refill_threshold=$T --name "p32-thr$T-$STAMP" >> "$LOG" 2>&1 || note "FAILED threshold $T"
+  done
+  note "p3 5/6 alpha policy + wavefront MASK"
+  node bench/adapters/matrix.ts --renderers pt-megakernel,pt-mk-shadow,pt-mk-indirect,pt-mk-secondary,pt-wavefront,pt-wf-shadow,pt-wf-indirect,pt-wf-secondary --scenes tex-mask,foliage-mask --spp 1024 --snapshots 1024 --repeat 5 --interleave --name "p37-ab-$STAMP" >> "$LOG" 2>&1 || note "FAILED p37"
+  note "p3 6/6 V-buffer primaries"
+  RV=pt-megakernel,pt-mk-vbuffer,pt-wavefront,pt-wf-vbuffer
+  node bench/adapters/matrix.ts --renderers $RV --scenes cornell,tex-mask --spp 256 --repeat 5 --interleave --name "p36-time-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 small"
+  node bench/adapters/matrix.ts --renderers $RV --scenes sponza-white --spp 64 --repeat 5 --interleave --append --name "p36-time-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 sponza"
+  node bench/adapters/matrix.ts --renderers $RV --scenes cornell,tex-mask --spp 256 --repeat 5 --interleave --extra pt_maxdepth=2 --name "p36-d2-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 d2"
+  node bench/adapters/matrix.ts --renderers $RV --scenes sponza-white --spp 64 --repeat 5 --interleave --extra pt_maxdepth=2 --append --name "p36-d2-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 d2 sponza"
+fi
+
 note "done; load $(load)"
