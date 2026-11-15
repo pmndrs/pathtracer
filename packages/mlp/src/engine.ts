@@ -12,6 +12,7 @@
 
 import { DEFAULT_SHAPE, DEFAULT_TRAIN, weightCount, type MlpShape, type TrainSettings } from './config.ts';
 import { NN_WORKGROUP, adamWgsl, inferWgsl, prepareWgsl, rowStride, trainWgsl, weightGradientWgsl, type Precision } from './wgsl.ts';
+import { DEFAULT_GRADIENT, gradientPartialBytes, gradientReduceWgsl, gradientTileWgsl, type GradientKind, type GradientOptions } from './wgsl-gradient.ts';
 import { inferSgmWgsl, packSgmWgsl, sgmWeightCount, sgmWorkgroupBytes, type SgmOptions } from './wgsl-sgm.ts';
 
 export interface MlpEngineOptions {
@@ -33,6 +34,16 @@ export interface MlpEngineOptions {
    * must equal `precision` (emulation: f32).
    */
   sgm?: Omit<SgmOptions, 'shape'>;
+  /** Weight-gradient arm: one thread per weight looping over all records, or the tiled split-K pass (N1.2). Default 'tiled' (N1.2 A/B: f16 step 6.9 → 2.7 ms on the M5 Pro). */
+  gradient?: GradientKind;
+  /** Tiled arm only: `splits` record ranges per layer and `chunk` records staged per iteration. */
+  gradientOptions?: Partial<GradientOptions>;
+}
+
+/** Per-stage timestamps for one training step (3 passes, 6 slots from `first`: begin/end of prepare+forward-backward, gradient, Adam). */
+export interface TrainStageTimestamps {
+  querySet: GPUQuerySet;
+  first: number;
 }
 
 const PARAMS_BYTES = 48;
@@ -72,8 +83,12 @@ export class MlpEngine {
   readonly inferGroupRecords: number;
   readonly inferBackend: 'portable' | 'sgm' | 'sgm-emulated';
 
-  private readonly pipelines: Record<'prepare' | 'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUComputePipeline> & { pack?: GPUComputePipeline };
-  private readonly groups: Record<'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUBindGroup> & { pack?: GPUBindGroup };
+  private readonly pipelines: Record<'prepare' | 'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUComputePipeline> & { pack?: GPUComputePipeline; gradientReduce?: GPUComputePipeline };
+  private readonly groups: Record<'infer' | 'forwardBackward' | 'weightGradient' | 'adam' | 'sync', GPUBindGroup> & { pack?: GPUBindGroup; gradientReduce?: GPUBindGroup };
+  readonly gradientKind: GradientKind;
+  readonly gradientOptions: GradientOptions;
+  /** Per-split partial dW (tiled arm only). */
+  readonly gradientPartials: GPUBuffer | null;
   private readonly sgmCount: number;
   private readonly settings: TrainSettings;
   private readonly useEma: boolean;
@@ -88,6 +103,8 @@ export class MlpEngine {
     this.useEma = options.useEma ?? false;
     this.pipelines = pipelines;
     this.weightCount = weightCount(this.shape);
+    this.gradientKind = options.gradient ?? 'tiled';
+    this.gradientOptions = { ...DEFAULT_GRADIENT, ...options.gradientOptions };
 
     const bpe = this.precision === 'f16' ? 2 : 4;
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
@@ -115,6 +132,7 @@ export class MlpEngine {
     this.inferGroupRecords = sgm ? sgm.records : NN_WORKGROUP;
     this.sgmCount = sgm ? sgmWeightCount(this.shape, sgm.config) : 0;
     this.sgmWeights = sgm ? buffer('sgmWeights', this.sgmCount * bpe) : null;
+    this.gradientPartials = this.gradientKind === 'tiled' ? buffer('gradientPartials', gradientPartialBytes({ shape: this.shape, precision: this.precision }, this.gradientOptions)) : null;
     this.resetOptimizer();
 
     // 'auto' layouts keep only the bindings a kernel uses, so nnSync gets just its own five.
@@ -123,9 +141,19 @@ export class MlpEngine {
     this.groups = {
       infer: bg(pipelines.infer, [this.sgmWeights ?? this.useWeights, this.inferState]), // the infer kernels read no params
       forwardBackward: bg(pipelines.forwardBackward, [this.trainWeights, this.trainState, this.trainParams, this.activations, this.deltas, this.loss]),
-      weightGradient: bg(pipelines.weightGradient, [this.trainState, this.trainParams, this.activations, this.deltas, this.gradient]),
+      weightGradient: this.gradientPartials
+        ? bg(pipelines.weightGradient, [this.trainState, this.trainParams, this.activations, this.deltas, this.gradientPartials])
+        : bg(pipelines.weightGradient, [this.trainState, this.trainParams, this.activations, this.deltas, this.gradient]),
       adam: bg(pipelines.adam, [this.trainState, this.trainParams, this.gradient, this.master, this.moments, this.ema, this.trainWeights, this.useWeights]),
       sync: bg(pipelines.sync, [this.master, this.moments, this.ema, this.trainWeights, this.useWeights], 3),
+      ...(pipelines.gradientReduce && this.gradientPartials
+        ? {
+            gradientReduce: device.createBindGroup({
+              layout: pipelines.gradientReduce.getBindGroupLayout(0),
+              entries: [{ binding: 0, resource: { buffer: this.trainState } }, { binding: 2, resource: { buffer: this.gradientPartials } }, { binding: 3, resource: { buffer: this.gradient } }],
+            }),
+          }
+        : {}),
       ...(pipelines.pack && this.sgmWeights ? { pack: bg(pipelines.pack, [this.useWeights, this.sgmWeights]) } : {}),
     };
   }
@@ -149,16 +177,19 @@ export class MlpEngine {
       const need = sgmWorkgroupBytes(sgm);
       if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: sgm needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower sgm.records`);
     }
-    const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync, pack] = await Promise.all([
+    const tiled = (options.gradient ?? 'tiled') === 'tiled';
+    const gradientOptions = { ...DEFAULT_GRADIENT, ...options.gradientOptions };
+    const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync, pack, gradientReduce] = await Promise.all([
       make('prepare', prepareWgsl(o), 'nnPrepare'),
       sgm ? make('inferSgm', inferSgmWgsl(sgm, options.inferHooks), 'nnInferSgm') : make('infer', inferWgsl(o, options.inferHooks), 'nnInfer'),
       make('forwardBackward', trainWgsl(o, options.trainHooks), 'nnForwardBackward'),
-      make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
+      tiled ? make('gradientTile', gradientTileWgsl(o, gradientOptions), 'nnGradientTile') : make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
       make('adam', adam, 'nnAdam'),
       make('sync', adam, 'nnSync'),
       sgm ? make('packSgm', packSgmWgsl(sgm), 'nnPackSgm') : Promise.resolve(undefined),
+      tiled ? make('gradientReduce', gradientReduceWgsl(o, gradientOptions), 'nnGradientReduce') : Promise.resolve(undefined),
     ]);
-    return new MlpEngine(device, options, { prepare, infer, forwardBackward, weightGradient, adam: adamPipeline, sync, ...(pack ? { pack } : {}) });
+    return new MlpEngine(device, options, { prepare, infer, forwardBackward, weightGradient, adam: adamPipeline, sync, ...(pack ? { pack } : {}), ...(gradientReduce ? { gradientReduce } : {}) });
   }
 
   /** Layout for the caller's group-1 bind group (training hooks). */
@@ -233,9 +264,12 @@ export class MlpEngine {
    * One training step: prepare (count, args, Adam step state) → forward/backward (indirect) → weight gradient →
    * Adam. `counts[countWord]` is the number of records; `hooks` is the caller's group-1 bind group.
    */
-  encodeTrainStep(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites): void {
+  encodeTrainStep(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites, stages?: TrainStageTimestamps): void {
     this.writeParams(this.trainParams, this.capacity, countWord, true, NN_WORKGROUP);
-    const pass = encoder.beginComputePass({ label: 'nn train', timestampWrites });
+    const stage = (name: string, n: number): GPUComputePassDescriptor =>
+      stages ? { label: `nn train ${name}`, timestampWrites: { querySet: stages.querySet, beginningOfPassWriteIndex: stages.first + 2 * n, endOfPassWriteIndex: stages.first + 2 * n + 1 } } : {};
+    // Without `stages` everything is one pass (the production shape); with it, three passes so each stage is timed.
+    let pass = encoder.beginComputePass(stages ? stage('forward-backward', 0) : { label: 'nn train', timestampWrites });
     pass.setPipeline(this.pipelines.prepare);
     pass.setBindGroup(0, this.prepareGroup('train', counts));
     pass.dispatchWorkgroups(1);
@@ -243,9 +277,22 @@ export class MlpEngine {
     pass.setBindGroup(0, this.groups.forwardBackward);
     pass.setBindGroup(1, hooks);
     pass.dispatchWorkgroupsIndirect(this.trainArgs, 0);
+    if (stages) {
+      pass.end();
+      pass = encoder.beginComputePass(stage('gradient', 1));
+    }
     pass.setPipeline(this.pipelines.weightGradient);
     pass.setBindGroup(0, this.groups.weightGradient);
+    if (this.pipelines.gradientReduce && this.groups.gradientReduce) {
+      pass.dispatchWorkgroups(this.gradientOptions.splits, this.shape.hidden + 1);
+      pass.setPipeline(this.pipelines.gradientReduce);
+      pass.setBindGroup(0, this.groups.gradientReduce);
+    }
     pass.dispatchWorkgroups(Math.ceil(this.weightCount / NN_WORKGROUP));
+    if (stages) {
+      pass.end();
+      pass = encoder.beginComputePass(stage('adam', 2));
+    }
     pass.setPipeline(this.pipelines.adam);
     pass.setBindGroup(0, this.groups.adam);
     pass.dispatchWorkgroups(Math.ceil(this.weightCount / NN_WORKGROUP));
@@ -274,6 +321,7 @@ export class MlpEngine {
 
   destroy(): void {
     for (const b of [this.master, this.trainWeights, this.useWeights, this.ema, this.moments, this.gradient, this.activations, this.deltas, this.loss, this.trainState, this.inferState, this.trainArgs, this.inferArgs, this.trainParams, this.inferParams]) b.destroy();
+    this.gradientPartials?.destroy();
     this.sgmWeights?.destroy();
   }
 }

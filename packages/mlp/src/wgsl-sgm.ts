@@ -53,6 +53,11 @@ export interface SgmOptions {
   offsetsFromLocalIndex?: boolean;
   /** Plain-WGSL stand-ins for the matrix built-ins (correctness on any device; f32 only). */
   emulate?: boolean;
+  /**
+   * TIMING PROBE ONLY (N3): the ReLU/convert pass between layers. 'relu' (default, correct), 'skip' (no pass: the next
+   * layer reads stale inputs, wrong results), 'double' (the pass twice). relu − skip ≈ double − relu = its cost.
+   */
+  roundTrip?: 'relu' | 'skip' | 'double';
 }
 
 /** Lanes per subgroup the kernel is laid out for (the config's max; the proposal requires workgroup x to be a multiple). */
@@ -258,11 +263,13 @@ ${mmas.join('\n')}
   workgroupBarrier();`);
     if (l < shape.hidden) {
       // Round trip (gpuweb #11077 / #11079): ReLU + convert to the operand type through workgroup memory.
-      layers.push(`  for (var i = lid; i < ${R * layerOut(shape, l)}u; i += ${wg}u) {
+      const pass = `  for (var i = lid; i < ${R * layerOut(shape, l)}u; i += ${wg}u) {
     let at = (i / ${layerOut(shape, l)}u) * ${S}u + i % ${layerOut(shape, l)}u;
     nnA[at] = T(max(f32(nnS[at]), 0.0));
   }
-  workgroupBarrier();`);
+  workgroupBarrier();`;
+      const times = { relu: 1, skip: 0, double: 2 }[o.roundTrip ?? 'relu'];
+      for (let t = 0; t < times; t++) layers.push(pass);
     }
   }
 

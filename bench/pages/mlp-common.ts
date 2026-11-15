@@ -63,7 +63,7 @@ export function inferArmOptions(
   device: GPUDevice,
   shape: MlpShape,
   precision: Precision,
-  opts: { records?: number; subgroups?: number; tile?: number } = {},
+  opts: { records?: number; subgroups?: number; tile?: number; roundTrip?: 'relu' | 'skip' | 'double' } = {},
 ): { precision: Precision; sgm?: MlpEngineOptions['sgm']; description: string } {
   const records = opts.records ?? 64;
   const subgroups = opts.subgroups ?? 1;
@@ -83,8 +83,8 @@ export function inferArmOptions(
     const enableName = device.features.has('subgroup-matrix' as GPUFeatureName) ? 'subgroup_matrix' : 'chromium_experimental_subgroup_matrix';
     return {
       precision: config.componentType,
-      sgm: { config, records, subgroups, enableName },
-      description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→${config.resultComponentType}, ${records} rec × ${subgroups} sg`,
+      sgm: { config, records, subgroups, enableName, ...(opts.roundTrip ? { roundTrip: opts.roundTrip } : {}) },
+      description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→${config.resultComponentType}, ${records} rec × ${subgroups} sg${opts.roundTrip && opts.roundTrip !== 'relu' ? `, roundTrip=${opts.roundTrip} (TIMING ONLY)` : ''}`,
     };
   }
   throw new Error(`infer must be portable, sgm or sgm-emu, got ${arm}`);

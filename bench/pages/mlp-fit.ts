@@ -15,7 +15,8 @@
  *
  * Args: precision=f32|f16  size=256  batch=16384  snapshots=16,64,256,1024  seed=1  ema=0|1  lr=0.01  oracleSteps=0
  *       octaves=8  phases=2 (image encoding layout, N1.3; octaves=nyquist means log2(size); 12 and 1 = the original)
- * A/B: --ab precision=f32,f16   --ab octaves=12,8   --ab phases=1,2
+ *       gradient=tiled|perWeight (weight-gradient arm, N1.2)
+ * A/B: --ab precision=f32,f16   --ab octaves=12,8   --ab phases=1,2   --ab gradient=perWeight,tiled
  */
 
 import { AdamState, DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, batchGradient, encodeImage, initWeights, type ImageEncoding, type Precision } from '@pathtracer/mlp';
@@ -68,6 +69,7 @@ try {
     capacity: batch,
     inferCapacity: pixels,
     useEma,
+    gradient: args.gradient === 'perWeight' ? 'perWeight' : 'tiled',
     train: { ...DEFAULT_TRAIN, learningRate },
     trainHooks: imageHooksTrain(encoding),
     inferHooks: imageHooksInfer(encoding),

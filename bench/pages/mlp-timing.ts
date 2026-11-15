@@ -7,10 +7,12 @@
  * 2 × weights per record (multiply-adds of the unpadded network), so the sgm arm's padding is not credited.
  *
  * Args: precision=f32|f16  infer=portable|sgm|sgm-emu  size=1024 (inference records = size²)  repeats=20  warmup=3
- *       batch=16384  trainSteps=20  sgmRecords=64  subgroups=1
+ *       batch=16384  trainSteps=20  sgmRecords=64  subgroups=1  gradient=perWeight|tiled  gradSplits=64  gradChunk=32
+ * Per-stage training times (forward-backward / gradient / Adam, each its own pass) come from extra `stageSteps` steps
+ * (default 20) with timestamps around each pass; the production-shape single-pass step is timed separately.
  */
 
-import { DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, initWeights, weightCount, type Precision } from '@pathtracer/mlp';
+import { DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, initWeights, weightCount, type GradientKind, type Precision } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
@@ -28,6 +30,10 @@ try {
   const warmup = numberArg(args, 'warmup', 3);
   const batch = numberArg(args, 'batch', 16384);
   const trainSteps = numberArg(args, 'trainSteps', 20);
+  const stageSteps = numberArg(args, 'stageSteps', 20);
+  const gradient = (args.gradient ?? 'perWeight') as GradientKind;
+  if (gradient !== 'perWeight' && gradient !== 'tiled') throw new Error(`gradient must be perWeight or tiled, got ${gradient}`);
+  const gradientOptions = { splits: numberArg(args, 'gradSplits', 64), chunk: numberArg(args, 'gradChunk', 32) };
   const records = size * size;
 
   const { adapter, device } = await requestMlpDevice();
@@ -39,6 +45,7 @@ try {
     records: numberArg(args, 'sgmRecords', 64),
     subgroups: numberArg(args, 'subgroups', 1),
     tile: numberArg(args, 'tile', 8),
+    ...(args.roundTrip ? { roundTrip: args.roundTrip as 'relu' | 'skip' | 'double' } : {}),
   });
   const mlp = await MlpEngine.create(device, {
     precision: arm.precision,
@@ -47,6 +54,8 @@ try {
     train: DEFAULT_TRAIN,
     trainHooks: IMAGE_HOOKS_TRAIN,
     inferHooks: IMAGE_HOOKS_INFER,
+    gradient,
+    gradientOptions,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
   });
   mlp.uploadWeights(initWeights(DEFAULT_SHAPE, 1));
@@ -58,7 +67,8 @@ try {
   const counts = storageBuffer(device, new Uint32Array([batch, records, 0, 0]), 'counts');
   const groups = imageBindGroups(device, mlp.trainLayout, mlp.inferLayout, target, dims, out);
 
-  const slots = (warmup + repeats) + (warmup + trainSteps);
+  const stageBase = 2 * ((warmup + repeats) + (warmup + trainSteps));
+  const slots = (warmup + repeats) + (warmup + trainSteps) + 3 * (warmup + stageSteps);
   const querySet = device.createQuerySet({ type: 'timestamp', count: 2 * slots });
   const ts = (slot: number): GPUComputePassTimestampWrites => ({ querySet, beginningOfPassWriteIndex: 2 * slot, endOfPassWriteIndex: 2 * slot + 1 });
 
@@ -76,6 +86,13 @@ try {
     device.queue.submit([encoder.finish()]);
   }
   await device.queue.onSubmittedWorkDone();
+  // Per-stage steps: three passes each, six timestamp slots (begin/end of forward-backward, gradient, Adam).
+  for (let i = 0; i < warmup + stageSteps; i++) {
+    const encoder = device.createCommandEncoder();
+    mlp.encodeTrainStep(encoder, counts, 0, groups.train, undefined, { querySet, first: stageBase + 6 * i });
+    device.queue.submit([encoder.finish()]);
+  }
+  await device.queue.onSubmittedWorkDone();
 
   const resolve = device.createBuffer({ size: querySet.count * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
   const encoder = device.createCommandEncoder();
@@ -85,6 +102,10 @@ try {
   const span = (s: number) => Number((t[2 * s + 1] as bigint) - (t[2 * s] as bigint)) / 1e6;
   const inferMs = Array.from({ length: repeats }, (_, i) => span(warmup + i));
   const trainMs = Array.from({ length: trainSteps }, (_, i) => span(warmup + repeats + warmup + i));
+  const stage = (n: number) => Array.from({ length: stageSteps }, (_, i) => Number((t[stageBase + 6 * (warmup + i) + 2 * n + 1] as bigint) - (t[stageBase + 6 * (warmup + i) + 2 * n] as bigint)) / 1e6);
+  const fbMs = stage(0);
+  const gradMs = stage(1);
+  const adamMs = stage(2);
   // Sanity: outputs must be finite (one readback, after timing).
   const sample = new Float32Array(await readBuffer(device, out, Math.min(records, 4096) * 12));
   const nonFinite = sample.filter((v) => !Number.isFinite(v)).length;
@@ -98,7 +119,7 @@ try {
     {
       scene: 'mlp-timing-image',
       renderer: arm.sgm ? (arm.sgm.emulate ? 'wgsl-sgm-emu' : 'wgsl-sgm') : `wgsl-${arm.precision}`,
-      config: { arm: arm.description, precision: arm.precision, size, records, batch, repeats, trainSteps, sgm: arm.sgm ?? null },
+      config: { arm: arm.description, precision: arm.precision, gradient, gradientOptions, size, records, batch, repeats, trainSteps, sgm: arm.sgm ?? null },
       metrics: {
         gpu_ms_infer_median: inferMedian,
         gpu_ms_infer_min: Math.min(...inferMs),
@@ -106,9 +127,13 @@ try {
         infer_tflops: (flopPerRecord * records) / (inferMedian * 1e-3) / 1e12,
         gpu_ms_train_step_median: median(trainMs),
         gpu_ms_train_step_min: Math.min(...trainMs),
+        gpu_ms_fwdbwd_median: median(fbMs),
+        gpu_ms_gradient_median: median(gradMs),
+        gpu_ms_adam_median: median(adamMs),
+        gpu_ms_stage_sum_median: median(fbMs) + median(gradMs) + median(adamMs),
       },
       valid: !software,
-      notes: { software, inferMs, trainMs },
+      notes: { software, inferMs, trainMs, fbMs, gradMs, adamMs },
     },
     { adapter: adapterSummary, deviceErrors },
   );

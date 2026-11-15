@@ -45,10 +45,10 @@ Target frame: 16.7 ms on the M5 Pro at 960×540 (upscaled to 1080p), path tracin
 | Piece | Measured now (M5 Pro, 2026-11-15) | Target |
 |---|---|---|
 | Inference, 518k queries (960×540) | 4.4 ms (subgroup matrix f16, 4 subgroups); 49 ms portable f16 (quiet) | ≤ 4 ms |
-| Training, 4 × 16k records | 27.5 ms (portable f16, 6.9 ms per step, quiet) | ≤ 4 ms → needs N3b or a much faster portable pass |
+| Training, 4 × 16k records | 10.8 ms (portable f16, 2.7 ms per step with the tiled gradient; was 27.5) | ≤ 4 ms → tiled forward-backward (N1.2b) or N3b |
 | Path tracing, ~2 short paths per pixel | not measured for this scene and resolution | rest of the frame |
 
-Training is the blocker today, not inference.
+Training is the blocker today, not inference; within a step, forward-backward (2.5 of 2.7 ms).
 
 ## 4. Milestones
 
@@ -58,7 +58,7 @@ Status: ✅ done · 🟡 in progress · ⬜ not started. Rows in TASKS.md carry 
 |---|---|---|---|---|---|
 | M0 | Groundwork | Subgroup-matrix probe, adapter caps, paper numbers checked | We know which machines run the matrix path | N0.1–N0.4 | 🟡 probe done (Apple); paper check and Windows open |
 | M1 | MLP engine + oracle | `packages/mlp`: forward, backward, Adam, f32/f16, CPU oracle; check, fit, timing and live pages | GPU matches the oracle; image fit converges | N1, N1.1, N1.3, N10 | ✅ engine, correctness, live page, encoding A/B (two-phase waves: fit error 0.26 → 0.16) |
-| M2 | Speed | Fast portable kernels (N1.2), subgroup-matrix inference (N3a) and training (N3b), round-trip cost per layer (N3) | §3 budget met on the M5 Pro, or the gap is measured | N1.2, N2, N3, N3a–c | 🟡 inference ✅ (8.4 ms per million queries, quiet); emulated twin ✅ on the GPU; training 🟡 (N1.2 started) |
+| M2 | Speed | Fast portable kernels (N1.2), subgroup-matrix inference (N3a) and training (N3b), round-trip cost per layer (N3) | §3 budget met on the M5 Pro, or the gap is measured | N1.2, N2, N3, N3a–c | 🟡 inference ✅ (8.4 ms per million queries, quiet); emulated twin ✅ on the GPU; training 🟡 (tiled gradient: step 6.9 → 2.7 ms; forward-backward next) |
 | M3 | NRC on our path tracer | A cache hook for main's integrator (`ptOnVertex` / `ptTerminate`, `updateBlock` training paths): query and training buffers, target back-propagation, inference, resolve into the accumulation | Closed-room check: the learned cache converges to the analytic indirect radiance `ρE/(1−ρ)`; megakernel = wavefront | N6a | ⬜ |
 | M4 | Demo page | `nrc-live` (§2), user-testable | The maintainer can run it and see both halves | N6b | ⬜ |
 | M5 | Equal-time study | `nrc` runner page; tables on sponza-white: relMSE, FLIP, bias, stability vs plain PT at equal ms | Q2 answered on the M5 Pro | N6c | ⬜ |
@@ -104,7 +104,8 @@ Newest first. One line per session: what changed, what it showed.
 - **2026-11-15 (Mac, session 2).** Merged main's 41 local commits (path tracer P1–P3 with hooks); track N IDs
   renumbered (D27/D28, V101–V104, W11). Emulated subgroup-matrix kernel verified on the Apple GPU (N3c). Denoiser
   issue pmndrs/denoiser#31 filed for `subgroup_id` offsets. Quiet timing rerun (matrix path 11.2× portable f16). Image
-  encoding A/B: two-phase waves at Nyquist, fit error 0.26 → 0.16. This plan written.
+  encoding A/B: two-phase waves at Nyquist, fit error 0.26 → 0.16. Tiled weight gradient: training step 6.9 → 2.7 ms
+  (f16). ReLU round trip measured at 12-24% of matrix-path inference. This plan written.
 - **2026-11-15 (Mac, session 1).** Native subgroup-matrix inference compiles in Chrome 157 and matches the oracle;
   4 subgroups via `subgroup_id` compile with no override. Matrix path 7.5–11× faster than our naive portable f16;
   training is now the larger cost. lr sweep on the image fit (0.01 best). The old emulated kernel hung the GPU.

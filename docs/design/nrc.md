@@ -286,6 +286,9 @@ Built (`packages/mlp`, `@pathtracer/mlp`, private, WGSL prefix `nn`):
   11.2× portable f16; 4 subgroups 1.47× one. The loaded f32 number (180) was load, not the kernel.
 - *N1.3:* two-phase triangle waves (sin/cos style) and octaves at Nyquist: relMSE 0.26 → 0.16 at lr 0.01, and the
   coarse chirp stripes are learned. Image-task defaults are now 8×2 at lr 0.01; NRC keeps VkNRC's encoding until N6.
+- *N1.2:* tiled split-K weight-gradient pass (default): gradient pass 4.4 → 0.20 ms, training step 6.9 → 2.7 ms (f16),
+  8.1 → 3.9 ms (f32). Forward-backward is now 92% of a step.
+- *N3:* the ReLU round trip through workgroup memory is 20-24% of matrix-path inference with 1 subgroup, 12-13% with 4.
 - Denoiser told (pmndrs/denoiser#31) that `subgroup_id` offsets lift its one-subgroup limit.
 
 **Mac session checklist** (each line is one command from the repo root; quiet-machine rules for the timing lines):

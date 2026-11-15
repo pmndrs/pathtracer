@@ -9,10 +9,11 @@
  * sgm-emu (the same kernel with plain-WGSL stand-ins, f32: runs anywhere). sgm options: tile=8|16 (sgm-emu only),
  * subgroups=1|4, sgmRecords=64.
  *
- * Args: precision=f32|f16 (default f32) records=256 steps=5 seed=1
+ * Args: precision=f32|f16 (default f32) records=256 steps=5 seed=1 gradient=perWeight|tiled (default perWeight)
+ *       gradSplits=64 gradChunk=32 (tiled arm)
  */
 
-import { AdamState, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision } from '@pathtracer/mlp';
+import { AdamState, type GradientKind, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
@@ -52,6 +53,9 @@ try {
   const steps = numberArg(args, 'steps', 5);
   const seed = numberArg(args, 'seed', 1);
   const shape = DEFAULT_SHAPE;
+  const gradientKind = (args.gradient ?? 'perWeight') as GradientKind;
+  if (gradientKind !== 'perWeight' && gradientKind !== 'tiled') throw new Error(`gradient must be perWeight or tiled, got ${gradientKind}`);
+  const gradientOptions = { splits: numberArg(args, 'gradSplits', 64), chunk: numberArg(args, 'gradChunk', 32) };
 
   const { adapter, device } = await requestMlpDevice();
   adapterSummary = summarizeAdapter(adapter);
@@ -72,7 +76,7 @@ try {
   const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8) });
   precision = arm.precision;
   const sgm = arm.sgm;
-  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, ...(sgm ? { sgm } : {}) });
+  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, ...(sgm ? { sgm } : {}) });
   const inputBuffer = storageBuffer(device, inputs, 'inputs');
   const targetBuffer = storageBuffer(device, targets, 'targets');
   const outputBuffer = storageBuffer(device, n * 3 * 4, 'outputs');
@@ -129,7 +133,7 @@ try {
     {
       scene: 'mlp-random',
       renderer: inferArm === 'portable' ? `wgsl-${precision}` : `wgsl-${inferArm}`,
-      config: { precision, records: n, steps, seed, shape, infer: inferArm, sgm: sgm ?? null },
+      config: { precision, gradient: gradientKind, gradientOptions, records: n, steps, seed, shape, infer: inferArm, sgm: sgm ?? null },
       metrics: {
         infer_rel_error: infer.rel,
         gradient_rel_error: gradient.rel,

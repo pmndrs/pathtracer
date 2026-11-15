@@ -538,3 +538,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Worktrees under `.claude/worktrees/<name>` resolve the `link:../../bvh` and `link:../../Denoiser/...` dependencies to
   `.claude/worktrees/bvh` and `.claude/worktrees/Denoiser`: those two are symlinks to `~/Developer/*` (re-create them if
   typecheck says `Cannot find module 'denoiser'`).
+- A WGSL loop that contains `workgroupBarrier()` needs a workgroup-uniform bound: a count read from a storage buffer is
+  not. Have one lane copy it into a `var<workgroup>` and loop on `workgroupUniformLoad(&v)` (`wgsl-gradient.ts`).
+- `mlp-check`'s `gradient_rel_error` is normalised by the largest gradient: a wrong small-magnitude layer can hide in it.
+  The per-weight check is the `mlp-fit --args oracleSteps=N batch=B` replay (use B = the real batch to cover chunking).
