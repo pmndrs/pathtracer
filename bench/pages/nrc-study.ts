@@ -18,7 +18,10 @@
  *    hard cut (cut), the same warm-up then a 60-frame camera flight to the view (fly), against a cache warmed at the view
  *    (steady) and plain path tracing (k spp per frame).
  *
- * Args: scenario=static|adapt|all  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
+ * 7. Unseen region (scenario=unseen or all): the upper gallery's corridor, which no ground-floor view shows; reference = our own
+ *    plain path tracer at refSpp (4096). Single-frame error after a cut from a cache warmed on the ground floor, vs cold and steady.
+ *
+ * Args: scenario=static|adapt|unseen|all  refSpp=4096  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
  *       trainSelect=tile|pixel  queryDepth=1  lr=0.002  upload=1 (PFMs of the 16- and 256-frame images)  flip=1
  * Timing rows are wall clock per submit (best effort on a shared machine); the quality numbers are deterministic for a seed.
  */
@@ -239,75 +242,79 @@ try {
     metrics.stability_nrc_rel_change = median(change.nrc!);
   }
 
-  // 6. Adaptation, real-time mode.
-  if (runAdapt) {
-    const viewB = camera;
-    const viewA: PtLookAtCamera = { ...camera, position: [8, 1.7, 0], target: [-10, 2.6, 0] };
-    const setCam = (c: PtLookAtCamera) => {
-      plain.setCamera(c);
-      cache.setCamera(c);
-    };
-    let seedN = 5000;
-    const rtFrame = async (): Promise<void> => {
-      const sd = seedN++;
-      plain.setSeed(sd);
-      cache.render.setSeed(sd);
-      await submit((e) => {
-        plain.reset(e);
-        cache.reset(e);
-        cache.encodeFrame(e);
-        plain.encode(e, k);
-      });
-    };
-    const single = async (): Promise<{ plain: number; nrc: number; nrcBias: number }> => {
-      const [a, b] = await Promise.all([plain.readImage(), cache.render.readImage()]);
-      const mb = compareImages(asImage(b), ref);
-      return { plain: compareImages(asImage(a), ref).relMse, nrc: mb.relMse, nrcBias: mb.relBias };
-    };
-    const ts = [1, 2, 4, 8, 16, 32, 64];
-    const warmAt = async (view: PtLookAtCamera) => {
-      cache.resetNetwork();
-      setCam(view);
-      for (let i = 0; i < warm; i++) await rtFrame();
-    };
-    const curve = async (tag: string) => {
-      let t = 0;
-      for (const T of ts) {
-        while (t < T) {
-          await rtFrame();
-          t++;
-        }
-        const m = await single();
-        metrics[`adapt_${tag}_nrc_relmse_t${T}`] = m.nrc;
-        metrics[`adapt_${tag}_nrc_relbias_t${T}`] = m.nrcBias;
+  // 6. Adaptation (real-time mode) and 7. an unseen region: shared helpers.
+  const viewB = camera;
+  const viewA: PtLookAtCamera = { ...camera, position: [8, 1.7, 0], target: [-10, 2.6, 0] };
+  /** The upper gallery's north corridor: vault and back wall the ground-floor views never see, lit almost only by bounced light. */
+  const viewC: PtLookAtCamera = { ...camera, position: [-8, 4.95, -4.5], target: [10, 4.95, -4.5] };
+  const setCam = (c: PtLookAtCamera) => {
+    plain.setCamera(c);
+    cache.setCamera(c);
+  };
+  let seedN = 5000;
+  const rtFrame = async (): Promise<void> => {
+    const sd = seedN++;
+    plain.setSeed(sd);
+    cache.render.setSeed(sd);
+    await submit((e) => {
+      plain.reset(e);
+      cache.reset(e);
+      cache.encodeFrame(e);
+      plain.encode(e, k);
+    });
+  };
+  const single = async (against: Image): Promise<{ plain: number; nrc: number; nrcBias: number }> => {
+    const [a, b] = await Promise.all([plain.readImage(), cache.render.readImage()]);
+    const mb = compareImages(asImage(b), against);
+    return { plain: compareImages(asImage(a), against).relMse, nrc: mb.relMse, nrcBias: mb.relBias };
+  };
+  const ts = [1, 2, 4, 8, 16, 32, 64];
+  const warmAt = async (view: PtLookAtCamera) => {
+    cache.resetNetwork();
+    setCam(view);
+    for (let i = 0; i < warm; i++) await rtFrame();
+  };
+  const curve = async (tag: string, against: Image) => {
+    let t = 0;
+    for (const T of ts) {
+      while (t < T) {
+        await rtFrame();
+        t++;
       }
-    };
-    // Steady state and plain: a cache warmed at the view itself.
-    await warmAt(viewB);
-    const plainErr: number[] = [];
-    const steadyErr: number[] = [];
-    const steadyBias: number[] = [];
+      const m = await single(against);
+      metrics[`${tag}_nrc_relmse_t${T}`] = m.nrc;
+      metrics[`${tag}_nrc_relbias_t${T}`] = m.nrcBias;
+    }
+  };
+  /** Steady state at `view` (a cache warmed there) and plain path tracing, medians of 8 single frames. */
+  const steady = async (tag: string, view: PtLookAtCamera, against: Image) => {
+    await warmAt(view);
+    const pe: number[] = [];
+    const ne: number[] = [];
+    const nb: number[] = [];
     for (let i = 0; i < 8; i++) {
       await rtFrame();
-      const m = await single();
-      plainErr.push(m.plain);
-      steadyErr.push(m.nrc);
-      steadyBias.push(m.nrcBias);
+      const m = await single(against);
+      pe.push(m.plain);
+      ne.push(m.nrc);
+      nb.push(m.nrcBias);
     }
-    metrics.adapt_plain_relmse = median(plainErr);
-    metrics.adapt_steady_nrc_relmse = median(steadyErr);
-    metrics.adapt_steady_nrc_relbias = median(steadyBias);
-    // Cold: a fresh network at the view.
+    metrics[`${tag}_plain_relmse`] = median(pe);
+    metrics[`${tag}_steady_nrc_relmse`] = median(ne);
+    metrics[`${tag}_steady_nrc_relbias`] = median(nb);
+  };
+
+  if (runAdapt) {
+    await steady('adapt', viewB, ref);
     cache.resetNetwork();
     setCam(viewB);
-    await curve('cold');
-    // Cut: warmed on the opposite view, then a hard cut.
+    await curve('adapt_cold', ref);
     await warmAt(viewA);
     setCam(viewB);
-    await curve('cut');
-    // Fly: the same warm-up, then 60 frames moving A -> B (training all the way).
+    await curve('adapt_cut', ref);
+    // Fly: the same warm-up, then 60 frames moving A -> B (training all the way), turning around by yaw (lerping the
+    // targets would pass through a straight-up view).
     await warmAt(viewA);
-    // Walk A -> B while turning around by yaw (lerping the targets would pass through a straight-up view).
     const yawOf = (c: PtLookAtCamera) => Math.atan2(c.target[2] - c.position[2], c.target[0] - c.position[0]);
     const yawA = yawOf(viewA);
     const yawB = yawOf(viewB) + (yawOf(viewB) < yawA ? 2 * Math.PI : 0) - 2 * Math.PI;
@@ -319,7 +326,32 @@ try {
       await rtFrame();
     }
     setCam(viewB);
-    await curve('fly');
+    await curve('adapt_fly', ref);
+  }
+
+  // 7. Unseen region: the reference there is our own path tracer at refSpp (it matches Mitsuba on Sponza, P2.9).
+  if (scenario === 'unseen' || scenario === 'all') {
+    const refSpp = numberArg(args, 'refSpp', 4096);
+    plain.setCamera(viewC);
+    plain.setSeed(777);
+    await submit((e) => plain.reset(e));
+    for (let n = 0; n < refSpp; n += 64) await submit((e) => plain.encode(e, Math.min(64, refSpp - n)));
+    const refC = asImage(await plain.readImage());
+    metrics.unseen_ref_spp = refSpp;
+    if (doUpload) await uploadImage('unseen-reference', refC as never);
+    await steady('unseen', viewC, refC);
+    cache.resetNetwork();
+    setCam(viewC);
+    await curve('unseen_cold', refC);
+    // Cut: a cache warmed on the ground-floor view (it never saw this corridor), then a hard cut.
+    await warmAt(viewB);
+    setCam(viewC);
+    await curve('unseen_cut', refC);
+    if (doUpload) {
+      const [a, b] = await Promise.all([plain.readImage(), cache.render.readImage()]);
+      await uploadImage('unseen-cut-plain-t64', asImage(a) as never);
+      await uploadImage('unseen-cut-nrc-t64', asImage(b) as never);
+    }
   }
 
   reportResult(

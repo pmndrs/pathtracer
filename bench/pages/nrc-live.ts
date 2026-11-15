@@ -517,4 +517,12 @@ async function means(): Promise<Record<string, number> | null> {
     building = false;
   }
 }
-(window as unknown as { __nrcLive: unknown }).__nrcLive = { benchmark, means, step, reset: () => { needsReset = true; }, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, get samples() { return live ? { plain: live.plain.samples, nrc: live.cache.samples } : null; }, status: () => statusEl.textContent };
+/** Debug: point the camera (position, target) and clear both images. */
+function setView(position: [number, number, number], target: [number, number, number]): void {
+  cam.position = [...position];
+  const d = [target[0] - position[0], target[1] - position[1], target[2] - position[2]];
+  cam.yaw = Math.atan2(d[2]!, d[0]!);
+  cam.pitch = Math.asin(d[1]! / Math.hypot(d[0]!, d[1]!, d[2]!));
+  needsReset = true;
+}
+(window as unknown as { __nrcLive: unknown }).__nrcLive = { benchmark, means, step, setView, reset: () => { needsReset = true; }, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, get samples() { return live ? { plain: live.plain.samples, nrc: live.cache.samples } : null; }, status: () => statusEl.textContent };
