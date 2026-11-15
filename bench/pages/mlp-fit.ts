@@ -13,16 +13,17 @@
  *
  * Inference arm for the snapshots: infer=portable|sgm|sgm-emu (training stays portable; see mlp-check).
  *
- * Args: precision=f32|f16  size=256  batch=16384  snapshots=16,64,256,1024  seed=1  ema=0|1  lr=0.002  oracleSteps=0
- * A/B: --ab precision=f32,f16
+ * Args: precision=f32|f16  size=256  batch=16384  snapshots=16,64,256,1024  seed=1  ema=0|1  lr=0.01  oracleSteps=0
+ *       octaves=8  phases=2 (image encoding layout, N1.3; octaves=nyquist means log2(size); 12 and 1 = the original)
+ * A/B: --ab precision=f32,f16   --ab octaves=12,8   --ab phases=1,2
  */
 
-import { AdamState, DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, batchGradient, encodeImage, initWeights, type Precision } from '@pathtracer/mlp';
+import { AdamState, DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, batchGradient, encodeImage, initWeights, type ImageEncoding, type Precision } from '@pathtracer/mlp';
 import { compareImages } from '../metrics/metrics.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, uploadImage, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
-import { IMAGE_HOOKS_INFER, IMAGE_HOOKS_TRAIN, targetImage, trainSample } from './mlp-image.ts';
+import { IMAGE_TASK_ENCODING, IMAGE_TASK_LEARNING_RATE, imageHooksInfer, imageHooksTrain, targetImage, trainSample } from './mlp-image.ts';
 
 
 let adapterSummary: AdapterSummary | null = null;
@@ -40,12 +41,16 @@ try {
   const batch = numberArg(args, 'batch', 16384);
   const seed = numberArg(args, 'seed', 1);
   const useEma = numberArg(args, 'ema', 0) === 1;
-  const learningRate = numberArg(args, 'lr', DEFAULT_TRAIN.learningRate);
+  const learningRate = numberArg(args, 'lr', IMAGE_TASK_LEARNING_RATE);
   const snapshots = (args.snapshots ?? '16,64,256,1024').split(',').map(Number).sort((a, b) => a - b);
   if (snapshots.some((s) => !Number.isInteger(s) || s <= 0)) throw new Error(`bad snapshots: ${args.snapshots}`);
   const steps = snapshots[snapshots.length - 1] as number;
   const pixels = size * size;
   const oracleSteps = numberArg(args, 'oracleSteps', 0);
+  const encoding: ImageEncoding = {
+    octaves: args.octaves === 'nyquist' ? Math.round(Math.log2(size)) : numberArg(args, 'octaves', IMAGE_TASK_ENCODING.octaves),
+    phases: numberArg(args, 'phases', IMAGE_TASK_ENCODING.phases) as 1 | 2,
+  };
 
   const { adapter, device } = await requestMlpDevice();
   adapterSummary = summarizeAdapter(adapter);
@@ -64,8 +69,8 @@ try {
     inferCapacity: pixels,
     useEma,
     train: { ...DEFAULT_TRAIN, learningRate },
-    trainHooks: IMAGE_HOOKS_TRAIN,
-    inferHooks: IMAGE_HOOKS_INFER,
+    trainHooks: imageHooksTrain(encoding),
+    inferHooks: imageHooksInfer(encoding),
   });
   const initial = initWeights(DEFAULT_SHAPE, seed);
   mlp.uploadWeights(initial);
@@ -88,7 +93,7 @@ try {
     for (let step = 1; step <= oracleSteps; step++) {
       for (let r = 0; r < batch; r++) {
         const s = trainSample(r, step, seed, size, target);
-        inputs.set(encodeImage(Math.fround(s.u), Math.fround(s.v), DEFAULT_SHAPE.inputs), r * DEFAULT_SHAPE.inputs);
+        inputs.set(encodeImage(Math.fround(s.u), Math.fround(s.v), DEFAULT_SHAPE.inputs, undefined, encoding), r * DEFAULT_SHAPE.inputs);
         targets.set(s.t, r * 3);
       }
       const g = batchGradient(DEFAULT_SHAPE, oracle.weights, inputs, targets, batch);
@@ -175,7 +180,7 @@ try {
       config: { arm: arm.description, precision, size, batch, seed, useEma, learningRate, snapshots, shape: DEFAULT_SHAPE },
       metrics,
       valid: timed && !software,
-      notes: { timed, software, trainMsFirst: trainMs.slice(0, 4) },
+      notes: { timed, software, encoding: `${encoding.octaves}x${encoding.phases}`, trainMsFirst: trainMs.slice(0, 4) },
     },
     { adapter: adapterSummary, deviceErrors },
   );

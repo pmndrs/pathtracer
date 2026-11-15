@@ -111,8 +111,8 @@ per pixel at 1080p is 2.07M queries, about **100 GFLOP per frame for inference a
 |---|---|---|---|
 | RTX 3060 Laptop, plain f16 | ~13 TFLOP/s [M] | ~30 ms | ~8 ms |
 | RTX 3060 Laptop, tensor cores | ~50+ TFLOP/s dense [M] | ~8 ms | ~2 ms |
-| M5 Pro, portable f16 (naive kernel, measured 2026-11-15) | 0.45 TFLOP/s achieved | ~190 ms | ~47 ms |
-| M5 Pro, `wgsl-sgm` f16, 4 subgroups (measured 2026-11-15) | 5.1 TFLOP/s achieved | ~17 ms | ~4.2 ms |
+| M5 Pro, portable f16 (naive kernel, quiet, 2026-11-15) | 0.44 TFLOP/s achieved | ~195 ms | ~49 ms |
+| M5 Pro, `wgsl-sgm` f16, 4 subgroups (quiet, 2026-11-15) | 4.9 TFLOP/s achieved | ~17 ms | ~4.4 ms |
 
 So **without matrix hardware, a full-resolution NRC does not fit a real-time frame; at half resolution it might.**
 This is the case for `subgroup-matrix`, and it is also why the demo should run at the upscaler's input resolution.
@@ -208,8 +208,9 @@ DIVERGES.md: reflectance factorisation as in the paper, hash-grid encoding, EMA 
 
 ## 5. The NRC demo integrator
 
-P2's path tracer does not exist yet, so the demo carries a minimal one, on the trace core that does (P1 slice 1:
-`rtClosest`, `rtVisible`, `rtSurface`):
+**Update 2026-11-15:** main now has the path tracer with cache hooks (`ptOnVertex` / `ptTerminate`, `updateBlock`
+training paths, both schedulers). The demo plugs into those instead of carrying its own integrator; the wiring is in
+[nrc-plan.md](nrc-plan.md) §5 (TASKS N6a-N6c). The original plan, kept for the pass structure:
 
 - Scene: **sponza-white** (grey diffuse, sun + sky, 262k triangles). Diffuse only means reflectance is a constant and
   the "specular" inputs are zero, so the first demo isolates the cache. References at 4096 spp exist (pbrt + Mitsuba).
@@ -277,6 +278,15 @@ Built (`packages/mlp`, `@pathtracer/mlp`, private, WGSL prefix `nn`):
   matrix path beats our portable f16 by 7.5× (11× with 4 subgroups)**, against the expectation in §2b. The caveat is
   that the portable kernel is a naive baseline at 0.45 TFLOP/s (N1.2), so the fair comparison is still open.
 - *Live demo (N10):* works in the app's browser pane (portable backends) and in flagged Chrome (all backends).
+
+**Session 2 (2026-11-15).** Main merged (track N IDs renumbered: D27/D28, V101-V104, W11).
+- *N3c:* the rewritten emulated form runs on the Apple GPU in 0.5-0.7 s and matches (8³/16³, 1 and 4 subgroups).
+- *N2 quiet table* (load 2.5-3.2, no row loaded), ms per 1M queries: portable f32 117-120, portable f16 93.7-94.4,
+  sgm f32 32.1-32.3, sgm f16 12.3-12.4, sgm f16 ×4 subgroups 8.4. Training step f32 8.2, f16 6.9. Ratios: matrix path
+  11.2× portable f16; 4 subgroups 1.47× one. The loaded f32 number (180) was load, not the kernel.
+- *N1.3:* two-phase triangle waves (sin/cos style) and octaves at Nyquist: relMSE 0.26 → 0.16 at lr 0.01, and the
+  coarse chirp stripes are learned. Image-task defaults are now 8×2 at lr 0.01; NRC keeps VkNRC's encoding until N6.
+- Denoiser told (pmndrs/denoiser#31) that `subgroup_id` offsets lift its one-subgroup limit.
 
 **Mac session checklist** (each line is one command from the repo root; quiet-machine rules for the timing lines):
 

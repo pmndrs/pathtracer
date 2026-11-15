@@ -74,17 +74,77 @@ export function encodeNrc(input: NrcInput, out: Float32Array | Float64Array = ne
 }
 
 /**
- * The "learn an image" encoding (N1): (u, v) ∈ [0, 1]². Frequencies of u and v (24), one-blob of u and v (8),
- * a constant one, zero padding to `width`.
+ * Frequency layout of the image encoding (N1.3 A/B). `octaves` triangle waves per axis at 2^0 … 2^(octaves−1);
+ * `phases: 2` adds a quarter-period-shifted twin of each wave (tri(x + 1/2), the cosine to the sine), so position is
+ * recoverable inside every period. A wave at 2^k spans 2^(k−1) periods over [0, 1]: a size-pixel image resolves up to
+ * size/2 periods, so octaves ≤ log2(size) (8 for 256²) stay under Nyquist.
  */
-export function encodeImage(u: number, v: number, width = 64, out: Float32Array | Float64Array = new Float32Array(width)): typeof out {
+export interface ImageEncoding {
+  octaves: number;
+  phases: 1 | 2;
+}
+
+/** Today's layout (VkNRC's position encoding applied to (u, v)): 12 one-phase octaves. */
+export const DEFAULT_IMAGE_ENCODING: ImageEncoding = { octaves: FREQUENCIES, phases: 1 };
+
+/** Inputs an image encoding uses (before zero padding). */
+export function imageEncodingWidth(e: ImageEncoding): number {
+  return 2 * e.octaves * e.phases + 2 * BLOB_BINS + 1;
+}
+
+function validateImageEncoding(e: ImageEncoding, width: number): void {
+  if (!Number.isInteger(e.octaves) || e.octaves < 1 || e.octaves > 16) throw new Error(`image encoding: octaves must be 1..16, got ${e.octaves}`);
+  if (e.phases !== 1 && e.phases !== 2) throw new Error(`image encoding: phases must be 1 or 2, got ${e.phases}`);
+  if (imageEncodingWidth(e) > width) throw new Error(`image encoding needs ${imageEncodingWidth(e)} inputs, the net has ${width}`);
+}
+
+/**
+ * The "learn an image" encoding (N1): (u, v) ∈ [0, 1]². Frequencies of u, then of v (octaves × phases each; for each
+ * octave the phase-0 wave, then the shifted one), one-blob of u and v (8), a constant one, zero padding to `width`.
+ * The default layout is the original one (12 one-phase octaves, 24 + 8 + 1 values).
+ */
+export function encodeImage(u: number, v: number, width = 64, out: Float32Array | Float64Array = new Float32Array(width), e: ImageEncoding = DEFAULT_IMAGE_ENCODING): typeof out {
+  validateImageEncoding(e, width);
   out.fill(0);
-  frequency(u, out, 0);
-  frequency(v, out, FREQUENCIES);
-  oneBlob(u, out, 2 * FREQUENCIES);
-  oneBlob(v, out, 2 * FREQUENCIES + BLOB_BINS);
-  out[2 * FREQUENCIES + 2 * BLOB_BINS] = 1;
+  let o = 0;
+  for (const x of [u, v]) {
+    let scale = 1;
+    for (let f = 0; f < e.octaves; f++, scale *= 2) {
+      out[o++] = triangleWave(x * scale);
+      if (e.phases === 2) out[o++] = triangleWave(x * scale + 0.5);
+    }
+  }
+  oneBlob(u, out, o);
+  oneBlob(v, out, o + BLOB_BINS);
+  out[o + 2 * BLOB_BINS] = 1;
   return out;
+}
+
+/**
+ * WGSL twin of `encodeImage` for a given layout: `fn <name>(uv: vec2f) -> array<f32, NN_IN>`. Needs `encodingWgsl()`
+ * (for `nnTriangle` and `nnOneBlob`), which every MLP kernel already includes.
+ */
+export function imageEncodingWgsl(e: ImageEncoding = DEFAULT_IMAGE_ENCODING, name = 'nnEncodeImageWith', width = 64): string {
+  validateImageEncoding(e, width);
+  const per = e.octaves * e.phases;
+  return /* wgsl */ `
+fn ${name}(uv: vec2f) -> array<f32, NN_IN> {
+  var e: array<f32, NN_IN>;
+  for (var a = 0u; a < 2u; a++) {
+    let x = uv[a];
+    var scale = 1.0;
+    for (var f = 0u; f < ${e.octaves}u; f++) {
+      e[a * ${per}u + f * ${e.phases}u] = nnTriangle(x * scale);${e.phases === 2 ? `
+      e[a * ${per}u + f * 2u + 1u] = nnTriangle(x * scale + 0.5);` : ''}
+      scale *= 2.0;
+    }
+  }
+  nnOneBlob(uv.x, &e, ${2 * per}u);
+  nnOneBlob(uv.y, &e, ${2 * per + BLOB_BINS}u);
+  e[${2 * per + 2 * BLOB_BINS}u] = 1.0;
+  return e;
+}
+`;
 }
 
 /** WGSL for the same encodings. `T` is the activation scalar type (f32 or f16). */

@@ -4,7 +4,7 @@
  * twin for oracle replays, and the group-1 hooks for MlpEngine.
  */
 
-import { hashU32 } from '@pathtracer/mlp';
+import { DEFAULT_IMAGE_ENCODING, hashU32, imageEncodingWgsl, type ImageEncoding } from '@pathtracer/mlp';
 
 /** Procedural HDR target, linear RGB, row 0 = top. Features at several scales so encodings and widths separate. */
 export function targetPixel(u: number, v: number): [number, number, number] {
@@ -87,25 +87,43 @@ fn imgSample(uv: vec2f) -> vec3f {
 }
 `;
 
-export const IMAGE_HOOKS_TRAIN = `${IMAGE_HOOKS_COMMON}
+/** Training hooks for an image-encoding layout (N1.3); the default layout gives the original inputs. */
+export function imageHooksTrain(e: ImageEncoding = DEFAULT_IMAGE_ENCODING): string {
+  return `${IMAGE_HOOKS_COMMON}${imageEncodingWgsl(e, 'imgEncode')}
 fn nnTrainLoad(r: u32, x: ptr<function, array<f32, NN_IN>>) -> vec3f {
   let key = imgHash(r ^ imgHash(nnState.step * 0x9e3779b9u + imgDims.seed));
   let uv = vec2f(imgRand(key), imgRand(key + 1u));
-  *x = nnEncodeImage(uv);
+  *x = imgEncode(uv);
   return imgSample(uv);
 }
 `;
+}
 
-export const IMAGE_HOOKS_INFER = /* wgsl */ `
+/** Inference hooks for an image-encoding layout: one query per pixel centre, RGB out. */
+export function imageHooksInfer(e: ImageEncoding = DEFAULT_IMAGE_ENCODING): string {
+  return /* wgsl */ `
 struct ImageDims { width: u32, height: u32, seed: u32, _pad: u32 }
 @group(1) @binding(1) var<uniform> imgDims: ImageDims;
 @group(1) @binding(2) var<storage, read_write> imgOut: array<f32>;
+${imageEncodingWgsl(e, 'imgEncode')}
 fn nnInferLoad(r: u32) -> array<f32, NN_IN> {
   let uv = (vec2f(f32(r % imgDims.width), f32(r / imgDims.width)) + 0.5) / vec2f(f32(imgDims.width), f32(imgDims.height));
-  return nnEncodeImage(uv);
+  return imgEncode(uv);
 }
 fn nnInferStore(r: u32, y: vec3f) { imgOut[r * 3u] = y.x; imgOut[r * 3u + 1u] = y.y; imgOut[r * 3u + 2u] = y.z; }
 `;
+}
+
+/**
+ * The image task's defaults after the N1.3 A/B (256², f16, 1024 steps; relMSE): 8 octaves (Nyquist for 256²) with two
+ * phases and lr 0.01 reach 0.16 vs 0.26 for the original 12 one-phase octaves at lr 0.01 (0.84 at VkNRC's 0.002) and
+ * learn the coarse chirp stripes. NRC itself keeps VkNRC's layout and lr until N6 runs its own A/B.
+ */
+export const IMAGE_TASK_ENCODING: ImageEncoding = { octaves: 8, phases: 2 };
+export const IMAGE_TASK_LEARNING_RATE = 0.01;
+
+export const IMAGE_HOOKS_TRAIN = imageHooksTrain(IMAGE_TASK_ENCODING);
+export const IMAGE_HOOKS_INFER = imageHooksInfer(IMAGE_TASK_ENCODING);
 
 
 /** Target image, size × size, linear RGB f32, row 0 = top. */
