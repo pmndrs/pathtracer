@@ -26,6 +26,8 @@ import { ptThinFilmWgsl } from '../bsdf/thinfilm-wgsl.ts';
 import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { ptSamplerWgsl } from './dimensions.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
+import { PtRestirPasses } from '../restir/restir.ts';
+import { PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from './outputs-wgsl.ts';
 
@@ -170,6 +172,8 @@ export class PtMegakernel {
   private hookGroup: GPUBindGroup | null = null;
   private vbufferView: GPUTextureView | null = null;
   private jitter: [number, number] = [0, 0];
+  /** ReSTIR DI passes (`integrator.restir`, P4): run before every sample dispatch. */
+  restir: PtRestirPasses | null = null;
   private counterBuffer: GPUBuffer | null = null;
   private readonly slotBytes: number;
   private slot = 0;
@@ -215,6 +219,7 @@ export class PtMegakernel {
           ...(options.integrator?.counters ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
           ...(options.integrator?.primary === 'vbuffer' ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
           ...(corrTexture ? [ptLayerCorrLayoutEntry()] : []),
+          ...(options.integrator?.restir ? [{ binding: PT_RESTIR_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
         ],
       }),
       ...(options.integrator?.hooks ? [device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] })] : []),
@@ -228,6 +233,7 @@ export class PtMegakernel {
       device.queue.writeBuffer(fuzzTable, 0, table);
     }
     const kernel = new PtMegakernel(device, options, pipeline, layouts, code.length, fuzzTable);
+    if (options.integrator?.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, layouts[0] as GPUBindGroupLayout, layouts[1] as GPUBindGroupLayout);
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
     return kernel;
   }
@@ -281,6 +287,7 @@ export class PtMegakernel {
     const vec4PerPixel = this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : 1;
     this.accum = this.device.createBuffer({ label: 'pt accum', size: width * height * 16 * vec4PerPixel, usage: STORAGE | COPY_SRC | COPY_DST });
     if (this.options.integrator?.counters) this.counterBuffer = this.device.createBuffer({ label: 'pt counters', size: width * height * PT_COUNTER_WORDS * 4, usage: STORAGE | COPY_SRC | COPY_DST });
+    this.restir?.setFilm(width, height);
     this.ioGroup = null;
     this.samples = 0;
   }
@@ -302,16 +309,17 @@ export class PtMegakernel {
   reset(encoder: GPUCommandEncoder): void {
     if (this.accum) encoder.clearBuffer(this.accum);
     if (this.counterBuffer) encoder.clearBuffer(this.counterBuffer);
+    this.restir?.reset(encoder);
     this.samples = 0;
   }
 
-  private paramsRecord(sampleIndex: number): ArrayBuffer {
+  private paramsRecord(sampleIndex: number, finalRegion = 0): ArrayBuffer {
     if (!this.camera) throw new Error('PtMegakernel: setCamera() first');
     const basis = ptCameraBasis(this.camera, this.width, this.height);
     const buffer = new ArrayBuffer(PT_PARAMS_BYTES);
     const u = new Uint32Array(buffer);
     const f = new Float32Array(buffer);
-    u.set([this.width, this.height, sampleIndex >>> 0, this.seed, this.limits.maxDepth >>> 0, (this.limits.rrStartDepth ?? 0) >>> 0, 0, 0]);
+    u.set([this.width, this.height, sampleIndex >>> 0, this.seed, this.limits.maxDepth >>> 0, (this.limits.rrStartDepth ?? 0) >>> 0, 0, finalRegion * this.width * this.height]);
     f[6] = this.limits.textureConeScale ?? 1;
     // With a V-buffer the (otherwise unused) w lanes of origin and right carry the frame's sample position inside the pixel (0.5 + offset): `ptPath` reads them in place of pair 0.
     const vb = this.options.integrator?.primary === 'vbuffer';
@@ -337,6 +345,7 @@ export class PtMegakernel {
         ...(this.counterBuffer ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, resource: { buffer: this.counterBuffer } }] : []),
         ...(this.vbufferView ? [{ binding: PT_VBUFFER_BINDING, resource: this.vbufferView }] : []),
         ...(this.corrTexture ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.corrTexture.createView() }] : []),
+        ...(this.restir?.reservoirs ? [{ binding: PT_RESTIR_SHADE_BINDING, resource: { buffer: this.restir.reservoirs } }] : []),
       ],
     });
     if (this.hookLayout && !this.hookGroup) {
@@ -351,9 +360,19 @@ export class PtMegakernel {
     const gx = Math.ceil(this.width / PT_WORKGROUP[0]);
     const gy = Math.ceil(this.height / PT_WORKGROUP[1]);
     for (let i = 0; i < passes; i++) {
+      let finalRegion = 0;
+      if (this.restir) {
+        if (!this.camera) throw new Error('PtMegakernel: setCamera() first');
+        finalRegion = this.restir.encodeFrame(pass, this.walkGroup, this.sceneGroup, this.camera, this.seed, this.samples);
+        // The ReSTIR passes switched pipeline and groups: set the shade pass's again.
+        pass.setPipeline(this.pipeline);
+        pass.setBindGroup(0, this.walkGroup);
+        pass.setBindGroup(1, this.sceneGroup);
+        if (this.hookGroup) pass.setBindGroup(3, this.hookGroup);
+      }
       const offset = (this.slot % PT_PARAM_SLOTS) * this.slotBytes;
       this.slot++;
-      this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(this.samples));
+      this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(this.samples, finalRegion));
       pass.setBindGroup(2, this.ioGroup, [offset]);
       pass.dispatchWorkgroups(gx, gy);
       this.samples++;
@@ -416,6 +435,7 @@ export class PtMegakernel {
     this.paramsBuffer.destroy();
     this.fuzzTable?.destroy();
     this.corrTexture?.destroy();
+    this.restir?.destroy();
     this.accum?.destroy();
     this.accum = null;
   }

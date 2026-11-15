@@ -20,3 +20,5 @@ export * from './bsdf/thinfilm-wgsl.ts';
 export * from './wavefront/layout.ts';
 export * from './wavefront/wavefront-wgsl.ts';
 export * from './wavefront/wavefront.ts';
+export * from './restir/restir-wgsl.ts';
+export * from './restir/restir.ts';

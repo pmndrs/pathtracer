@@ -7,7 +7,7 @@
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
  *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg  pt_nee=0|1  pt_env=uniform|importance|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
- *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_texture_lod=0|cone  pt_texture_cone_scale=auto|N  pt_layering=albedo|stochastic  pt_albedo_base=openpbr|internal  pt_albedo_correction=none|lut|texture  pt_exit_mis=pbrt|none  pt_layer_depth=N  pt_layer_thickness=T  pt_tint=0|1  pt_coverage=0|1  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)  pt_refill=0|1|inline|batch pt_refill_threshold=F pt_layers=N (wavefront only: refill, slots per pixel; P3.2)  pt_alpha_policy=exact|opaqueShadow|opaqueIndirect|opaqueSecondary (alpha MASK scenes; BIASED unless exact, R2)  pt_packing=split|packed (scene copy as two storage buffers or one; P3.11)  pt_primary=trace|vbuffer (primary hits: traced camera rays, or a bench-rasterised visibility buffer; P3.6)  pt_aovs=0|1 (albedo/normal/depth extra images)  pt_counters=0|1 (counter heatmaps, row INVALID for timing)  pt_denoise=oidn (extra `denoised` image; raw stays the result)  pt_lod=full|secondary (R1, biased) pt_lod_depth=N
+ *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_texture_lod=0|cone  pt_texture_cone_scale=auto|N  pt_layering=albedo|stochastic  pt_albedo_base=openpbr|internal  pt_albedo_correction=none|lut|texture  pt_exit_mis=pbrt|none  pt_layer_depth=N  pt_layer_thickness=T  pt_tint=0|1  pt_coverage=0|1  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)  pt_refill=0|1|inline|batch pt_refill_threshold=F pt_layers=N (wavefront only: refill, slots per pixel; P3.2)  pt_alpha_policy=exact|opaqueShadow|opaqueIndirect|opaqueSecondary (alpha MASK scenes; BIASED unless exact, R2)  pt_packing=split|packed (scene copy as two storage buffers or one; P3.11)  pt_primary=trace|vbuffer (primary hits: traced camera rays, or a bench-rasterised visibility buffer; P3.6)  pt_aovs=0|1 (albedo/normal/depth extra images)  pt_counters=0|1 (counter heatmaps, row INVALID for timing)  pt_denoise=oidn (extra `denoised` image; raw stays the result)  pt_lod=full|secondary (R1, biased) pt_lod_depth=N  pt_restir=1 (ReSTIR DI at the first vertex, P4, megakernel; one sample pass = one frame: static scene, accumulated mean) pt_restir_m=N pt_restir_temporal=0|1 pt_restir_spatial=K pt_restir_radius=PX pt_restir_bias=biased|unbiased pt_restir_vis=0|1 pt_restir_cap=N pt_restir_nb=random|fixed pt_restir_tpick=random|nearest
  *
  * Uploads `<renderer>__<scene>` (final image) and `<renderer>__<scene>__spp<N>` per snapshot. Unsupported scenes report
  * `skipped=1` and upload nothing.
@@ -84,6 +84,21 @@ try {
     ...(args['pt_tint'] ? { transmissionTint: args['pt_tint'] !== '0' } : {}),
     ...(args['pt_lod'] ? { materialLod: args['pt_lod'] === 'secondary' ? ('secondary' as const) : ('full' as const) } : {}),
     ...(args['pt_lod_depth'] ? { materialLodDepth: numberArg(args, 'pt_lod_depth', 1) } : {}),
+    ...(args['pt_restir'] === '1'
+      ? {
+          restir: {
+            ...(args['pt_restir_m'] ? { candidates: numberArg(args, 'pt_restir_m', 8) } : {}),
+            ...(args['pt_restir_temporal'] ? { temporal: args['pt_restir_temporal'] !== '0' } : {}),
+            ...(args['pt_restir_spatial'] ? { spatial: numberArg(args, 'pt_restir_spatial', 1) } : {}),
+            ...(args['pt_restir_radius'] ? { spatialRadius: numberArg(args, 'pt_restir_radius', 16) } : {}),
+            ...(args['pt_restir_bias'] ? { bias: args['pt_restir_bias'] as 'biased' | 'unbiased' } : {}),
+            ...(args['pt_restir_vis'] ? { initialVisibility: args['pt_restir_vis'] !== '0' } : {}),
+            ...(args['pt_restir_cap'] ? { historyCap: numberArg(args, 'pt_restir_cap', 20) } : {}),
+            ...(args['pt_restir_nb'] ? { neighbours: args['pt_restir_nb'] as 'random' | 'fixed' } : {}),
+            ...(args['pt_restir_tpick'] ? { temporalPick: args['pt_restir_tpick'] as 'random' | 'nearest' } : {}),
+          },
+        }
+      : {}),
     ...(args['pt_tangent'] ? { tangent: args['pt_tangent'] as 'attribute' | 'uv' } : {}),
     ...(args['pt_coverage'] ? { coverage: args['pt_coverage'] === '1' } : {}),
     ...(args['pt_seed'] ? { seed: numberArg(args, 'pt_seed', 0) } : {}),

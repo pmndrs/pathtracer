@@ -85,6 +85,7 @@ function stripWalkBindings(code: string): string {
 /** The five kernels' source and source maps. Throws for options the wavefront does not support (`ptwfUnsupported`). */
 export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames' | 'refill' | 'layers' | 'refillThreshold'>): PtWavefrontBuild {
   const wf = scheduling(options);
+  if (resolveIntegratorOptions(options.integrator ?? {}).restir) throw new Error('PtWavefront: integrator.restir (ReSTIR DI, P4) is megakernel only so far: the passes run between the primary hit and the shade dispatch of one frame (TASKS P4.x1)');
   if (resolveIntegratorOptions(options.integrator ?? {}).primary === 'vbuffer') {
     if (wf.refill) throw new Error("PtWavefront: integrator.primary 'vbuffer' does not support refill / layers (a slot starts its next sample at its own time; a V-buffer is one frame)");
     if (!options.layout.positions) throw new Error("PtWavefront: integrator.primary 'vbuffer' needs a surface layout with positions");

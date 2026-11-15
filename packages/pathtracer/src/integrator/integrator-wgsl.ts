@@ -15,6 +15,7 @@ import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtSamplerKind } from './dimensions.ts';
 import { ptHookVertexExpr, type PtHooksOptions } from './outputs-wgsl.ts';
+import { PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
   /** `'owen-sobol'` (reference) or `'pcg'` (debug). */
@@ -96,6 +97,12 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   materialLod?: 'full' | 'secondary';
   /** First scattering depth that uses the reduced material (`materialLod: 'secondary'`). Default 1 (the hits of indirect rays); 0 reduces every vertex (debug / furnace checks). */
   materialLodDepth?: number;
+  /**
+   * ReSTIR DI at the first scattering vertex (P4, real-time mode, megakernel only; restir/restir-wgsl.ts). Setting it compiles the shade side here (read the final
+   * reservoir, regenerate the light sample, one shadow ray; no MIS weight on emission after that vertex) and makes `PtMegakernel` run the G-buffer / candidate /
+   * temporal / spatial passes before every sample dispatch. Default null: no ReSTIR code at all (the kernel text is unchanged). Needs `nee`, no textures, legacy materials.
+   */
+  restir?: PtRestirOptions | null;
   /** @internal Set by the wavefront builder on its secondary shade kernel: every vertex it shades is reduced (no run-time branch). */
   lodKernel?: 'secondary';
 }
@@ -147,10 +154,12 @@ export interface ResolvedIntegratorOptions {
   /** R1: `'off'` (full material everywhere: no code changes), `'branch'` (megakernel and wavefront primary kernel: `depth >= lodDepth` at run time), `'always'` (wavefront secondary shade kernel). */
   lod: 'off' | 'branch' | 'always';
   lodDepth: number;
+  /** ReSTIR DI at the first vertex (`PtIntegratorOptions.restir`). */
+  restir: boolean;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)) };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -293,6 +302,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const hooks = !!o.hooks;
   const counters = o.counters;
   const aovs = o.aovs;
+  const restir = o.restir;
   const vb = o.primary === 'vbuffer';
   const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
   const term = (reason: number): string => (counters ? `            termReason = ${reason}u;\n` : '');
@@ -301,13 +311,49 @@ alias PtRadiance = vec4f;
 ${PT_PARAMS_WGSL}
 @group(2) @binding(0) var<uniform> ptParams: PtParams;
 @group(2) @binding(1) var<storage, read_write> ptAccum: array<vec4f>;
-
+${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> ptRestirRes: array<vec4u>;
+` : ''}
 ${ptCommonHeadWgsl(o)}
 
 ${maskShadow ? PT_VISIBLE_MASKED_WGSL : ''}${PT_MIS_WGSL}
+${restir ? `
+${PT_RESTIR_UNPACK_WGSL}
 
-fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters ? ', pxIndex: u32' : ''}) -> vec3f {
-    let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
+fn ptRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> vec3f {
+    let r = ptRestirRes[ptParams.limits.w + pxIndex];
+    let rw = bitcast<f32>(r.z);
+    if (r.x == RT_NONE || !(rw > 0.0)) {
+        return vec3f(0.0);
+    }
+    let li = rtSampleLightLi(r.x, p, ptRsUnpackU(r.y));
+    if (!li.valid || !(li.pdf > 0.0)) {
+        return vec3f(0.0);
+    }
+    let wiLocal = ptToLocal(frame, li.wi);
+    let f = ptBsdfEval(bp, wo, wiLocal).f * abs(wiLocal.z);
+    if (!(ptMax3(f) > 0.0)) {
+        return vec3f(0.0);
+    }
+    let origin = ptOffsetOrigin(p, ptSideNormal(ng, li.wi));
+    var ray: RtRay;
+    if (li.distance < 1.0e30) {
+        let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
+        ray = rtSegment(origin, end, 0.0, 0.0);
+    } else {
+        ray = RtRay(origin, 0.0, li.wi, PT_FAR);
+    }
+${counters ? `    ptCountRay(pxIndex, 0u, 1u);
+` : ''}    if (!rtVisible(ray, RT_MASK_ALL)) {
+        return vec3f(0.0);
+    }
+    return li.radiance * f * (rw / li.pdf);
+}
+` : ''}
+fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters || restir ? ', pxIndex: u32' : ''}) -> vec3f {
+${restir ? `    if (vertex == 0u) {
+        return ptRestirLd(p, ng, frame, wo, bp, pxIndex);
+    }
+` : ''}    let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
     let pointU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_LIGHT_POINT));
     let pick = rtSampleLight(selectU);
     if (pick.index == RT_NONE || !(pick.pmf > 0.0)) {
@@ -358,7 +404,7 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
     let origin = ptParams.origin.xyz;
     var ray = RtRay(origin, 0.0, normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y), PT_FAR);
 
-${counters || aovs || hooks ? `    let pxIndex = px.y * dims.x + px.x;
+${counters || aovs || hooks || restir ? `    let pxIndex = px.y * dims.x + px.x;
 ` : ''}${counters ? `    var termReason = 0u;
 ` : ''}${aovs ? `    var aovDone = false;
 ` : ''}    var radiance = vec3f(0.0);
@@ -452,7 +498,7 @@ ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
 ` : `        let frame = ptFrameFromNormal(${shadingNormal});
 `}        let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
-            radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters ? ', pxIndex' : ''});
+            radiance += beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters || restir ? ', pxIndex' : ''});
         }
 
 ${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' })};
@@ -474,7 +520,7 @@ ${tex ? `        cone = RtCone(coneW, cone.spread + select(PT_CONE_DIFFUSE_SPREA
             etaScale = etaScale * s.etap * s.etap;
 ${medium ? `            sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.0);
 ` : ''}        }
-        prevPdf = s.pdf;${stochastic ? `
+        prevPdf = ${restir ? 'select(s.pdf, 0.0, vertex == 0u)' : 's.pdf'};${stochastic ? `
         if ((s.flags & PT_FLAG_PROPORTIONAL) != 0u) {
             prevPdf = ptLayeredPdf(ptLayeredOf(bp), wo, s.wi, ptLayerSeed);
         }` : ''}
