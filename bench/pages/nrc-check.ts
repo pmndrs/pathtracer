@@ -118,6 +118,8 @@ try {
   const plainDepthLimited = (E * (1 - RHO ** (maxDepth + 1))) / (1 - RHO);
   const ok = meanRel <= tol && worst <= tolMax && deviceErrors.length === 0;
   await drainDevice(device);
+  // A miss must fail the run: the first report wins, so throw before reporting a pass.
+  if (!ok) throw new Error(`nrc-check: mean ${mean.toFixed(4)} vs ${expected} (rel ${meanRel.toExponential(2)}), worst pixel rel ${worst.toExponential(2)}${deviceErrors.length ? `; device errors: ${deviceErrors.join('; ')}` : ''}`);
   reportResult(
     {
       scene: 'nrc-check',
@@ -129,7 +131,6 @@ try {
     },
     { adapter: adapterSummary, deviceErrors },
   );
-  if (!ok) throw new Error(`nrc-check: mean ${mean.toFixed(4)} vs ${expected} (rel ${meanRel.toExponential(2)}), worst pixel rel ${worst.toExponential(2)}${deviceErrors.length ? `; device errors: ${deviceErrors.join('; ')}` : ''}`);
 } catch (error) {
   reportError(error, { adapter: adapterSummary, deviceErrors });
 }

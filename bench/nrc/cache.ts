@@ -102,11 +102,16 @@ fn nrcTrainSlot(pixel: u32, sampleIndex: u32) -> u32 {
     let x = pixel % nrcHook.width;
     let y = pixel / nrcHook.width;
     if (nrcHook.tileEvery > 0u) {
-        let tile = (y / 8u) * nrcHook.tilesX + x / 8u;
-        if (tile % nrcHook.tileEvery != frame % nrcHook.tileEvery) {
+        // Diagonal pattern: tile (tx, ty) trains when (tx + block * ty) % tileEvery == frame % tileEvery, so each row shifts by
+        // block tiles (training tiles scatter instead of lining up in columns when tilesX is a multiple of tileEvery) and
+        // every tile trains once per tileEvery frames. One selected tile per tileEvery-wide group of a row: a unique slot.
+        let tx = x / 8u;
+        let ty = y / 8u;
+        if ((tx + nrcHook.block * ty) % nrcHook.tileEvery != frame % nrcHook.tileEvery) {
             return 0u;
         }
-        return (tile / nrcHook.tileEvery) * 64u + (y % 8u) * 8u + x % 8u + 1u;
+        let groupsX = (nrcHook.tilesX + nrcHook.tileEvery - 1u) / nrcHook.tileEvery;
+        return (ty * groupsX + tx / nrcHook.tileEvery) * 64u + (y % 8u) * 8u + x % 8u + 1u;
     }
     let b = nrcHook.block;
     if ((x % b) + (y % b) * b != frame % (b * b)) {
@@ -115,8 +120,8 @@ fn nrcTrainSlot(pixel: u32, sampleIndex: u32) -> u32 {
     return (y / b) * nrcHook.slotsX + x / b + 1u;
 }
 
-// Appends a query; returns its index + 1 (0 when full).
-fn nrcQuery(v: PtPathVertex) -> u32 {
+// Appends a query; returns its index + 1 (0 when full). flag 1: the resolve pass adds it to the image; 2: training only.
+fn nrcQuery(v: PtPathVertex, flag: f32) -> u32 {
     let q = atomicAdd(&nrcCount[0], 1u);
     if (q >= nrcHook.capacity) {
         return 0u;
@@ -125,7 +130,7 @@ fn nrcQuery(v: PtPathVertex) -> u32 {
     nrcRecords[b] = vec4f(v.position, f32(v.pixel));
     nrcRecords[b + 1u] = vec4f(nrcSpherical(v.wo), nrcSpherical(v.normal));
     nrcRecords[b + 2u] = vec4f(v.albedo, 1.0);
-    nrcRecords[b + 3u] = vec4f(v.throughput, 1.0);
+    nrcRecords[b + 3u] = vec4f(v.throughput, flag);
     return q + 1u;
 }
 
@@ -133,22 +138,28 @@ fn ptOnVertex(v: PtPathVertex) -> u32 {
     let train = nrcTrainSlot(v.pixel, v.sampleIndex);
     if (train != 0u) {
         let slot = train - 1u;
+        // The image gets the same estimate as every other pixel: a display query at the cache vertex (resolved into the
+        // image), and the fix-up pass later removes what the path gathers beyond it. The path itself trains to vertex M.
+        let display = nrcHook.stopDepth < nrcHook.trainDepth;
         if (v.depth < nrcHook.trainDepth) {
             let b = (v.depth * nrcHook.slots + slot) * ${NRC_RECORD_VEC4}u;
             nrcTrain[b] = vec4f(v.position, f32(v.pixel));
             nrcTrain[b + 1u] = vec4f(nrcSpherical(v.wo), nrcSpherical(v.normal));
             nrcTrain[b + 2u] = vec4f(v.albedo, 1.0);
             nrcTrain[b + 3u] = vec4f(v.throughput, 1.0);
+            if (display && v.depth == nrcHook.stopDepth) {
+                _ = nrcQuery(v, 1.0);
+            }
             return PT_HOOK_CONTINUE;
         }
         let s0 = slot * (nrcHook.trainDepth + 1u);
-        nrcSums[s0] = vec4f(nrcSums[s0].xyz, f32(nrcQuery(v)));
+        nrcSums[s0] = vec4f(nrcSums[s0].xyz, f32(nrcQuery(v, select(1.0, 2.0, display))));
         return PT_HOOK_TERMINATE;
     }
     if (v.depth < nrcHook.stopDepth) {
         return PT_HOOK_CONTINUE;
     }
-    _ = nrcQuery(v);
+    _ = nrcQuery(v, 1.0);
     return PT_HOOK_TERMINATE;
 }
 
@@ -330,9 +341,36 @@ fn nrcResolve(@builtin(global_invocation_id) gid: vec3u) {
   }
   if (r >= min(count[0], p.capacity)) { return; }
   let b = r * ${NRC_RECORD_VEC4}u;
+  if (queries[b + 3u].w != 1.0) { return; } // a training path's tail: training only
   let px = u32(queries[b].w);
   let beta = queries[b + 3u].xyz;
   accum[px] = accum[px] + vec4f(beta * max(preds[r].xyz, vec3f(0.0)), 0.0);
+}
+`;
+
+/**
+ * Inline training, after the resolve: a training path's pixel already holds everything the path gathered (the integrator added it);
+ * remove what it gathered beyond the cache vertex K (reported values with index > K, summed per path by ptOnRadiance), so the pixel
+ * keeps the same estimate as every other pixel (its display query at K was resolved into the image). Only when K < M.
+ */
+const FIXUP_WGSL = /* wgsl */ `
+struct P { slots: u32, queryDepth: u32, trainDepth: u32, _c: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> verts: array<vec4f>;
+@group(0) @binding(2) var<storage, read> sums: array<vec4f>;
+@group(0) @binding(3) var<storage, read_write> accum: array<vec4f>;
+
+@compute @workgroup_size(64)
+fn nrcFixup(@builtin(global_invocation_id) gid: vec3u) {
+  let slot = gid.x;
+  if (slot >= p.slots || p.queryDepth >= p.trainDepth) { return; }
+  let v0 = slot * ${NRC_RECORD_VEC4}u; // layer 0: the primary vertex (no record: the camera ray escaped, nothing to remove)
+  if (verts[v0 + 3u].w == 0.0) { return; }
+  let s0 = slot * (p.trainDepth + 1u);
+  var beyond = vec3f(0.0);
+  for (var j = p.queryDepth + 1u; j <= p.trainDepth; j++) { beyond += sums[s0 + j].xyz; }
+  let px = u32(verts[v0].w);
+  accum[px] = accum[px] - vec4f(beyond, 0.0);
 }
 `;
 
@@ -419,6 +457,10 @@ export class NrcCache {
   private readonly trainHookGroup!: GPUBindGroup;
   private readonly targetParams!: GPUBuffer;
   private readonly resolveParams!: GPUBuffer;
+  private readonly queryCapacity!: number;
+  private readonly fixupPipeline!: GPUComputePipeline | null;
+  private readonly fixupGroup!: GPUBindGroup | null;
+  private readonly fixupParams!: GPUBuffer | null;
   private frame = 0;
 
   private constructor(init: Record<string, unknown>) {
@@ -438,8 +480,7 @@ export class NrcCache {
     const slotsX = Math.ceil(film.width / B);
     const tileEvery = s.trainSelect === 'tile' ? B * B : 0;
     const tilesX = Math.ceil(film.width / 8);
-    const tiles = tilesX * Math.ceil(film.height / 8);
-    const trainPaths = !inline ? s.trainWidth * s.trainHeight : tileEvery ? Math.ceil(tiles / tileEvery) * 64 : slotsX * Math.ceil(film.height / B);
+    const trainPaths = !inline ? s.trainWidth * s.trainHeight : tileEvery ? Math.ceil(film.height / 8) * Math.ceil(tilesX / tileEvery) * 64 : slotsX * Math.ceil(film.height / B);
     const hooks: PtHooksOptions = inline ? { wgsl: NRC_HOOK_INLINE_WGSL, bindings: NRC_HOOK_INLINE_BINDINGS } : { wgsl: NRC_HOOK_WGSL, bindings: NRC_HOOK_BINDINGS };
     const hooked = (label: string): PtMegakernelOptions => ({ ...plain.options, integrator: { ...plain.options.integrator, hooks }, label });
     const [render, trainer] = await Promise.all([PtMegakernel.create(device, caps, hooked('nrc render')), inline ? Promise.resolve(null) : PtMegakernel.create(device, caps, hooked('nrc trainer'))]);
@@ -467,8 +508,10 @@ export class NrcCache {
     const trainCount = buf('nrc training count', 16);
     const tailCount = inline ? null : buf('nrc tail count', 16);
     if (tailCount) device.queue.writeBuffer(tailCount, 0, new Uint32Array([trainPaths, 0, 0, 0]));
-    const queries = buf('nrc queries', pixels * RECORD_BYTES);
-    const preds = buf('nrc predictions', pixels * 16);
+    // One query per pixel, plus (inline) a training path's display query and tail: up to two per training path.
+    const queryCapacity = pixels + (inline ? trainPaths : 0);
+    const queries = buf('nrc queries', queryCapacity * RECORD_BYTES);
+    const preds = buf('nrc predictions', queryCapacity * 16);
     const queryCount = buf('nrc query count', 16);
     const box = buf('nrc box', 32, UNIFORM | COPY_DST);
     const lo = bounds.min;
@@ -478,7 +521,7 @@ export class NrcCache {
     // Hook params: replay slots 0..M (trainer run k), slot M+1 the render kernel; inline uses slot M+1 only.
     const hookParams = buf('nrc hook params', (M + 2) * HOOK_SLOT, UNIFORM | COPY_DST);
     for (let k = 0; k <= M; k++) device.queue.writeBuffer(hookParams, k * HOOK_SLOT, new Uint32Array([1, k, k * trainPaths, 0]));
-    const renderParams = new Uint32Array([0, s.queryDepth, 0, pixels, M, film.width, B, slotsX, trainPaths, tileEvery, tilesX, 0]);
+    const renderParams = new Uint32Array([0, s.queryDepth, 0, queryCapacity, M, film.width, B, slotsX, trainPaths, tileEvery, tilesX, 0]);
     device.queue.writeBuffer(hookParams, (M + 1) * HOOK_SLOT, renderParams);
     const paramsEntry = (k: number) => ({ binding: 0, resource: { buffer: hookParams, offset: k * HOOK_SLOT, size: inline ? 48 : 16 } });
     let trainGroups: GPUBindGroup[] = [];
@@ -497,7 +540,7 @@ export class NrcCache {
     const mlp = await MlpEngine.create(device, {
       precision: s.precision,
       capacity: s.batch,
-      inferCapacity: Math.max(pixels, trainPaths),
+      inferCapacity: Math.max(queryCapacity, trainPaths),
       useEma: s.useEma,
       train: { ...DEFAULT_TRAIN, learningRate: s.learningRate },
       trainHooks: NRC_TRAIN_HOOKS,
@@ -524,15 +567,25 @@ export class NrcCache {
     // nrcFinish uses the params and the count only (auto layout drops the rest).
     const finishGroup = device.createBindGroup({ layout: finishPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: targetParams } }, { binding: targetBuffers.length - 1, resource: { buffer: trainCount } }] });
     const resolveParams = buf('nrc resolve params', 16, UNIFORM | COPY_DST);
-    device.queue.writeBuffer(resolveParams, 0, new Uint32Array([pixels, 0, 0, 0]));
+    device.queue.writeBuffer(resolveParams, 0, new Uint32Array([queryCapacity, 0, 0, 0]));
     const resolveGroup = device.createBindGroup({
       layout: resolvePipeline.getBindGroupLayout(0),
       entries: [resolveParams, queries, preds, queryCount, render.accumulator as GPUBuffer].map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
+    // Inline training: the fix-up that gives training pixels the same image estimate as the rest.
+    let fixupPipeline: GPUComputePipeline | null = null;
+    let fixupGroup: GPUBindGroup | null = null;
+    let fixupParams: GPUBuffer | null = null;
+    if (inline) {
+      fixupPipeline = await device.createComputePipelineAsync({ label: 'nrc fixup', layout: 'auto', compute: { module: device.createShaderModule({ label: 'nrc fixup', code: FIXUP_WGSL }), entryPoint: 'nrcFixup' } });
+      fixupParams = buf('nrc fixup params', 16, UNIFORM | COPY_DST);
+      device.queue.writeBuffer(fixupParams, 0, new Uint32Array([trainPaths, s.queryDepth, M, 0]));
+      fixupGroup = device.createBindGroup({ layout: fixupPipeline.getBindGroupLayout(0), entries: [fixupParams, trainVerts, trainSums as GPUBuffer, render.accumulator as GPUBuffer].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+    }
 
     return new NrcCache({
       device, render, trainer, mlp, settings: s, width: film.width, height: film.height, trainPaths, hookParams, trainGroups, trainVerts, trainSums, trainRadiance, tailPred, trainSet, trainCount, tailCount, queries, preds, queryCount, box,
-      targetsPipeline, finishPipeline, resolvePipeline, targetsGroup, finishGroup, resolveGroup, tailInferGroup, renderInferGroup, trainHookGroup, targetParams, resolveParams,
+      targetsPipeline, finishPipeline, resolvePipeline, targetsGroup, finishGroup, resolveGroup, tailInferGroup, renderInferGroup, trainHookGroup, targetParams, resolveParams, fixupPipeline, fixupGroup, fixupParams, queryCapacity,
     });
   }
 
@@ -563,6 +616,7 @@ export class NrcCache {
   setQueryDepth(depth: number): void {
     const M = this.settings.trainDepth;
     this.device.queue.writeBuffer(this.hookParams, (M + 1) * HOOK_SLOT + 4, new Uint32Array([depth]));
+    if (this.fixupParams) this.device.queue.writeBuffer(this.fixupParams, 4, new Uint32Array([depth]));
   }
 
   /**
@@ -621,7 +675,12 @@ export class NrcCache {
       const pass = encoder.beginComputePass({ label: 'nrc resolve' });
       pass.setPipeline(this.resolvePipeline);
       pass.setBindGroup(0, this.resolveGroup);
-      pass.dispatchWorkgroups(Math.ceil((this.width * this.height) / 64));
+      pass.dispatchWorkgroups(Math.ceil(this.queryCapacity / 64));
+      if (this.fixupPipeline && this.fixupGroup) {
+        pass.setPipeline(this.fixupPipeline);
+        pass.setBindGroup(0, this.fixupGroup);
+        pass.dispatchWorkgroups(Math.ceil(this.trainPaths / 64));
+      }
       pass.end();
     }
   }
@@ -656,7 +715,7 @@ export class NrcCache {
     this.render.destroy();
     this.trainer?.destroy();
     this.mlp.destroy();
-    for (const b of [this.hookParams, this.trainVerts, this.trainSums, this.trainRadiance, this.tailPred, this.trainSet, this.trainCount, this.tailCount, this.queries, this.preds, this.queryCount, this.box, this.targetParams, this.resolveParams]) b?.destroy();
+    for (const b of [this.hookParams, this.trainVerts, this.trainSums, this.trainRadiance, this.tailPred, this.trainSet, this.trainCount, this.tailCount, this.queries, this.preds, this.queryCount, this.box, this.targetParams, this.resolveParams, this.fixupParams]) b?.destroy();
   }
 }
 
