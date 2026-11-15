@@ -75,6 +75,36 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   alphaPolicy?: PtAlphaPolicy;
   /**
+   * Shadow-ray handling of alpha MASK cutouts (R2b; only with `alphaMask`). `'policy'` (default): as `alphaPolicy` says (exact closest-hit loop, or solid any-hit),
+   * the kernel text is unchanged. The others replace the shadow side of the policy (the indirect side still follows `alphaPolicy`) and are about recovering
+   * the light the solid walk loses at (almost) its cost; see DIVERGES V140-V149 and TASKS R2b for the A/B.
+   *  - `'roulette'`: UNBIASED. The solid any-hit walk runs first; when it says blocked, with probability `alphaRoulette` (q) the exact closest-hit loop runs and a
+   *    visible result counts 1/q. Solid blockers are a superset of the exact ones, so the estimator is exact in the mean; the cost is noise.
+   *  - `'coverage'`: BIASED, one closest-hit walk, no texture fetch, no loop: the first hit's material transmits `1 - alphaCoverage[material]` (a solid material
+   *    has coverage 1). A ray through several cards sees only the first one's transmittance (too bright behind a second card).
+   *  - `'stochastic'`: closest-hit loop without texture fetches: at every hit the ray is blocked with probability `alphaCoverage[material]`, else it steps over the card
+   *    (stochastic opacity with the mean coverage in place of the texel). Unbiased for holes independent between cards.
+   *  - `'firstK'`: BIASED dark: the first `alphaFirstK` cutout hits are tested exactly (closest hit + texture), the rest of the ray is a solid any-hit walk.
+   *  - `'transmit'`: BIASED by a constant, at about the solid walk's cost: the adapter puts every cutout card in an instance with mask `alphaMixedMask`. A shadow ray is an
+   *    any-hit walk over everything else (blocked: 0), then one over the cards only: blocked by cards alone counts `alphaTransmit` (beta, default 0.5 = 1 - the mean coverage)
+   *    instead of 0. Right on average when beta is the share of card-blocked rays that the exact test would pass (calibrate it: the mean image is linear in beta),
+   *    blind to which texel was hit, so the hole pattern of a card's shadow becomes a uniform partial shadow.
+   *  - `'classified'`: EXACT (to the classification's conservatism): the scene was split by the adapter into `alphaMixedMask` instances (cards whose triangles
+   *    straddle the cutoff) and everything else (solid, the fully opaque triangles of cards included). The shadow ray is a solid any-hit over the second set,
+   *    then the exact loop over the first only.
+   */
+  alphaShadow?: PtAlphaShadow;
+  /** `alphaShadow: 'roulette'`: probability q that a solid-blocked shadow ray is re-tested exactly (default 0.25). */
+  alphaRoulette?: number;
+  /** `alphaShadow: 'firstK'`: number of cutout hits tested exactly (default 1). */
+  alphaFirstK?: number;
+  /** `alphaShadow: 'coverage' | 'stochastic'`: per-material fraction of the card that is solid (1 for a non-cutout material), indexed by material id (bench: `alphaCoverageOf`). */
+  alphaCoverage?: readonly number[];
+  /** `alphaShadow: 'transmit'`: visibility of a shadow ray blocked only by cutout cards (default 0.5). */
+  alphaTransmit?: number;
+  /** `alphaShadow: 'classified'`: the bvh instance mask bit of the mixed cards (default 0x04); all other instances are solid. */
+  alphaMixedMask?: number;
+  /**
    * OpenPBR mode (P2.21, P2.22, P2.30): the scene has `openpbr` materials. Selects the OpenPBR material adapter (`ptBsdfFromOpenPbr`) and compiles
    * only the lobes `features` names: stochastic metal/dielectric mix, thin-walled dielectric, layered dielectric-over-diffuse
    * (`layered.layering` albedo | stochastic) and the absorbing interior medium (path state: Beer's law over the distance to the exit
@@ -146,6 +176,9 @@ export function ptLodSnippets(o: ResolvedIntegratorOptions, indent: string): { d
 }
 
 export type PtAlphaPolicy = 'exact' | 'opaqueShadow' | 'opaqueIndirect' | 'opaqueSecondary';
+export type PtAlphaShadow = 'policy' | 'roulette' | 'coverage' | 'stochastic' | 'firstK' | 'transmit' | 'classified';
+/** Resolved shadow mode of alpha cutouts: `exact` (closest-hit loop), `solid` (any-hit walk), or one of the R2b modes. */
+export type PtAlphaShadowMode = 'exact' | 'solid' | Exclude<PtAlphaShadow, 'policy'>;
 
 export interface ResolvedIntegratorOptions {
   sampler: PtSamplerKind;
@@ -161,6 +194,13 @@ export interface ResolvedIntegratorOptions {
   alphaMask: boolean;
   /** Always 'exact' without `alphaMask`. */
   alphaPolicy: PtAlphaPolicy;
+  /** Shadow handling of cutouts (R2b). Always 'exact' without `alphaMask`. */
+  alphaShadow: PtAlphaShadowMode;
+  alphaRoulette: number;
+  alphaFirstK: number;
+  alphaCoverage: readonly number[];
+  alphaMixedMask: number;
+  alphaTransmit: number;
   materials: PtMaterialOptions | null;
   hooks: PtHooksOptions | null;
   counters: boolean;
@@ -174,11 +214,28 @@ export interface ResolvedIntegratorOptions {
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir };
+  const alphaMask = (o.alphaMask ?? false) && (o.textures ?? false);
+  const alphaPolicy: PtAlphaPolicy = alphaMask ? o.alphaPolicy ?? 'exact' : 'exact';
+  const override = o.alphaShadow ?? 'policy';
+  const alphaShadow: PtAlphaShadowMode = !alphaMask ? 'exact' : override !== 'policy' ? override : alphaPolicy === 'exact' || alphaPolicy === 'opaqueIndirect' ? 'exact' : 'solid';
+  const alphaRoulette = o.alphaRoulette ?? 0.25;
+  if (alphaShadow === 'roulette' && !(alphaRoulette > 0 && alphaRoulette <= 1)) throw new RangeError(`integrator.alphaRoulette must be in (0, 1], got ${alphaRoulette}`);
+  const alphaFirstK = Math.floor(o.alphaFirstK ?? 1);
+  if (alphaShadow === 'firstK' && !(alphaFirstK >= 1 && alphaFirstK <= 32)) throw new RangeError(`integrator.alphaFirstK must be in 1..32, got ${alphaFirstK}`);
+  const alphaCoverage = o.alphaCoverage ?? [];
+  if ((alphaShadow === 'coverage' || alphaShadow === 'stochastic') && alphaCoverage.length === 0) throw new RangeError(`integrator.alphaShadow '${alphaShadow}' needs alphaCoverage (one fraction per material)`);
+  const alphaMixedMask = o.alphaMixedMask ?? 0x04;
+  const alphaTransmit = o.alphaTransmit ?? 0.5;
+  if (alphaShadow === 'transmit' && !(alphaTransmit >= 0 && alphaTransmit <= 1)) throw new RangeError(`integrator.alphaTransmit must be in [0, 1], got ${alphaTransmit}`);
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
-export const ptMaskShadow = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && (o.alphaPolicy === 'exact' || o.alphaPolicy === 'opaqueIndirect');
+export const ptMaskShadow = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && o.alphaShadow === 'exact';
+/** Shadow rays use the R2b weighted visibility `ptShadowWeight` (a weight in [0, 1/q], not a bool). */
+export const ptShadowWeighted = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && o.alphaShadow !== 'exact' && o.alphaShadow !== 'solid';
+/** The shadow kernel / path needs the scene copy (material and texture fetches) for its alpha handling. */
+export const ptShadowNeedsScene = (o: ResolvedIntegratorOptions): boolean => ptMaskShadow(o) || (ptShadowWeighted(o) && o.alphaShadow !== 'coverage' && o.alphaShadow !== 'stochastic' && o.alphaShadow !== 'transmit');
 /** Extension rays after the first scattering vertex honour cutouts. Camera rays always do. */
 export const ptMaskIndirect = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && (o.alphaPolicy === 'exact' || o.alphaPolicy === 'opaqueShadow');
 
@@ -295,6 +352,125 @@ fn ptVisibleMasked(ray0: RtRay, mask: u32) -> bool {
 
 `;
 
+const f32Lit = (v: number): string => (Number.isInteger(v) ? `${v}.0` : String(Math.fround(v)));
+const hex32 = (v: number): string => `0x${(v >>> 0).toString(16)}u`;
+
+/**
+ * R2b: weighted shadow-ray visibility for cutouts, `ptShadowWeight(ray, h) -> f32` (0 blocked, 1 visible, 1/q for a roulette survivor; the caller multiplies the
+ * light contribution by it). `h` seeds the per-ray random number (`ptAlphaRand`). Shared by the megakernel's NEE and the wavefront shadow kernel; '' unless
+ * `ptShadowWeighted(o)`, so every other kernel is unchanged. Needs `PT_VISIBLE_MASKED_WGSL` for the modes that test the texture (`ptShadowNeedsScene`).
+ */
+export function ptShadowWeightWgsl(o: ResolvedIntegratorOptions): string {
+  if (!ptShadowWeighted(o)) return '';
+  const rand = `// per-ray uniform number in [0, 1) (pcg3d, Jarzynski and Olano 2020)
+fn ptAlphaRand(a: u32, b: u32, c: u32) -> f32 {
+    var v = vec3u(a, b, c) * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> vec3u(16u);
+    v.x += v.y * v.z;
+    return f32(v.x >> 8u) * 5.9604644775390625e-8;
+}
+
+`;
+  const advance = `        let p = ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction));
+        ray = RtRay(p, 0.0, ray.direction, ray.tMax - length(p - ray.origin));
+        if (ray.tMax <= 0.0) {
+            return 1.0;
+        }
+`;
+  const n = o.alphaCoverage.length;
+  const coverageTable = (): string => `var<private> PT_ALPHA_COVERAGE: array<f32, ${n}> = array<f32, ${n}>(${o.alphaCoverage.map((c) => f32Lit(Math.min(1, Math.max(0, c)))).join(', ')});
+fn ptAlphaCoverage(material: u32) -> f32 {
+    return select(1.0, PT_ALPHA_COVERAGE[min(material, ${n - 1}u)], material < ${n}u);
+}
+
+`;
+  switch (o.alphaShadow) {
+    case 'roulette':
+      return `${rand}const PT_ALPHA_Q: f32 = ${f32Lit(o.alphaRoulette)};
+fn ptShadowWeight(ray: RtRay, h: vec3u) -> f32 {
+    if (rtVisible(ray, RT_MASK_ALL)) {
+        return 1.0;
+    }
+    if (ptAlphaRand(h.x, h.y, h.z) >= PT_ALPHA_Q) {
+        return 0.0;
+    }
+    return select(0.0, 1.0 / PT_ALPHA_Q, ptVisibleMasked(ray, RT_MASK_ALL));
+}
+
+`;
+    case 'coverage':
+      return `${coverageTable()}fn ptShadowWeight(ray: RtRay, h: vec3u) -> f32 {
+    let hit = rtClosest(ray, RT_MASK_ALL);
+    if (hit.t < 0.0) {
+        return 1.0;
+    }
+    return 1.0 - ptAlphaCoverage(hit.material);
+}
+
+`;
+    case 'stochastic':
+      return `${rand}${coverageTable()}fn ptShadowWeight(ray0: RtRay, h: vec3u) -> f32 {
+    var ray = ray0;
+    for (var i = 0u; i < PT_MASK_SKIPS; i++) {
+        let hit = rtClosest(ray, RT_MASK_ALL);
+        if (hit.t < 0.0) {
+            return 1.0;
+        }
+        let c = ptAlphaCoverage(hit.material);
+        if (c >= 1.0 || ptAlphaRand(h.x, h.y, h.z + i) < c) {
+            return 0.0;
+        }
+${advance}    }
+    return 0.0;
+}
+
+`;
+    case 'firstK':
+      return `const PT_ALPHA_K: u32 = ${o.alphaFirstK}u;
+fn ptShadowWeight(ray0: RtRay, h: vec3u) -> f32 {
+    var ray = ray0;
+    for (var i = 0u; i < PT_ALPHA_K; i++) {
+        let hit = rtClosest(ray, RT_MASK_ALL);
+        if (hit.t < 0.0) {
+            return 1.0;
+        }
+        if (!ptMaskedOut(hit, ray)) {
+            return 0.0;
+        }
+${advance}    }
+    return select(0.0, 1.0, rtVisible(ray, RT_MASK_ALL));
+}
+
+`;
+    case 'transmit':
+      return `const PT_ALPHA_CARDS: u32 = ${hex32(o.alphaMixedMask)};
+const PT_ALPHA_BETA: f32 = ${f32Lit(o.alphaTransmit)};
+fn ptShadowWeight(ray: RtRay, h: vec3u) -> f32 {
+    if (!rtVisible(ray, RT_MASK_ALL & ~PT_ALPHA_CARDS)) {
+        return 0.0;
+    }
+    return select(1.0, PT_ALPHA_BETA, !rtVisible(ray, PT_ALPHA_CARDS));
+}
+
+`;
+    case 'classified':
+      return `const PT_ALPHA_MIXED: u32 = ${hex32(o.alphaMixedMask)};
+fn ptShadowWeight(ray: RtRay, h: vec3u) -> f32 {
+    if (!rtVisible(ray, RT_MASK_ALL & ~PT_ALPHA_MIXED)) {
+        return 0.0;
+    }
+    return select(0.0, 1.0, ptVisibleMasked(ray, PT_ALPHA_MIXED));
+}
+
+`;
+    default:
+      return '';
+  }
+}
+
 /** The integrator module text, to append after the raytracer module, the light sampling, the Owen-Sobol functions, the BSDF, its adapter and the sampler. */
 export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const o = resolveIntegratorOptions(options);
@@ -302,6 +478,8 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const mask = o.alphaMask;
   const maskShadow = ptMaskShadow(o);
   const maskIndirect = ptMaskIndirect(o);
+  const shadowWeighted = ptShadowWeighted(o);
+  const shadowWeightedScene = shadowWeighted && ptShadowNeedsScene(o);
   const shadingNormal = tex ? 'shadingN' : 'surf.shadingNormal';
   const mats = o.materials;
   const layered = !!mats?.features.layered;
@@ -336,7 +514,7 @@ ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> pt
 ` : ''}
 ${ptCommonHeadWgsl(o)}
 
-${maskShadow ? PT_VISIBLE_MASKED_WGSL : ''}${PT_MIS_WGSL}
+${maskShadow || shadowWeightedScene ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
@@ -402,15 +580,19 @@ ${restir ? `    if (vertex == 0u) {
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);
     }
 ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
-` : ''}    if (!${maskShadow ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
+` : ''}${shadowWeighted ? `    let vis = ptShadowWeight(ray, vec3u(pixelSeed, sampleIndex, vertex));
+    if (!(vis > 0.0)) {
         return vec3f(0.0);
     }
-    let pl = pick.pmf * li.pdf;
+` : `    if (!${maskShadow ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
+        return vec3f(0.0);
+    }
+`}    let pl = pick.pmf * li.pdf;
     var w = 1.0;
     if (!li.delta) {
         w = ptMis(pl, e.pdf);
     }
-    return li.radiance * f * (w / pl);
+    return li.radiance * f * (w ${shadowWeighted ? '* vis ' : ''}/ pl);
 }
 
 ${PT_ESCAPED_WGSL}

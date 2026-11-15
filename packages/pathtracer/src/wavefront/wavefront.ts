@@ -21,10 +21,10 @@ import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
 import { ptApplyMode } from '../integrator/modes.ts';
-import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_PARAMS_BYTES, ptMaskShadow, ptShadowNeedsScene, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptHookWantsRadiance, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
-import { ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
+import { ptNeedsRayMasks, ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
 import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfPrimaryWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfSortWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
 
@@ -93,7 +93,7 @@ function usesScene(kernel: PtwfKernel, integrator: PtIntegratorOptions | undefin
   if (kernel === 'sortHit' || kernel === 'sortRay' || kernel === 'primary') return false;
   const o = resolveIntegratorOptions({ ...integrator, ...(textures ? { textures: true } : {}) });
   if (o.primary === 'vbuffer' && kernel === 'intersect') return true; // resolves the V-buffer texel through the scene copy's surface table
-  return o.alphaMask && (kernel === 'intersect' || (kernel === 'shadow' && ptMaskShadow(o)));
+  return o.alphaMask && (kernel === 'intersect' || (kernel === 'shadow' && ptShadowNeedsScene(o)));
 }
 export type PtwfKernel = PtwfBaseKernel | PtwfExtraKernel;
 /** The five kernels, plus (`integrator.materialLod: 'secondary'`, R1) `shadeSecondary`: the smaller shade kernel for depth >= `materialLodDepth` (the `shade` kernel then only runs depth < N), plus the settings' extra kernels. */
@@ -128,7 +128,7 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   const why = ptwfUnsupported(integratorOptions);
   if (why) throw new Error(`PtWavefront: unsupported: ${why}`);
   const t = { prune: options.prune, shorten: options.shortenNames, minify: options.minify };
-  const walk = rtModuleWgsl(caps, { ...options.format, rayMasks: false, traceSlot: { group: 0, firstBinding: 0 } });
+  const walk = rtModuleWgsl(caps, { ...options.format, rayMasks: ptNeedsRayMasks(options), traceSlot: { group: 0, firstBinding: 0 } });
   const full = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
   // Optional outputs (hooks, counters, AOVs; `integrator/outputs-wgsl.ts`) join the shade kernel only: it is the one that sees every vertex.
   const outputs = ptOutputsWgsl(resolveIntegratorOptions(integratorOptions), PTWF_BINDING.counters);

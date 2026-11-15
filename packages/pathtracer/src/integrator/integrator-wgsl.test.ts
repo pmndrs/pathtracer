@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -153,6 +153,45 @@ describe('integrator WGSL', () => {
       expect(both).toContain('depth == 0u && mat.alphaMode == RT_ALPHA_MASK');
       // no alphaMask: the policy is ignored
       expect(build({ ...o, integrator: { alphaPolicy: 'opaqueSecondary' } })).toBe(build(o));
+    });
+
+    it('alpha shadow (R2b): `policy` is the default text; each mode replaces only the shadow visibility; options without alphaMask change nothing', () => {
+      const o = { minify: false, shortenNames: false };
+      const exact = build({ ...o, integrator: { alphaMask: true } });
+      expect(build({ ...o, integrator: { alphaMask: true, alphaShadow: 'policy' } })).toBe(exact);
+      expect(build({ ...o, integrator: { alphaMask: true, alphaShadow: 'policy', alphaPolicy: 'opaqueShadow' } })).toBe(build({ ...o, integrator: { alphaMask: true, alphaPolicy: 'opaqueShadow' } }));
+      const roulette = build({ ...o, integrator: { alphaMask: true, alphaShadow: 'roulette', alphaRoulette: 0.125 } });
+      expect(roulette).toContain('fn ptShadowWeight(ray: RtRay, h: vec3u) -> f32');
+      expect(roulette).toContain('const PT_ALPHA_Q: f32 = 0.125;');
+      expect(roulette).toContain('ptVisibleMasked(ray, RT_MASK_ALL)'); // the exact loop is the correction
+      expect(roulette).toContain('let vis = ptShadowWeight(ray, vec3u(pixelSeed, sampleIndex, vertex));');
+      expect(roulette).toContain('(w * vis / pl)');
+      // the indirect side still follows alphaPolicy (exact by default: cutouts at depth >= 1 are tested)
+      expect(roulette).toContain('if (mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff)');
+      expect(build({ ...o, integrator: { alphaMask: true, alphaShadow: 'roulette', alphaPolicy: 'opaqueIndirect' } })).toContain('depth == 0u && mat.alphaMode == RT_ALPHA_MASK');
+      const coverage = build({ ...o, integrator: { alphaMask: true, alphaShadow: 'coverage', alphaCoverage: [1, 0.5, 0.25] } });
+      expect(coverage).toContain('var<private> PT_ALPHA_COVERAGE: array<f32, 3> = array<f32, 3>(1.0, 0.5, 0.25);');
+      expect(coverage).not.toContain('ptVisibleMasked'); // no texture fetch in the shadow ray
+      expect(coverage).not.toContain('ptAlphaRand');
+      const stochastic = build({ ...o, integrator: { alphaMask: true, alphaShadow: 'stochastic', alphaCoverage: [1, 0.5] } });
+      expect(stochastic).toContain('ptAlphaRand(h.x, h.y, h.z + i) < c');
+      expect(stochastic).not.toContain('ptVisibleMasked');
+      const firstK = build({ ...o, integrator: { alphaMask: true, alphaShadow: 'firstK', alphaFirstK: 2 } });
+      expect(firstK).toContain('const PT_ALPHA_K: u32 = 2u;');
+      expect(firstK).toContain('rtVisible(ray, RT_MASK_ALL)'); // the solid walk after the exact ones
+      const transmit = build({ ...o, integrator: { alphaMask: true, alphaShadow: 'transmit', alphaTransmit: 0.25 } });
+      expect(transmit).toContain('const PT_ALPHA_BETA: f32 = 0.25;');
+      expect(transmit).toContain('rtVisible(ray, RT_MASK_ALL & ~PT_ALPHA_CARDS)');
+      expect(transmit).not.toContain('ptVisibleMasked'); // no texture fetch, no loop
+      const classified = build({ ...o, integrator: { alphaMask: true, alphaShadow: 'classified', alphaMixedMask: 8 } });
+      expect(classified).toContain('const PT_ALPHA_MIXED: u32 = 0x8u;');
+      expect(classified).toContain('rtVisible(ray, RT_MASK_ALL & ~PT_ALPHA_MIXED)');
+      expect(classified).toContain('ptVisibleMasked(ray, PT_ALPHA_MIXED)');
+      // ignored without alphaMask; bad parameters throw
+      expect(build({ ...o, integrator: { alphaShadow: 'roulette' } })).toBe(build(o));
+      expect(() => resolveIntegratorOptions({ alphaMask: true, textures: true, alphaShadow: 'roulette', alphaRoulette: 0 })).toThrow(/alphaRoulette/);
+      expect(() => resolveIntegratorOptions({ alphaMask: true, textures: true, alphaShadow: 'coverage' })).toThrow(/alphaCoverage/);
+      expect(() => resolveIntegratorOptions({ alphaMask: true, textures: true, alphaShadow: 'firstK', alphaFirstK: 0 })).toThrow(/alphaFirstK/);
     });
 
     it('binds the arrays then their samplers after the two scene buffers, in group 1', () => {

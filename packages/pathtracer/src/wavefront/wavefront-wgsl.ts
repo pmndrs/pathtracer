@@ -21,7 +21,7 @@
  * Not yet (P3.3+): compaction, octant binning, material sorting, subgroup-aggregated appends. Refill and layers (P3.2) are the `PtwfConfig` variants of the
  * kernels: inline refill restarts a finished slot in the shade kernel, batch refill dispatches the camera kernel over the film from the args kernel's decision.
  */
-import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, ptShadowNeedsScene, ptShadowWeighted, ptShadowWeightWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } from '../integrator/outputs-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
@@ -385,14 +385,16 @@ ${medium ? `        st.beta = st.beta * exp(-st.sigma * hit.t);
 
 /** Shadow kernel: visibility of every shadow ray; a visible one adds its contribution to the pixel. Needs the raytracer module (walk; the scene copy with `ptVisibleMasked`, alpha MASK with an exact shadow policy). */
 export function ptwfShadowWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig = PTWF_PLAIN): string {
-  const masked = ptMaskShadow(resolveIntegratorOptions(options));
+  const o = resolveIntegratorOptions(options);
+  const masked = ptMaskShadow(o);
   // The optional radiance callback: the shade kernel stored (vertex, flags, sample, pixel) in the 4th shadow-ray section.
   const onRadiance = ptHookWantsRadiance(options.hooks);
+  const weighted = ptShadowWeighted(o);
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'count', 'queue', 'shadow'])}
-${masked ? `${ptCommonHeadWgsl(resolveIntegratorOptions(options))}
-${PT_VISIBLE_MASKED_WGSL}` : ''}${onRadiance ? `${ptHooksWgsl(options.hooks ?? null)}\n` : ''}${commonWgsl(wf)}
+${masked || weighted ? `${ptCommonHeadWgsl(o)}
+${masked || ptShadowNeedsScene(o) ? PT_VISIBLE_MASKED_WGSL : ''}${ptShadowWeightWgsl(o)}` : ''}${onRadiance ? `${ptHooksWgsl(options.hooks ?? null)}\n` : ''}${commonWgsl(wf)}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -405,12 +407,18 @@ fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index
     let r0 = ptwfShadowRay[path];
     let r1 = ptwfShadowRay[n + path];
     let r2 = ptwfShadowRay[2u * n + path];
-    if (${masked ? 'ptVisibleMasked' : 'rtVisible'}(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), RT_MASK_ALL)) {
+${weighted ? `    let vis = ptShadowWeight(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), vec3u(path ^ r0.x, r1.x, r0.z ^ r1.y));
+    if (vis > 0.0) {
+        ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2) * vis, 0.0);
+${onRadiance ? `        let info = ptwfShadowRay[3u * n + path];
+        ptOnRadiance(info.w, info.z, info.x, info.y, ptwfF3(r2) * vis);
+` : ''}    }
+` : `    if (${masked ? 'ptVisibleMasked' : 'rtVisible'}(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), RT_MASK_ALL)) {
         ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2), 0.0);
 ${onRadiance ? `        let info = ptwfShadowRay[3u * n + path];
         ptOnRadiance(info.w, info.z, info.x, info.y, ptwfF3(r2));
 ` : ''}    }
-}
+`}}
 `;
 }
 

@@ -99,6 +99,19 @@ describe('wavefront WGSL (P3.1)', () => {
     expect(indirect.shadow.code).toContain('ptVisibleMasked(RtRay(');
     // the policy means nothing without alphaMask: kernels are the plain textured ones
     expect(ptWavefrontBuild(caps, { ...tex, integrator: { alphaPolicy: 'opaqueSecondary' } }).intersect.code).toBe(ptWavefrontBuild(caps, tex).intersect.code);
+    // R2b alpha shadow modes: the shadow kernel weights the contribution; the scene copy is bound only where the mode fetches textures
+    const roulette = ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, alphaShadow: 'roulette' } });
+    expect(roulette.shadow.code).toContain('fn ptShadowWeight(');
+    expect(roulette.shadow.code).toContain('@group(1) @binding(0)');
+    expect(roulette.shadow.code).toContain('ptVisibleMasked(');
+    expect(roulette.shadow.code).toContain('ptwfF3(r2) * vis');
+    expect(roulette.intersect.code).toBe(exact.intersect.code); // the indirect side is the policy's (exact)
+    const coverage = ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, alphaShadow: 'coverage', alphaCoverage: [1, 0.5] } });
+    expect(coverage.shadow.code).toContain('PT_ALPHA_COVERAGE');
+    expect(coverage.shadow.code).not.toContain('@group(1)'); // walk only
+    const classified = ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, alphaShadow: 'classified' } });
+    expect(classified.shadow.code).toContain('@group(1) @binding(0)');
+    expect(ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, alphaShadow: 'policy' } }).shadow.code).toBe(exact.shadow.code);
     expect(ptwfUnsupported({ alphaMask: true, textures: true })).toBeNull();
     expect(ptwfUnsupported({ alphaMask: true, textures: true, counters: true })).toMatch(/counters/);
     expect(() => ptWavefrontBuild(caps, { ...tex, integrator: { alphaMask: true, counters: true } })).toThrow(/counters/);

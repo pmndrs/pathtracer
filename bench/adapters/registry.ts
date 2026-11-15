@@ -8,7 +8,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 export const ADAPTER_IDS = ['tgpt-wavefront', 'tgpt-megakernel', 'mutracer'] as const;
 export type AdapterId = (typeof ADAPTER_IDS)[number];
 /** Our own renderers: valid for `--renderers`, but not in the default competitor set. */
-export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer', 'pt-mk-packed', 'pt-wf-packed', 'pt-mk-lay-stoch', 'pt-mk-lay-int', 'pt-mk-lay-lut', 'pt-mk-lay-tex', 'pt-wf-lay-int', 'pt-wf-lay-lut', 'pt-wf-lay-tex', 'pt-mk-lod', 'pt-wf-lod', 'pt-wf-sg', 'pt-wf-sort-mat', 'pt-wf-sort-oct', 'pt-wf-sort-both', 'pt-wf-refill-sg', 'pt-wf-ordered', 'pt-wf-ordered-sg', 'pt-wf-ordered-l2', 'pt-wf-ordered-l4', 'pt-wf-refill-lod', 'pt-wf-ordered-lod', 'pt-auto'] as const;
+export const OWN_ADAPTER_IDS = ['pt-megakernel', 'pt-wavefront', 'pt-wf-refill', 'pt-wf-batch', 'pt-wf-refill-l2', 'pt-wf-refill-l4', 'pt-wf-batch-l2', 'pt-mk-shadow', 'pt-mk-indirect', 'pt-mk-secondary', 'pt-wf-shadow', 'pt-wf-indirect', 'pt-wf-secondary', 'pt-mk-vbuffer', 'pt-wf-vbuffer', 'pt-mk-packed', 'pt-wf-packed', 'pt-mk-lay-stoch', 'pt-mk-lay-int', 'pt-mk-lay-lut', 'pt-mk-lay-tex', 'pt-wf-lay-int', 'pt-wf-lay-lut', 'pt-wf-lay-tex', 'pt-mk-lod', 'pt-wf-lod', 'pt-mk-transmit', 'pt-mk-transmit0', 'pt-mk-transmit1', 'pt-wf-transmit', 'pt-wf-transmit0', 'pt-wf-transmit1', 'pt-mk-roulette', 'pt-mk-roulette10', 'pt-mk-roulette50', 'pt-mk-coverage', 'pt-mk-stochastic', 'pt-mk-firstk', 'pt-mk-firstk2', 'pt-mk-classified', 'pt-wf-roulette', 'pt-wf-roulette10', 'pt-wf-roulette50', 'pt-wf-coverage', 'pt-wf-stochastic', 'pt-wf-firstk', 'pt-wf-firstk2', 'pt-wf-classified''pt-wf-sg', 'pt-wf-sort-mat', 'pt-wf-sort-oct', 'pt-wf-sort-both', 'pt-wf-refill-sg', 'pt-wf-ordered', 'pt-wf-ordered-sg', 'pt-wf-ordered-l2', 'pt-wf-ordered-l4', 'pt-wf-refill-lod', 'pt-wf-ordered-lod', 'pt-auto'] as const;
 /** Wavefront scheduling presets (P3.2): the same adapter with `refill` / `layers` set, so `matrix.ts --interleave` can A/B them in one run. `--extra pt_refill=...` still overrides. */
 const WAVEFRONT_PRESETS = {
   'pt-wf-refill': { refill: 'inline' },
@@ -42,6 +42,29 @@ const ALPHA_PRESETS = {
   'pt-wf-shadow': { alphaPolicy: 'opaqueShadow', scheduler: 'wavefront' },
   'pt-wf-indirect': { alphaPolicy: 'opaqueIndirect', scheduler: 'wavefront' },
   'pt-wf-secondary': { alphaPolicy: 'opaqueSecondary', scheduler: 'wavefront' },
+  // R2b: the shadow side replaced (indirect rays stay exact), on both schedulers. `roulette` is unbiased (q = 0.25), `classified` exact, the rest biased.
+  'pt-mk-roulette': { alphaShadow: 'roulette' },
+  'pt-mk-roulette10': { alphaShadow: 'roulette', alphaRoulette: 0.1 },
+  'pt-mk-roulette50': { alphaShadow: 'roulette', alphaRoulette: 0.5 },
+  'pt-mk-coverage': { alphaShadow: 'coverage' },
+  'pt-mk-stochastic': { alphaShadow: 'stochastic' },
+  'pt-mk-firstk': { alphaShadow: 'firstK', alphaFirstK: 1 },
+  'pt-mk-firstk2': { alphaShadow: 'firstK', alphaFirstK: 2 },
+  'pt-mk-classified': { alphaShadow: 'classified' },
+  'pt-mk-transmit': { alphaShadow: 'transmit' },
+  'pt-mk-transmit0': { alphaShadow: 'transmit', alphaTransmit: 0 },
+  'pt-mk-transmit1': { alphaShadow: 'transmit', alphaTransmit: 1 },
+  'pt-wf-roulette': { alphaShadow: 'roulette', scheduler: 'wavefront' },
+  'pt-wf-roulette10': { alphaShadow: 'roulette', alphaRoulette: 0.1, scheduler: 'wavefront' },
+  'pt-wf-roulette50': { alphaShadow: 'roulette', alphaRoulette: 0.5, scheduler: 'wavefront' },
+  'pt-wf-coverage': { alphaShadow: 'coverage', scheduler: 'wavefront' },
+  'pt-wf-stochastic': { alphaShadow: 'stochastic', scheduler: 'wavefront' },
+  'pt-wf-firstk': { alphaShadow: 'firstK', alphaFirstK: 1, scheduler: 'wavefront' },
+  'pt-wf-firstk2': { alphaShadow: 'firstK', alphaFirstK: 2, scheduler: 'wavefront' },
+  'pt-wf-classified': { alphaShadow: 'classified', scheduler: 'wavefront' },
+  'pt-wf-transmit': { alphaShadow: 'transmit', scheduler: 'wavefront' },
+  'pt-wf-transmit0': { alphaShadow: 'transmit', alphaTransmit: 0, scheduler: 'wavefront' },
+  'pt-wf-transmit1': { alphaShadow: 'transmit', alphaTransmit: 1, scheduler: 'wavefront' },
 } as const;
 
 /** V-buffer primaries (P3.6): the same adapter with `primary: 'vbuffer'` (a bench rasteriser writes the V-buffer each sample), so `matrix.ts --interleave` can A/B it against traced primaries. */
@@ -116,6 +139,28 @@ export async function createAdapter(id: string, options: AdapterOptions = {}): P
     case 'pt-wf-shadow':
     case 'pt-wf-indirect':
     case 'pt-wf-secondary':
+    case 'pt-mk-transmit':
+    case 'pt-mk-transmit0':
+    case 'pt-mk-transmit1':
+    case 'pt-wf-transmit':
+    case 'pt-wf-transmit0':
+    case 'pt-wf-transmit1':
+    case 'pt-mk-roulette':
+    case 'pt-mk-roulette10':
+    case 'pt-mk-roulette50':
+    case 'pt-mk-coverage':
+    case 'pt-mk-stochastic':
+    case 'pt-mk-firstk':
+    case 'pt-mk-firstk2':
+    case 'pt-mk-classified':
+    case 'pt-wf-roulette':
+    case 'pt-wf-roulette10':
+    case 'pt-wf-roulette50':
+    case 'pt-wf-coverage':
+    case 'pt-wf-stochastic':
+    case 'pt-wf-firstk':
+    case 'pt-wf-firstk2':
+    case 'pt-wf-classified':
       return (await import('./pt-megakernel/index.ts')).createPtMegakernel({ ...ALPHA_PRESETS[id], ...options.pt }, id);
     case 'pt-mk-packed':
     case 'pt-wf-packed':

@@ -150,7 +150,8 @@ export function normalize3(v: Vec3): [number, number, number] {
 // ---------------------------------------------------------------------------------------------------------------
 
 /** Quad in the local XZ plane, centred on the origin, normal +Y. 4 vertices, 2 triangles. */
-export function tessellateQuad(size: readonly [number, number], uv?: TessellateOptions['uv']): TriangleMesh {
+export function tessellateQuad(size: readonly [number, number], uv?: TessellateOptions['uv'], segments?: readonly [number, number]): TriangleMesh {
+  if (segments && (segments[0] !== 1 || segments[1] !== 1)) return tessellateQuadGrid(size, uv, segments);
   const hx = size[0] / 2, hz = size[1] / 2;
   const mesh: TriangleMesh = {
     positions: new Float32Array([-hx, 0, hz, hx, 0, hz, hx, 0, -hz, -hx, 0, -hz]),
@@ -162,6 +163,36 @@ export function tessellateQuad(size: readonly [number, number], uv?: TessellateO
     // u = x / size_x + 1/2, v = z / size_z + 1/2: seen from above (+Y down) with -Z up the image, the texture reads upright.
     mesh.uvs = new Float32Array([0, sv, su, sv, su, 0, 0, 0]);
   }
+  return mesh;
+}
+
+/** `tessellateQuad` as an nx x nz grid (2 nx nz triangles, the cell diagonal runs like the plain quad's), same uv mapping: u = x / size_x + 1/2, v = z / size_z + 1/2. */
+function tessellateQuadGrid(size: readonly [number, number], uv: TessellateOptions['uv'] | undefined, segments: readonly [number, number]): TriangleMesh {
+  const [nx, nz] = segments;
+  if (!Number.isInteger(nx) || !Number.isInteger(nz) || nx < 1 || nz < 1) throw new RangeError(`tessellateQuad: segments must be positive integers, got ${nx} x ${nz}`);
+  const hx = size[0] / 2, hz = size[1] / 2;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const [su, sv] = uv?.scale ?? [1, 1];
+  for (let j = 0; j <= nz; j++) {
+    for (let i = 0; i <= nx; i++) {
+      // vertex (0, 0) is the plain quad's corner (-hx, 0, hz): x grows with i, z falls with j
+      positions.push(-hx + (size[0] * i) / nx, 0, hz - (size[1] * j) / nz);
+      normals.push(0, 1, 0);
+      uvs.push((su * i) / nx, sv * (1 - j / nz));
+    }
+  }
+  const indices: number[] = [];
+  const row = nx + 1;
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      const a = j * row + i;
+      indices.push(a, a + 1, a + 1 + row, a, a + 1 + row, a + row);
+    }
+  }
+  const mesh: TriangleMesh = { positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices) };
+  if (uv) mesh.uvs = new Float32Array(uvs);
   return mesh;
 }
 
@@ -307,7 +338,7 @@ export function tessellate(geometry: GeometryDesc, opts: TessellateOptions = {})
   if (opts.uv && geometry.type !== 'quad' && geometry.type !== 'sphere') throw new Error(`tessellate: uvs are only generated for quad and sphere, not '${geometry.type}'`);
   switch (geometry.type) {
     case 'quad':
-      return tessellateQuad(geometry.size, opts.uv);
+      return tessellateQuad(geometry.size, opts.uv, geometry.segments);
     case 'box':
       return tessellateBox(geometry.size);
     case 'sphere':

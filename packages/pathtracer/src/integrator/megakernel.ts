@@ -145,11 +145,16 @@ export function ptSecondaryIntegratorOptions(integrator: PtIntegratorOptions = {
   return { ...integrator, lodKernel: 'secondary', materials: mats ? { ...mats, features: ptReducedKernelFeatures(mats.features), reducedFrom: mats.features } : mats };
 }
 
+/** Instance masks are compiled out of the walk (speed) except for `alphaShadow: 'classified'`, whose shadow rays walk the mixed cards and the solid geometry separately (R2b). */
+export function ptNeedsRayMasks(options: { textures?: unknown; integrator?: PtIntegratorOptions }): boolean {
+  return resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) }).alphaShadow === 'classified' || resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) }).alphaShadow === 'transmit';
+}
+
 /** The raytracer module options both schedulers use for the walk (group 0) and the scene copy (group 1). */
-export function ptRaytracerModuleOptions(options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'textures' | 'scenePacking'>): Parameters<typeof rtModuleWgsl>[1] {
+export function ptRaytracerModuleOptions(options: Pick<PtMegakernelOptions, 'format' | 'layout' | 'textures' | 'scenePacking'> & { integrator?: PtIntegratorOptions }): Parameters<typeof rtModuleWgsl>[1] {
   return {
     ...options.format,
-    rayMasks: false,
+    rayMasks: ptNeedsRayMasks(options),
     traceSlot: { group: 0, firstBinding: 0 },
     scene: { slot: { group: 1, firstBinding: 0 }, layout: options.layout, ...(options.textures ? { textures: options.textures } : {}), ...(options.scenePacking ? { packing: options.scenePacking } : {}) },
   };

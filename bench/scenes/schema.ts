@@ -184,7 +184,7 @@ export type MaterialDesc =
   | { type: 'black' };
 
 export type GeometryDesc =
-  | { type: 'quad'; /** Size in local X and Z; normal is local +Y. */ size: readonly [number, number] }
+  | { type: 'quad'; /** Size in local X and Z; normal is local +Y. */ size: readonly [number, number]; /** Grid cells in X and Z (default 1 x 1: two triangles). A cutout card with finer geometry, R2b. */ segments?: readonly [number, number] }
   | { type: 'box'; size: Vec3 }
   | { type: 'sphere'; radius: number; /** UV-sphere tessellation; same triangles go to every renderer. */ segments: number; rings: number }
   | { type: 'triangles'; positions: readonly number[]; indices: readonly number[]; normals?: readonly number[] }

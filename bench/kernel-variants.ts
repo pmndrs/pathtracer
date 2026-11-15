@@ -3,6 +3,16 @@
 import type { Caps, SceneCopyPacking } from '@pmndrs/raytracer';
 import { ptMegakernelWgsl, ptRestirBuild, ptWavefrontBuild } from '@pmndrs/pathtracer';
 
+/** R2b cutout shadow modes (`integrator.alphaShadow`), shared by the megakernel and wavefront variant lists. */
+const ALPHA_SHADOW_VARIANTS = {
+  roulette: { alphaShadow: 'roulette' },
+  coverage: { alphaShadow: 'coverage', alphaCoverage: [1, 0.5] },
+  stochastic: { alphaShadow: 'stochastic', alphaCoverage: [1, 0.5] },
+  firstK: { alphaShadow: 'firstK', alphaFirstK: 1 },
+  transmit: { alphaShadow: 'transmit' },
+  classified: { alphaShadow: 'classified' },
+} as const;
+
 export type KernelVariants = Record<string, () => string>;
 
 /** Name -> builder of the shipped WGSL text for `caps`. Order is the print order. */
@@ -44,6 +54,8 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   variants['tex-mask'] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true } });
   // Alpha policy (R2): the exact kernel above is the default; these drop the cutout test for shadow rays and / or indirect extension rays.
   for (const alphaPolicy of ['opaqueShadow', 'opaqueIndirect', 'opaqueSecondary'] as const) variants[`tex-mask-${alphaPolicy}`] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy } });
+  // Cutout shadow modes (R2b): only the shadow visibility differs from `tex-mask`.
+  for (const [name, integrator] of Object.entries(ALPHA_SHADOW_VARIANTS)) variants[`tex-mask-${name}`] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, ...integrator } });
   // V-buffer primaries (P3.6): the first hit comes from a texture; the traced variants above are unchanged.
   variants.vbuffer = () => mk(caps, { format: {}, layout, integrator: { primary: 'vbuffer' } });
   variants['tex-mask-vbuffer'] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, primary: 'vbuffer' } });
@@ -81,6 +93,7 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     'tex-mask-opaqueShadow': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueShadow' } },
     'tex-mask-opaqueIndirect': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueIndirect' } },
     'tex-mask-opaqueSecondary': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, alphaPolicy: 'opaqueSecondary' } },
+    ...Object.fromEntries(Object.entries(ALPHA_SHADOW_VARIANTS).map(([name, integrator]) => [`tex-mask-${name}`, { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, ...integrator } }])),
     // V-buffer primaries (P3.6): the camera kernel reads the jitter from the params, the intersect kernel resolves depth-0 paths from the V-buffer.
     vbuffer: { format: {}, layout, integrator: { primary: 'vbuffer' } },
     'tex-mask-vbuffer': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, primary: 'vbuffer' } },

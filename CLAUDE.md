@@ -691,3 +691,13 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Hash-grid cache (M7, `bench/nrc/hash-grid.ts`): a cell with one or two samples shows its noise as a blotch the size of the cell, and young cells appear after every
   cut, cold start or LOD change while the camera moves (single-frame relMSE spiked to 10.6, above plain path tracing). A sample threshold fixes it only together with
   the pyramid update (coarser cells always populated); a threshold alone turns into dark misses (−4% bias). Jitter makes it worse.
+- Cutout shadows (R2b, `integrator.alphaShadow`): the kernels compile bvh instance masks OUT for speed (`rayMasks: false`, so `rtVisible(ray, mask)` ignores `mask`);
+  only `'classified'` turns them on (`ptNeedsRayMasks`), and a mask bit then costs a test per instance. Anything new that needs a ray mask must go through `ptRaytracerModuleOptions`, or the
+  mask is silently all-ones (the first `classified` run read exactly the solid-walk image). The `rt` walk of a WGSL module is built once per kernel: a mask-using kernel and a plain one differ in text.
+- Scratchpad files shared between agents: two agents writing `edit2.py` to the same scratchpad directory ran each other's script (one edited the other's worktree). Put scratch files in your own
+  subdirectory (`scratchpad/<task>/`).
+- `classifyAlphaCards` (bench/scenes/alpha-classify.ts) must read the STORED level-0 texels (`buildSceneTextures` resamples a 96 px texture to 128), not the input texels: against the input data
+  a checker edge is off by a texel and half the triangles of an aligned grid read mixed. Use power-of-two textures for cutout A/B scenes; the contour of a bilinear alpha of a hard edge sits ON the texel
+  boundary, so a triangle bounded by it is pure (zero-measure contact, `TOUCH`); the GPU's 8-bit filter weights move the contour by ~1/256 texel (`classified` reads -0.01% of exact on grid16).
+- A cutout `roulette` shadow (q) is unbiased only because solid blockers are a superset of exact ones; it needs the solid walk to run FIRST for every shadow ray, so at q = 0.25 on a scene where
+  most shadow rays are blocked it costs MORE than the exact loop (the extra any-hit plus q of the loop). Judge it by time to equal noise (`eqTime` of `alpha-shadow-ab.ts`), never by ms/spp alone.

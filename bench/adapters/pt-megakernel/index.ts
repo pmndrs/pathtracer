@@ -19,6 +19,7 @@ import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
 import type { MaterialDesc, MeshDesc, SceneDesc } from '../../scenes/schema.ts';
 import { sceneDescToCopyInput } from '../../scenes/to-scene-copy.ts';
+import { alphaCoverageOf, classifyAlphaCards, INSTANCE_MASK_MIXED, type AlphaClassStats } from '../../scenes/alpha-classify.ts';
 import { uvTangents } from '../../scenes/tangents.ts';
 import { setImageTextureLoader } from '../../scenes/textures.ts';
 import { readPFM } from '../../metrics/pfm.ts';
@@ -195,6 +196,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.scheduler === 'wavefront' && settings.appends && settings.appends !== 'atomic' ? { appends: settings.appends } : {}),
         ...(settings.scheduler === 'wavefront' && settings.sort && settings.sort !== 'none' ? { sort: settings.sort } : {}),
         ...(settings.alphaPolicy && settings.alphaPolicy !== 'exact' ? { alphaPolicy: settings.alphaPolicy } : {}),
+        ...(settings.alphaShadow && settings.alphaShadow !== 'policy' ? { alphaShadow: settings.alphaShadow, ...(settings.alphaShadow === 'roulette' ? { alphaRoulette: settings.alphaRoulette ?? 0.25 } : {}), ...(settings.alphaShadow === 'firstK' ? { alphaFirstK: settings.alphaFirstK ?? 1 } : {}), ...(settings.alphaShadow === 'transmit' ? { alphaTransmit: settings.alphaTransmit ?? 0.5 } : {}) } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
@@ -280,11 +282,26 @@ export class PtMegakernelAdapter implements RendererAdapter {
       if (!response.ok) throw new Error(`environment ${scene.environment.path}: HTTP ${response.status}. Run: node bench/scenes/tier0/generate-assets.ts`);
       hdriMap = readPFM(await response.arrayBuffer());
     }
-    const input = sceneDescToCopyInput(scene, { ...(resolveFile ? { resolveFile: resolveFile as never } : {}), ...(hdriMap ? { hdriMap } : {}) });
+    let input = sceneDescToCopyInput(scene, { ...(resolveFile ? { resolveFile: resolveFile as never } : {}), ...(hdriMap ? { hdriMap } : {}) });
     // The glb is baked into world space (the exporter applied each mesh's transform): the instance transform must not apply it again.
     for (const mesh of fileMeshes) input.instances[scene.meshes.indexOf(mesh)]!.objectToWorld = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     if (this.settings.tangent === 'uv') for (const mesh of input.meshes) if (mesh.tangents && mesh.uvs) mesh.tangents = uvTangents({ positions: mesh.positions, indices: mesh.indices ? Uint32Array.from(mesh.indices) : Uint32Array.from({ length: mesh.positions.length / 3 }, (_, i) => i), uvs: mesh.uvs as Float32Array });
     if (input.sun && this.settings.sunAngularRadius !== undefined) input.sun = { ...input.sun, angularRadius: this.settings.sunAngularRadius };
+    // R2b `alphaShadow: 'transmit'`: every cutout card goes into the mask-`alphaMixedMask` instance group (no triangle split), the walk tells cards from the rest
+    if (this.settings.alphaShadow === 'transmit') {
+      const mask = this.settings.alphaMixedMask ?? INSTANCE_MASK_MIXED;
+      input.instances.forEach((inst) => {
+        if (inst.material !== undefined && createMaterial(input.materials[inst.material] ?? {}).alphaMode === ALPHA_MODE.mask) inst.mask = mask;
+      });
+    }
+    // R2b `alphaShadow: 'classified'`: split the cutout cards into mixed and solid instances (and drop the transparent triangles) before the trees are built
+    let alphaClasses: AlphaClassStats[] = [];
+    if (this.settings.alphaShadow === 'classified') {
+      if (this.settings.textureLod === 'cone') this.approximations.push("alphaShadow 'classified': the classification is exact for level-0 texture lookups; textureLod 'cone' can differ at card edges");
+      const classified = classifyAlphaCards(input, { ...(this.settings.alphaMixedMask !== undefined ? { mixedMask: this.settings.alphaMixedMask } : {}) });
+      input = classified.input;
+      alphaClasses = classified.stats;
+    }
     const builder = createMeshBvhBuilder();
     const data = await buildTraceScene(
       input.meshes.map((mesh) => ({ positions: mesh.positions, indices: mesh.indices ? Uint32Array.from(mesh.indices) : null })),
@@ -314,6 +331,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
+    if (alphaMask && this.settings.alphaShadow && this.settings.alphaShadow !== 'policy') this.approximations.push(`alpha shadow ${this.settings.alphaShadow}${this.settings.alphaShadow === 'classified' ? ' (exact for level-0 lookups)' : this.settings.alphaShadow === 'roulette' ? ' (unbiased, noisier)' : ' (biased, not a reference)'}`);
     if (alphaMask && this.settings.alphaPolicy && this.settings.alphaPolicy !== 'exact') this.approximations.push(`alpha policy ${this.settings.alphaPolicy}: cutouts ignored for some ray classes (biased, not a reference)`);
     if (this.settings.auto) {
       const choice = ptwfAutoPolicy({ width: scene.film.width, height: scene.film.height, maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, subgroups: caps.subgroups });
@@ -334,7 +352,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _layers;
     void _appends;
     void _sort;
-    const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}), ...(this.settings.appends !== undefined ? { appends: this.settings.appends } : {}), ...(this.settings.sort !== undefined ? { sort: this.settings.sort } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
@@ -348,7 +366,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     this.limits = { maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, rrStartDepth: this.settings.rrStartDepth ?? scene.integrator.rrStartDepth };
     this.kernel.setLimits(this.limits);
     this.kernel.setSeed(this.settings.seed ?? 0);
-    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(this.kernel instanceof PtWavefront ? { ...Object.fromEntries(Object.entries(this.kernel.kernelBytes).map(([k, v]) => [`kernel_bytes_${k}`, v])), path_state_bytes: this.kernel.memory().stateBytesPerPath, wavefront_bytes: this.kernel.memory().totalBytes } : {}), ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium, ...(materials.features.aniso ? { mat_aniso: 1 } : {}) } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
+    this.lastStats = { kernel_bytes: this.kernel.wgslBytes, ...(alphaClasses.length > 0 ? { alpha_tri_total: alphaClasses.reduce((a, c) => a + c.triangles, 0), alpha_tri_mixed: alphaClasses.reduce((a, c) => a + c.mixed, 0), alpha_tri_solid: alphaClasses.reduce((a, c) => a + c.solid, 0), alpha_tri_transparent: alphaClasses.reduce((a, c) => a + c.transparent, 0) } : {}), ...(this.kernel instanceof PtWavefront ? { ...Object.fromEntries(Object.entries(this.kernel.kernelBytes).map(([k, v]) => [`kernel_bytes_${k}`, v])), path_state_bytes: this.kernel.memory().stateBytesPerPath, wavefront_bytes: this.kernel.memory().totalBytes } : {}), ...(materials ? { openpbr: 1, mat_mix: +materials.features.mix, mat_thin: +materials.features.thin, mat_layered: +materials.features.layered, mat_medium: +materials.features.medium, ...(materials.features.aniso ? { mat_aniso: 1 } : {}) } : {}), scene_copy_bytes: copy.byteLength, env_map: hdriMap ? 1 : 0, env_importance: hdriMap && this.envSampling(true) === 'importance' ? 1 : 0, ...(copy.textures ? { texture_arrays: copy.textures.buckets.length, texture_bytes: copy.textures.byteLength, texture_count: copy.textures.slots.length } : {}) };
     return { loadMs, compileMs: performance.now() - t1 };
   }
 
