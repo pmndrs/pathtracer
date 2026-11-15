@@ -3,11 +3,58 @@
 **Question (Q2 in [nrc-plan.md](../../docs/design/nrc-plan.md)):** does the neural radiance cache make a better image than
 plain path tracing in the same time?
 
-**Answer on the M5 Pro: yes, once the cache has warmed up.** With a warm cache, the cache side's error (relMSE against the
-Mitsuba reference) is **3.0–3.8× lower** than plain path tracing at 1280×720 and **1.3–1.8× lower** at 640×360, for the
-same number of frames at about equal time per frame. Its bias is under 0.4% after 4 frames at 1280×720 (−2.8% on the very
+**Answer on the M5 Pro: yes, once the cache has warmed up, and it warms up within a few frames.** In the windowed Chrome a
+cache frame costs less than one plain sample (0.58× at 1280×720), and with a warm cache its error (relMSE against the Mitsuba
+reference) is **3.1–3.8× lower** at the same frame count, **5–6× per unit of time**. (The first, headless pass below measured
+3.0–3.8× at 1280×720 and 1.3–1.8× at 640×360, where plain got 2 samples per frame.) Its bias is under 0.4% after 4 frames at 1280×720 (−2.8% on the very
 first frame), and FLIP is lower too. Frame-to-frame flicker on a still camera drops by about a third. From a cold start the
 cache is biased for the first frames while it learns (+64% on frame 1, +12% after 16 frames, +1.3% after 256).
+
+## Windowed Chrome (the reference setting from 2026-11-15 on)
+
+The maintainer's call: time interactive work in a windowed Chrome started with `--enable-unsafe-webgpu` (it matches real use
+better than the runner's headless Chrome; the difference is backlogged as TASKS N6e). Same page, driven over CDP
+(`nrc-study.html?scenario=all&res=…&steps=…`). Load 2.1-2.4, no other GPU job.
+
+| | 1280×720, 4 steps | 640×360, 2 steps |
+|---|---|---|
+| Cache frame (render + training + inference) | **34.6 ms** | **8.9 ms** |
+| Plain path tracing, 1 sample per pixel | 59.8 ms | 14.0 ms |
+| Cache frame / plain sample | 0.58 | 0.64 |
+
+So in the window the cache frame costs less than one plain sample: plain gets 1 sample per frame and still uses more time.
+
+**Warm cache, error after N frames (relMSE vs Mitsuba; plain 1 spp per frame):**
+
+| Frames | 720p plain | 720p cache | Ratio | 720p cache bias | 360p plain | 360p cache | Ratio | 360p cache bias |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 8.97 | 2.65 | 3.4× | −2.0% | 8.58 | 2.77 | 3.1× | +7.5% |
+| 4 | 2.14 | 0.599 | 3.6× | | 2.16 | 0.636 | 3.4× | |
+| 16 | 0.504 | 0.133 | 3.8× | −0.2% | 0.505 | 0.137 | 3.7× | +1.7% |
+| 64 | 0.125 | 0.0332 | 3.8× | | 0.122 | 0.0359 | 3.4× | |
+| 256 | 0.0319 | 0.0104 | 3.1× | +0.4% | 0.0306 | 0.0119 | 2.6× | +0.5% |
+
+Per unit of time (plain error scaled by the time ratio, relMSE ∝ 1/time) the cache's lead is 5.3-6.5× at 1280×720 and
+4.0-5.8× at 640×360. LDR-FLIP (720p): 0.34 vs 0.49 at 1 frame, 0.14 vs 0.22 at 16, 0.070 vs 0.089 at 256. Flicker on a
+still camera: 1.08 vs 1.60 (720p), 1.10 vs 1.61 (360p).
+
+**Adaptation (real-time mode: every frame cleared, new seed, training on; single-frame relMSE at the reference view):**
+
+| Frames after arriving | 1 | 2 | 4 | 8 | 16 | 64 |
+|---|---|---|---|---|---|---|
+| 720p cold (fresh network) | 3.52 | 4.81 (+65% bias) | 2.78 | 2.56 | 2.58 | 2.64 |
+| 720p cut from the opposite view | 2.70 | 2.65 | 2.66 | 2.69 | 2.70 | 2.65 |
+| 720p 60-frame flight from the opposite view | 2.80 | 2.72 | 2.67 | 2.75 | 2.69 | 2.78 |
+| 360p cold | 3.64 | 4.54 (+58%) | 4.35 (+58%) | 2.68 | 2.38 | 2.60 |
+| 360p cut | 2.68 | 2.72 | 2.71 | 2.72 | 2.62 | 2.63 |
+
+Steady state (cache warmed at the view): 2.79 (720p), 2.74 (360p); plain: 9.01 / 8.67. A cache trained on the opposite end of
+the atrium is already at its steady-state error on the first frame after a cut: the two views share the scene's surfaces and
+light, and the network generalises across them. A fresh network needs about 8 frames (0.3 s at 720p, 0.07 s at 360p) and
+overshoots on frames 2-4 (bias +58-65%) before it settles: worth damping (EMA weights, N-D7, or a smaller learning rate for the
+first steps). Not measured: moving into a part of the scene the cache has never seen (the upper gallery, outdoors).
+
+## Headless runner (first pass)
 
 ## Setup
 
