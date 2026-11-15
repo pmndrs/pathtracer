@@ -63,7 +63,7 @@ suggestion, pros/cons and the A/B that would settle it.
 
 ## N — Neural radiance cache (research track)
 
-Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Reference implementation: VkNRC (Vulkan, NV cooperative matrix;
+**Owner from 2026-11-15: the local Mac agent; start with [docs/design/nrc-HANDOFF.md](docs/design/nrc-HANDOFF.md).** Spec and plan: [docs/design/nrc.md](docs/design/nrc.md). Reference implementation: VkNRC (Vulkan, NV cooperative matrix;
 **no licence: we follow its design, own code, D23**; read-only clone `research/sources/native/vknrc`). Backends A/B'd: WGSL f32 / f16 / subgroup-matrix,
 ORT-Web, WebNN.
 

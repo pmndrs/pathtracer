@@ -33,7 +33,12 @@ _Last updated 2026-11-13._
   the bvh repo's CPU version (the few differences are float-precision ties at edges, counted and explained). Speed not
   measured yet: the machine was loaded.
 
+- **Research track N: neural radiance cache on WebGPU (started 2026-11-14).** A small trainable network in WGSL
+  (`packages/mlp`) matches its CPU reference on a software GPU; a subgroup-matrix version is written but has never run
+  on real hardware. No timings yet. Owner from now: the local Mac agent; handoff in `docs/design/nrc-HANDOFF.md`.
+
 **Next**
+- Track N on the Mac: the checklist in `docs/design/nrc-HANDOFF.md` (probe, correctness, timings, live demo).
 - Quiet-machine rerun of the baseline with ABBA across renderers (the first one ran while other jobs loaded the Mac); see `bench/results/BASELINE-P0.md`.
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - **Wide-BVH experiment** in the bvh repo: running now on its own branch in the bvh repo.
