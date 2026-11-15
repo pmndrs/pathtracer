@@ -5,6 +5,9 @@ difference from the paper and VkNRC in [nrc-diverges.md](nrc-diverges.md), task 
 section N. This file says what we are trying to find out, what "done" means, the milestones in order, and where each
 one stands. Update the **Progress** column and the log at the bottom at the end of every session.
 
+Shareable progress page (private until shared from its Share menu): https://claude.ai/artifact/DLEmXfvC7ChP8481rioCAx.
+Its milestones and log are uploaded copies of §4 and §7: update both at the end of a session.
+
 ## 1. The questions
 
 The experiment exists to answer four questions, each with a measured answer:
