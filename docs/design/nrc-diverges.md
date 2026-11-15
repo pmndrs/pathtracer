@@ -47,6 +47,7 @@ Status: **planned** (not built yet), **built** (in `packages/mlp` or a bench pag
 | N-K9 | Workgroup memory | 32 KiB for backward | Portable: 16 KiB (f32 layer) / 8 KiB (f16); request the adapter max | platform | built | none |
 | N-K10 | Loop structure | GLSL `[[unroll]]` over tile arrays | Host-generated unrolled WGSL (like the Denoiser) | platform (no `@unroll`, gpuweb #11073) | built (portable) | switch to `@unroll` if it ships |
 | N-K11 | Runtime shape | standalone kernels | Standalone `MlpEngine`, not behind the Denoiser's `NetworkRuntime` (V141) | simplification | built | N5 adds `ort` / `webnn` arms; revisit a shared interface |
+| N-K12 | Where the matrix arm runs on Windows | native Vulkan (`VK_NV_cooperative_matrix`) | Chrome on Windows has no subgroup matrices (Dawn D3D12: "no support"); the sgm arms run in dawn.node on Dawn's Vulkan backend (runner `--dawn vulkan`, toggles `allow_unsafe_apis,vulkan_enable_f16_on_nvidia`): same WGSL, Dawn and Tint as Chrome on Linux/Android, not a browser. Tiled/portable arms run in Chrome (D3D12) and, for paired ratios, in dawn.node too | platform | built (WN1, 2026-11-16) | rerun in Chrome once Dawn D3D12 (SM 6.10 linalg) or a Vulkan adapter ships on Windows |
 
 ## C. Integrator and scene (N6; the cache runs on main's megakernel since 2026-11-15)
 

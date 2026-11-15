@@ -34,6 +34,13 @@ export interface RunnerOptions {
   loadWaitS: number;
   /** Fail instead of running loaded. */
   strictLoad: boolean;
+  /**
+   * Run the page in dawn.node (the npm `webgpu` package) on this Dawn backend instead of in Chrome. For backends Chrome
+   * does not offer on this platform (Vulkan on Windows, M6). Null = Chrome.
+   */
+  dawnBackend: string | null;
+  /** Dawn toggles to enable with --dawn (e.g. allow_unsafe_apis,vulkan_enable_f16_on_nvidia). */
+  dawnToggles: string[];
   help: boolean;
 }
 
@@ -62,6 +69,9 @@ export const USAGE = `Usage: node bench/runner/run.ts --page <name> [options]
   --load-wait <s>      Wait up to this long for the load to drop (default 120), then run anyway, rows marked valid=0 'loaded'.
   --strict-load        Fail the run instead of running loaded.
   --no-webgpu          Start Chrome with the GPU disabled. The run must fail clearly (self-check).
+  --dawn <backend>     Run the page in dawn.node instead of Chrome (vulkan, d3d12, metal, ...): same Dawn + Tint, a backend
+                       Chrome does not offer here (Vulkan on Windows). Needs DAWN_NODE or .cache/dawn-node (bench/runner/dawn-host.ts).
+  --dawn-toggles <a,b> Dawn toggles for --dawn (default allow_unsafe_apis; NVIDIA f16 on Vulkan also needs vulkan_enable_f16_on_nvidia).
   --verbose            Print all console output, not only for failing runs.
   --help               Show this text.`;
 
@@ -114,6 +124,8 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
         'load-wait': { type: 'string' },
         'strict-load': { type: 'boolean' },
         'no-webgpu': { type: 'boolean' },
+        dawn: { type: 'string' },
+        'dawn-toggles': { type: 'string' },
         verbose: { type: 'boolean' },
         help: { type: 'boolean' },
       },
@@ -152,6 +164,10 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
     ab = { key: match[1] as string, values: [match[2] as string, match[3] as string] };
     if (ab.key in args) throw new UsageError(`--ab key "${ab.key}" is also given in --args.`);
   }
+  if (values.dawn !== undefined && !/^[a-z0-9]+$/.test(values.dawn)) throw new UsageError(`--dawn expects a backend name (vulkan, d3d12, ...), got "${values.dawn}".`);
+  if (values['dawn-toggles'] !== undefined && values.dawn === undefined) throw new UsageError('--dawn-toggles needs --dawn.');
+  const dawnToggles = (values['dawn-toggles'] ?? 'allow_unsafe_apis').split(',').map((t) => t.trim()).filter((t) => t !== '');
+  if (dawnToggles.some((t) => !/^[a-z0-9_]+$/.test(t))) throw new UsageError(`--dawn-toggles expects comma-separated toggle names, got "${values['dawn-toggles']}".`);
   if (values.page !== undefined && !/^[A-Za-z0-9._-]+$/.test(values.page)) {
     throw new UsageError(`--page must be a plain page name (letters, digits, . _ -), got "${values.page}".`);
   }
@@ -176,6 +192,8 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
     maxGpuProcs,
     loadWaitS,
     strictLoad: values['strict-load'] ?? false,
+    dawnBackend: values.dawn ?? null,
+    dawnToggles,
     help: values.help ?? false,
   };
 }

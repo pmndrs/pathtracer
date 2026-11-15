@@ -6,6 +6,7 @@ import {
   buildCaps, capsHash, capsDefines, detectCaps, requestDeviceForCaps, wgslEnableLines,
   type Caps,
 } from '../../packages/raytracer/src/caps/index.ts';
+import { reportError, reportResult, summarizeAdapter } from '../runner/page-client.ts';
 
 interface Probe { name: string; status: 'ok' | 'fail' | 'skip'; detail: string; ms: number }
 declare global { interface Window { __benchResult?: unknown } }
@@ -39,7 +40,7 @@ async function compileProbe(device: GPUDevice, code: string, immediateSize = 0):
   });
 }
 
-function probes(caps: Caps, device: GPUDevice): Array<[string, boolean, () => Promise<string | null>]> {
+function probes(caps: Caps, device: GPUDevice, adapter: GPUAdapter): Array<[string, boolean, () => Promise<string | null>]> {
   const enables = wgslEnableLines(caps);
   const wrap = (enable: string, body: string) => `${enable}\n@group(0) @binding(0) var<storage, read_write> o: array<f32>;\n@compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { ${body} }`;
   const texFmt = (format: GPUTextureFormat) => async () =>
@@ -50,7 +51,14 @@ function probes(caps: Caps, device: GPUDevice): Array<[string, boolean, () => Pr
     ['shaderF16', caps.shaderF16, () => compileProbe(device, wrap('enable f16;', 'let h: f16 = f16(i); o[i] = f32(h * 2.0h);'))],
     ['timestampQuery', caps.timestampQuery, async () => guarded(device, () => { device.createQuerySet({ type: 'timestamp', count: 2 }).destroy(); })],
     ['immediates', caps.immediates, () => compileProbe(device, `var<immediate> k: vec4u;\n@group(0) @binding(0) var<storage, read_write> o: array<f32>;\n@compute @workgroup_size(32) fn main(@builtin(local_invocation_index) i: u32) { o[i] = f32(k.x + i); }`, 16)],
-    ['subgroupMatrix', caps.subgroupMatrix, () => compileProbe(device, wrap(enables.split('\n').find((l) => l.includes('subgroup_matrix')) ?? '', 'var m: subgroup_matrix_result<f32, 8, 8>; o[i] = 0.0;'))],
+    // A result type the adapter lists (Apple: f32 8x8; NVIDIA/Vulkan: no f32 at all, f16/i32/u32 16x16 or 16x8).
+    ['subgroupMatrix', caps.subgroupMatrix, () => {
+      const configs = Array.from((adapter.info as unknown as { subgroupMatrixConfigs?: ArrayLike<{ resultComponentType: string; M: number; N: number }> }).subgroupMatrixConfigs ?? []);
+      const c = configs.find((x) => x.resultComponentType !== 'f16') ?? configs[0];
+      const type = c?.resultComponentType ?? 'f32';
+      const enable = [type === 'f16' ? 'enable f16;' : '', enables.split('\n').find((l) => l.includes('subgroup_matrix')) ?? ''].join('\n');
+      return compileProbe(device, wrap(enable, `var m: subgroup_matrix_result<${type}, ${c?.N ?? 8}, ${c?.M ?? 8}>; o[i] = 0.0;`));
+    }],
     ['float32Filterable', caps.float32Filterable, async () => guarded(device, () => {
       const t = device.createTexture({ size: [4, 4], format: 'r32float', usage: GPUTextureUsage.TEXTURE_BINDING });
       const l = device.createBindGroupLayout({ entries: [
@@ -88,7 +96,7 @@ async function main() {
   device.addEventListener('uncapturederror', (e) => deviceErrors.push((e as GPUUncapturedErrorEvent).error.message));
 
   const probeResults: Probe[] = [];
-  for (const [name, present, run] of probes(caps, device)) {
+  for (const [name, present, run] of probes(caps, device, adapter)) {
     const t0 = performance.now();
     if (!present) { probeResults.push({ name, status: 'skip', detail: 'feature absent', ms: 0 }); continue; }
     const err = await run();
@@ -148,6 +156,30 @@ async function main() {
   ].join('');
   document.getElementById('json')!.textContent = JSON.stringify(result, null, 2);
   result.done = true;
+  // For the runner (`node bench/runner/run.ts --page caps`): before this the page only set __benchResult, which the runner
+  // does not read, so every runner call timed out (found on Windows, WN1).
+  reportResult(
+    {
+      scene: 'caps',
+      renderer: 'caps',
+      metrics: {
+        tier: Number(caps.tier) || 0,
+        probes_ok: probeResults.filter((p) => p.status === 'ok').length,
+        probes_failed: probeResults.filter((p) => p.status === 'fail').length,
+        subgroup_min: caps.subgroupMinSize,
+        subgroup_max: caps.subgroupMaxSize,
+      },
+      notes: {
+        capsHash: hash, adapterCapsHash: adapterOnlyHash, tier: caps.tier, resourceTable: caps.resourceTable, subgroupMatrix: caps.subgroupMatrix,
+        subgroupMatrixConfigs: (adapter.info as unknown as { subgroupMatrixConfigs?: ArrayLike<Record<string, unknown>> }).subgroupMatrixConfigs
+          ? Array.from((adapter.info as unknown as { subgroupMatrixConfigs: ArrayLike<Record<string, unknown>> }).subgroupMatrixConfigs, (c) => `${c.componentType}->${c.resultComponentType} ${c.M}x${c.N}x${c.K}`)
+          : [],
+        probes: probeResults, enableLines: wgslEnableLines(caps), wgslLanguageFeatures: caps.wgslLanguageFeatures,
+        adapterFeatures: [...adapter.features].sort(), limits: caps.limits, userAgent: navigator.userAgent,
+      },
+    },
+    { adapter: summarizeAdapter(adapter), deviceErrors },
+  );
 }
 
 main().catch((e) => {
@@ -155,4 +187,5 @@ main().catch((e) => {
   document.getElementById('out')!.innerHTML = `<pre class="bad">${esc(msg)}</pre>`;
   (window.__benchResult as Record<string, unknown> | undefined) ??= {};
   (window.__benchResult as Record<string, unknown>).error = msg;
+  reportError(e);
 });

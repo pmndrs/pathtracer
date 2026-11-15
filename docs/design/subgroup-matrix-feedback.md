@@ -49,6 +49,33 @@ f32 FMA ~3.1 TFMA/s; f16 matrices only with f16 accumulation; >1 subgroup per wo
 (`li / 32` offsets; it predates or did not use `subgroup_id`). The matrix path gave fp32 57 → 44–50 ms; fp16 stayed on
 the portable kernel. (pmndrs/denoiser `docs/specs/runtimes.md`.)
 
+## 1b. Windows / NVIDIA (2026-11-16, RTX 3060 Laptop, driver 592.00)
+
+**Chrome on Windows offers no subgroup matrices, with any flag.** Chrome 157 stable and Canary 160 run Dawn on D3D12 (chrome://gpu: D3D12
+adapters plus blocklisted D3D11 ones). Dawn's feature doc says "D3D: no support" (HLSL WaveMatrix was withdrawn; the proposal's SM 6.10
+`linalg::Matrix` path is not implemented), and `subgroup_id` is "not implemented on D3D". No switch gives Dawn a hardware Vulkan adapter
+on Windows (tried `--use-webgpu-adapter=vulkan`, `--force-webgpu-adapter=vulkan`, `--enable-features=Vulkan --use-vulkan=native`,
+`--enable-vulkan`; chrome://flags `force-webgpu-adapter` lists only Default and OpenGL ES). web3dsurvey shows the feature at 0% on Windows.
+
+**The hardware and Dawn's Vulkan backend can.** The driver exposes `VK_KHR_cooperative_matrix` (Vulkan 1.4.325). Through dawn.node 0.6.2
+(npm `webgpu`, Dawn + Tint as a Node addon) on Vulkan:
+
+| Dawn toggles | `shader-f16` | `subgroupMatrixConfigs` |
+|---|---|---|
+| none | no | feature absent |
+| `allow_unsafe_apis` | no | u8→u32 16×16×32, i8→i32 16×16×32, u8→u32 16×8×32, i8→i32 16×8×32 |
+| `allow_unsafe_apis,vulkan_enable_f16_on_nvidia` | yes | f16→f16 and f16→f32 at 16×16×16, 16×8×16, 16×8×8, plus the int8 ones |
+
+Dawn keeps f16 off on NVIDIA Vulkan by default because the driver reports `storageInputOutput16 = false`, and the f16 matrix configs go with
+it. No f32-operand config exists (Apple has f32 8×8×8). Our inference kernel compiles with f16→f32 16×16×16 in the one-subgroup and
+`subgroup_id ×4` forms; the `local_invocation_index / 32` control fails uniformity unless `diagnostic(off,
+chromium.subgroup_matrix_uniformity)` (the unprefixed name is rejected). Tint in that build warns that `subgroupMatrixLoad`/`Store` are
+deprecated builtins.
+
+**For the feedback (not posted, N9):** Windows is where most discrete tensor-core GPUs are, and today a WebGPU page there cannot use them
+at all. Either Dawn's D3D12 path (SM 6.10) or a Vulkan adapter for Chrome on Windows would close it; f16 on NVIDIA Vulkan additionally
+needs the `storageInputOutput16` requirement relaxed (f16 stage IO is not what matrix code uses).
+
 ## 2. What an online-trained MLP (NRC) needs, mapped to the open issues
 
 The workload: 64-wide, 5-hidden-layer MLP; inference on ~0.5–2M records per frame and 4 training steps of 16k records

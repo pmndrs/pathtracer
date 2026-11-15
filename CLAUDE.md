@@ -609,3 +609,19 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - `infer=portable` on the MLP pages is the naive per-record kernel (kept so older CSV rows keep their meaning); the engine's
   default portable inference is the tiled kernel (`infer: 'tiled'`, 8.6× faster in f16). A one-off 73 ms/M reading for tiled f16
   was a load spike (loadavg 5.2): rerun before believing a single bad A/B.
+- Windows: the siblings live in `pmndrs/denoiser/` (`bvh`, `denoiser`, `downsampler`), not next to this repo; a worktree needs junctions
+  `.claude/worktrees/bvh` -> `pmndrs/denoiser/bvh` and `.claude/worktrees/Denoiser` -> `pmndrs/denoiser/denoiser`
+  (`New-Item -ItemType Junction`), then `pnpm install`. That bvh is ahead of the Mac's.
+- Windows: Chrome (157 stable, 160 Canary) runs WebGPU on Dawn D3D12 only, and Dawn D3D12 has no subgroup matrices: no flag exposes
+  `chromium-experimental-subgroup-matrix` on Windows, and no switch gives Dawn a hardware Vulkan adapter (`--use-webgpu-adapter=vulkan`,
+  `--force-webgpu-adapter`, `--enable-features=Vulkan`, `--use-vulkan=native` all leave chrome://gpu at D3D12/D3D11). Matrix arms run in
+  dawn.node on Vulkan instead: `node bench/runner/run.ts --page <p> --dawn vulkan --dawn-toggles allow_unsafe_apis,vulkan_enable_f16_on_nvidia`
+  (same load checks, ABBA, CSV; `browser` column `dawn.node/<ver> vulkan +toggles`). It is not what a Windows Chrome user gets.
+- Windows: dawn.node (`.cache/dawn-node`, `npm install webgpu` there; or `DAWN_NODE=<index.js>`) fails to load Vulkan ("vulkan-1.dll Windows
+  Error: 87") until `C:\Windows\System32\vulkan-1.dll` is copied next to `dist/win32-x64/dawn.node`. Without `vulkan_enable_f16_on_nvidia`
+  Dawn hides `shader-f16` on NVIDIA Vulkan (driver `storageInputOutput16 = false`) and with it every f16 matrix config (only int8 remain).
+  dawn.node does not keep Node's event loop alive while GPU promises are pending (the host keeps a timer), and prints Tint compile logs to
+  stdout without a final newline (the host starts each record on a new line).
+- Windows: Canary 160 ignores `--use-adapter-luid` and hands out the Intel UHD; `--gpu nvidia` then fails the run. Use Chrome stable.
+- Windows: the `caps` page used to set only `window.__benchResult`, so the runner always timed out on it; it now calls `reportResult`.
+  Its subgroup-matrix probe compiles a result type the adapter lists (NVIDIA has no f32 or 8×8 config).

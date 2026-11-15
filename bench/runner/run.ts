@@ -23,6 +23,7 @@ import { formatLoadNote, sampleLoad, waitForQuiet } from './load-check.ts';
 import { gitCommit } from './measured-commit.ts';
 import { buildReportManifest, fileSystemIo, slotFor } from './report.ts';
 import { BrowserSession, WebGpuUnavailableError, WrongAdapterError } from './session.ts';
+import { DawnSession } from './dawn-session.ts';
 import { INCOMING_DIR, REPOSITORY_ROOT, RESULTS_DIR, startBenchServer, type BenchServer } from './server.ts';
 import { DEFAULT_PAGE_TIMEOUT_MS } from './contract.ts';
 
@@ -88,7 +89,7 @@ async function main(): Promise<number> {
     csvFile: null,
   };
   let failures = 0;
-  let session: BrowserSession | null = null;
+  let session: BrowserSession | DawnSession | null = null;
   let server: BenchServer | null = null;
   let sampler: ClockSampler | null = null;
   let releaseLock: () => void = () => {};
@@ -108,14 +109,16 @@ async function main(): Promise<number> {
     closeServer = registerCleanup(server.close);
     console.log(`bench site: ${server.origin}   gpu requested: ${options.gpu ?? 'any'}   run id: ${runId}`);
 
-    session = await BrowserSession.launch({
-      serverOrigin: server.origin,
-      chromePath: options.chromePath,
-      gpu: options.gpu,
-      withoutGpu: options.withoutWebGpu,
-      allowSoftware: options.allowSoftware,
-      headed: options.headed,
-    });
+    session = options.dawnBackend
+      ? DawnSession.launch({ serverOrigin: server.origin, backend: options.dawnBackend, toggles: options.dawnToggles, gpu: options.gpu })
+      : await BrowserSession.launch({
+          serverOrigin: server.origin,
+          chromePath: options.chromePath,
+          gpu: options.gpu,
+          withoutGpu: options.withoutWebGpu,
+          allowSoftware: options.allowSoftware,
+          headed: options.headed,
+        });
     summary.adapter = await session.preflight();
     summary.browser = await session.browserLabel();
     console.log(`adapter: ${describeAdapter(summary.adapter)}`);
