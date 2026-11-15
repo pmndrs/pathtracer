@@ -13,7 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -67,8 +67,14 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** Scheduler (P3.1): `megakernel` (default) or `wavefront` (queues + indirect dispatch; same estimator, alpha MASK in intersect and shadow (P3.7)). The `pt-wavefront` renderer id sets it. */
   scheduler?: 'megakernel' | 'wavefront';
   /** Wavefront scheduling (P3.2): `refill` starts a slot's next sample inline when its path ends (A/B; `finish()` drains the tail inside the timed region), `layers` = slots per pixel (needs refill). */
-  refill?: boolean | 'inline' | 'batch';
+  refill?: boolean | 'inline' | 'batch' | 'ordered';
   refillThreshold?: number;
+  /** Wavefront queue appends (P3.3): `atomic` (default), `subgroup` (one `atomicAdd` per subgroup) or `auto` (subgroup when the device has the feature). */
+  appends?: 'atomic' | 'subgroup' | 'auto';
+  /** Wavefront block sorting (P3.4): `none` (default), `material` (shade queue by material), `octant` (next queue by ray octant) or `both`. */
+  sort?: 'none' | 'material' | 'octant' | 'both';
+  /** P3.9: pick scheduler, refill, layers, appends and sort with `ptwfAutoPolicy` from the film, maxDepth and the device (overrides those settings; the choice is recorded in the row's stats). */
+  auto?: boolean;
   layers?: number;
   /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`). Images are per-pixel identical; only the addressing differs. */
   scenePacking?: 'split' | 'packed';
@@ -154,7 +160,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
   /** AOVs and counters of the last `render` (when `aovs` / `counters` are on). */
   lastAovs: PtAovs | null = null;
   lastCounters: PtCounters | null = null;
-  private readonly settings: PtAdapterSettings;
+  private settings: PtAdapterSettings;
   /** The scheduler instance (`PtMegakernel` or `PtWavefront`), for checks that bind hook buffers or read outputs themselves. */
   get renderer(): PtMegakernel | PtWavefront | null {
     return this.kernel;
@@ -186,6 +192,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
       config: {
         scheduler: settings.scheduler ?? 'megakernel',
         ...(settings.scheduler === 'wavefront' ? { refill: settings.refill === true ? 'inline' : settings.refill || 'off', refillThreshold: settings.refillThreshold ?? 0.25, layers: settings.layers ?? 1 } : {}),
+        ...(settings.scheduler === 'wavefront' && settings.appends && settings.appends !== 'atomic' ? { appends: settings.appends } : {}),
+        ...(settings.scheduler === 'wavefront' && settings.sort && settings.sort !== 'none' ? { sort: settings.sort } : {}),
         ...(settings.alphaPolicy && settings.alphaPolicy !== 'exact' ? { alphaPolicy: settings.alphaPolicy } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
@@ -307,7 +315,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const t1 = performance.now();
     const alphaMask = !!copy.textureLayout && input.materials.some((m) => m.alphaMode === ALPHA_MODE.mask);
     if (alphaMask && this.settings.alphaPolicy && this.settings.alphaPolicy !== 'exact') this.approximations.push(`alpha policy ${this.settings.alphaPolicy}: cutouts ignored for some ray classes (biased, not a reference)`);
-    const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, mode: _mode, blueNoise: _bnName, ...integratorSettings } = this.settings;
+    if (this.settings.auto) {
+      const choice = ptwfAutoPolicy({ width: scene.film.width, height: scene.film.height, maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, subgroups: caps.subgroups });
+      const { auto: _auto, ...rest } = this.settings;
+      void _auto;
+      this.settings = { ...rest, scheduler: choice.scheduler, refill: choice.refill, layers: choice.layers, appends: choice.appends, sort: choice.sort };
+      this.autoReason = choice.reason;
+    }
+    const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, appends: _appends, sort: _sort, mode: _mode, blueNoise: _bnName, ...integratorSettings } = this.settings;
     void _mode;
     void _bnName;
     const needsBlueNoise = integratorSettings.sampler === 'bluenoise' || (this.settings.mode === 'realtime' && this.settings.scheduler !== 'wavefront');
@@ -317,8 +332,10 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _refill;
     void _thr;
     void _layers;
+    void _appends;
+    void _sort;
     const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
-    this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
+    this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}), ...(this.settings.appends !== undefined ? { appends: this.settings.appends } : {}), ...(this.settings.sort !== undefined ? { sort: this.settings.sort } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);
     this.kernel.setCamera(scene.camera);
@@ -387,10 +404,11 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const wallMs = performance.now() - start - readbackMs;
     const image = toImage(await kernel.readImage());
     await this.readOutputs(kernel, image);
-    const wfStats: Record<string, number> = kernel instanceof PtWavefront && this.settings.refill ? { wf_refill: this.settings.refill === 'batch' ? 2 : 1, wf_layers: this.settings.layers ?? 1, wf_finish_chunks: kernel.lastFinish.chunks, wf_finish_iterations: kernel.lastFinish.iterations, wf_finish_ms: kernel.lastFinish.ms, wf_min_samples: kernel.sampleCount.min, wf_max_samples: kernel.sampleCount.max } : {};
+    const wfStats: Record<string, number> = kernel instanceof PtWavefront && this.settings.refill ? { wf_refill: this.settings.refill === 'batch' ? 2 : this.settings.refill === 'ordered' ? 3 : 1, wf_layers: this.settings.layers ?? 1, wf_finish_chunks: kernel.lastFinish.chunks, wf_finish_iterations: kernel.lastFinish.iterations, wf_finish_ms: kernel.lastFinish.ms, wf_min_samples: kernel.sampleCount.min, wf_max_samples: kernel.sampleCount.max } : {};
     return { image, spp, timings: { wallMs }, snapshots, stats: { ...this.lastStats, ...(kernel.instrumented ? { instrumented: 1 } : {}), ...this.outputStats, ...wfStats } };
   }
 
+  private autoReason = '';
   private outputStats: Record<string, number> = {};
 
   /** AOVs, counters and the denoised frame after the timed region (readbacks and the denoiser are never inside it). */

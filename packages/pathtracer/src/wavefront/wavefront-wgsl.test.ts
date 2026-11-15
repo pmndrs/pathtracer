@@ -1,7 +1,7 @@
 import { buildCaps } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
 import { ptMegakernelBuild } from '../integrator/megakernel.ts';
-import { PTWF_KERNELS, ptWavefrontBuild, ptWavefrontKernelBytes } from './wavefront.ts';
+import { PTWF_EXTRA_KERNELS, PTWF_KERNELS, ptWavefrontBuild, ptWavefrontKernelBytes } from './wavefront.ts';
 import { ptwfUnsupported } from './wavefront-wgsl.ts';
 
 const caps = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
@@ -22,6 +22,10 @@ const variants: Record<string, Parameters<typeof ptWavefrontBuild>[1]> = {
   'refill-layers-env': { format: {}, layout, integrator: { envMap: true, envSampling: 'importance' }, refill: true, layers: 4 },
   'refill-tex': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, refill: true, layers: 2 },
   'refill-pbr-stochastic': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'stochastic', maxDepth: 64 } } }, refill: true } as never,
+  'subgroup-appends': { format: {}, layout, appends: 'subgroup' },
+  'subgroup-refill-tex': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, refill: true, layers: 2, appends: 'subgroup' },
+  'sort-both': { format: {}, layout, sort: 'both' },
+  'ordered-sort-sg': { format: {}, layout, refill: 'ordered', layers: 2, sort: 'both', appends: 'subgroup' },
   'pbr-fuzz': { format: {}, layout, integrator: { materials: { features: { ...feat, fuzz: true }, layered: { layering: 'albedo' } } } } as never,
 };
 
@@ -117,5 +121,64 @@ describe('wavefront WGSL (P3.1)', () => {
     const b = body(wf, 'fn ptwfSampleLd(', 'let pl = pick.pmf');
     const norm = (t: string) => t.replace(/if \(!(ptVisibleMasked|rtVisible)\(ray, RT_MASK_ALL\)\) \{\s*return vec3f\(0\.0\);\s*\}\s*/, '').replace(/return vec3f\(0\.0\);/g, 'return none;').replace(/let none = [^\n]*\n/, '').split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
     expect(norm(b)).toBe(norm(a));
+  });
+
+  it('P3.3 subgroup appends: one ballot-free atomic per subgroup, appends in uniform flow after the shade body; off = the old text', () => {
+    const raw = { prune: false, shortenNames: false, minify: false };
+    const atomic = ptWavefrontBuild(caps, { ...variants.plain!, ...raw });
+    const sg = ptWavefrontBuild(caps, { ...variants.plain!, appends: 'subgroup', ...raw });
+    expect(atomic.shade.code).not.toContain('subgroupAdd');
+    expect(atomic.shade.code).not.toContain('ptwfAppend');
+    expect(sg.shade.code).toContain('subgroupExclusiveAdd');
+    expect(sg.shade.code).toContain('subgroupBroadcastFirst');
+    // the entry point has no early return (a ballot after a non-uniform return is rejected): the shade body is guarded by `go`
+    const entry = sg.shade.code.slice(sg.shade.code.indexOf('fn ptwfShade('));
+    expect(entry).not.toMatch(/\breturn;/);
+    expect(entry.indexOf('ptwfShadePath(path)')).toBeLessThan(entry.indexOf('ptwfAppend('));
+    // an explicit 'atomic' and the default are the same kernels; the other kernels never change
+    for (const k of PTWF_KERNELS) expect(ptWavefrontBuild(caps, { ...variants.plain!, appends: 'atomic', ...raw })[k].code).toBe(atomic[k].code);
+    for (const k of ['camera', 'intersect', 'shadow', 'args'] as const) expect(sg[k].code).toBe(atomic[k].code);
+    // the feature is required for 'subgroup'; 'auto' falls back
+    const noSg = buildCaps({ features: new Set(['timestamp-query']), limits: {} }, new Set());
+    expect(() => ptWavefrontBuild(noSg, { ...variants.plain!, appends: 'subgroup' })).toThrow(/subgroups/);
+    expect(ptWavefrontBuild(noSg, { ...variants.plain!, appends: 'auto', ...raw }).shade.code).toBe(ptWavefrontBuild(noSg, { ...variants.plain!, ...raw }).shade.code);
+    expect(ptWavefrontBuild(caps, { ...variants.plain!, appends: 'auto', ...raw }).shade.code).toBe(sg.shade.code);
+    // a restart (inline refill) sets the flag instead of appending
+    const refill = ptWavefrontBuild(caps, { ...variants.plain!, refill: true, appends: 'subgroup', ...raw });
+    expect(refill.shade.code).toContain('ptwfWantNext = true;');
+    const restart = (code: string): string => code.slice(code.indexOf('fn ptwfRestart('), code.indexOf('fn ptwfShadePath('));
+    expect(restart(refill.shade.code)).not.toContain('atomicAdd');
+  });
+
+  it('P3.4 block sorts and P3.10 ordered restart build their own kernels only when asked, from the same params and queue bindings', () => {
+    const raw = { prune: false, shortenNames: false, minify: false };
+    const off = ptWavefrontBuild(caps, { ...variants.plain!, ...raw });
+    for (const k of PTWF_EXTRA_KERNELS) expect(off[k]).toBeUndefined();
+    const sorted = ptWavefrontBuild(caps, { ...variants.plain!, sort: 'material', ...raw });
+    expect(sorted.sortHit?.code).toContain('ptwfHit[path]');
+    expect(sorted.sortRay).toBeUndefined();
+    expect(sorted.sortHit?.code).toContain('workgroupBarrier()');
+    expect(sorted.shade.code).toBe(off.shade.code); // sorting only reorders the queue: no other kernel changes
+    const oct = ptWavefrontBuild(caps, { ...variants.plain!, sort: 'octant', ...raw });
+    expect(oct.sortRay?.code).toContain('ptwfState[n + path]');
+    expect(oct.sortHit).toBeUndefined();
+    const ordered = ptWavefrontBuild(caps, { ...variants.plain!, refill: 'ordered', ...raw });
+    expect(ordered.primary?.code).toContain('0xffffffffu');
+    expect(ordered.shade.code).toContain('ptwfState[path].w = 0xffffffffu;');
+    expect(ordered.shade.code.slice(ordered.shade.code.indexOf('fn ptwfRestart('), ordered.shade.code.indexOf('fn ptwfShadePath('))).not.toContain('atomicAdd'); // the restart only flags the slot; the primary kernel appends
+    expect(() => ptWavefrontBuild(caps, { ...variants.plain!, sort: 'bogus' as never })).toThrow(RangeError);
+    const bytes = ptWavefrontKernelBytes(ptWavefrontBuild(caps, { ...variants.plain!, refill: 'ordered', sort: 'both' }));
+    expect(bytes.sortHit).toBeLessThan(3000);
+    expect(bytes.primary).toBeLessThan(3000);
+  });
+
+  it('R1b: materialLod secondary with refill gates each shade kernel on the path depth class', () => {
+    const lodOptions = { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo' } }, materialLod: 'secondary', materialLodDepth: 2 }, prune: false, shortenNames: false, minify: false } as never;
+    const plain = ptWavefrontBuild(caps, lodOptions);
+    expect(plain.shade.code).not.toContain('>= 2u) {\n        return;');
+    const refill = ptWavefrontBuild(caps, { ...(lodOptions as object), refill: true } as never);
+    expect(refill.shadeSecondary).toBeDefined();
+    expect(refill.shade.code).toMatch(/\(ptwfState\[2u \* n \+ path\]\.w & 0x1fffffffu\) >= 2u\) \{\s*return;/);
+    expect((refill.shadeSecondary as { code: string }).code).toMatch(/\(ptwfState\[2u \* n \+ path\]\.w & 0x1fffffffu\) < 2u\) \{\s*return;/);
   });
 });

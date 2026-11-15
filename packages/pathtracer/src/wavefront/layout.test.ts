@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PTWF_INIT, PTWF_LIVE, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP, ptwfArgsStart, ptwfArgsStep, ptwfBufferBytes, ptwfDispatchesPerSample, ptwfGroups, ptwfHasNext, ptwfPackDepth, ptwfQueueOffsets, ptwfRefillDecision, ptwfRecordsPerSample, ptwfSampleOf, ptwfSlot, ptwfStateBytes, ptwfUnpackDepth } from './layout.ts';
+import { PTWF_INIT, PTWF_LIVE, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP, ptwfArgsStart, ptwfArgsStep, ptwfBlockSortPositions, ptwfBufferBytes, ptwfDispatchesPerSample, ptwfGroups, ptwfHasNext, ptwfHitSortKey, ptwfLodClass, ptwfOrderedAppend, ptwfPackDepth, ptwfQueueOffsets, ptwfRefillDecision, ptwfRecordsPerSample, ptwfRaySortKey, ptwfSampleOf, ptwfSlot, ptwfStateBytes, ptwfSubgroupAppend, ptwfUnpackDepth } from './layout.ts';
 
 describe('wavefront layout (P3.1)', () => {
   it('path state is 64 B plain and 80 B with a medium or textures, under the 96 B budget', () => {
@@ -222,5 +222,56 @@ describe('wavefront layout (P3.1)', () => {
       }
       for (let slot = 0; slot < slots; slot++) expect(live[slot]).toBe(0);
     }
+  });
+});
+
+describe('wavefront scheduling twins (P3.3, P3.4, P3.10, R1b)', () => {
+  it('subgroup append: one reservation per subgroup, lanes keep their order, every wanting lane gets a distinct slot', () => {
+    const wants = [true, false, true, true, false, false, true, false];
+    const r = ptwfSubgroupAppend(wants, 100);
+    expect(r.slots).toEqual([100, -1, 101, 102, -1, -1, 103, -1]);
+    expect(r.counter).toBe(104);
+    expect(ptwfSubgroupAppend(wants.map(() => false), 7)).toEqual({ slots: wants.map(() => -1), counter: 7 });
+    // two subgroups append back to back: ranges are disjoint and dense
+    const a = ptwfSubgroupAppend([true, true, false, true], 0);
+    const b = ptwfSubgroupAppend([true, false, true, true], a.counter);
+    expect([...a.slots, ...b.slots].filter((s) => s >= 0).sort((x, y) => x - y)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('block sort: a stable permutation inside the block, ascending keys; the keys of the hit and ray sorts', () => {
+    const keys = Array.from({ length: PTWF_WORKGROUP }, (_, i) => (i * 7 + (i >> 2)) % 5);
+    const pos = ptwfBlockSortPositions(keys);
+    expect([...pos].sort((a, b) => a - b)).toEqual(keys.map((_, i) => i)); // a permutation
+    const sorted = new Array<number>(keys.length);
+    const origin = new Array<number>(keys.length);
+    pos.forEach((p, i) => {
+      sorted[p] = keys[i] as number;
+      origin[p] = i;
+    });
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i]).toBeGreaterThanOrEqual(sorted[i - 1] as number);
+      if (sorted[i] === sorted[i - 1]) expect(origin[i]).toBeGreaterThan(origin[i - 1] as number); // stable
+    }
+    expect(ptwfBlockSortPositions([])).toEqual([]);
+    expect(ptwfHitSortKey(-1, 7)).toBe(0);
+    expect(ptwfHitSortKey(2, 0)).toBe(1);
+    expect(ptwfHitSortKey(2, 15)).toBe(1);
+    expect(ptwfHitSortKey(2, 14)).toBe(15);
+    expect(ptwfRaySortKey([1, 1, 1])).toBe(0);
+    expect(ptwfRaySortKey([-1, 1, -1])).toBe(5);
+    expect(ptwfRaySortKey([-1, -1, -1])).toBe(7);
+  });
+
+  it('ordered restart: restarted slots join the queue in slot order, contiguous per block (inline appends scatter them)', () => {
+    const flags = Array.from({ length: PTWF_WORKGROUP }, (_, i) => i % 3 === 0);
+    const r = ptwfOrderedAppend(flags, 5, 10);
+    expect(r.entries).toEqual(flags.map((f, i) => (f ? 5 * PTWF_WORKGROUP + i : -1)).filter((s) => s >= 0));
+    expect(r.counter).toBe(10 + r.entries.length);
+    expect([...r.entries]).toEqual([...r.entries].sort((a, b) => a - b));
+    expect(ptwfOrderedAppend(flags.map(() => false), 0, 3)).toEqual({ entries: [], counter: 3 });
+  });
+
+  it('R1b: the two shade kernels partition the depths, so a path is shaded by exactly one of them per iteration', () => {
+    for (let depth = 0; depth < 8; depth++) expect([ptwfLodClass(depth, 1), ptwfLodClass(depth, 3)]).toEqual([depth < 1 ? 'first' : 'second', depth < 3 ? 'first' : 'second']);
   });
 });

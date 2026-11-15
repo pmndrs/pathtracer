@@ -18,6 +18,7 @@ export * from './integrator/outputs-wgsl.ts';
 export * from './integrator/vbuffer.ts';
 export * from './bsdf/thinfilm.ts';
 export * from './bsdf/thinfilm-wgsl.ts';
+export * from './wavefront/auto-policy.ts';
 export * from './wavefront/layout.ts';
 export * from './wavefront/wavefront-wgsl.ts';
 export * from './wavefront/wavefront.ts';

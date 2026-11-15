@@ -41,6 +41,16 @@ export interface PtwfConfig {
   batch: boolean;
   threshold: number;
   layers: number;
+  /** P3.3: queue appends of the shade kernel are aggregated per subgroup (one `atomicAdd` per subgroup, lane order kept); needs the `subgroups` feature. */
+  subgroup?: boolean;
+  /** P3.10: `refill: 'ordered'`: the shade kernel starts the next sample inline but only flags the slot; the `primary` kernel appends the flagged slots in slot (pixel) order. Needs `refill`. */
+  ordered?: boolean;
+  /** P3.4: the `sortHit` kernel (counting sort of each 64-entry block of the queue by material, between intersect and shade) is built and dispatched. */
+  sortHit?: boolean;
+  /** P3.4: the `sortRay` kernel (block sort of the next queue by ray-direction octant, before the next intersect) is built and dispatched. */
+  sortRay?: boolean;
+  /** R1b: with refill, a queue mixes depths, so the two shade kernels of `materialLod: 'secondary'` each skip the entries of the other class (`first`: depth < `depth`, `second`: depth >= `depth`). */
+  lodGate?: { role: 'first' | 'second'; depth: number };
 }
 export const PTWF_PLAIN: PtwfConfig = { refill: false, batch: false, threshold: 0.25, layers: 1 };
 
@@ -67,6 +77,7 @@ const PTWF_WG: u32 = ${PTWF_WORKGROUP}u;
 const PTWF_STRIDE: u32 = ${PTWF_STRIDE}u;
 const PTWF_INIT: u32 = ${PTWF_INIT}u;
 ${wf.refill ? `const PTWF_LAYERS: u32 = ${wf.layers}u;
+` : ''}${wf.lodGate ? `const PTWF_CONSUMED: u32 = 0xffffffffu;
 ` : ''}
 // path slots: the stride of every SoA section (one per pixel, or layers per pixel in refill mode)
 fn ptwfSlots(dims: vec4u) -> u32 {
@@ -549,7 +560,25 @@ fn ptwfAddRadiance(path: u32, l: vec3f) {
     }
 }
 
-${wf.refill ? `// the path of this thread did not continue (escaped, absorbed, depth limit, roulette): the slot starts its next sample or goes dormant
+${wf.subgroup ? `// P3.3: the shade body only says whether the path queued a shadow ray / continues; the kernel appends once per subgroup in uniform control flow
+var<private> ptwfWantShadow: bool;
+var<private> ptwfWantNext: bool;
+
+// one atomicAdd per subgroup; the lanes keep their order inside the reserved range. Returns the queue slot (valid when \`want\`).
+fn ptwfAppend(want: bool, counter: u32) -> u32 {
+    let one = select(0u, 1u, want);
+    let rank = subgroupExclusiveAdd(one);
+    let total = subgroupAdd(one);
+    var base = 0u;
+    if (subgroupElect()) {
+        if (total > 0u) {
+            base = atomicAdd(&ptwfCount[counter], total);
+        }
+    }
+    return subgroupBroadcastFirst(base) + rank;
+}
+
+` : ''}${wf.refill ? `// the path of this thread did not continue (escaped, absorbed, depth limit, roulette): the slot starts its next sample or goes dormant
 var<private> ptwfLive: bool;
 
 fn ptwfSampleIndex(path: u32) -> u32 {
@@ -567,6 +596,12 @@ fn ptwfRestart(path: u32) {
     }
 ${wf.batch ? `    ptwfState[2u * n + path].w = 0u;
     atomicAdd(&ptwfCount[${PTWF_COUNT_IDLE}u], 1u);
+` : wf.ordered ? `    ptwfStartPath(path, n, sampleIndex);
+    ptAccum[path].w = f32(started + 1u);
+    ptwfState[path].w = 0xffffffffu; // pending: the primary kernel appends it to the next queue in slot order
+` : wf.subgroup ? `    ptwfStartPath(path, n, sampleIndex);
+    ptAccum[path].w = f32(started + 1u);
+    ptwfWantNext = true;
 ` : `    ptwfStartPath(path, n, sampleIndex);
     ptAccum[path].w = f32(started + 1u);
     let nq = (ptParams.limits.w + 1u) & 1u;
@@ -674,9 +709,10 @@ ${aniso ? `    var frame = ptFrameFromNormal(${shadingNormal});
             ptwfShadowRay[path] = vec4u(bitcast<vec3u>(ld.ray.origin), bitcast<u32>(ld.ray.tMin));
             ptwfShadowRay[n + path] = vec4u(bitcast<vec3u>(ld.ray.direction), bitcast<u32>(ld.ray.tMax));
             ptwfShadowRay[2u * n + path] = vec4u(bitcast<vec3u>(beta * ld.contrib), 0u);
-            let ss = atomicAdd(&ptwfCount[2u + (iter & 1u)], 1u);
+${wf.subgroup ? `            ptwfWantShadow = true;
+` : `            let ss = atomicAdd(&ptwfCount[2u + (iter & 1u)], 1u);
             ptwfQueue[2u * n + ss] = path;
-${counters ? `            ptCountRay(path, 0u, 1u);
+`}${counters ? `            ptCountRay(path, 0u, 1u);
 ` : ''}        }
     }
 ${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' })};
@@ -739,27 +775,175 @@ ${wf.refill ? `    ptwfLive = true;
     next.coneSpread = ${tex ? 'cone.spread' : '0.0'};
 ${aovs ? `    next.aovDone = aovDone;
 ` : ''}    ptwfStorePath(path, n, next);
-    let nq = (iter + 1u) & 1u;
+${wf.subgroup ? `    ptwfWantNext = true;
+` : `    let nq = (iter + 1u) & 1u;
     let slot = atomicAdd(&ptwfCount[nq], 1u);
     ptwfQueue[nq * n + slot] = path;
-}
+`}}
 
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfShade(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
     let q = iter & 1u;
     let slot = ptwfSlot(wid, li);
-    if (slot >= atomicLoad(&ptwfCount[q])) {
+${wf.subgroup ? ptwfShadeEntrySubgroup(wf) : `    if (slot >= atomicLoad(&ptwfCount[q])) {
         return;
     }
     let n = ptwfSlots(ptParams.dims);
 ${wf.refill ? `    ptwfLive = false;
     let path = ptwfQueue[q * n + slot];
-    ptwfShadePath(path);
+${wf.lodGate ? `    if (${ptwfGateTest(wf, `(ptwfState[2u * n + path].w & 0x1fffffffu)`, true)}) {
+        return;
+    }
+` : ''}    ptwfShadePath(path);
     if (!ptwfLive) {
         ptwfRestart(path);
     }
-` : `    ptwfShadePath(ptwfQueue[q * n + slot]);
-`}}
+${wf.lodGate?.role === 'first' ? `    ptwfQueue[q * n + slot] = PTWF_CONSUMED;
+` : ''}` : `    ptwfShadePath(ptwfQueue[q * n + slot]);
+`}`}}
+`;
+}
+
+/**
+ * R1b gate: the test that is true for a queue entry this shade kernel must skip (\`skip\`), or must process. The class is the path's depth when the
+ * kernel starts: the FIRST kernel (depth < N) runs before the SECOND (depth >= N) over the same queue and may raise a depth past N (or restart a slot at 0),
+ * so it overwrites each entry it consumed with \`PTWF_CONSUMED\` and the second kernel skips those, instead of reading a changed state.
+ */
+function ptwfGateTest(wf: PtwfConfig, depthExpr: string, skip: boolean): string {
+  const g = wf.lodGate as { role: 'first' | 'second'; depth: number };
+  const first = g.role === 'first';
+  // keep: first -> depth < D, second -> depth >= D (and not consumed)
+  if (skip) return `path == PTWF_CONSUMED || ${depthExpr} ${first ? '>=' : '<'} ${g.depth}u`;
+  return `path != PTWF_CONSUMED && ${depthExpr} ${first ? '<' : '>='} ${g.depth}u`;
+}
+
+/** The shade entry point of the subgroup-append variant (P3.3): no early return before the ballots (they need uniform control flow), the appends sit after the shade body. */
+function ptwfShadeEntrySubgroup(wf: PtwfConfig): string {
+  return `    let n = ptwfSlots(ptParams.dims);
+    var path = 0u;
+    var go = false;
+    ptwfWantShadow = false;
+    ptwfWantNext = false;
+${wf.refill ? `    ptwfLive = false;
+` : ''}    if (slot < atomicLoad(&ptwfCount[q])) {
+        path = ptwfQueue[q * n + slot];
+        go = ${wf.lodGate ? ptwfGateTest(wf, '(ptwfState[2u * n + path].w & 0x1fffffffu)', false) : 'true'};
+    }
+    if (go) {
+        ptwfShadePath(path);
+${wf.refill ? `        if (!ptwfLive) {
+            ptwfRestart(path);
+        }
+${wf.lodGate?.role === 'first' ? `        ptwfQueue[q * n + slot] = PTWF_CONSUMED;
+` : ''}` : ''}    }
+    let ss = ptwfAppend(ptwfWantShadow, 2u + (iter & 1u));
+    if (ptwfWantShadow) {
+        ptwfQueue[2u * n + ss] = path;
+    }
+    let nq = (iter + 1u) & 1u;
+    let ns = ptwfAppend(ptwfWantNext, nq);
+    if (ptwfWantNext) {
+        ptwfQueue[nq * n + ns] = path;
+    }
+`;
+}
+
+/** Buckets of the block sort keys (the key is `< PTWF_SORT_KEYS`; the sentinel of an empty lane is `PTWF_SORT_KEYS`). */
+export const PTWF_SORT_KEYS = 16;
+
+/**
+ * Block-wise counting sort of the queue (P3.4, no global payload sort: spec section 5). One workgroup takes one 64-entry block of a queue, computes a small key per
+ * entry, and writes the entries back into the SAME block ordered by key (stable inside a key: an entry's new position = the entries with a smaller key + the earlier
+ * entries of its own key, found by one pass over the 64 keys in shared memory). Coherence it buys: the 32 lanes of a subgroup mostly hold one key, so shade runs
+ * one material per subgroup (`kind: 'hit'`, key = miss / material id mod 15, from the hit record) and the next intersect traces one direction octant per
+ * subgroup (`kind: 'ray'`, key = sign bits of the ray direction, from the path state). Each queue entry is read once before the barrier and written once after it,
+ * so the in-place rewrite is safe, and no counter changes: only the order inside a block.
+ *
+ * 'hit' sorts `Q[iter & 1]` (dispatched between intersect and shade of an iteration with that iteration's args); 'ray' sorts `Q[(iter + 1) & 1]`, the queue shade just filled
+ * (dispatched after the args kernel, whose main args are that queue's count).
+ */
+export function ptwfSortWgsl(kind: 'hit' | 'ray', wf: PtwfConfig = PTWF_PLAIN): string {
+  const hit = kind === 'hit';
+  return /* wgsl */ `
+${PT_PARAMS_WGSL}
+${bindings(hit ? ['params', 'hit', 'count', 'queue'] : ['params', 'state', 'count', 'queue'])}
+${commonWgsl(wf)}
+var<workgroup> ptwfKeys: array<u32, ${PTWF_WORKGROUP}>;
+
+@compute @workgroup_size(${PTWF_WORKGROUP})
+fn ptwfSort(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+    let iter = ptParams.limits.w;
+    let q = ${hit ? 'iter & 1u' : '(iter + 1u) & 1u'};
+    let count = atomicLoad(&ptwfCount[q]);
+    let first = (wid.y * PTWF_STRIDE + wid.x) * PTWF_WG;
+    let n = ptwfSlots(ptParams.dims);
+    let slot = first + li;
+    let valid = slot < count;
+    var path = 0u;
+    var key = ${PTWF_SORT_KEYS}u;
+    if (valid) {
+        path = ptwfQueue[q * n + slot];
+${hit ? `        let h = ptwfHit[path];
+        key = select(1u + h.w % 15u, 0u, bitcast<f32>(h.x) < 0.0);
+` : `        let d = ptwfF3(ptwfState[n + path]);
+        key = select(0u, 1u, d.x < 0.0) | select(0u, 2u, d.y < 0.0) | select(0u, 4u, d.z < 0.0);
+`}    }
+    ptwfKeys[li] = key;
+    workgroupBarrier();
+    if (valid) {
+        var pos = 0u;
+        for (var j = 0u; j < PTWF_WG; j++) {
+            let k = ptwfKeys[j];
+            pos += select(0u, 1u, k < key || (k == key && j < li));
+        }
+        ptwfQueue[q * n + first + pos] = path;
+    }
+}
+`;
+}
+
+/**
+ * Primary kernel of 'ordered' refill (P3.10): appends the slots the shade kernel restarted this iteration (state word 0.w == 0xffffffff, a NaN pattern a real pdf never
+ * has) to the next queue IN SLOT ORDER: one workgroup per 64 slots, a serial exclusive scan of the 64 flags in shared memory, one `atomicAdd` per workgroup for the range,
+ * so a block of restarted primary rays stays contiguous and in pixel order (inline refill's per-thread `atomicAdd` scatters them: V87). Direct dispatch over all slots.
+ */
+export function ptwfPrimaryWgsl(wf: PtwfConfig = PTWF_PLAIN): string {
+  return /* wgsl */ `
+${PT_PARAMS_WGSL}
+${bindings(['params', 'state', 'count', 'queue'])}
+${commonWgsl(wf)}
+var<workgroup> ptwfFlag: array<u32, ${PTWF_WORKGROUP}>;
+var<workgroup> ptwfRank: array<u32, ${PTWF_WORKGROUP}>;
+var<workgroup> ptwfBase: u32;
+
+@compute @workgroup_size(${PTWF_WORKGROUP})
+fn ptwfPrimary(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+    let n = ptwfSlots(ptParams.dims);
+    let slot = ptwfSlot(wid, li);
+    var flag = 0u;
+    if (slot < n && ptwfState[slot].w == 0xffffffffu) {
+        flag = 1u;
+        ptwfState[slot].w = 0u; // prevPdf of a primary ray
+    }
+    ptwfFlag[li] = flag;
+    workgroupBarrier();
+    if (li == 0u) {
+        var total = 0u;
+        for (var i = 0u; i < PTWF_WG; i++) {
+            ptwfRank[i] = total;
+            total += ptwfFlag[i];
+        }
+        ptwfBase = 0u;
+        if (total > 0u) {
+            ptwfBase = atomicAdd(&ptwfCount[(ptParams.limits.w + 1u) & 1u], total);
+        }
+    }
+    workgroupBarrier();
+    if (flag == 1u) {
+        let nq = (ptParams.limits.w + 1u) & 1u;
+        ptwfQueue[nq * n + ptwfBase + ptwfRank[li]] = slot;
+    }
+}
 `;
 }

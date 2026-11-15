@@ -184,3 +184,50 @@ export function ptwfRefillDecision(live: number, idle: number, slots: number, th
   const refill = idle > 0 && (live === 0 || live < Math.floor(slots * threshold)) ? idle : 0;
   return { refill, main: ptwfGroups(live + refill), refillGrid: refill > 0 ? [Math.ceil(width / 8), Math.ceil(height / 8), layers] : [0, 0, 0] };
 }
+
+/**
+ * P3.3: subgroup-aggregated append (TS twin of WGSL `ptwfAppend`). `wants[i]` = lane i of one subgroup wants a queue slot; one `atomicAdd` of the number of
+ * wanting lanes reserves a contiguous range at `counter` and each lane takes `base + (wanting lanes before it)`, so the lanes keep their order. Returns the
+ * slot of every wanting lane (-1 for the others) and the new counter.
+ */
+export function ptwfSubgroupAppend(wants: readonly boolean[], counter: number): { slots: number[]; counter: number } {
+  const total = wants.filter(Boolean).length;
+  let rank = 0;
+  const slots = wants.map((w) => (w ? counter + rank++ : -1));
+  return { slots, counter: counter + total };
+}
+
+/**
+ * P3.4: block-wise counting sort of one queue block (TS twin of WGSL `ptwfSort`): returns, for every entry, its new position inside the block. Position =
+ * entries with a smaller key + earlier entries with the same key (stable). `keys.length` is at most `PTWF_WORKGROUP`.
+ */
+export function ptwfBlockSortPositions(keys: readonly number[]): number[] {
+  return keys.map((key, i) => keys.reduce((pos, k, j) => pos + (k < key || (k === key && j < i) ? 1 : 0), 0));
+}
+
+/** P3.4 key of the `hit` sort (TS twin of the WGSL): 0 for a miss, else 1 + material % 15. */
+export function ptwfHitSortKey(hitT: number, material: number): number {
+  return hitT < 0 ? 0 : 1 + (material % 15);
+}
+
+/** P3.4 key of the `ray` sort (octant): the sign bits of the direction, x | y << 1 | z << 2. */
+export function ptwfRaySortKey(dir: readonly [number, number, number]): number {
+  return (dir[0] < 0 ? 1 : 0) | (dir[1] < 0 ? 2 : 0) | (dir[2] < 0 ? 4 : 0);
+}
+
+/**
+ * P3.10 ordered restart (TS twin of WGSL `ptwfPrimary`): the slots flagged in one 64-slot block are appended to the queue in slot order with one
+ * range reservation. `flags[i]` = slot `block * 64 + i` was restarted this iteration. Returns the queue entries written (slot ids) and the new counter.
+ */
+export function ptwfOrderedAppend(flags: readonly boolean[], block: number, counter: number): { entries: number[]; counter: number } {
+  const entries: number[] = [];
+  flags.forEach((f, i) => {
+    if (f) entries.push(block * PTWF_WORKGROUP + i);
+  });
+  return { entries, counter: counter + entries.length };
+}
+
+/** R1b: which shade kernel handles a path of `depth` when `materialLod: 'secondary'` runs with refill (the gate of `ptwfShadeWgsl`). */
+export function ptwfLodClass(depth: number, lodDepth: number): 'first' | 'second' {
+  return depth < lodDepth ? 'first' : 'second';
+}

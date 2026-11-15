@@ -77,8 +77,13 @@ describe('materialLod (R1)', () => {
     expect(bytes.shadeSecondary).toBeLessThan(50_000);
   });
 
-  it('refill modes are not supported yet (a refilled slot mixes depths in one queue)', () => {
-    expect(() => ptWavefrontBuild(caps, { format: {}, layout, integrator: { materials: materials('albedo'), materialLod: 'secondary' }, refill: true })).toThrow(/materialLod/);
+  it('refill modes (R1b): both shade kernels exist, each skipping the other depth class (a refilled queue mixes depths)', () => {
+    for (const refill of [true, 'batch', 'ordered'] as const) {
+      const b = ptWavefrontBuild(caps, { format: {}, layout, integrator: { materials: materials('albedo'), materialLod: 'secondary', materialLodDepth: 1 }, refill, shortenNames: false, minify: false });
+      expect(b.shadeSecondary, String(refill)).toBeDefined();
+      expect(b.shade.code).toMatch(/& 0x1fffffffu\) >= 1u\) \{\s*return;/);
+      expect((b.shadeSecondary as { code: string }).code).toMatch(/& 0x1fffffffu\) < 1u\) \{\s*return;/);
+    }
   });
 
   it('no WGSL identifier of the reduced adapter is a reserved word', () => {
