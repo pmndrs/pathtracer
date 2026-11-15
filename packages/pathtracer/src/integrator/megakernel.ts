@@ -16,7 +16,7 @@
 import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
-import { ptBsdfAdapterWgsl, ptLayeredDispatchWgsl } from '../bsdf/adapter.ts';
+import { ptBsdfAdapterWgsl, ptBsdfReducedWgsl, ptLayeredDispatchWgsl, ptReducedKernelFeatures } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
 import { ptLayeredWgsl } from '../bsdf/layered-wgsl.ts';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
@@ -105,8 +105,17 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
   const film = mats?.features.thinFilm ? [stripWgslComments(ptThinFilmWgsl())] : [];
   const fuzz = mats?.features.fuzz ? [stripWgslComments(ptFuzzWgsl({ layered: !!mats.features.layered }))] : [];
-  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler)];
+  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler)];
   return { integratorOptions, parts };
+}
+
+/**
+ * R1: the integrator options of the wavefront's secondary shade kernel (`materialLod: 'secondary'`): every vertex it shades is reduced, so the layered /
+ * fuzz / thin film / anisotropy / coated-metal code is not compiled (`ptReducedKernelFeatures`) while the reduced adapter still knows which of those the scene has (`reducedFrom`).
+ */
+export function ptSecondaryIntegratorOptions(integrator: PtIntegratorOptions = {}): PtIntegratorOptions {
+  const mats = integrator.materials;
+  return { ...integrator, lodKernel: 'secondary', materials: mats ? { ...mats, features: ptReducedKernelFeatures(mats.features), reducedFrom: mats.features } : mats };
 }
 
 /** The raytracer module options both schedulers use for the walk (group 0) and the scene copy (group 1). */

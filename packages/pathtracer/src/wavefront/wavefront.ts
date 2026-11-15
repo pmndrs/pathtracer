@@ -22,7 +22,7 @@ import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
 import { PT_PARAMS_BYTES, ptMaskShadow, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, ptDecodeAovs, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters } from '../integrator/outputs-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
-import { ptRaytracerModuleOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
+import { ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
 import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
 
@@ -70,7 +70,8 @@ function usesScene(kernel: (typeof PTWF_KERNELS)[number], integrator: PtIntegrat
   return o.alphaMask && (kernel === 'intersect' || (kernel === 'shadow' && ptMaskShadow(o)));
 }
 export type PtwfKernel = (typeof PTWF_KERNELS)[number];
-export type PtWavefrontBuild = Record<PtwfKernel, RtWgslBuild>;
+/** The five kernels, plus (`integrator.materialLod: 'secondary'`, R1) `shadeSecondary`: the smaller shade kernel for depth >= `materialLodDepth` (the `shade` kernel then only runs depth < N). */
+export type PtWavefrontBuild = Record<PtwfKernel, RtWgslBuild> & { shadeSecondary?: RtWgslBuild };
 
 /**
  * The shade kernel has no ray traversal, so it drops the walk's group 0 declarations (a declared binding must be in its pipeline layout, and
@@ -91,6 +92,11 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
     const o = resolveIntegratorOptions(options.integrator ?? {});
     if (o.aovs || o.counters || o.hooks) throw new Error('PtWavefront: layers > 1 does not support aovs / counters / hooks yet (they index per-pixel buffers by the path slot)');
   }
+  // R1: the shade kernel only ever sees depth < N when a secondary kernel takes over, so it is built as the default ('full') kernel, byte for byte.
+  const lod = resolveIntegratorOptions(options.integrator ?? {});
+  const lodOn = lod.lod !== 'off';
+  if (lodOn && wf.refill) throw new Error("PtWavefront: integrator.materialLod 'secondary' is not supported with refill yet (a refilled slot mixes depths in one queue: P3.x)");
+  if (lodOn) options = { ...options, integrator: { ...options.integrator, materialLod: 'full' } };
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const why = ptwfUnsupported(integratorOptions);
   if (why) throw new Error(`PtWavefront: unsupported: ${why}`);
@@ -100,7 +106,14 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   // Optional outputs (hooks, counters, AOVs; `integrator/outputs-wgsl.ts`) join the shade kernel only: it is the one that sees every vertex.
   const outputs = ptOutputsWgsl(resolveIntegratorOptions(integratorOptions), PTWF_BINDING.counters);
   const sampler = parts.slice(1, 2).concat(parts.slice(-1)).join('\n'); // Owen-Sobol + the sampler's ptSample2D
+  let shadeSecondary: RtWgslBuild | undefined;
+  if (lodOn) {
+    const second = ptShadingModulesWgsl({ ...options, integrator: { ...ptSecondaryIntegratorOptions(options.integrator), materialLod: 'secondary', materialLodDepth: lod.lodDepth } });
+    const secondOutputs = ptOutputsWgsl(resolveIntegratorOptions(second.integratorOptions), PTWF_BINDING.counters);
+    shadeSecondary = rtTransformWgsl(`${stripWalkBindings(full)}\n${second.parts.join('\n')}\n${secondOutputs ? `${secondOutputs}\n` : ''}${ptwfShadeWgsl(second.integratorOptions, wf)}`, { ...t, keep: ['ptwfShade'] });
+  }
   return {
+    ...(shadeSecondary ? { shadeSecondary } : {}),
     camera: rtTransformWgsl(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfCamera'] }),
     intersect: rtTransformWgsl(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${resolveIntegratorOptions(integratorOptions).primary === 'vbuffer' ? `${ptVbufferWgsl()}\n` : ''}${ptwfIntersectWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfIntersect'] }),
     shade: rtTransformWgsl(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, wf)}`, { ...t, keep: ['ptwfShade'] }),
@@ -110,8 +123,8 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
 }
 
 /** Bytes of each kernel's WGSL. */
-export function ptWavefrontKernelBytes(build: PtWavefrontBuild): Record<PtwfKernel, number> {
-  return Object.fromEntries(PTWF_KERNELS.map((k) => [k, build[k].code.length])) as Record<PtwfKernel, number>;
+export function ptWavefrontKernelBytes(build: PtWavefrontBuild): Record<PtwfKernel, number> & { shadeSecondary?: number } {
+  return { ...(Object.fromEntries(PTWF_KERNELS.map((k) => [k, build[k].code.length])) as Record<PtwfKernel, number>), ...(build.shadeSecondary ? { shadeSecondary: build.shadeSecondary.code.length } : {}) };
 }
 
 interface PtwfLayouts {
@@ -138,8 +151,11 @@ export class PtWavefront {
   readonly options: PtWavefrontOptions;
   /** Largest kernel's WGSL bytes (the D26 budget applies per kernel). */
   readonly wgslBytes: number;
-  readonly kernelBytes: Record<PtwfKernel, number>;
+  readonly kernelBytes: Record<PtwfKernel, number> & { shadeSecondary?: number };
   private readonly pipelines: Record<PtwfKernel, GPUComputePipeline>;
+  /** R1: the shade kernel of depth >= `lodDepth` (`integrator.materialLod: 'secondary'`), or null. */
+  private readonly pipelineSecondary: GPUComputePipeline | null;
+  private readonly lodDepth: number;
   private readonly layouts: PtwfLayouts;
   private readonly paramsBuffer: GPUBuffer;
   private readonly argsBuffer: GPUBuffer;
@@ -175,8 +191,10 @@ export class PtWavefront {
   /** Refill: what the last `finish` did (chunks submitted, iterations encoded, wall ms). */
   lastFinish = { chunks: 0, iterations: 0, ms: 0 };
 
-  private constructor(device: GPUDevice, options: PtWavefrontOptions, pipelines: Record<PtwfKernel, GPUComputePipeline>, layouts: PtwfLayouts, bytes: Record<PtwfKernel, number>, fuzzTable: GPUBuffer | null, medium: boolean, wf: PtwfConfig) {
+  private constructor(device: GPUDevice, options: PtWavefrontOptions, pipelines: Record<PtwfKernel, GPUComputePipeline>, layouts: PtwfLayouts, bytes: Record<PtwfKernel, number> & { shadeSecondary?: number }, fuzzTable: GPUBuffer | null, medium: boolean, wf: PtwfConfig, secondary: GPUComputePipeline | null, lodDepth: number) {
     this.device = device;
+    this.pipelineSecondary = secondary;
+    this.lodDepth = lodDepth;
     this.wf = wf;
     this.options = options;
     this.pipelines = pipelines;
@@ -218,13 +236,14 @@ export class PtWavefront {
     const entry: Record<PtwfKernel, string> = { camera: 'ptwfCamera', intersect: 'ptwfIntersect', shade: 'ptwfShade', shadow: 'ptwfShadow', args: 'ptwfArgsMain' };
     const made = await Promise.all(PTWF_KERNELS.map((k) => rtCreateComputePipelineAsync(device, { label: `${label} ${k}`, layout: pipelineLayouts[k], code: build[k].code, map: build[k].map, entryPoint: entry[k], sourceMap: options.sourceMap })));
     const pipelines = Object.fromEntries(PTWF_KERNELS.map((k, i) => [k, made[i]])) as Record<PtwfKernel, GPUComputePipeline>;
+    const secondary = build.shadeSecondary ? await rtCreateComputePipelineAsync(device, { label: `${label} shade secondary`, layout: pipelineLayouts.shade, code: build.shadeSecondary.code, map: build.shadeSecondary.map, entryPoint: entry.shade, sourceMap: options.sourceMap }) : null;
     let fuzzTable: GPUBuffer | null = null;
     if (features?.fuzz) {
       const table = ptFuzzTableF32();
       fuzzTable = device.createBuffer({ label: `${label} fuzz ltc`, size: table.byteLength, usage: STORAGE | COPY_DST });
       device.queue.writeBuffer(fuzzTable, 0, table);
     }
-    return new PtWavefront(device, options, pipelines, layouts, ptWavefrontKernelBytes(build), fuzzTable, !!features?.medium, wf);
+    return new PtWavefront(device, options, pipelines, layouts, ptWavefrontKernelBytes(build), fuzzTable, !!features?.medium, wf, secondary, resolveIntegratorOptions(options.integrator ?? {}).lodDepth);
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
@@ -378,8 +397,8 @@ export class PtWavefront {
       this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(sampleIndex, iter));
     };
     // Every pipeline has its own layout, so a pipeline switch invalidates the groups: set them all again.
-    const use = (kernel: PtwfKernel): void => {
-      pass.setPipeline(this.pipelines[kernel]);
+    const use = (kernel: PtwfKernel, secondary = false): void => {
+      pass.setPipeline(secondary && this.pipelineSecondary ? this.pipelineSecondary : this.pipelines[kernel]);
       pass.setBindGroup(0, USES_WALK[kernel] ? walkGroup : emptyGroup);
       pass.setBindGroup(1, this.layouts.scene_[kernel] ? sceneGroup : emptyGroup);
       pass.setBindGroup(2, ioGroups[kernel], [offset]);
@@ -396,7 +415,7 @@ export class PtWavefront {
         record(this.samples, d);
         use('intersect');
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
-        use('shade');
+        use('shade', d >= this.lodDepth); // R1: from depth lodDepth on, the reduced-material shade kernel (when built)
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_MAIN);
         if (d === maxDepth) break; // depth maxDepth ends every path before NEE and the bounce: nothing left to trace
         use('args');

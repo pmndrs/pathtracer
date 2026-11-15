@@ -85,9 +85,46 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    * `refill: false`.
    */
   primary?: PtPrimary;
+  /**
+   * R1, ray-class material LOD (a real-time setting, BIASED: never for reference renders). `'full'` (default): every vertex evaluates the full
+   * material and the kernel text is unchanged. `'secondary'`: vertices at depth >= `materialLodDepth` (the hits of indirect rays) evaluate a reduced
+   * material (`ptBsdfReduced`, adapter.ts): the layered lobe / coat becomes a stochastic GGX-or-Lambert choice with the same directional albedo, a coated
+   * metal a plain conductor with the stack's reflectance, anisotropy its mean alpha, and fuzz and thin film are skipped; texture footprints
+   * are widened by `PT_LOD_TEX_BIAS` when `textureLod` is `'cone'`. Needs OpenPBR mode (`materials`) to change a BSDF (without it only the texture bias applies).
+   * The megakernel branches at run time (all lobes stay compiled for depth < N); the wavefront compiles a second, smaller shade kernel for depth >= N.
+   */
+  materialLod?: 'full' | 'secondary';
+  /** First scattering depth that uses the reduced material (`materialLod: 'secondary'`). Default 1 (the hits of indirect rays); 0 reduces every vertex (debug / furnace checks). */
+  materialLodDepth?: number;
+  /** @internal Set by the wavefront builder on its secondary shade kernel: every vertex it shades is reduced (no run-time branch). */
+  lodKernel?: 'secondary';
 }
 
 export type PtPrimary = 'trace' | 'vbuffer';
+
+/** R1: factor on the texture footprint (`fp`) of a reduced vertex with `textureLod: 'cone'`: 2 = one mip level coarser. */
+export const PT_LOD_TEX_BIAS = '2.0';
+
+/**
+ * R1: the lines `ptPath` (megakernel) and `ptwfShadePath` (wavefront) share to reduce a vertex. `expr` is the run-time condition (`true` in the wavefront's
+ * secondary kernel). Every field is '' when `o.lod` is 'off', so the default kernel text does not change.
+ */
+export function ptLodSnippets(o: ResolvedIntegratorOptions, indent: string): { decl: string; texBias: string; bsdf: (mixU: string, shadingNormal: string, hasMats: boolean) => string | null; and: string; fuzzW: string } {
+  if (o.lod === 'off') return { decl: '', texBias: '', bsdf: () => null, and: '', fuzzW: 'mat.sheenWeight' };
+  const always = o.lod === 'always';
+  const mats = !!o.materials;
+  return {
+    decl: `${indent}let lod = ${always ? 'true' : 'depth >= PT_LOD_DEPTH'};\n`,
+    texBias: o.textures ? ' * select(1.0, PT_LOD_TEX_BIAS, lod)' : '',
+    bsdf: (mixU, shadingNormal, hasMats) => {
+      if (!(mats && hasMats)) return null;
+      const reduced = `ptBsdfReduced(mat, ${mixU}, abs(dot(${shadingNormal}, -ray.direction)))`;
+      return always ? `${indent}let bp = ${reduced};\n` : `${indent}var bp: PtBsdfParams;\n${indent}if (lod) {\n${indent}    bp = ${reduced};\n${indent}} else {\n${indent}    bp = ptBsdfFromMaterial(mat, ${mixU});\n${indent}}\n`;
+    },
+    and: ' && !lod',
+    fuzzW: 'select(mat.sheenWeight, 0.0, lod)',
+  };
+}
 
 export type PtAlphaPolicy = 'exact' | 'opaqueShadow' | 'opaqueIndirect' | 'opaqueSecondary';
 
@@ -107,10 +144,13 @@ export interface ResolvedIntegratorOptions {
   counters: boolean;
   aovs: boolean;
   primary: PtPrimary;
+  /** R1: `'off'` (full material everywhere: no code changes), `'branch'` (megakernel and wavefront primary kernel: `depth >= lodDepth` at run time), `'always'` (wavefront secondary shade kernel). */
+  lod: 'off' | 'branch' | 'always';
+  lodDepth: number;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
-  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace' };
+  return { sampler: o.sampler ?? 'owen-sobol', nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask: (o.alphaMask ?? false) && (o.textures ?? false), alphaPolicy: (o.alphaMask ?? false) && (o.textures ?? false) ? o.alphaPolicy ?? 'exact' : 'exact', materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -150,7 +190,9 @@ const PT_INT_SCALE: f32 = 256.0;
 ${mask ? `const PT_MASK_SKIPS: u32 = 64u;
 ` : ''}${tex ? `const PT_TEX_CONE: bool = ${o.textureLod === 'cone'};
 const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
-` : ''}
+` : ''}${o.lod !== 'off' ? `const PT_LOD_DEPTH: u32 = ${o.lodDepth}u;
+${tex ? `const PT_LOD_TEX_BIAS: f32 = ${PT_LOD_TEX_BIAS};
+` : ''}` : ''}
 fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
     let ofs = vec3i(PT_INT_SCALE * n);
     let pi = bitcast<vec3f>(bitcast<vec3i>(p) + select(ofs, -ofs, p < vec3f(0.0)));
@@ -246,7 +288,8 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const film = !!mats?.features.thinFilm;
   const evalFn = fuzz ? 'ptFuzzedEval' : layered ? 'ptEval' : 'ptBsdfEval';
   const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
-  const mixU = mats?.features.mix ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
+  const lodS = ptLodSnippets(o, '        ');
+  const mixU = mats?.features.mix || (o.lod !== 'off' && mats) ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
   const hooks = !!o.hooks;
   const counters = o.counters;
   const aovs = o.aovs;
@@ -345,9 +388,9 @@ ${counters ? `        ptCountRay(pxIndex, 1u, 0u);
             radiance += beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf);
             break;
         }
-${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
+${lodS.decl}${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
         let coneW = rtConeAt(cone, hit.t);
-        let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
+        let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${lodS.texBias}, PT_TEX_CONE);
         let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);
         var shadingN = surf.shadingNormal;
         if (mat.normalTexture != RT_TEXTURE_NONE) {
@@ -383,9 +426,9 @@ ${hooks ? `        var hookEmitted = vec3f(0.0);
 ${hooks ? `            hookEmitted = beta * mat.emissionColor * w;
 ` : ''}        }
 
-        let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
-${film ? `        ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5);
-` : ''}${fuzz ? `        ptFuzzW = mat.sheenWeight;
+${lodS.bsdf(mixU, shadingNormal, true) ?? `        let bp = ptBsdfFromMaterial(mat${mats ? `, ${mixU}` : ''});
+`}${film ? `        ptFilm = select(vec3f(0.0), ptMaterialFilm(hit.material), mat.coatWeight <= 0.5 && mat.transmissionWeight <= 0.5${lodS.and});
+` : ''}${fuzz ? `        ptFuzzW = ${lodS.fuzzW};
         ptFuzzC = vec4f(mat.sheenColor, mat.sheenRoughness);
 ` : ''}${aovs ? `        if (depth == 0u) {
             ptAovPrimary(pxIndex, dims.x * dims.y, -dot(surf.position - origin, normalize(ptParams.forward.xyz)));
@@ -403,7 +446,7 @@ ${counters ? `            termReason = select(2u, 1u, ${black});
 ${layered ? `        ptLayerSeed = pixelSeed ^ (sampleIndex * 2654435761u) ^ (vertex * 2246822519u);
 ` : ''}
 ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
-        if (bp.kind == PT_BSDF_CONDUCTOR && mat.specularAnisotropy > 0.0) {
+        if (bp.kind == PT_BSDF_CONDUCTOR && mat.specularAnisotropy > 0.0${lodS.and}) {
             frame = ptFrameFromTangent(${shadingNormal}, surf.vertexTangent, mat.anisotropyRotation * 6.283185307179586);
         }
 ` : `        let frame = ptFrameFromNormal(${shadingNormal});
