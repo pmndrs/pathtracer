@@ -67,7 +67,7 @@ Status: ✅ done · 🟡 in progress · ⬜ not started. Rows in TASKS.md carry 
 | M2 | Speed | Fast portable kernels (N1.2), subgroup-matrix inference (N3a) and training (N3b), round-trip cost per layer (N3) | §3 budget met on the M5 Pro, or the gap is measured | N1.2, N2, N3, N3a–c | 🟡 inference ✅ (8.4 ms per million queries, quiet); emulated twin ✅ on the GPU; training 🟡 (tiled gradient: step 6.9 → 2.7 ms; forward-backward next) |
 | M3 | NRC on our path tracer | A cache hook for main's integrator (`ptOnVertex` / `ptTerminate`, `updateBlock` training paths): query and training buffers, target back-propagation, inference, resolve into the accumulation | Closed-room check: the learned cache converges to the analytic indirect radiance `ρE/(1−ρ)`; megakernel = wavefront | N6a | ✅ megakernel (room gate: 0.06-0.55% mean error, all backends); wavefront open |
 | M4 | Demo page | `nrc-live` (§2), user-testable | The maintainer can run it and see both halves | N6b | 🟡 built and running (`nrc:live`); try it in flagged Chrome |
-| M5 | Equal-time study | `nrc` runner page; tables on sponza-white: relMSE, FLIP, bias, stability vs plain PT at equal ms | Q2 answered on the M5 Pro | N6c | ✅ first pass (windowed): warm cache 3.1-3.8× lower relMSE at equal frames, 5-6× per unit time; adapts within 1-8 frames ([NRC-STUDY.md](../../bench/results/NRC-STUDY.md)) |
+| M5 | Equal-time study | `nrc` runner page; tables on sponza-white: relMSE, FLIP, bias, stability vs plain PT at equal ms | Q2 answered on the M5 Pro | N6c | ✅ (windowed): warm cache 3.2-4.3× lower relMSE at equal frames, 5-7× per unit time; steady from frame 1 after a cut, even into an unseen corridor ([NRC-STUDY.md](../../bench/results/NRC-STUDY.md)) |
 | M6 | Windows / NVIDIA | Matrix path on the RTX 3060 (Dawn Vulkan vs D3D12), N2 table there, VkNRC native baseline | Q3 answered for NVIDIA; native vs web ratio | N0.3, N6.1, N6.2 | ⬜ (maintainer's laptop) |
 | M7 | Hash-cache competitor | SHaRC-like non-neural cache at equal time | Q4 answered | N7 | ⬜ |
 | M8 | Write-up | `bench/results/NRC.md`, viewer report; gpuweb feedback (maintainer decides) | Maintainer review | N8, N9 | ⬜ |
@@ -107,6 +107,10 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-15 (Mac, session 7).** Unseen-region test: a cache trained only on the ground floor is at its steady error in the
+  upper-gallery corridor from the first frame after a cut. Found and fixed: training tiles showed as noisy columns in the image
+  (now display query + fix-up), plus a query-buffer overflow. Final windowed numbers: warm error 3.2-4.3× lower than plain at
+  equal frames, 5-7× per unit time; a fresh cache overshoots on its first 1-2 frames (N6f).
 - **2026-11-15 (Mac, session 6).** Windowed Chrome is the timing reference now (headless differences backlogged, N6e). There a
   cache frame costs less than one plain sample (0.58× at 720p); warm error 3.1-3.8× lower at equal frames, 5-6× per unit time.
   Adaptation: a cache trained elsewhere in the atrium is at steady state on the first frame after a cut; a fresh one in ~8 frames.
