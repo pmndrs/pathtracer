@@ -130,7 +130,7 @@ export function pickSubgroupMatrixConfig(info: GPUAdapterInfo | undefined, shape
 }
 
 /** Matrix built-ins, native or emulated. */
-interface Ops {
+export interface Ops {
   prelude: string;
   left: string;
   right: string;
@@ -139,13 +139,17 @@ interface Ops {
   loadLeft(offset: string, stride: string): string;
   /** Load a right tile from the weight buffer as a column-major view. */
   loadRight(offset: string, stride: string): string;
+  /** Load a right tile as a row-major view of the weight buffer (K rows × N columns, element (k, n) at offset + k * stride + n): Wᵀ-free products δ·W of the backward pass. */
+  loadRightN(offset: string, stride: string): string;
   zero(): string;
   mma(l: string, r: string, acc: string): string;
+  /** Multiply-accumulate with a right tile from `loadRightN`. */
+  mmaN(l: string, r: string, acc: string): string;
   /** Store a result tile to workgroup results (row-major). */
   store(offset: string, value: string, stride: string): string;
 }
 
-function nativeOps(c: SgmConfig): Ops {
+export function nativeOps(c: SgmConfig): Ops {
   const left = `subgroup_matrix_left<${c.componentType}, ${c.K}, ${c.M}>`;
   const right = `subgroup_matrix_right<${c.componentType}, ${c.N}, ${c.K}>`;
   const result = `subgroup_matrix_result<${c.resultComponentType}, ${c.N}, ${c.M}>`;
@@ -156,8 +160,10 @@ function nativeOps(c: SgmConfig): Ops {
     result,
     loadLeft: (off, stride) => `subgroupMatrixLoad<${left}>(&nnA, ${off}, false, ${stride})`,
     loadRight: (off, stride) => `subgroupMatrixLoad<${right}>(&nnSgmW, ${off}, true, ${stride})`,
+    loadRightN: (off, stride) => `subgroupMatrixLoad<${right}>(&nnSgmW, ${off}, false, ${stride})`,
     zero: () => `${result}()`,
     mma: (l, r, acc) => `subgroupMatrixMultiplyAccumulate(${l}, ${r}, ${acc})`,
+    mmaN: (l, r, acc) => `subgroupMatrixMultiplyAccumulate(${l}, ${r}, ${acc})`,
     store: (off, value, stride) => `subgroupMatrixStore(&nnS, ${off}, ${value}, false, ${stride})`,
   };
 }
@@ -169,7 +175,7 @@ export function sgmEmuElementsPerLane(c: Pick<SgmConfig, 'M' | 'N'>): number {
 
 const EMU_LANES = 32;
 
-function emulatedOps(c: SgmConfig): Ops {
+export function emulatedOps(c: SgmConfig): Ops {
   const { M, N, K } = c;
   const E = sgmEmuElementsPerLane(c);
   const guard = M * N % EMU_LANES ? `if (e >= ${M * N}u) { continue; }\n    ` : '';
@@ -196,6 +202,18 @@ fn emuMma(l: EmuLeft, r: EmuRight, acc: EmuResult) -> EmuResult {
   }
   return o;
 }
+fn emuMmaN(l: EmuLeft, r: EmuRight, acc: EmuResult) -> EmuResult {
+  var o = acc;
+  for (var j = 0u; j < ${E}u; j++) {
+    let e = nnEmuLane + j * ${EMU_LANES}u;
+    ${guard}let i = e / ${N}u;
+    let n = e % ${N}u;
+    var s = o[j];
+    for (var k = 0u; k < ${K}u; k++) { s += f32(nnA[l.x + i * l.y + k]) * f32(nnSgmW[r.x + k * r.y + n]); }
+    o[j] = s;
+  }
+  return o;
+}
 fn emuStore(off: u32, v: EmuResult, stride: u32) {
   for (var j = 0u; j < ${E}u; j++) {
     let e = nnEmuLane + j * ${EMU_LANES}u;
@@ -208,13 +226,15 @@ fn emuStore(off: u32, v: EmuResult, stride: u32) {
     result: 'EmuResult',
     loadLeft: (off, stride) => `vec2u(${off}, ${stride})`,
     loadRight: (off, stride) => `vec2u(${off}, ${stride})`,
+    loadRightN: (off, stride) => `vec2u(${off}, ${stride})`,
     zero: () => 'EmuResult()',
     mma: (l, r, acc) => `emuMma(${l}, ${r}, ${acc})`,
+    mmaN: (l, r, acc) => `emuMmaN(${l}, ${r}, ${acc})`,
     store: (off, value, stride) => `emuStore(${off}, ${value}, ${stride})`,
   };
 }
 
-function directives(o: SgmOptions): string[] {
+export function directives(o: SgmOptions): string[] {
   const d: string[] = [];
   const usesSubgroupId = o.subgroups > 1 && !o.offsetsFromLocalIndex && !o.emulate;
   if (!o.emulate) d.push(`enable ${o.enableName ?? 'chromium_experimental_subgroup_matrix'};`);
@@ -224,7 +244,7 @@ function directives(o: SgmOptions): string[] {
   return d;
 }
 
-function mlpOptions(o: SgmOptions): MlpWgslOptions {
+export function mlpOptions(o: SgmOptions): MlpWgslOptions {
   // T is the operand type; emulation runs in f32.
   return { shape: o.shape, precision: o.emulate ? 'f32' : o.config.componentType };
 }

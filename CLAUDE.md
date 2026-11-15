@@ -595,3 +595,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   counter, and every clear gets a new seed (else each restarted image repeats the same noise).
 - NRC wall-clock frame times from the runner's headless Chrome were 2-4x the windowed flagged Chrome's (640×360 cache frame
   37.9 vs 9.0 ms) and not in the same ratio to plain path tracing: do not mix the two; the cause is open.
+- Subgroup-matrix training on Apple (N3b): f32 needs R ≤ 32 records per workgroup (R×S×8 B + 16 B per record of targets in
+  32 KiB); one subgroup per workgroup is 2-3× slower than four; Apple's only f16 config is f16→f16, so f16 sums are noisier than
+  the tiled kernel's (f32 row sums). Short MLP kernels time bimodally on this Mac (0.3-1.0 ms medians on a quiet machine):
+  quote min and p25.

@@ -10,13 +10,13 @@
  * subgroups=1|4, sgmRecords=64.
  *
  * Args: precision=f32|f16 (default f32) records=256 steps=5 seed=1 gradient=tiled|perWeight (default perWeight)
- *       gradSplits=64 gradChunk=32 (tiled arm) forward=tiled|perRecord (default tiled) fwdRecords=64 f16 / 48 f32 (tiled forward)
+ *       gradSplits=64 gradChunk=32 (tiled arm) forward=tiled|perRecord|sgm|sgm-emu (default tiled; sgm: subgroups=1|4 via fwdSubgroups, tile=8|16 for sgm-emu) fwdRecords=64 f16 / 48 f32 (tiled forward)
  */
 
 import { AdamState, type ForwardKind, type GradientKind, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
+import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
 
 // Tolerances relative to max |value|. f16 activations/weights carry ~1e-3 relative rounding.
 const TOLERANCE: Record<Precision, { infer: number; gradient: number; weights: number }> = {
@@ -55,9 +55,8 @@ try {
   const shape = DEFAULT_SHAPE;
   const gradientKind = (args.gradient ?? 'tiled') as GradientKind;
   if (gradientKind !== 'perWeight' && gradientKind !== 'tiled') throw new Error(`gradient must be perWeight or tiled, got ${gradientKind}`);
-  const forwardKind = (args.forward ?? 'tiled') as ForwardKind;
-  if (forwardKind !== 'perRecord' && forwardKind !== 'tiled') throw new Error(`forward must be perRecord or tiled, got ${forwardKind}`);
-  const forwardOptions = args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {};
+  const forwardArg = args.forward ?? 'tiled';
+  const forwardOptions = args.fwdRecords && !forwardArg.startsWith('sgm') ? { records: numberArg(args, 'fwdRecords', 64) } : {};
   const gradientOptions = { splits: numberArg(args, 'gradSplits', 64), chunk: numberArg(args, 'gradChunk', 32) };
 
   const { adapter, device } = await requestMlpDevice();
@@ -79,7 +78,10 @@ try {
   const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8) });
   precision = arm.precision;
   const sgm = arm.sgm;
-  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, forward: forwardKind, forwardOptions, ...(sgm ? { sgm } : {}) });
+  const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', subgroups), tile: numberArg(args, 'tile', 8) });
+  precision = fwdArm.precision;
+  const forwardKind = fwdArm.forward;
+  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, forward: forwardKind, forwardOptions, ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}), ...(sgm ? { sgm } : {}) });
   const inputBuffer = storageBuffer(device, inputs, 'inputs');
   const targetBuffer = storageBuffer(device, targets, 'targets');
   const outputBuffer = storageBuffer(device, n * 3 * 4, 'outputs');
@@ -136,7 +138,7 @@ try {
     {
       scene: 'mlp-random',
       renderer: inferArm === 'portable' ? `wgsl-${precision}` : `wgsl-${inferArm}`,
-      config: { precision, forward: forwardKind, forwardOptions, gradient: gradientKind, gradientOptions, records: n, steps, seed, shape, infer: inferArm, sgm: sgm ?? null },
+      config: { precision, forward: forwardKind, forwardArm: fwdArm.description, trainSgm: fwdArm.trainSgm ?? null, forwardOptions, gradient: gradientKind, gradientOptions, records: n, steps, seed, shape, infer: inferArm, sgm: sgm ?? null },
       metrics: {
         infer_rel_error: infer.rel,
         gradient_rel_error: gradient.rel,

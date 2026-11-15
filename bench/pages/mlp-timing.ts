@@ -7,7 +7,7 @@
  * 2 × weights per record (multiply-adds of the unpadded network), so the sgm arm's padding is not credited.
  *
  * Args: precision=f32|f16  infer=portable|sgm|sgm-emu  size=1024 (inference records = size²)  repeats=20  warmup=3
- *       forward=tiled|perRecord  fwdRecords=64 f16 / 48 f32  batch=16384  trainSteps=20  sgmRecords=64  subgroups=1  gradient=tiled|perWeight  gradSplits=64  gradChunk=32
+ *       forward=tiled|perRecord|sgm|sgm-emu  fwdSubgroups=1|4  fwdRecords=64 f16 / 48 f32  batch=16384  trainSteps=20  sgmRecords=64  subgroups=1  gradient=tiled|perWeight  gradSplits=64  gradChunk=32
  * Per-stage training times (forward-backward / gradient / Adam, each its own pass) come from extra `stageSteps` steps
  * (default 20) with timestamps around each pass; the production-shape single-pass step is timed separately.
  */
@@ -15,7 +15,7 @@
 import { DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, initWeights, weightCount, type ForwardKind, type GradientKind, type Precision } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
+import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
 import { IMAGE_HOOKS_INFER, IMAGE_HOOKS_TRAIN, imageBindGroups, targetImage } from './mlp-image.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -33,9 +33,8 @@ try {
   const stageSteps = numberArg(args, 'stageSteps', 20);
   const gradient = (args.gradient ?? 'tiled') as GradientKind;
   if (gradient !== 'perWeight' && gradient !== 'tiled') throw new Error(`gradient must be perWeight or tiled, got ${gradient}`);
-  const forward = (args.forward ?? 'tiled') as ForwardKind;
-  if (forward !== 'perRecord' && forward !== 'tiled') throw new Error(`forward must be perRecord or tiled, got ${forward}`);
-  const forwardOptions = args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {};
+  const forwardArg = args.forward ?? 'tiled';
+  const forwardOptions = args.fwdRecords && !forwardArg.startsWith('sgm') ? { records: numberArg(args, 'fwdRecords', 64) } : {};
   const gradientOptions = { splits: numberArg(args, 'gradSplits', 64), chunk: numberArg(args, 'gradChunk', 32) };
   const records = size * size;
 
@@ -50,8 +49,11 @@ try {
     tile: numberArg(args, 'tile', 8),
     ...(args.roundTrip ? { roundTrip: args.roundTrip as 'relu' | 'skip' | 'double' } : {}),
   });
+  const fwdArm = forwardArmOptions(forwardArg, adapter, device, DEFAULT_SHAPE, arm.precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', numberArg(args, 'subgroups', 1)), tile: numberArg(args, 'tile', 8) });
+  const forward: ForwardKind = fwdArm.forward;
   const mlp = await MlpEngine.create(device, {
-    precision: arm.precision,
+    precision: fwdArm.precision,
+    ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}),
     capacity: batch,
     inferCapacity: records,
     train: DEFAULT_TRAIN,
@@ -124,7 +126,7 @@ try {
     {
       scene: 'mlp-timing-image',
       renderer: arm.sgm ? (arm.sgm.emulate ? 'wgsl-sgm-emu' : 'wgsl-sgm') : `wgsl-${arm.precision}`,
-      config: { arm: arm.description, precision: arm.precision, forward, forwardOptions, gradient, gradientOptions, size, records, batch, repeats, trainSteps, sgm: arm.sgm ?? null },
+      config: { arm: arm.description, forwardArm: fwdArm.description, precision: fwdArm.precision, forward, forwardOptions, gradient, gradientOptions, size, records, batch, repeats, trainSteps, sgm: arm.sgm ?? null },
       metrics: {
         gpu_ms_infer_median: inferMedian,
         gpu_ms_infer_min: Math.min(...inferMs),

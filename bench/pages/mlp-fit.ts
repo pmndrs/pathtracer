@@ -23,7 +23,7 @@ import { AdamState, DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, batchGradient, enco
 import { compareImages } from '../metrics/metrics.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, uploadImage, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
+import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
 import { IMAGE_TASK_ENCODING, IMAGE_TASK_LEARNING_RATE, imageHooksInfer, imageHooksTrain, targetImage, trainSample } from './mlp-image.ts';
 
 
@@ -63,15 +63,18 @@ try {
 
   const arm = inferArmOptions(args.infer ?? 'portable', adapter, device, DEFAULT_SHAPE, precision, { records: numberArg(args, 'sgmRecords', 64), subgroups: numberArg(args, 'subgroups', 1), tile: numberArg(args, 'tile', 8) });
   precision = arm.precision;
+  const fwdArm = forwardArmOptions(args.forward ?? 'tiled', adapter, device, DEFAULT_SHAPE, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', numberArg(args, 'subgroups', 1)), tile: numberArg(args, 'tile', 8) });
+  precision = fwdArm.precision;
   const mlp = await MlpEngine.create(device, {
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
+    ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}),
     precision,
     capacity: batch,
     inferCapacity: pixels,
     useEma,
     gradient: args.gradient === 'perWeight' ? 'perWeight' : 'tiled',
-    forward: args.forward === 'perRecord' ? 'perRecord' : 'tiled',
-    ...(args.fwdRecords ? { forwardOptions: { records: numberArg(args, 'fwdRecords', 64) } } : {}),
+    forward: fwdArm.forward,
+    ...(args.fwdRecords && fwdArm.forward !== 'sgm' ? { forwardOptions: { records: numberArg(args, 'fwdRecords', 64) } } : {}),
     train: { ...DEFAULT_TRAIN, learningRate },
     trainHooks: imageHooksTrain(encoding),
     inferHooks: imageHooksInfer(encoding),

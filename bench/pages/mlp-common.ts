@@ -1,6 +1,6 @@
 /** Shared helpers for the research-track-N pages (mlp-check, mlp-fit, mlp-timing, mlp-live, mlp-sgm-probe). */
 
-import { pickSubgroupMatrixConfig, type MlpEngineOptions, type MlpShape, type Precision } from '@pathtracer/mlp';
+import { pickSubgroupMatrixConfig, type ForwardKind, type MlpEngineOptions, type MlpShape, type Precision } from '@pathtracer/mlp';
 
 /** A device with every adapter feature and the adapter's max limits (the MLP wants 16-32 KiB of workgroup memory). */
 export async function requestMlpDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice }> {
@@ -88,4 +88,29 @@ export function inferArmOptions(
     };
   }
   throw new Error(`infer must be portable, sgm or sgm-emu, got ${arm}`);
+}
+
+/**
+ * Training forward-backward arm from the page arg `forward=perRecord|tiled|sgm|sgm-emu` (N3b). `sgm` / `sgm-emu` use the
+ * subgroup-matrix kernel (config from the adapter, or the plain-WGSL stand-in at tile=8|16, f32). `fwdRecords` defaults
+ * to 64 records per workgroup (f16) or 32 (f32 / emulated: 64 × 64 × 8 B would be the whole 32 KiB), rounded up to a
+ * multiple of M × subgroups.
+ */
+export function forwardArmOptions(
+  arg: string,
+  adapter: GPUAdapter,
+  device: GPUDevice,
+  shape: MlpShape,
+  precision: Precision,
+  opts: { records?: number; subgroups?: number; tile?: number } = {},
+): { forward: ForwardKind; precision: Precision; trainSgm?: MlpEngineOptions['trainSgm']; description: string } {
+  if (arg === 'perRecord' || arg === 'tiled') return { forward: arg, precision, description: `${arg} ${precision}` };
+  if (arg !== 'sgm' && arg !== 'sgm-emu') throw new Error(`forward must be perRecord, tiled, sgm or sgm-emu, got ${arg}`);
+  const subgroups = opts.subgroups ?? 1;
+  const base = inferArmOptions(arg, adapter, device, shape, precision, { records: 64, subgroups, tile: opts.tile ?? 8 });
+  const sgm = base.sgm as NonNullable<MlpEngineOptions['trainSgm']>;
+  const unit = sgm.config.M * subgroups;
+  const wanted = opts.records ?? (base.precision === 'f16' ? 64 : 32);
+  const records = Math.ceil(wanted / unit) * unit;
+  return { forward: 'sgm', precision: base.precision, trainSgm: { ...sgm, records }, description: base.description.replace(/\d+ rec/, `${records} rec`) };
 }

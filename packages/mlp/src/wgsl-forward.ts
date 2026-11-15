@@ -24,7 +24,7 @@ import { layerCount, layerIn, layerOffset, layerOut } from './config.ts';
 import { encodingWgsl } from './encoding.ts';
 import { header, rowStride, type MlpWgslOptions } from './wgsl.ts';
 
-export type ForwardKind = 'perRecord' | 'tiled';
+export type ForwardKind = 'perRecord' | 'tiled' | 'sgm';
 
 export interface ForwardOptions {
   /** Records per workgroup (multiple of 16, at most 256). */

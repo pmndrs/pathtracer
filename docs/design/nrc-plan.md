@@ -64,7 +64,7 @@ Status: ✅ done · 🟡 in progress · ⬜ not started. Rows in TASKS.md carry 
 |---|---|---|---|---|---|
 | M0 | Groundwork | Subgroup-matrix probe, adapter caps, paper numbers checked | We know which machines run the matrix path | N0.1–N0.4 | 🟡 probe done (Apple); paper check and Windows open |
 | M1 | MLP engine + oracle | `packages/mlp`: forward, backward, Adam, f32/f16, CPU oracle; check, fit, timing and live pages | GPU matches the oracle; image fit converges | N1, N1.1, N1.3, N10 | ✅ engine, correctness, live page, encoding A/B (two-phase waves: fit error 0.26 → 0.16) |
-| M2 | Speed | Fast portable kernels (N1.2), subgroup-matrix inference (N3a) and training (N3b), round-trip cost per layer (N3) | §3 budget met on the M5 Pro, or the gap is measured | N1.2, N2, N3, N3a–c | 🟡 inference ✅ (8.4 ms per million queries, quiet); emulated twin ✅ on the GPU; training 🟡 (tiled gradient: step 6.9 → 2.7 ms; forward-backward next) |
+| M2 | Speed | Fast portable kernels (N1.2), subgroup-matrix inference (N3a) and training (N3b), round-trip cost per layer (N3) | §3 budget met on the M5 Pro, or the gap is measured | N1.2, N2, N3, N3a–c | 🟡 inference ✅ (8.4 ms per million queries, quiet); emulated twin ✅ on the GPU; training ✅ (0.51 ms per step, tiled); sgm forward-backward built (N3b: faster in f32 only on Apple); tiled portable inference next (N1.4) |
 | M3 | NRC on our path tracer | A cache hook for main's integrator (`ptOnVertex` / `ptTerminate`, `updateBlock` training paths): query and training buffers, target back-propagation, inference, resolve into the accumulation | Closed-room check: the learned cache converges to the analytic indirect radiance `ρE/(1−ρ)`; megakernel = wavefront | N6a | ✅ megakernel (room gate: 0.06-0.55% mean error, all backends); wavefront open |
 | M4 | Demo page | `nrc-live` (§2), user-testable | The maintainer can run it and see both halves | N6b | 🟡 built and running (`nrc:live`); try it in flagged Chrome |
 | M5 | Equal-time study | `nrc` runner page; tables on sponza-white: relMSE, FLIP, bias, stability vs plain PT at equal ms | Q2 answered on the M5 Pro | N6c | ✅ (windowed): warm cache 3.2-4.3× lower relMSE at equal frames, 5-7× per unit time; steady from frame 1 after a cut, even into an unseen corridor ([NRC-STUDY.md](../../bench/results/NRC-STUDY.md)) |
@@ -107,6 +107,9 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-15 (Mac, session 9).** Subgroup-matrix training (forward-backward) built and verified: 1.55× faster than the tiled kernel
+  in f32, 10-25% slower in f16. On Apple, well-tiled plain WGSL is about as fast as the matrix path; NVIDIA is the real test (M6).
+  Next: tiled portable inference (N1.4) for users without the flag.
 - **2026-11-15 (Mac, session 8).** Fresh-cache damping (N6f): zero output layer + warm-up EMA are the defaults now; a fresh cache's
   first frame is at the steady error (was 2-3× worse with +77% bias), and steady-state bias fell to +0.1-0.5%.
 - **2026-11-15 (Mac, session 7).** Unseen-region test: a cache trained only on the ground floor is at its steady error in the
