@@ -16,7 +16,7 @@
 import { layerCount, layerIn, layerOffset, layerOut, weightCount } from './config.ts';
 import { header, type MlpWgslOptions } from './wgsl.ts';
 
-export type GradientKind = 'perWeight' | 'tiled';
+export type GradientKind = 'perWeight' | 'tiled' | 'sgm';
 
 export interface GradientOptions {
   /** Record ranges (workgroups per layer) the batch is split into. */

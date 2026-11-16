@@ -394,6 +394,10 @@ export interface NrcSettings {
   sgm?: MlpEngineOptions['sgm'];
   /** Portable inference kernel when `sgm` is absent: 'tiled' (default, N1.4) or 'perRecord'. */
   infer?: 'perRecord' | 'tiled';
+  /** Subgroup-matrix forward-backward for training (`forward: 'sgm'`, from `forwardArmOptions`); tiled when absent. */
+  trainSgm?: MlpEngineOptions['trainSgm'];
+  /** Subgroup-matrix weight gradient (`gradient: 'sgm'`, needs `trainSgm` in the blocked layout); tiled when absent. */
+  gradientSgm?: MlpEngineOptions['gradientSgm'];
   /** Vertex the render paths terminate into the cache at (0 = the primary hit: the "cache only" view). Default 1. */
   queryDepth: number;
   /** Training paths are terminated at vertex M with the cache as the tail; targets for vertices 0..M−1. Default 4. */
@@ -565,6 +569,8 @@ export class NrcCache {
       inferHooks: NRC_INFER_HOOKS,
       ...(s.sgm ? { sgm: s.sgm } : {}),
       ...(s.infer ? { infer: s.infer } : {}),
+      ...(s.trainSgm ? { forward: 'sgm' as const, trainSgm: s.trainSgm } : {}),
+      ...(s.gradientSgm ? { gradient: 'sgm' as const, gradientSgm: s.gradientSgm } : {}),
     });
     mlp.uploadWeights(NrcCache.freshWeights(s, s.seed));
     const tailInferGroup = inline

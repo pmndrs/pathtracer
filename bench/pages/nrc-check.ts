@@ -7,7 +7,7 @@
  * image with the cache at vertex `queryDepth` must read E / (1 - rho) = 2 in every pixel (plain PT to maxDepth M reads
  * E (1 - rho^(M+1)) / (1 - rho)). Reports the mean and worst pixel error, the training records and queries per frame.
  *
- * Args: frames=300  queryDepth=1  trainDepth=4  precision=f32|f16  infer=portable|sgm|sgm-emu  subgroups=4  steps=4  batch=4096  lr=0.01  spp=16
+ * Args: frames=300  queryDepth=1  trainDepth=4  precision=f32|f16  infer=portable|sgm|sgm-emu  subgroups=4  forward=sgm fwdLayout=row|blocked gradient=sgm (training, N2r-d)  steps=4  batch=4096  lr=0.01  spp=16
  *       training=inline|replay  updateBlock=2  trainSelect=tile|pixel (inline)  tol=0.03 (mean)  tolMax=0.1
  */
 import type { AdapterSummary } from '../runner/contract.ts';
@@ -18,7 +18,7 @@ import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { PtMegakernel } from '@pmndrs/pathtracer';
 import type { Precision, SgmScalar } from '@pathtracer/mlp';
 import { NrcCache } from '../nrc/cache.ts';
-import { inferArmOptions } from './mlp-common.ts';
+import { forwardArgs, forwardArmOptions, gradientArmOptions, inferArmOptions } from './mlp-common.ts';
 import { DEFAULT_SHAPE } from '@pathtracer/mlp';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -71,6 +71,9 @@ try {
     precision,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
     ...(arm.infer ? { infer: arm.infer } : {}),
+    // forward=sgm (+ fwdLayout, fwdRecords, fwdSubgroups, acc): the subgroup-matrix forward-backward for training (N2r-d).
+    ...(args.forward === 'sgm' ? { trainSgm: forwardArmOptions('sgm', gpu.adapter, device, DEFAULT_SHAPE, precision, forwardArgs(args, 1)).trainSgm } : {}),
+    ...(args.gradient === 'sgm' ? { gradientSgm: gradientArmOptions('sgm', gpu.adapter, device, DEFAULT_SHAPE, precision).gradientSgm } : {}),
     training: args.training === 'replay' ? 'replay' : 'inline',
     updateBlock: numberArg(args, 'updateBlock', 2),
     trainSelect: args.trainSelect === 'pixel' ? 'pixel' : 'tile',

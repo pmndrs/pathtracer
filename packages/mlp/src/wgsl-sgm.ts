@@ -72,6 +72,18 @@ export interface SgmOptions {
   inputProbe?: 'skip' | 'none';
   /** 'blocked' f16 ReLU: adjacent halves per lane item (1, 2, 4 or 8; default 4). N2r-c: 1 → 4.63, 2 → 3.98 ms/M on the 3060. */
   reluRun?: number;
+  /**
+   * TIMING PROBE ONLY ('blocked' training, N2r-d; wrong gradients): 'noMaskRead' tests the ReLU mask on the delta itself
+   * instead of reading a_l from `activations`; 'noStores' skips the activation and delta stores (and so reads stale
+   * activations); 'forwardOnly' stops after the loss gradient.
+   */
+  trainProbe?: 'noMaskRead' | 'noStores' | 'forwardOnly';
+  /**
+   * 'blocked' training: where the backward pass gets the ReLU mask [a_l > 0]. 'global' reads a_l back from `activations`
+   * (N2r-d probe: ~0.13 of 0.42 ms on the 3060); 'bits' keeps one bit per hidden activation in workgroup memory
+   * (`atomicOr` in the forward ReLU pass, R × width × hidden / 8 bytes).
+   */
+  trainMask?: 'global' | 'bits';
 }
 
 /** Lanes per subgroup the kernel is laid out for (the config's max; the proposal requires workgroup x to be a multiple). */
@@ -386,7 +398,7 @@ ${cases.join('\n')}
  * `count` work items over the workgroup's lanes with a CONSTANT trip count (`i` = item): a `for (var i = lid; ...)` loop
  * gets Tint's 64-bit loop counter, which cost the blocked kernel's ReLU passes ~4x at 64 records on NVIDIA (N2r-c, as P-W1).
  */
-function laneLoop(count: number, wg: number, body: string): string {
+export function laneLoop(count: number, wg: number, body: string): string {
   const trips = Math.ceil(count / wg);
   const guarded = count % wg ? `if (i < ${count}u) {
     ${body}

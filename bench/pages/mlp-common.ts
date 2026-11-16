@@ -1,6 +1,6 @@
 /** Shared helpers for the research-track-N pages (mlp-check, mlp-fit, mlp-timing, mlp-live, mlp-sgm-probe). */
 
-import { pickSubgroupMatrixConfig, type ForwardKind, type MlpEngineOptions, type MlpShape, type Precision, type SgmScalar } from '@pathtracer/mlp';
+import { pickSubgroupMatrixConfig, type ForwardKind, type GradientKind, type MlpEngineOptions, type MlpShape, type Precision, type SgmScalar } from '@pathtracer/mlp';
 
 /** A device with every adapter feature and the adapter's max limits (the MLP wants 16-32 KiB of workgroup memory). */
 export async function requestMlpDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice }> {
@@ -105,15 +105,56 @@ export function forwardArmOptions(
   device: GPUDevice,
   shape: MlpShape,
   precision: Precision,
-  opts: { records?: number; subgroups?: number; tile?: number; accumulate?: SgmScalar } = {},
+  opts: { records?: number; subgroups?: number; tile?: number; accumulate?: SgmScalar; layout?: 'row' | 'blocked'; pad?: number; reluRun?: number; trainProbe?: 'noMaskRead' | 'noStores' | 'forwardOnly'; trainMask?: 'global' | 'bits' } = {},
 ): { forward: ForwardKind; precision: Precision; trainSgm?: MlpEngineOptions['trainSgm']; description: string } {
   if (arg === 'perRecord' || arg === 'tiled') return { forward: arg, precision, description: `${arg} ${precision}` };
   if (arg !== 'sgm' && arg !== 'sgm-emu') throw new Error(`forward must be perRecord, tiled, sgm or sgm-emu, got ${arg}`);
   const subgroups = opts.subgroups ?? 1;
-  const base = inferArmOptions(arg, adapter, device, shape, precision, { records: 64, subgroups, tile: opts.tile ?? 8, ...(opts.accumulate ? { accumulate: opts.accumulate } : {}) });
+  const base = inferArmOptions(arg, adapter, device, shape, precision, { records: 64, subgroups, tile: opts.tile ?? 8, ...(opts.accumulate ? { accumulate: opts.accumulate } : {}), ...(opts.layout ? { layout: opts.layout } : {}), ...(opts.pad !== undefined ? { pad: opts.pad } : {}), ...(opts.reluRun ? { reluRun: opts.reluRun } : {}) });
   const sgm = base.sgm as NonNullable<MlpEngineOptions['trainSgm']>;
   const unit = sgm.config.M * subgroups;
   const wanted = opts.records ?? (base.precision === 'f16' ? 64 : 32);
   const records = Math.ceil(wanted / unit) * unit;
-  return { forward: 'sgm', precision: base.precision, trainSgm: { ...sgm, records }, description: base.description.replace(/\d+ rec/, `${records} rec`) };
+  return { forward: 'sgm', precision: base.precision, trainSgm: { ...sgm, records, ...(opts.trainProbe ? { trainProbe: opts.trainProbe } : {}), ...(opts.trainMask ? { trainMask: opts.trainMask } : {}) }, description: base.description.replace(/\d+ rec/, `${records} rec`) + (opts.trainProbe ? `, trainProbe=${opts.trainProbe} (TIMING ONLY)` : '') };
+}
+
+/**
+ * `forwardArmOptions` extras from page args: `fwdRecords`, `fwdSubgroups` (else `subgroups`, else `subgroups0`), `tile`, `acc`,
+ * `fwdLayout=row|blocked`, `fwdPad` (else `pad`), `reluRun` (N2r-d: the blocked layout for the sgm forward-backward).
+ */
+export function forwardArgs(args: Record<string, string>, subgroups0 = 1): Parameters<typeof forwardArmOptions>[5] {
+  const num = (k: string) => {
+    const v = Number(args[k]);
+    if (!Number.isFinite(v)) throw new Error(`Argument ${k}="${args[k]}" is not a number.`);
+    return v;
+  };
+  const pad = args.fwdPad ?? args.pad;
+  return {
+    ...(args.fwdRecords ? { records: num('fwdRecords') } : {}),
+    subgroups: args.fwdSubgroups ? num('fwdSubgroups') : args.subgroups ? num('subgroups') : subgroups0,
+    tile: args.tile ? num('tile') : 8,
+    ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}),
+    ...(args.fwdLayout ? { layout: args.fwdLayout as 'row' | 'blocked' } : {}),
+    ...(pad !== undefined ? { pad: Number(pad) } : {}),
+    ...(args.reluRun ? { reluRun: num('reluRun') } : {}),
+    ...(args.fwdMask ? { trainMask: args.fwdMask as 'global' | 'bits' } : {}),
+    ...(args.fwdProbe && args.fwdProbe !== 'none' ? { trainProbe: args.fwdProbe as 'noMaskRead' | 'noStores' | 'forwardOnly' } : {}),
+  };
+}
+
+/** Weight-gradient arm from the page arg `gradient=perWeight|tiled|sgm` (sgm: f32-result config with the MLP's operand type, N2r-d). */
+export function gradientArmOptions(
+  arg: string,
+  adapter: GPUAdapter,
+  device: GPUDevice,
+  shape: MlpShape,
+  precision: Precision,
+): { gradient: GradientKind; gradientSgm?: MlpEngineOptions['gradientSgm']; description: string } {
+  if (arg === 'perWeight' || arg === 'tiled') return { gradient: arg, description: arg };
+  if (arg !== 'sgm') throw new Error(`gradient must be perWeight, tiled or sgm, got ${arg}`);
+  if (!hasSubgroupMatrix(device)) throw new Error('gradient=sgm needs chromium-experimental-subgroup-matrix');
+  const config = pickSubgroupMatrixConfig(adapter.info, shape, precision === 'f16' && device.features.has('shader-f16'), 'f32');
+  if (!config || config.componentType !== precision || config.resultComponentType !== 'f32') throw new Error(`gradient=sgm: no ${precision}->f32 subgroup-matrix config on this adapter`);
+  const enableName = device.features.has('subgroup-matrix' as GPUFeatureName) ? 'subgroup_matrix' : 'chromium_experimental_subgroup_matrix';
+  return { gradient: 'sgm', gradientSgm: { config, enableName }, description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→f32` };
 }

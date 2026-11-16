@@ -16,6 +16,7 @@ import { DEFAULT_GRADIENT, gradientPartialBytes, gradientReduceWgsl, gradientTil
 import { DEFAULT_FORWARD, defaultForwardRecords, forwardWorkgroupBytes, inferTiledWgsl, inferTiledWorkgroupBytes, trainTiledWgsl, type ForwardKind, type ForwardOptions } from './wgsl-forward.ts';
 import { inferSgmWgsl, packSgmWgsl, sgmWeightCount, sgmWorkgroupBytes, type SgmOptions } from './wgsl-sgm.ts';
 import { sgmTrainWorkgroupBytes, trainSgmWgsl } from './wgsl-sgm-train.ts';
+import { gradientSgmWgsl, type SgmGradientOptions } from './wgsl-gradient-sgm.ts';
 
 export interface MlpEngineOptions {
   shape?: MlpShape;
@@ -42,8 +43,14 @@ export interface MlpEngineOptions {
   inferOptions?: Partial<ForwardOptions>;
   /** Weight-gradient arm: one thread per weight looping over all records, or the tiled split-K pass (N1.2). Default 'tiled' (N1.2 A/B: f16 step 6.9 → 2.7 ms on the M5 Pro). */
   gradient?: GradientKind;
-  /** Tiled arm only: `splits` record ranges per layer and `chunk` records staged per iteration. */
+  /** Tiled and sgm arms: `splits` record ranges per layer (`chunk`: tiled only, records staged per iteration). */
   gradientOptions?: Partial<GradientOptions>;
+  /**
+   * Subgroup-matrix weight gradient (`gradient: 'sgm'`, N2r-d): an f32-result config with the MLP's operand type. Needs
+   * `forward: 'sgm'` in the 'blocked' layout (it writes the zero deltas the whole K-record steps read) and a `capacity`
+   * that is a multiple of the config's K.
+   */
+  gradientSgm?: SgmGradientOptions;
   /** Forward-backward arm: one thread per record ('perRecord') or the tiled workgroup-per-R-records kernel (N1.2b). Default 'tiled' (N1.2b A/B: forward-backward 2.49 → 0.31 ms f16, 3.65 → 0.50 ms f32, M5 Pro). */
   forward?: ForwardKind;
   /**
@@ -157,7 +164,7 @@ export class MlpEngine {
     this.inferGroupRecords = sgm ? sgm.records : tiledInfer ? (options.inferOptions?.records ?? defaultForwardRecords(options.precision)) : NN_WORKGROUP;
     this.sgmCount = sgm ? sgmWeightCount(this.shape, sgm.config) : 0;
     this.sgmWeights = sgm ? buffer('sgmWeights', this.sgmCount * bpe) : null;
-    this.gradientPartials = this.gradientKind === 'tiled' ? buffer('gradientPartials', gradientPartialBytes({ shape: this.shape, precision: this.precision }, this.gradientOptions)) : null;
+    this.gradientPartials = this.gradientKind === 'tiled' || this.gradientKind === 'sgm' ? buffer('gradientPartials', gradientPartialBytes({ shape: this.shape, precision: this.precision }, this.gradientOptions)) : null;
     const trainSgm = options.trainSgm;
     if (this.forwardKind === 'sgm' && !trainSgm) throw new Error("MlpEngine: forward 'sgm' needs trainSgm");
     this.trainSgmCount = trainSgm && this.forwardKind === 'sgm' ? sgmWeightCount(this.shape, trainSgm.config) : 0;
@@ -229,17 +236,24 @@ export class MlpEngine {
       const need = forwardWorkgroupBytes(o, forwardOptions);
       if (need > device.limits.maxComputeWorkgroupStorageSize) throw new Error(`MlpEngine: tiled forward needs ${need} B of workgroup memory, device allows ${device.limits.maxComputeWorkgroupStorageSize}; lower forwardOptions.records`);
     }
-    const tiled = (options.gradient ?? 'tiled') === 'tiled';
+    const gradientKind = options.gradient ?? 'tiled';
+    const tiled = gradientKind === 'tiled';
+    const sgmGradient = gradientKind === 'sgm';
     const gradientOptions = { ...DEFAULT_GRADIENT, ...options.gradientOptions };
+    if (sgmGradient) {
+      if (!options.gradientSgm) throw new Error("MlpEngine: gradient 'sgm' needs gradientSgm");
+      if (!trainSgm || trainSgm.layout !== 'blocked' || trainSgm.emulate) throw new Error("MlpEngine: gradient 'sgm' needs forward 'sgm' with layout 'blocked' (zero deltas up to capacity)");
+      if (options.capacity % options.gradientSgm.config.K) throw new Error(`MlpEngine: gradient 'sgm' needs capacity to be a multiple of K=${options.gradientSgm.config.K}`);
+    }
     const [prepare, infer, forwardBackward, weightGradient, adamPipeline, sync, pack, gradientReduce, packTrain] = await Promise.all([
       make('prepare', prepareWgsl(o), 'nnPrepare'),
       sgm ? make('inferSgm', inferSgmWgsl(sgm, options.inferHooks), 'nnInferSgm') : make('infer', tiledInfer ? inferTiledWgsl(o, options.inferHooks, inferOptions) : inferWgsl(o, options.inferHooks), 'nnInfer'),
       make('forwardBackward', trainSgm ? trainSgmWgsl(trainSgm, options.trainHooks) : tiledForward ? trainTiledWgsl(o, options.trainHooks, forwardOptions) : trainWgsl(o, options.trainHooks), 'nnForwardBackward'),
-      tiled ? make('gradientTile', gradientTileWgsl(o, gradientOptions), 'nnGradientTile') : make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
+      sgmGradient ? make('gradientSgm', gradientSgmWgsl(o, gradientOptions, options.gradientSgm as SgmGradientOptions), 'nnGradientSgm') : tiled ? make('gradientTile', gradientTileWgsl(o, gradientOptions), 'nnGradientTile') : make('weightGradient', weightGradientWgsl(o), 'nnWeightGradient'),
       make('adam', adam, 'nnAdam'),
       make('sync', adam, 'nnSync'),
       sgm ? make('packSgm', packSgmWgsl(sgm), 'nnPackSgm') : Promise.resolve(undefined),
-      tiled ? make('gradientReduce', gradientReduceWgsl(o, gradientOptions), 'nnGradientReduce') : Promise.resolve(undefined),
+      tiled || sgmGradient ? make('gradientReduce', gradientReduceWgsl(o, gradientOptions), 'nnGradientReduce') : Promise.resolve(undefined),
       trainSgm ? make('packTrainSgm', packSgmWgsl(trainSgm), 'nnPackSgm') : Promise.resolve(undefined),
     ]);
     return new MlpEngine(device, options, { prepare, infer, forwardBackward, weightGradient, adam: adamPipeline, sync, ...(pack ? { pack } : {}), ...(packTrain ? { packTrain } : {}), ...(gradientReduce ? { gradientReduce } : {}) });

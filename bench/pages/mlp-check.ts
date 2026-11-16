@@ -9,14 +9,14 @@
  * sgm-emu (the same kernel with plain-WGSL stand-ins, f32: runs anywhere). sgm options: tile=8|16 (sgm-emu only),
  * subgroups=1|4, sgmRecords=64.
  *
- * Args: precision=f32|f16 (default f32) records=256 steps=5 seed=1 gradient=tiled|perWeight (default perWeight)
+ * Args: precision=f32|f16 (default f32) records=256 capacity=records steps=5 seed=1 gradient=tiled|perWeight|sgm (default tiled; sgm needs forward=sgm fwdLayout=blocked)
  *       gradSplits=64 gradChunk=32 (tiled arm) forward=tiled|perRecord|sgm|sgm-emu (default tiled; sgm: subgroups=1|4 via fwdSubgroups, tile=8|16 for sgm-emu) fwdRecords=64 f16 / 48 f32 (tiled forward)
  */
 
 import { AdamState, type ForwardKind, type GradientKind, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision, type SgmScalar } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
+import { forwardArgs, forwardArmOptions, gradientArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
 
 // Tolerances relative to max |value|. f16 activations/weights carry ~1e-3 relative rounding.
 const TOLERANCE: Record<Precision, { infer: number; gradient: number; weights: number }> = {
@@ -50,11 +50,11 @@ try {
   const subgroups = numberArg(args, 'subgroups', 1);
   const sgmRecords = numberArg(args, 'sgmRecords', 64);
   const n = numberArg(args, 'records', 256);
+  // capacity > records exercises a partly filled last workgroup / gradient step (sgm gradient: capacity a multiple of 16).
+  const capacity = Math.max(n, numberArg(args, 'capacity', n));
   const steps = numberArg(args, 'steps', 5);
   const seed = numberArg(args, 'seed', 1);
   const shape = DEFAULT_SHAPE;
-  const gradientKind = (args.gradient ?? 'tiled') as GradientKind;
-  if (gradientKind !== 'perWeight' && gradientKind !== 'tiled') throw new Error(`gradient must be perWeight or tiled, got ${gradientKind}`);
   const forwardArg = args.forward ?? 'tiled';
   const forwardOptions = args.fwdRecords && !forwardArg.startsWith('sgm') ? { records: numberArg(args, 'fwdRecords', 64) } : {};
   const gradientOptions = { splits: numberArg(args, 'gradSplits', 64), chunk: numberArg(args, 'gradChunk', 32) };
@@ -78,10 +78,12 @@ try {
   const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}), ...(args.layout ? { layout: args.layout as 'row' | 'blocked' } : {}), ...(args.pad ? { pad: numberArg(args, 'pad', 8) } : {}) });
   precision = arm.precision;
   const sgm = arm.sgm;
-  const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', subgroups), tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });
+  const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, forwardArgs(args, subgroups));
+  const gradArm = gradientArmOptions(args.gradient ?? 'tiled', adapter, device, shape, fwdArm.precision);
+  const gradientKind: GradientKind = gradArm.gradient;
   precision = fwdArm.precision;
   const forwardKind = fwdArm.forward;
-  const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, forward: forwardKind, forwardOptions, ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}), ...(sgm ? { sgm } : {}), ...(arm.infer ? { infer: arm.infer } : {}) });
+  const mlp = await MlpEngine.create(device, { precision, capacity, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, ...(gradArm.gradientSgm ? { gradientSgm: gradArm.gradientSgm } : {}), gradientOptions, forward: forwardKind, forwardOptions, ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}), ...(sgm ? { sgm } : {}), ...(arm.infer ? { infer: arm.infer } : {}) });
   const inputBuffer = storageBuffer(device, inputs, 'inputs');
   const targetBuffer = storageBuffer(device, targets, 'targets');
   const outputBuffer = storageBuffer(device, n * 3 * 4, 'outputs');

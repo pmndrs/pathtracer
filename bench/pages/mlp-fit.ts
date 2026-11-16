@@ -15,7 +15,7 @@
  *
  * Args: precision=f32|f16  size=256  batch=16384  snapshots=16,64,256,1024  seed=1  ema=0|1  lr=0.01  oracleSteps=0
  *       octaves=8  phases=2 (image encoding layout, N1.3; octaves=nyquist means log2(size); 12 and 1 = the original)
- *       gradient=tiled|perWeight (weight-gradient arm, N1.2)
+ *       gradient=tiled|perWeight|sgm (weight-gradient arm, N1.2; sgm N2r-d, needs forward=sgm fwdLayout=blocked)
  * A/B: --ab precision=f32,f16   --ab octaves=12,8   --ab phases=1,2   --ab gradient=perWeight,tiled
  */
 
@@ -23,7 +23,7 @@ import { AdamState, DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, batchGradient, enco
 import { compareImages } from '../metrics/metrics.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, uploadImage, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
+import { forwardArgs, forwardArmOptions, gradientArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
 import { IMAGE_TASK_ENCODING, IMAGE_TASK_LEARNING_RATE, imageHooksInfer, imageHooksTrain, targetImage, trainSample } from './mlp-image.ts';
 
 
@@ -63,7 +63,8 @@ try {
 
   const arm = inferArmOptions(args.infer ?? 'portable', adapter, device, DEFAULT_SHAPE, precision, { records: numberArg(args, 'sgmRecords', 64), subgroups: numberArg(args, 'subgroups', 1), tile: numberArg(args, 'tile', 8) });
   precision = arm.precision;
-  const fwdArm = forwardArmOptions(args.forward ?? 'tiled', adapter, device, DEFAULT_SHAPE, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', numberArg(args, 'subgroups', 1)), tile: numberArg(args, 'tile', 8) });
+  const fwdArm = forwardArmOptions(args.forward ?? 'tiled', adapter, device, DEFAULT_SHAPE, precision, forwardArgs(args));
+  const gradArm = gradientArmOptions(args.gradient ?? 'tiled', adapter, device, DEFAULT_SHAPE, fwdArm.precision);
   precision = fwdArm.precision;
   const mlp = await MlpEngine.create(device, {
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
@@ -73,7 +74,8 @@ try {
     capacity: batch,
     inferCapacity: pixels,
     useEma,
-    gradient: args.gradient === 'perWeight' ? 'perWeight' : 'tiled',
+    gradient: gradArm.gradient,
+    ...(gradArm.gradientSgm ? { gradientSgm: gradArm.gradientSgm } : {}),
     forward: fwdArm.forward,
     ...(args.fwdRecords && fwdArm.forward !== 'sgm' ? { forwardOptions: { records: numberArg(args, 'fwdRecords', 64) } } : {}),
     train: { ...DEFAULT_TRAIN, learningRate },
