@@ -63,7 +63,7 @@ export function inferArmOptions(
   device: GPUDevice,
   shape: MlpShape,
   precision: Precision,
-  opts: { records?: number; subgroups?: number; tile?: number; roundTrip?: 'relu' | 'skip' | 'double'; accumulate?: SgmScalar } = {},
+  opts: { records?: number; subgroups?: number; tile?: number; roundTrip?: 'relu' | 'skip' | 'double'; accumulate?: SgmScalar; layout?: 'row' | 'blocked'; pad?: number } = {},
 ): { precision: Precision; sgm?: MlpEngineOptions['sgm']; infer?: 'perRecord' | 'tiled'; description: string } {
   const records = opts.records ?? 64;
   const subgroups = opts.subgroups ?? 1;
@@ -86,8 +86,8 @@ export function inferArmOptions(
     const enableName = device.features.has('subgroup-matrix' as GPUFeatureName) ? 'subgroup_matrix' : 'chromium_experimental_subgroup_matrix';
     return {
       precision: config.componentType,
-      sgm: { config, records, subgroups, enableName, ...(opts.roundTrip ? { roundTrip: opts.roundTrip } : {}) },
-      description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→${config.resultComponentType}, ${records} rec × ${subgroups} sg${opts.roundTrip && opts.roundTrip !== 'relu' ? `, roundTrip=${opts.roundTrip} (TIMING ONLY)` : ''}`,
+      sgm: { config, records, subgroups, enableName, ...(opts.roundTrip ? { roundTrip: opts.roundTrip } : {}), ...(opts.layout ? { layout: opts.layout } : {}), ...(opts.pad !== undefined ? { pad: opts.pad } : {}) },
+      description: `sgm ${config.M}×${config.N}×${config.K} ${config.componentType}→${config.resultComponentType}, ${records} rec × ${subgroups} sg${opts.layout === 'blocked' ? `, blocked pad ${opts.pad ?? 8}` : ''}${opts.roundTrip && opts.roundTrip !== 'relu' ? `, roundTrip=${opts.roundTrip} (TIMING ONLY)` : ''}`,
     };
   }
   throw new Error(`infer must be portable, tiled, sgm or sgm-emu, got ${arm}`);

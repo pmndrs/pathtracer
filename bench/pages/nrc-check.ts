@@ -16,7 +16,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 import { tessellateSphere } from '../scenes/geometry.ts';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { PtMegakernel } from '@pmndrs/pathtracer';
-import type { Precision } from '@pathtracer/mlp';
+import type { Precision, SgmScalar } from '@pathtracer/mlp';
 import { NrcCache } from '../nrc/cache.ts';
 import { inferArmOptions } from './mlp-common.ts';
 import { DEFAULT_SHAPE } from '@pathtracer/mlp';
@@ -65,7 +65,7 @@ try {
   const scene = room(maxDepth);
   const camera = scene.camera;
 
-  const arm = inferArmOptions(args.infer ?? 'portable', gpu.adapter, device, DEFAULT_SHAPE, precision, { records: 64, subgroups: numberArg(args, 'subgroups', 4) });
+  const arm = inferArmOptions(args.infer ?? 'portable', gpu.adapter, device, DEFAULT_SHAPE, precision, { records: numberArg(args, 'sgmRecords', 64), subgroups: numberArg(args, 'subgroups', 4), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}), ...(args.layout ? { layout: args.layout as 'row' | 'blocked' } : {}), ...(args.pad ? { pad: numberArg(args, 'pad', 8) } : {}) });
   precision = arm.precision;
   const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width: WIDTH, height: WIDTH, camera, maxDepth }, { min: [-1, -1, -1], max: [1, 1, 1] }, {
     precision,

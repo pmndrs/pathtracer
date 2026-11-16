@@ -75,7 +75,7 @@ try {
   }
   const weights = initWeights(shape, seed);
 
-  const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });
+  const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}), ...(args.layout ? { layout: args.layout as 'row' | 'blocked' } : {}), ...(args.pad ? { pad: numberArg(args, 'pad', 8) } : {}) });
   precision = arm.precision;
   const sgm = arm.sgm;
   const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', subgroups), tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });

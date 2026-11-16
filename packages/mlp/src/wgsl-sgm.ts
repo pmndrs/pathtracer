@@ -58,6 +58,16 @@ export interface SgmOptions {
    * layer reads stale inputs, wrong results), 'double' (the pass twice). relu − skip ≈ double − relu = its cost.
    */
   roundTrip?: 'relu' | 'skip' | 'double';
+  /**
+   * Inference data layout (N2r-b). 'row' (default): per output column block, its right tiles are loaded and one
+   * accumulator walks the subgroup's row blocks, a left load per multiply. 'blocked': the layer's right tiles are all
+   * held in registers, each row block loads its left tiles once and feeds one accumulator per column block; with
+   * f16 results the result tile is stored straight into a second activation buffer (ping-pong) and ReLU runs in place,
+   * so there is no convert pass. Native only (no emulated form). The roofline that motivated it: TASKS N2r.
+   */
+  layout?: 'row' | 'blocked';
+  /** Row stride padding in elements for 'blocked' (default 8: a 64-half stride bank-conflicts on NVIDIA, N2r). */
+  pad?: number;
 }
 
 /** Lanes per subgroup the kernel is laid out for (the config's max; the proposal requires workgroup x to be a multiple). */
@@ -86,10 +96,16 @@ export function sgmWeightCount(shape: MlpShape, config: Pick<SgmConfig, 'N'>): n
 
 /** Workgroup memory the kernel needs (bytes): activations in T plus results in TR. */
 export function sgmWorkgroupBytes(o: SgmOptions): number {
-  const s = rowStride(o.shape);
+  const blocked = o.layout === 'blocked';
+  const s = rowStride(o.shape) + (blocked ? sgmPad(o) : 0);
   const t = o.emulate ? 4 : o.config.componentType === 'f16' ? 2 : 4;
   const tr = o.emulate ? 4 : o.config.resultComponentType === 'f16' ? 2 : 4;
-  return o.records * s * (t + tr);
+  // 'blocked' with equal operand and result types ping-pongs two activation buffers instead of activations + results.
+  return o.records * s * (blocked && o.config.resultComponentType === o.config.componentType ? 2 * t : t + tr);
+}
+
+export function sgmPad(o: Pick<SgmOptions, 'pad'>): number {
+  return o.pad ?? 8;
 }
 
 export function validateSgm(o: SgmOptions): void {
@@ -254,6 +270,7 @@ export function mlpOptions(o: SgmOptions): MlpWgslOptions {
 /** Inference kernel `nnInferSgm`. Hooks as for the portable arm (`nnInferLoad`, `nnInferStore`, group 1). */
 export function inferSgmWgsl(o: SgmOptions, hooks: string): string {
   validateSgm(o);
+  if (o.layout === 'blocked') return inferSgmBlockedWgsl(o, hooks);
   const { shape, config: c } = o;
   const ops = o.emulate ? emulatedOps(c) : nativeOps(c);
   const S = rowStride(shape);
@@ -357,6 +374,112 @@ fn nnPackSgm(@builtin(global_invocation_id) gid: vec3u) {
   var v = T(0.0);
 ${cases.join('\n')}
   nnPacked[w] = v;
+}
+`;
+}
+
+/** Inference kernel `nnInferSgm` in the 'blocked' layout (see `SgmOptions.layout`). Same bindings and hooks as 'row'. */
+function inferSgmBlockedWgsl(o: SgmOptions, hooks: string): string {
+  if (o.emulate) throw new Error("sgm layout 'blocked' has no emulated form");
+  if (o.roundTrip && o.roundTrip !== 'relu') throw new Error("sgm layout 'blocked' has no roundTrip probe");
+  const { shape, config: c } = o;
+  const ops = nativeOps(c);
+  const S = rowStride(shape) + sgmPad(o);
+  const R = o.records;
+  const wg = sgmWorkgroupSize(o);
+  const rowBlocks = R / c.M / o.subgroups;
+  const TR = c.resultComponentType;
+  const direct = TR === c.componentType;
+  const sgIndex = o.subgroups === 1 ? '0u' : o.offsetsFromLocalIndex ? `lid / ${sgmLanes(o)}u` : 'sgid';
+  const count = layerCount(shape);
+  const act = (l: number) => (direct ? `nnA${l % 2}` : 'nnA');
+
+  const layers: string[] = [];
+  for (let l = 0; l < count; l++) {
+    const nIn = layerIn(shape, l);
+    const nOut = sgmLayerOut(shape, c, l);
+    const off = sgmLayerOffset(shape, c, l);
+    const kBlocks = nIn / c.K;
+    const nBlocks = nOut / c.N;
+    const src = act(l);
+    const dst = direct ? act(l + 1) : 'nnS';
+    const rights: string[] = [];
+    for (let nb = 0; nb < nBlocks; nb++)
+      for (let kb = 0; kb < kBlocks; kb++)
+        rights.push(`    let w${nb}_${kb} = subgroupMatrixLoad<${ops.right}>(&nnSgmW, ${off + nb * c.N * nIn + kb * c.K}u, true, ${nIn}u);`);
+    const lefts = Array.from({ length: kBlocks }, (_, kb) => `      let a${kb} = subgroupMatrixLoad<${ops.left}>(&${src}, rowBase + ${kb * c.K}u, false, ${S}u);`);
+    const body: string[] = [];
+    for (let nb = 0; nb < nBlocks; nb++) {
+      body.push(`      var z${nb} = ${ops.zero()};`);
+      for (let kb = 0; kb < kBlocks; kb++) body.push(`      z${nb} = subgroupMatrixMultiplyAccumulate(a${kb}, w${nb}_${kb}, z${nb});`);
+      body.push(`      subgroupMatrixStore(&${dst}, rowBase + ${nb * c.N}u, z${nb}, false, ${S}u);`);
+    }
+    const width = layerOut(shape, l);
+    const relu = l >= shape.hidden
+      ? ''
+      : direct
+        ? `
+  for (var i = lid; i < ${R * width}u; i += ${wg}u) {
+    let at = (i / ${width}u) * ${S}u + i % ${width}u;
+    ${dst}[at] = max(${dst}[at], T(0.0));
+  }
+  workgroupBarrier();`
+        : `
+  for (var i = lid; i < ${R * width}u; i += ${wg}u) {
+    let at = (i / ${width}u) * ${S}u + i % ${width}u;
+    nnA[at] = T(max(f32(nnS[at]), 0.0));
+  }
+  workgroupBarrier();`;
+    layers.push(`  // Layer ${l}: ${nIn} → ${width}${nOut !== width ? ` (padded to ${nOut})` : ''}; ${nBlocks * kBlocks} right tiles held.
+  {
+${rights.join('\n')}
+    for (var mbi = 0u; mbi < ${rowBlocks}u; mbi++) {
+      let rowBase = (sg * ${rowBlocks}u + mbi) * ${c.M * S}u;
+${lefts.join('\n')}
+${body.join('\n')}
+    }
+  }
+  workgroupBarrier();${relu}`);
+  }
+  const out = direct ? act(count) : 'nnS';
+  const builtins = [
+    '@builtin(workgroup_id) wid: vec3u',
+    '@builtin(num_workgroups) nwg: vec3u',
+    '@builtin(local_invocation_index) lid: u32',
+    ...(sgIndex === 'sgid' ? ['@builtin(subgroup_id) sgid: u32'] : []),
+  ];
+  const buffers = direct
+    ? `var<workgroup> nnA0: array<T, ${R * S}>;
+var<workgroup> nnA1: array<T, ${R * S}>;`
+    : `var<workgroup> nnA: array<T, ${R * S}>;
+var<workgroup> nnS: array<TR, ${R * S}>;`;
+
+  return `${header(mlpOptions(o), directives(o))}
+${encodingWgsl()}
+alias TR = ${TR};
+@group(0) @binding(0) var<storage, read> nnSgmW: array<T>;
+@group(0) @binding(1) var<storage, read> nnState: NnState;
+
+${buffers}
+${hooks}
+
+// Subgroup matrix ${c.M}×${c.N}×${c.K} ${c.componentType} → ${TR}, layout 'blocked'; ${R} records, ${o.subgroups} subgroup(s) per workgroup, row stride ${S}.
+@compute @workgroup_size(${wg})
+fn nnInferSgm(${builtins.join(', ')}) {
+  let base = (wid.x + wid.y * nwg.x) * ${R}u;
+  let sg = ${sgIndex};
+  for (var i = lid; i < ${R}u; i += ${wg}u) {
+    let r = base + i;
+    var x: array<f32, NN_IN>;
+    if (r < nnState.count) { x = nnInferLoad(r); }
+    for (var k = 0u; k < NN_IN; k++) { ${act(0)}[i * ${S}u + k] = T(x[k]); }
+  }
+  workgroupBarrier();
+${layers.join('\n')}
+  for (var i = lid; i < ${R}u; i += ${wg}u) {
+    let r = base + i;
+    if (r < nnState.count) { nnInferStore(r, vec3f(f32(${out}[i * ${S}u]), f32(${out}[i * ${S}u + 1u]), f32(${out}[i * ${S}u + 2u]))); }
+  }
 }
 `;
 }

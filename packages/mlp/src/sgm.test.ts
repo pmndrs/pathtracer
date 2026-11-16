@@ -25,6 +25,36 @@ describe('sgm layout', () => {
   });
 });
 
+const NVIDIA: SgmConfig = { componentType: 'f16', resultComponentType: 'f16', M: 16, N: 16, K: 16, minSubgroupSize: 32, maxSubgroupSize: 32 };
+
+describe("sgm 'blocked' layout (N2r-b)", () => {
+  it('ping-pongs two f16 activation buffers with a padded stride, holds every right tile of a layer, ReLU in place', () => {
+    const code = inferSgmWgsl(opts({ config: NVIDIA, layout: 'blocked' }), BUFFER_HOOKS_INFER);
+    expect(code).toContain('var<workgroup> nnA0: array<T, 4608>;');
+    expect(code).toContain('var<workgroup> nnA1: array<T, 4608>;');
+    expect(code).not.toMatch(/\bnnS\b/);
+    expect(code).toContain('let w3_3 = subgroupMatrixLoad');
+    expect(code).not.toContain('let w4_');
+    expect(code).toContain('nnA1[at] = max(nnA1[at], T(0.0));');
+    // 6 layers: the output is read from nnA0 (6 is even), the 3-wide output layer is one column block of 4 tiles.
+    expect(code).toMatch(/nnInferStore\(r, vec3f\(f32\(nnA0\[i \* 72u\]\)/);
+    expect(code).toContain('// Layer 5: 64 → 3 (padded to 16); 4 right tiles held.');
+    expect(sgmWorkgroupBytes(opts({ config: NVIDIA, layout: 'blocked' }))).toBe(64 * 72 * 2 * 2);
+  });
+
+  it('with f32 results keeps activations + results and a convert pass', () => {
+    const f32 = { ...NVIDIA, resultComponentType: 'f32' as const };
+    const code = inferSgmWgsl(opts({ config: f32, layout: 'blocked', pad: 0 }), BUFFER_HOOKS_INFER);
+    expect(code).toContain('var<workgroup> nnS: array<TR, 4096>;');
+    expect(code).toContain('nnA[at] = T(max(f32(nnS[at]), 0.0));');
+    expect(sgmWorkgroupBytes(opts({ config: f32, layout: 'blocked', pad: 0 }))).toBe(64 * 64 * (2 + 4));
+  });
+
+  it('has no emulated form', () => {
+    expect(() => inferSgmWgsl(opts({ config: { ...NVIDIA, componentType: 'f32', resultComponentType: 'f32' }, layout: 'blocked', emulate: true }), BUFFER_HOOKS_INFER)).toThrow(/no emulated form/);
+  });
+});
+
 describe('sgm generator', () => {
   it('native form: enable first, transposed weight view, zero-initialised accumulators', () => {
     const code = inferSgmWgsl(opts(), BUFFER_HOOKS_INFER);
