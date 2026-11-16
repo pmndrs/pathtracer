@@ -107,6 +107,7 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 
 Newest first. One line per session: what changed, what it showed.
 
+- **2026-11-16 (Windows, N2r-c).** Constant-trip lane loops (no Tint loop counters) and a 4-wide ReLU take the blocked sgm kernel to 3.85 ms per million queries on the 3060 (old default 13.9, 3.6x); VkNRC inference is 2.35-2.47, so the gap is 1.6x, and the matrix work alone (2.67) is within 1.1x of it: what is left is the ReLU round trip WGSL forces.
 - **2026-11-16 (Windows, N2r-b).** The sgm inference kernel in the blocked layout (held weight tiles, f16 sums, ping-pong, padded stride, 1 subgroup x 32 records) runs 5.68 ms per million queries on the 3060 against 13.9-14.0 for the old one (2.45x), correct in `mlp-check` and the closed-room `nrc-check`. The gap to VkNRC inference is now 2.3-2.4x (was 5.6-6.0x). Apple and the default: N2r-c.
 - **2026-11-16 (Windows, N2r).** The inference gap to VkNRC is mostly our kernel layout: Dawn/Vulkan subgroup matrices reach 42 TFLOP/s on the 3060 with f16 sums, and an MLP-shaped chain (one subgroup per workgroup, padded stride, held weight tiles, f16 sums) does 3.6 ms per million records against VkNRC's 2.35-2.47 with encoding; our MLP kernel does ~14. Next: N2r-b.
 - **2026-11-16 (Windows, P-W1).** The path-tracing gap to VkNRC was mostly ours: Tint's loop counters in the BVH walk made the megakernel 3.3× slower on D3D12/NVIDIA. With the walk loops constant-bounded, Sponza runs at 58-61 ms/spp in Chrome (was 191-202), level with Vulkan and the M5 Pro.

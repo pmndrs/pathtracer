@@ -628,7 +628,8 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Windows: Dawn/Vulkan subgroup matrices reach the RTX 3060's tensor cores (42 TFLOP/s f16 sums, 21 f32 in `--page sgm-roofline mode=peak`); an MLP-shaped kernel lost 4x of
   that to layout, not to Dawn: f32 sums need a result buffer + convert pass and more workgroup memory (4.4x), 4 subgroups per workgroup vs 1 (2.4-2.7x), an unpadded
   64-half row stride (1.3x, bank conflicts). Measure a kernel shape there (`mode=chain`) before blaming the API. The MLP kernel in that layout
-  (`layout=blocked`, N2r-b) went 14.0 -> 5.7 ms per M queries. f16->f16 configs exist only with `vulkan_enable_f16_on_nvidia`.
+  (`layout=blocked`, N2r-b) went 14.0 -> 5.7 ms per M queries, then 3.85 with constant-trip lane loops (N2r-c): `for (var i = lid; i < N; i += wg)` has a
+  runtime START, so Tint adds its loop counter there too; write `for (var j = 0u; j < N / wg; j++) { let i = lid + j * wg; }` (`laneLoop` in wgsl-sgm.ts). f16->f16 configs exist only with `vulkan_enable_f16_on_nvidia`.
 - Windows: on NVIDIA the per-record MLP kernel (`infer=portable`) beats the tiled one in Chrome/D3D12 (17 vs 24 ms per M queries, f16), the
   reverse of Apple, and the same per-record kernel is 3.5x slower on Dawn/Vulkan (60 ms): compare kernels within one backend.
 - Windows: Canary 160 ignores `--use-adapter-luid` and hands out the Intel UHD; `--gpu nvidia` then fails the run. Use Chrome stable.

@@ -50,6 +50,8 @@ try {
     ...(args.roundTrip ? { roundTrip: args.roundTrip as 'relu' | 'skip' | 'double' } : {}),
     ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}),
     ...(args.layout ? { layout: args.layout as 'row' | 'blocked' } : {}), ...(args.pad ? { pad: numberArg(args, 'pad', 8) } : {}),
+    ...(args.inputProbe === 'skip' || args.inputProbe === 'none' ? { inputProbe: args.inputProbe } : {}),
+    ...(args.reluRun ? { reluRun: numberArg(args, 'reluRun', 4) } : {}),
   });
   const fwdArm = forwardArmOptions(forwardArg, adapter, device, DEFAULT_SHAPE, arm.precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', numberArg(args, 'subgroups', 1)), tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });
   const forward: ForwardKind = fwdArm.forward;

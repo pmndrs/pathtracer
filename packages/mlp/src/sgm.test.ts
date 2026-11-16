@@ -35,7 +35,9 @@ describe("sgm 'blocked' layout (N2r-b)", () => {
     expect(code).not.toMatch(/\bnnS\b/);
     expect(code).toContain('let w3_3 = subgroupMatrixLoad');
     expect(code).not.toContain('let w4_');
-    expect(code).toContain('nnA1[at] = max(nnA1[at], T(0.0));');
+    expect(code).toContain('nnA1[at + 3u] = max(nnA1[at + 3u], T(0.0));');
+    expect(code).not.toContain('nnA1[at + 4u]');
+    expect(code).not.toMatch(/for \(var i = lid/);
     // 6 layers: the output is read from nnA0 (6 is even), the 3-wide output layer is one column block of 4 tiles.
     expect(code).toMatch(/nnInferStore\(r, vec3f\(f32\(nnA0\[i \* 72u\]\)/);
     expect(code).toContain('// Layer 5: 64 → 3 (padded to 16); 4 right tiles held.');

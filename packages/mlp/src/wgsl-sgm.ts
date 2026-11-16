@@ -68,6 +68,10 @@ export interface SgmOptions {
   layout?: 'row' | 'blocked';
   /** Row stride padding in elements for 'blocked' (default 8: a 64-half stride bank-conflicts on NVIDIA, N2r). */
   pad?: number;
+  /** TIMING PROBE ONLY ('blocked'): 'skip' writes a constant instead of calling `nnInferLoad` (wrong results). */
+  inputProbe?: 'skip' | 'none';
+  /** 'blocked' f16 ReLU: adjacent halves per lane item (1, 2, 4 or 8; default 4). N2r-c: 1 → 4.63, 2 → 3.98 ms/M on the 3060. */
+  reluRun?: number;
 }
 
 /** Lanes per subgroup the kernel is laid out for (the config's max; the proposal requires workgroup x to be a multiple). */
@@ -378,10 +382,25 @@ ${cases.join('\n')}
 `;
 }
 
+/**
+ * `count` work items over the workgroup's lanes with a CONSTANT trip count (`i` = item): a `for (var i = lid; ...)` loop
+ * gets Tint's 64-bit loop counter, which cost the blocked kernel's ReLU passes ~4x at 64 records on NVIDIA (N2r-c, as P-W1).
+ */
+function laneLoop(count: number, wg: number, body: string): string {
+  const trips = Math.ceil(count / wg);
+  const guarded = count % wg ? `if (i < ${count}u) {
+    ${body}
+    }` : body;
+  return `  for (var j = 0u; j < ${trips}u; j++) {
+    let i = lid + j * ${wg}u;
+    ${guarded}
+  }`;
+}
+
 /** Inference kernel `nnInferSgm` in the 'blocked' layout (see `SgmOptions.layout`). Same bindings and hooks as 'row'. */
 function inferSgmBlockedWgsl(o: SgmOptions, hooks: string): string {
   if (o.emulate) throw new Error("sgm layout 'blocked' has no emulated form");
-  if (o.roundTrip && o.roundTrip !== 'relu') throw new Error("sgm layout 'blocked' has no roundTrip probe");
+  if (o.roundTrip === 'double') throw new Error("sgm layout 'blocked' has no roundTrip 'double' probe");
   const { shape, config: c } = o;
   const ops = nativeOps(c);
   const S = rowStride(shape) + sgmPad(o);
@@ -393,6 +412,8 @@ function inferSgmBlockedWgsl(o: SgmOptions, hooks: string): string {
   const sgIndex = o.subgroups === 1 ? '0u' : o.offsetsFromLocalIndex ? `lid / ${sgmLanes(o)}u` : 'sgid';
   const count = layerCount(shape);
   const act = (l: number) => (direct ? `nnA${l % 2}` : 'nnA');
+  const reluRun = o.reluRun ?? 4;
+  if (![1, 2, 4, 8].includes(reluRun)) throw new Error(`sgm: reluRun must be 1, 2, 4 or 8, got ${reluRun}`);
 
   const layers: string[] = [];
   for (let l = 0; l < count; l++) {
@@ -415,20 +436,16 @@ function inferSgmBlockedWgsl(o: SgmOptions, hooks: string): string {
       body.push(`      subgroupMatrixStore(&${dst}, rowBase + ${nb * c.N}u, z${nb}, false, ${S}u);`);
     }
     const width = layerOut(shape, l);
-    const relu = l >= shape.hidden
+    const relu = l >= shape.hidden || o.roundTrip === 'skip'
       ? ''
       : direct
         ? `
-  for (var i = lid; i < ${R * width}u; i += ${wg}u) {
-    let at = (i / ${width}u) * ${S}u + i % ${width}u;
-    ${dst}[at] = max(${dst}[at], T(0.0));
-  }
+${laneLoop((R * width) / reluRun, wg, `let at = (i / ${width / reluRun}u) * ${S}u + (i % ${width / reluRun}u) * ${reluRun}u;
+${Array.from({ length: reluRun }, (_, e) => `    ${dst}[at + ${e}u] = max(${dst}[at + ${e}u], T(0.0));`).join('\n')}`)}
   workgroupBarrier();`
         : `
-  for (var i = lid; i < ${R * width}u; i += ${wg}u) {
-    let at = (i / ${width}u) * ${S}u + i % ${width}u;
-    nnA[at] = T(max(f32(nnS[at]), 0.0));
-  }
+${laneLoop(R * width, wg, `let at = (i / ${width}u) * ${S}u + i % ${width}u;
+    nnA[at] = T(max(f32(nnS[at]), 0.0));`)}
   workgroupBarrier();`;
     layers.push(`  // Layer ${l}: ${nIn} → ${width}${nOut !== width ? ` (padded to ${nOut})` : ''}; ${nBlocks * kBlocks} right tiles held.
   {
@@ -468,15 +485,19 @@ ${hooks}
 fn nnInferSgm(${builtins.join(', ')}) {
   let base = (wid.x + wid.y * nwg.x) * ${R}u;
   let sg = ${sgIndex};
-  for (var i = lid; i < ${R}u; i += ${wg}u) {
+  for (var j = 0u; j < ${Math.ceil(R / wg)}u; j++) {
+    let i = lid + j * ${wg}u;${R % wg ? `
+    if (i >= ${R}u) { break; }` : ''}
     let r = base + i;
     var x: array<f32, NN_IN>;
-    if (r < nnState.count) { x = nnInferLoad(r); }
-    for (var k = 0u; k < NN_IN; k++) { ${act(0)}[i * ${S}u + k] = T(x[k]); }
+    ${o.inputProbe ? 'if (r > 0xfffffff0u) { x = nnInferLoad(r); } x[r % NN_IN] = 1.0; // keeps the hook bindings alive' : 'if (r < nnState.count) { x = nnInferLoad(r); }'}
+    ${o.inputProbe === 'none' ? `if (r > 0xfffffff0u) { ${act(0)}[i] = T(x[0]); } // probe: no input stores` : `for (var k = 0u; k < NN_IN; k++) { ${act(0)}[i * ${S}u + k] = T(x[k]); }`}
   }
   workgroupBarrier();
 ${layers.join('\n')}
-  for (var i = lid; i < ${R}u; i += ${wg}u) {
+  for (var j = 0u; j < ${Math.ceil(R / wg)}u; j++) {
+    let i = lid + j * ${wg}u;${R % wg ? `
+    if (i >= ${R}u) { break; }` : ''}
     let r = base + i;
     if (r < nnState.count) { nnInferStore(r, vec3f(f32(${out}[i * ${S}u]), f32(${out}[i * ${S}u + 1u]), f32(${out}[i * ${S}u + 2u]))); }
   }
