@@ -38,10 +38,13 @@ export function defaultDawnNodePath(repoRoot: string, env: NodeJS.ProcessEnv = p
  * Chrome's --enable-webgpu-developer-features that the runner passes, and PT_NO_DEV_FEATURES=1 leaves it on in both.
  */
 export function dawnCreateFlags(backend: string, toggles: readonly string[], env: NodeJS.ProcessEnv = process.env): string[] {
+  // A toggle written `-name` is disabled instead (e.g. `-use_dxc` compiles HLSL with FXC on D3D12).
+  const enable = toggles.filter((t) => !t.startsWith('-'));
+  const disable = [...toggles.filter((t) => t.startsWith('-')).map((t) => t.slice(1)), ...(env.PT_NO_DEV_FEATURES === '1' ? [] : ['timestamp_quantization'])];
   return [
     `backend=${backend}`,
-    ...(toggles.length ? [`enable-dawn-features=${toggles.join(',')}`] : []),
-    ...(env.PT_NO_DEV_FEATURES === '1' ? [] : ['disable-dawn-features=timestamp_quantization']),
+    ...(enable.length ? [`enable-dawn-features=${enable.join(',')}`] : []),
+    ...(disable.length ? [`disable-dawn-features=${disable.join(',')}`] : []),
   ];
 }
 

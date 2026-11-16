@@ -81,10 +81,40 @@ export function assertBvhLayout(version: number = TRACER_GPU_LAYOUT_VERSION): vo
   }
 }
 
+/** The comment bvh's walk functions end with (each leaves only through a `return` inside its endless `loop`). */
+const WALK_TAIL = "// No return here: the loop above only exits through 'return'.";
+/** What each walk function returns once its pop loop finds the stack empty, in the order the functions appear. */
+const WALK_RETURNS = ['return bvhFinishClosest(result, hitRecord, hitSlot);', 'return false;'];
+
+/**
+ * P-W1 (Windows/NVIDIA): rewrites the descent and pop `loop {}` of bvh's two walk functions as `for` loops with a constant bound,
+ * the only loop shape Tint's PreventInfiniteLoops leaves alone (index declared in the for-init, `< constant`, `++`). Every other
+ * loop gets an injected 64-bit iteration counter; inside the megakernel (both walks inlined into the bounce loop) the counters
+ * of these two loops made DXC's SM 6.6+ code on an RTX 3060 3.7x slower (Sponza, Chrome D3D12: 66 -> 17.7 ms per sample at depth
+ * 1; Vulkan, Metal and the wavefront kernels never paid it). Same paths: the bound, 2^32 - 1 iterations per loop, is never reached
+ * by a walk that terminates. Returns the text unchanged when bvh's walk is not the expected shape (`rtBoundWalkLoopsApplies`;
+ * a unit test checks it applies to every walk variant, so a bvh change that breaks the pattern fails the tests, not a user).
+ */
+export function rtBoundWalkLoops(walk: string): string {
+  if (!rtBoundWalkLoopsApplies(walk)) return walk;
+  let index = 0;
+  const bounded = walk.replace(/\bloop \{/g, () => {
+    const step = `rtWalkStep${index++}`; // unique per walk loop (rtShortenWgsl wants unique names)
+    return `for (var ${step} = 0u; ${step} < 0xffffffffu; ${step}++) {`;
+  });
+  const [head = '', ...rest] = bounded.split(WALK_TAIL);
+  return rest.reduce((out, part, i) => out + WALK_RETURNS[i] + part, head);
+}
+
+/** True when `rtBoundWalkLoops` recognises bvh's walk: two walk functions, each with a descent and a pop `loop`, each ending in WALK_TAIL. */
+export function rtBoundWalkLoopsApplies(walk: string): boolean {
+  return (walk.match(/\bloop \{/g) ?? []).length === 4 && walk.split(WALK_TAIL).length === 3 && /\bfn bvhWalkClosest\b[\s\S]*\bfn bvhWalkAny\b/.test(walk);
+}
+
 function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string {
   assertBvhLayout();
   const format = sceneFormatOf(options);
-  return traceModuleWgsl({
+  const walk = traceModuleWgsl({
     traceSlot: options.traceSlot,
     rayMasks: options.rayMasks ?? true,
     triangleFilter: options.triangleFilter,
@@ -93,6 +123,7 @@ function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string 
     positionLayout: format.positionLayout,
     nodeFormat: format.nodeFormat,
   });
+  return rtBoundWalkLoops(walk);
 }
 
 /** Removes `//` line comments and block comments, keeping every line break (WGSL has no string literals, so no `//` is ever text). */

@@ -2,7 +2,7 @@
  * Scheduling A/B in ONE page (P3.3 / P3.4 / P3.10 / R1b): several of our renderer ids on one scene, interleaved ABBA inside the page, so a run takes the shared GPU
  * lock once instead of once per (renderer, round) like `matrix.ts --interleave`. The first id is the baseline of the paired ratios.
  *
- *   node bench/runner/run.ts --page wf-sched-ab --suite wf-sched-ab --timeout 1800000 --args scene=cornell renderers=pt-megakernel,pt-wavefront,pt-wf-sg spp=256 rounds=5 [pt_layers=2 pt_maxdepth=4]
+ *   node bench/runner/run.ts --page wf-sched-ab --suite wf-sched-ab --timeout 1800000 --args scene=cornell renderers=pt-megakernel,pt-wavefront,pt-wf-sg spp=256 rounds=5 [pt_layers=2 pt_maxdepth=4 pt_nee=0|1]
  *
  * Metrics: `<id>_ms_per_spp_min / _med / _max`, `<id>_ratio_min / _max` (paired against the first id, round by round), `<id>_max_rel_pixel` (the final image of round 0 against the
  * baseline's, per pixel: the correctness check of the very same runs; a variant that is not mathematically the same image shows up here) and `<id>_non_finite`.
@@ -22,6 +22,7 @@ try {
   const pt = {
     ...(args['pt_maxdepth'] ? { maxDepth: numberArg(args, 'pt_maxdepth', 1) } : {}),
     ...(args['pt_layers'] ? { layers: numberArg(args, 'pt_layers', 1) } : {}),
+    ...(args['pt_nee'] ? { nee: args['pt_nee'] === '1' } : {}),
     ...(args['pt_refill_threshold'] ? { refillThreshold: numberArg(args, 'pt_refill_threshold', 0.25) } : {}),
   };
   const scene = getScene(sceneName);

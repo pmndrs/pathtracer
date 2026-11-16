@@ -71,7 +71,8 @@ export const USAGE = `Usage: node bench/runner/run.ts --page <name> [options]
   --no-webgpu          Start Chrome with the GPU disabled. The run must fail clearly (self-check).
   --dawn <backend>     Run the page in dawn.node instead of Chrome (vulkan, d3d12, metal, ...): same Dawn + Tint, a backend
                        Chrome does not offer here (Vulkan on Windows). Needs DAWN_NODE or .cache/dawn-node (bench/runner/dawn-host.ts).
-  --dawn-toggles <a,b> Dawn toggles for --dawn (default allow_unsafe_apis; NVIDIA f16 on Vulkan also needs vulkan_enable_f16_on_nvidia).
+  --dawn-toggles <a,b> Dawn toggles for --dawn (default allow_unsafe_apis; NVIDIA f16 on Vulkan also needs vulkan_enable_f16_on_nvidia;
+                       -name disables one, e.g. -use_dxc).
   --verbose            Print all console output, not only for failing runs.
   --help               Show this text.`;
 
@@ -167,7 +168,7 @@ export function parseRunnerArgs(argv: string[], env: NodeJS.ProcessEnv = process
   if (values.dawn !== undefined && !/^[a-z0-9]+$/.test(values.dawn)) throw new UsageError(`--dawn expects a backend name (vulkan, d3d12, ...), got "${values.dawn}".`);
   if (values['dawn-toggles'] !== undefined && values.dawn === undefined) throw new UsageError('--dawn-toggles needs --dawn.');
   const dawnToggles = (values['dawn-toggles'] ?? 'allow_unsafe_apis').split(',').map((t) => t.trim()).filter((t) => t !== '');
-  if (dawnToggles.some((t) => !/^[a-z0-9_]+$/.test(t))) throw new UsageError(`--dawn-toggles expects comma-separated toggle names, got "${values['dawn-toggles']}".`);
+  if (dawnToggles.some((t) => !/^-?[a-z0-9_]+$/.test(t))) throw new UsageError(`--dawn-toggles expects comma-separated toggle names, got "${values['dawn-toggles']}".`);
   if (values.page !== undefined && !/^[A-Za-z0-9._-]+$/.test(values.page)) {
     throw new UsageError(`--page must be a plain page name (letters, digits, . _ -), got "${values.page}".`);
   }

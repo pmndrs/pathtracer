@@ -23,7 +23,8 @@ describe('Tier 1 golden OpenPBR tables', () => {
       });
       // The downloads are git-ignored (node bench/assets/fetch.ts): the recomputation runs where they exist.
       it.skipIf(!existsSync(model.file))('equals the table computed from the downloaded model', () => {
-        expect(goldenText(model)).toBe(readFileSync(path, 'utf8'));
+        // A Windows checkout (core.autocrlf) has CRLF line endings; the generator writes LF.
+        expect(goldenText(model)).toBe(readFileSync(path, 'utf8').replace(/\r\n/g, '\n'));
       });
     });
   }

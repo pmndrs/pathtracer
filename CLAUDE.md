@@ -632,5 +632,11 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   with `env -u CMAKE_TOOLCHAIN_FILE cmake ...` (VkNRC: `-A x64 -G "Visual Studio 17 2022"`, then `cmake --build build --target VkNRC --config Release -- -m`).
 - Windows: the RTX 3060 Laptop heats to 80-87 °C within minutes of back-to-back full-load runs (VkNRC, a 1024 spp megakernel cell) and the runner then marks
   rows `thermal throttling` although clocks stay at 1.5-2.0 GHz (reason 0x20, software thermal slowdown). Pause between long runs; quote the start temperature.
+- Windows: Tint (all backends, part of robustness) puts a 64-bit iteration counter into every loop it cannot prove finite; on D3D12 with DXC SM 6.6+ such
+  counters on loops nested inside a big kernel can cost 3-4x (P-W1: the BVH walks inside the megakernel; standalone kernels did not pay). Only
+  `for (var i = <int>; i <op> <literal constant>; i++)` with the bound test first escapes it (a runtime bound, `while`, or `loop {}` does not). For a new
+  unbounded loop in a hot kernel use `for (var s = 0u; s < 0xffffffffu; s++)` (WGSL then wants a return after it). To bisect a D3D12-only slowdown,
+  dawn.node `--dawn d3d12 --dawn-toggles allow_unsafe_apis,disable_robustness` (or `d3d12_dont_use_shader_model_66_or_higher`, `-use_dxc`; `-x` disables
+  a toggle) and `dump_shaders` (HLSL + DXIL in the console with `--verbose`).
 - Windows: the `caps` page used to set only `window.__benchResult`, so the runner always timed out on it; it now calls `reportResult`.
   Its subgroup-matrix probe compiles a result type the adapter lists (NVIDIA has no f32 or 8×8 config).

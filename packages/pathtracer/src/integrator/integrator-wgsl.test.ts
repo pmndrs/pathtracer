@@ -264,19 +264,20 @@ describe('integrator WGSL', () => {
       expect(readable({ fuzz: true })).toMatch(/ptBsdfEval\(p, wo, wi\)/);
     });
 
-    it('sizes (minified, short names; P2.21/22/30): thin +0.5 KB, medium +0.3 KB, layered albedo +7.9 KB, stochastic +9.1 KB; all lobes with an env map under 53.5 KB', () => {
+    it('sizes (minified, short names; P2.21/22/30): thin +0.5 KB, medium +0.3 KB, layered albedo +7.9 KB, stochastic +9.1 KB; all lobes with an env map under 53.7 KB', () => {
       const legacy = ptMegakernelWgsl(caps, { format: {}, layout }).length;
       const size = (f: Partial<PtMaterialFeatures>, layered?: PtMaterialOptions['layered'], extra: object = {}) => build(feats(f, layered), extra).length;
       expect(size({})).toBeLessThan(legacy + 100);
       expect(size({ mix: true })).toBeLessThan(legacy + 150);
       expect(size({ thin: true })).toBeLessThan(legacy + 600);
       expect(size({ medium: true })).toBeLessThan(legacy + 400);
-      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(48_700);
-      expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(49_900);
+      // Caps raised by 150 B (P-W1): the constant-bounded walk loops (rtBoundWalkLoops) add ~130 B to every kernel with both walks.
+      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(48_850);
+      expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(50_050);
       const all = { layered: true, mix: true, thin: true, medium: true };
-      expect(size(all, { layering: 'albedo' })).toBeLessThan(49_500);
-      expect(size(all, { layering: 'stochastic' })).toBeLessThan(50_700);
-      expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(53_500);
+      expect(size(all, { layering: 'albedo' })).toBeLessThan(49_650);
+      expect(size(all, { layering: 'stochastic' })).toBeLessThan(50_850);
+      expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(53_650);
     });
   });
 });
