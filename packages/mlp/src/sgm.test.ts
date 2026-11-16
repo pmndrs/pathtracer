@@ -86,6 +86,12 @@ describe('pickSubgroupMatrixConfig', () => {
     expect(pickSubgroupMatrixConfig(info([{ componentType: 'f16', resultComponentType: 'f16', M: 8, N: 8, K: 8 }]), DEFAULT_SHAPE, false)?.componentType).toBe('f16');
   });
 
+  it('takes the requested accumulator type and the biggest tile among ties (NVIDIA list)', () => {
+    const nvidia = info(['f16', 'f32'].flatMap((r) => [[16, 8, 8], [16, 8, 16], [16, 16, 16]].map(([M, N, K]) => ({ componentType: 'f16' as const, resultComponentType: r as 'f16' | 'f32', M, N, K }))));
+    expect(pickSubgroupMatrixConfig(nvidia, DEFAULT_SHAPE, true)).toMatchObject({ resultComponentType: 'f32', M: 16, N: 16, K: 16 });
+    expect(pickSubgroupMatrixConfig(nvidia, DEFAULT_SHAPE, true, 'f16')).toMatchObject({ resultComponentType: 'f16', M: 16, N: 16, K: 16 });
+  });
+
   it('skips integer configs and tiles that do not divide the network', () => {
     expect(pickSubgroupMatrixConfig(info([{ componentType: 'u8' as never, resultComponentType: 'u32' as never, M: 8, N: 8, K: 32 }, { componentType: 'f16', resultComponentType: 'f16', M: 8, N: 24, K: 8 }]), DEFAULT_SHAPE, true)).toBeNull();
     expect(pickSubgroupMatrixConfig(undefined, DEFAULT_SHAPE, true)).toBeNull();

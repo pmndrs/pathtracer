@@ -7,12 +7,12 @@
  * 2 × weights per record (multiply-adds of the unpadded network), so the sgm arm's padding is not credited.
  *
  * Args: precision=f32|f16  infer=portable|sgm|sgm-emu  size=1024 (inference records = size²)  repeats=20  warmup=3
- *       forward=tiled|perRecord|sgm|sgm-emu  fwdSubgroups=1|4  fwdRecords=64 f16 / 48 f32  batch=16384  trainSteps=20  sgmRecords=64  subgroups=1  gradient=tiled|perWeight  gradSplits=64  gradChunk=32
+ *       acc=f16|f32 (sgm result/accumulator type)  forward=tiled|perRecord|sgm|sgm-emu  fwdSubgroups=1|4  fwdRecords=64 f16 / 48 f32  batch=16384  trainSteps=20  sgmRecords=64  subgroups=1  gradient=tiled|perWeight  gradSplits=64  gradChunk=32
  * Per-stage training times (forward-backward / gradient / Adam, each its own pass) come from extra `stageSteps` steps
  * (default 20) with timestamps around each pass; the production-shape single-pass step is timed separately.
  */
 
-import { DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, initWeights, weightCount, type ForwardKind, type GradientKind, type Precision } from '@pathtracer/mlp';
+import { DEFAULT_SHAPE, DEFAULT_TRAIN, MlpEngine, initWeights, weightCount, type ForwardKind, type GradientKind, type Precision, type SgmScalar } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
@@ -48,8 +48,9 @@ try {
     subgroups: numberArg(args, 'subgroups', 1),
     tile: numberArg(args, 'tile', 8),
     ...(args.roundTrip ? { roundTrip: args.roundTrip as 'relu' | 'skip' | 'double' } : {}),
+    ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}),
   });
-  const fwdArm = forwardArmOptions(forwardArg, adapter, device, DEFAULT_SHAPE, arm.precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', numberArg(args, 'subgroups', 1)), tile: numberArg(args, 'tile', 8) });
+  const fwdArm = forwardArmOptions(forwardArg, adapter, device, DEFAULT_SHAPE, arm.precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', numberArg(args, 'subgroups', 1)), tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });
   const forward: ForwardKind = fwdArm.forward;
   const mlp = await MlpEngine.create(device, {
     precision: fwdArm.precision,

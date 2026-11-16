@@ -13,7 +13,7 @@
  *       gradSplits=64 gradChunk=32 (tiled arm) forward=tiled|perRecord|sgm|sgm-emu (default tiled; sgm: subgroups=1|4 via fwdSubgroups, tile=8|16 for sgm-emu) fwdRecords=64 f16 / 48 f32 (tiled forward)
  */
 
-import { AdamState, type ForwardKind, type GradientKind, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision } from '@pathtracer/mlp';
+import { AdamState, type ForwardKind, type GradientKind, BUFFER_HOOKS_INFER, BUFFER_HOOKS_TRAIN, DEFAULT_SHAPE, MlpEngine, Rng, batchGradient, encodeImage, forward, initWeights, type Precision, type SgmScalar } from '@pathtracer/mlp';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { forwardArmOptions, inferArmOptions, readBuffer, requestMlpDevice, storageBuffer } from './mlp-common.ts';
@@ -75,10 +75,10 @@ try {
   }
   const weights = initWeights(shape, seed);
 
-  const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8) });
+  const arm = inferArmOptions(inferArm, adapter, device, shape, precision, { records: sgmRecords, subgroups, tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });
   precision = arm.precision;
   const sgm = arm.sgm;
-  const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', subgroups), tile: numberArg(args, 'tile', 8) });
+  const fwdArm = forwardArmOptions(forwardArg, adapter, device, shape, precision, { ...(args.fwdRecords ? { records: numberArg(args, 'fwdRecords', 64) } : {}), subgroups: numberArg(args, 'fwdSubgroups', subgroups), tile: numberArg(args, 'tile', 8), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}) });
   precision = fwdArm.precision;
   const forwardKind = fwdArm.forward;
   const mlp = await MlpEngine.create(device, { precision, capacity: n, inferCapacity: n, trainHooks: BUFFER_HOOKS_TRAIN, inferHooks: BUFFER_HOOKS_INFER, gradient: gradientKind, gradientOptions, forward: forwardKind, forwardOptions, ...(fwdArm.trainSgm ? { trainSgm: fwdArm.trainSgm } : {}), ...(sgm ? { sgm } : {}), ...(arm.infer ? { infer: arm.infer } : {}) });

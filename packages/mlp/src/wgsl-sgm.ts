@@ -104,9 +104,10 @@ export function validateSgm(o: SgmOptions): void {
 
 /**
  * Picks a usable config from `adapter.info.subgroupMatrixConfigs`: square-friendly sizes that divide the network,
- * operand type `f16` when `preferF16` (and the device has shader-f16), else `f32`; f32 results preferred.
+ * operand type `f16` when `preferF16` (and the device has shader-f16), else `f32`; f32 results preferred unless
+ * `accumulate` asks for a result type (f16 sums run at twice the f32-sum rate on GeForce tensor cores; VkNRC uses them).
  */
-export function pickSubgroupMatrixConfig(info: GPUAdapterInfo | undefined, shape: MlpShape, preferF16: boolean): SgmConfig | null {
+export function pickSubgroupMatrixConfig(info: GPUAdapterInfo | undefined, shape: MlpShape, preferF16: boolean, accumulate?: SgmScalar): SgmConfig | null {
   const raw = (info as unknown as { subgroupMatrixConfigs?: ArrayLike<Record<string, unknown>> } | undefined)?.subgroupMatrixConfigs;
   if (!raw) return null;
   const read = (c: Record<string, unknown>): SgmConfig => ({
@@ -124,8 +125,9 @@ export function pickSubgroupMatrixConfig(info: GPUAdapterInfo | undefined, shape
     shape.width % c.N === 0 && shape.width % c.K === 0 && shape.inputs % c.K === 0;
   const all = Array.from(raw, read).filter(fits);
   const want: SgmScalar = preferF16 ? 'f16' : 'f32';
-  const score = (c: SgmConfig) => (c.componentType === want ? 2 : 0) + (c.resultComponentType === 'f32' ? 1 : 0);
-  all.sort((a, b) => score(b) - score(a));
+  const score = (c: SgmConfig) => (c.componentType === want ? 2 : 0) + (c.resultComponentType === (accumulate ?? 'f32') ? 1 : 0);
+  // Ties go to the biggest tile (NVIDIA lists 16x8x8, 16x8x16 and 16x16x16 per type pair).
+  all.sort((a, b) => score(b) - score(a) || b.M * b.N * b.K - a.M * a.N * a.K);
   return all[0] ?? null;
 }
 

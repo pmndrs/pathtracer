@@ -1,6 +1,6 @@
 /** Shared helpers for the research-track-N pages (mlp-check, mlp-fit, mlp-timing, mlp-live, mlp-sgm-probe). */
 
-import { pickSubgroupMatrixConfig, type ForwardKind, type MlpEngineOptions, type MlpShape, type Precision } from '@pathtracer/mlp';
+import { pickSubgroupMatrixConfig, type ForwardKind, type MlpEngineOptions, type MlpShape, type Precision, type SgmScalar } from '@pathtracer/mlp';
 
 /** A device with every adapter feature and the adapter's max limits (the MLP wants 16-32 KiB of workgroup memory). */
 export async function requestMlpDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice }> {
@@ -63,7 +63,7 @@ export function inferArmOptions(
   device: GPUDevice,
   shape: MlpShape,
   precision: Precision,
-  opts: { records?: number; subgroups?: number; tile?: number; roundTrip?: 'relu' | 'skip' | 'double' } = {},
+  opts: { records?: number; subgroups?: number; tile?: number; roundTrip?: 'relu' | 'skip' | 'double'; accumulate?: SgmScalar } = {},
 ): { precision: Precision; sgm?: MlpEngineOptions['sgm']; infer?: 'perRecord' | 'tiled'; description: string } {
   const records = opts.records ?? 64;
   const subgroups = opts.subgroups ?? 1;
@@ -80,8 +80,9 @@ export function inferArmOptions(
   }
   if (arm === 'sgm') {
     if (!hasSubgroupMatrix(device)) throw new Error('infer=sgm needs chromium-experimental-subgroup-matrix (Chrome with --enable-unsafe-webgpu)');
-    const config = pickSubgroupMatrixConfig(adapter.info, shape, precision === 'f16' && device.features.has('shader-f16'));
+    const config = pickSubgroupMatrixConfig(adapter.info, shape, precision === 'f16' && device.features.has('shader-f16'), opts.accumulate);
     if (!config) throw new Error('no usable subgroupMatrixConfigs entry on this adapter');
+    if (opts.accumulate && config.resultComponentType !== opts.accumulate) throw new Error(`acc=${opts.accumulate}: no ${config.componentType}->${opts.accumulate} config on this adapter`);
     const enableName = device.features.has('subgroup-matrix' as GPUFeatureName) ? 'subgroup_matrix' : 'chromium_experimental_subgroup_matrix';
     return {
       precision: config.componentType,
@@ -104,12 +105,12 @@ export function forwardArmOptions(
   device: GPUDevice,
   shape: MlpShape,
   precision: Precision,
-  opts: { records?: number; subgroups?: number; tile?: number } = {},
+  opts: { records?: number; subgroups?: number; tile?: number; accumulate?: SgmScalar } = {},
 ): { forward: ForwardKind; precision: Precision; trainSgm?: MlpEngineOptions['trainSgm']; description: string } {
   if (arg === 'perRecord' || arg === 'tiled') return { forward: arg, precision, description: `${arg} ${precision}` };
   if (arg !== 'sgm' && arg !== 'sgm-emu') throw new Error(`forward must be perRecord, tiled, sgm or sgm-emu, got ${arg}`);
   const subgroups = opts.subgroups ?? 1;
-  const base = inferArmOptions(arg, adapter, device, shape, precision, { records: 64, subgroups, tile: opts.tile ?? 8 });
+  const base = inferArmOptions(arg, adapter, device, shape, precision, { records: 64, subgroups, tile: opts.tile ?? 8, ...(opts.accumulate ? { accumulate: opts.accumulate } : {}) });
   const sgm = base.sgm as NonNullable<MlpEngineOptions['trainSgm']>;
   const unit = sgm.config.M * subgroups;
   const wanted = opts.records ?? (base.precision === 'f16' ? 64 : 32);
