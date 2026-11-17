@@ -6,6 +6,9 @@ _Written on the Mac at the end of M5. This is milestone **M6** of [nrc-plan.md](
 track: [nrc-plan.md](nrc-plan.md) (questions, milestones, budget, log), [nrc.md](nrc.md) (spec; §9 is the VkNRC
 baseline), [nrc-diverges.md](nrc-diverges.md), TASKS.md section N and [bench/results/NRC-STUDY.md](../../bench/results/NRC-STUDY.md)._
 
+_Matrix kernels on Windows run outside Chrome, in dawn.node on Vulkan: setup, switches and pitfalls in
+[dawn-node-vulkan.md](dawn-node-vulkan.md)._
+
 ## Where things stand
 
 Everything below was built and verified on the Mac (Apple M5 Pro, Metal, Chrome 157). Nothing in track N has run on
