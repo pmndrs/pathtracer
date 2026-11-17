@@ -686,3 +686,8 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   a 4-frame OIDN mean's error there, so ratios against it are pulled toward 1. Estimate the floor before quoting a small-error ratio.
 - `NrcCache.readLoss()` is the last step's loss on ONE frame's noisy targets (relative L2: 30-190 on sponza-white, frame to frame): check it
   for drift or NaN (training stability), never read it as a convergence curve; convergence is the image error through the chain.
+- `node bench/runner/run.ts --args` takes each `k=v` as its own token: `--args "a=1 b=2"` (one quoted string) sets `a` to `1 b=2` and the page silently runs
+  its defaults (an `nrc-check model=hash` run tested the network). Check the echoed args JSON on the PASS line.
+- Hash-grid cache (M7, `bench/nrc/hash-grid.ts`): a cell with one or two samples shows its noise as a blotch the size of the cell, and young cells appear after every
+  cut, cold start or LOD change while the camera moves (single-frame relMSE spiked to 10.6, above plain path tracing). A sample threshold fixes it only together with
+  the pyramid update (coarser cells always populated); a threshold alone turns into dark misses (−4% bias). Jitter makes it worse.

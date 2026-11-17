@@ -72,6 +72,21 @@ Status: **planned** (not built yet), **built** (in `packages/mlp` or a bench pag
 | N-I17 | OIDN in the chain (M9, N11.3) | — | — | Denoiser package OIDN (WGSL, our device) as a second denoiser of `PipelineArm`, mutracer-style schedule (its docs, not its code): the small network every frame while the camera moves, a progressive mean of beauty / albedo / normal while it is still, the standard network once at `stillSamples` (default 8), then the frame is held (no tracing or denoising until the camera moves). Guides: our primary-hit albedo factor and normal (1-spp, so nearly clean: the `calb_cnrm` nets), or albedo only. mutracer reruns the standard net on a doubling schedule instead of holding, and uses the `alb_nrm` (noisy-aux) nets | design (simplest schedule that shows the trade) | doubling schedule; the `high` (large) net at hold |
 | N-I18 | Start-up of a fresh network (N11.7) | the cache is used from the first frame (the paper trains online from frame 0 and shows the cache at once) | used from frame 0 | a warm-up gate: plain path tracing in the image until the network has trained a step budget (120 SVGF / 600 OIDN, D30), training unchanged meanwhile | quality: through a denoiser a young cache is worse than plain for ~100 frames (OIDN), its low-frequency error survives the denoiser while 1-spp noise does not; the paper judges raw frames, where the young cache already looks trained after a few frames | NRC-PIPELINE.md "Warm-up gate" |
 
+## D. Hash-grid competitor (M7, [nrc-hash-cache.md](nrc-hash-cache.md))
+
+Source: SHaRC as described in its integration notes (research/notes/08-realtime-gi.md §3.3; ideas only, no SDK code) and
+Binder et al. 2019 (arXiv 1902.05942). The hash arm shares every path, record and resolve of the network arm on purpose:
+these rows are what a closer SHaRC would change.
+
+| ID | Topic | SHaRC / Binder | Ours | Why | Status | Follow-up |
+|---|---|---|---|---|---|---|
+| N-H1 | Miss | terminate only in a cell with enough samples; trace on otherwise | terminate at `queryDepth` like the network arm; a miss (after `fallbackLevels` coarser cells) adds 0 | design (isolate the store) | built | continue-on-miss: lookup inside the render hook (grid bound in the hook group, +1 storage buffer) |
+| N-H2 | Update source | dedicated update paths (~4% of pixels), every bounce, radiance propagated back a few bounces | the network's training records: every 16th 8 × 8 tile, vertices 0..3, cache as the tail | design (same data for both arms) | built | none unless N-H1 changes the paths |
+| N-H3 | Key | 64-bit key (position, normal, level), 64-bit atomics optional | bucket index (32-bit hash) + 32-bit checksum, buckets of 8, scan-all lookups | platform (WGSL has 32-bit atomics only) | built | count dropped records (full buckets); none seen yet |
+| N-H4 | Temporal | sample count capped by an accumulation frame count, stale-frame eviction | exponentially weighted sample mean, time constant `historyFrames`; eviction after `staleFrames` | simplification | built, A/B'd | 640×360 sweep: 32 frames best (8: 3.35, 128: 2.83 vs 2.88 steady); keep |
+| N-H5 | What a cell stores | radiance (optionally directional) | view-independent radiance, no albedo demodulation | simplification (sponza-white is one white Lambert material) | built | albedo demodulation before a textured scene |
+| N-H6 | Termination rule | segment longer than the voxel, cone spread for glossy lobes | fixed `queryDepth` (both arms) | design | built | the spread rule for both arms (N-I4) |
+
 ## Follow-up queue (by when it can run)
 
 - **Mac, no Windows:** N0.1 (paper check: closes every [M]), N0.2 (subgroup-matrix configs + the `subgroup_id`

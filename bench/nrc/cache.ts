@@ -16,6 +16,9 @@
  *    must return at vertex k (MIS included), with the cache's own prediction as the tail (self-training, N-I5).
  *    Cost: M + 1 trainer passes per frame (DIVERGES N-I9 in nrc-diverges.md).
  *
+ * `model: 'hash'` (M7) swaps the network for a world-space hash grid (`hash-grid.ts`): inference becomes a lookup, the training steps one
+ * update + resolve; the hook, the targets, the resolve into the image and the fix-up are the same code.
+ *
  * Per frame, everything is encoded into one command encoder with no readback: trainer runs → tail inference → targets
  * → `stepsPerFrame` training steps → render pass → inference → resolve.
  */
@@ -23,6 +26,7 @@
 import { MlpEngine, nrcEncodingWgsl, initWeights, layerOffset, weightCount, DEFAULT_SHAPE, DEFAULT_TRAIN, type Precision, type MlpEngineOptions } from '@pathtracer/mlp';
 import { PtMegakernel, type PtHooksOptions, type PtLookAtCamera, type PtMegakernelOptions } from '@pmndrs/pathtracer';
 import type { Caps } from '@pmndrs/raytracer';
+import { HashGrid, type HashGridSettings } from './hash-grid.ts';
 
 const STORAGE = GPUBufferUsage.STORAGE;
 const COPY_DST = GPUBufferUsage.COPY_DST;
@@ -404,6 +408,13 @@ fn nrcFixup(@builtin(global_invocation_id) gid: vec3u) {
 
 export interface NrcSettings {
   /**
+   * What stores the cache (M7, Q4): 'mlp' (default) the network; 'hash' a world-space hash grid (`hash-grid.ts`) fed by the same training
+   * records and queried by the same render paths, so only the store differs. 'hash' needs inline training; network settings are ignored.
+   */
+  model: 'mlp' | 'hash';
+  /** Hash grid settings (`model: 'hash'`). */
+  hash: Partial<HashGridSettings>;
+  /**
    * Where training paths come from: 'inline' (default) the render pass's own update paths, gathered through `ptOnRadiance` (no extra
    * pass); 'replay' a separate trainer film replayed trainDepth + 1 times per frame (the first version, kept for the A/B).
    */
@@ -452,6 +463,8 @@ export interface NrcSettings {
 }
 
 export const DEFAULT_NRC_SETTINGS: NrcSettings = {
+  model: 'mlp',
+  hash: {},
   training: 'inline',
   updateBlock: 4,
   trainSelect: 'tile',
@@ -481,7 +494,10 @@ export class NrcCache {
   readonly render!: PtMegakernel;
   /** Replay training only. */
   readonly trainer!: PtMegakernel | null;
-  readonly mlp!: MlpEngine;
+  /** The network (`model: 'mlp'`), null for the hash grid. */
+  readonly mlp!: MlpEngine | null;
+  /** The hash grid (`model: 'hash'`), null for the network. */
+  readonly hash!: HashGrid | null;
   readonly settings!: NrcSettings;
   readonly width!: number;
   readonly height!: number;
@@ -507,8 +523,8 @@ export class NrcCache {
   private readonly finishGroup!: GPUBindGroup;
   private readonly resolveGroup!: GPUBindGroup;
   private readonly tailInferGroup!: GPUBindGroup | null;
-  private readonly renderInferGroup!: GPUBindGroup;
-  private readonly trainHookGroup!: GPUBindGroup;
+  private readonly renderInferGroup!: GPUBindGroup | null;
+  private readonly trainHookGroup!: GPUBindGroup | null;
   private readonly targetParams!: GPUBuffer;
   private readonly resolveParams!: GPUBuffer;
   private readonly queryCapacity!: number;
@@ -531,6 +547,8 @@ export class NrcCache {
     // Frame mode (the real-time planes, nrc-pipeline): the resolve and fix-up also write the demodulated planes.
     const frame = !!plain.options.integrator?.frame;
     if (frame && !inline) throw new Error("NrcCache: frame mode (integrator.frame) supports training: 'inline' only");
+    const useHash = s.model === 'hash';
+    if (useHash && !inline) throw new Error("NrcCache: model 'hash' supports training: 'inline' only");
     const M = s.trainDepth;
     const pixels = film.width * film.height;
     const B = Math.max(1, Math.floor(s.updateBlock));
@@ -594,7 +612,7 @@ export class NrcCache {
       render.setHookBindGroup(group(M + 1, queries, queryCount, render.hookBindGroupLayout as GPUBindGroupLayout));
     }
 
-    const mlp = await MlpEngine.create(device, {
+    const mlp = useHash ? null : await MlpEngine.create(device, {
       precision: s.precision,
       capacity: s.batch,
       inferCapacity: Math.max(queryCapacity, trainPaths),
@@ -607,12 +625,12 @@ export class NrcCache {
       ...(s.trainSgm ? { forward: 'sgm' as const, trainSgm: s.trainSgm } : {}),
       ...(s.gradientSgm ? { gradient: 'sgm' as const, gradientSgm: s.gradientSgm } : {}),
     });
-    mlp.uploadWeights(NrcCache.freshWeights(s, s.seed));
-    const tailInferGroup = inline
+    mlp?.uploadWeights(NrcCache.freshWeights(s, s.seed));
+    const tailInferGroup = inline || !mlp
       ? null
       : device.createBindGroup({ layout: mlp.inferLayout, entries: [{ binding: 0, resource: { buffer: trainVerts, offset: M * trainPaths * RECORD_BYTES, size: trainPaths * RECORD_BYTES } }, { binding: 1, resource: { buffer: tailPred as GPUBuffer } }, { binding: 2, resource: { buffer: box } }] });
-    const renderInferGroup = device.createBindGroup({ layout: mlp.inferLayout, entries: [{ binding: 0, resource: { buffer: queries } }, { binding: 1, resource: { buffer: preds } }, { binding: 2, resource: { buffer: box } }] });
-    const trainHookGroup = device.createBindGroup({ layout: mlp.trainLayout, entries: [{ binding: 0, resource: { buffer: trainSet } }, { binding: 1, resource: { buffer: trainCount } }, { binding: 2, resource: { buffer: box } }] });
+    const renderInferGroup = !mlp ? null : device.createBindGroup({ layout: mlp.inferLayout, entries: [{ binding: 0, resource: { buffer: queries } }, { binding: 1, resource: { buffer: preds } }, { binding: 2, resource: { buffer: box } }] });
+    const trainHookGroup = !mlp ? null : device.createBindGroup({ layout: mlp.trainLayout, entries: [{ binding: 0, resource: { buffer: trainSet } }, { binding: 1, resource: { buffer: trainCount } }, { binding: 2, resource: { buffer: box } }] });
 
     const targetsModule = device.createShaderModule({ label: 'nrc targets', code: inline ? TARGETS_INLINE_WGSL : TARGETS_WGSL });
     const [targetsPipeline, finishPipeline, resolvePipeline] = await Promise.all([
@@ -643,10 +661,24 @@ export class NrcCache {
       fixupGroup = device.createBindGroup({ layout: fixupPipeline.getBindGroupLayout(0), entries: [fixupParams, trainVerts, trainSums as GPUBuffer, render.accumulator as GPUBuffer, ...(frame ? [render.frameBuffers.planes] : [])].map((buffer, binding) => ({ binding, resource: { buffer } })) });
     }
 
+    // The hash grid reads the same query records (lookup instead of inference) and the same training set (update instead of steps).
+    let hash: HashGrid | null = null;
+    if (useHash) {
+      hash = await HashGrid.create(device, s.hash, { yFovDeg: film.camera.yFovDeg, filmHeight: film.height });
+      hash.bindQueries(queries, queryCount, preds, queryCapacity);
+      hash.bindRecords(trainSet, trainCount, capacity);
+      hash.setCameraPosition(film.camera.position);
+    }
+
     return new NrcCache({
-      device, render, trainer, mlp, settings: s, width: film.width, height: film.height, trainPaths, hookParams, trainGroups, trainVerts, trainSums, trainRadiance, tailPred, trainSet, trainCount, tailCount, queries, preds, queryCount, box,
+      device, render, trainer, mlp, hash, settings: s, width: film.width, height: film.height, trainPaths, hookParams, trainGroups, trainVerts, trainSums, trainRadiance, tailPred, trainSet, trainCount, tailCount, queries, preds, queryCount, box,
       targetsPipeline, finishPipeline, resolvePipeline, targetsGroup, finishGroup, resolveGroup, tailInferGroup, renderInferGroup, trainHookGroup, targetParams, resolveParams, fixupPipeline, fixupGroup, fixupParams, queryCapacity,
     });
+  }
+
+  /** What stores the cache, for logs: the network's inference backend and precision, or the hash grid's size. */
+  get description(): string {
+    return this.hash ? `hash grid 2^${this.hash.settings.log2Entries}` : `${this.mlp?.inferBackend} ${this.mlp?.precision}`;
   }
 
   get accumulator(): GPUBuffer {
@@ -664,7 +696,8 @@ export class NrcCache {
 
   /** Forgets everything the network learned (fresh weights, Adam state). */
   resetNetwork(): void {
-    this.mlp.uploadWeights(NrcCache.freshWeights(this.settings, this.settings.seed + this.frame));
+    this.hash?.clear();
+    this.mlp?.uploadWeights(NrcCache.freshWeights(this.settings, this.settings.seed + this.frame));
     this.trainedFrames = 0;
     this.trainedSteps = 0;
   }
@@ -704,12 +737,14 @@ export class NrcCache {
 
   setCamera(camera: PtLookAtCamera): void {
     this.render.setCamera(camera);
+    this.hash?.setCameraPosition(camera.position);
     this.trainer?.setCamera(camera);
   }
 
   /** Frame mode: the next frame's camera (the current one becomes the previous camera the motion vectors reproject to). */
   nextCamera(camera: PtLookAtCamera): void {
     this.render.nextFrame(camera);
+    this.hash?.setCameraPosition(camera.position);
     this.trainer?.setCamera(camera);
   }
 
@@ -756,12 +791,23 @@ export class NrcCache {
         this.trainer.encode(encoder, 1);
         encoder.copyBufferToBuffer(this.trainer.accumulator as GPUBuffer, 0, this.trainRadiance as GPUBuffer, k * n * 16, n * 16);
       }
-      this.mlp.encodeInfer(encoder, this.tailCount as GPUBuffer, 0, this.tailInferGroup as GPUBindGroup);
+      (this.mlp as MlpEngine).encodeInfer(encoder, this.tailCount as GPUBuffer, 0, this.tailInferGroup as GPUBindGroup);
       this.encodeTargets(encoder);
     } else if (stage === 'trainSteps') {
-      if (s.lrWarmupFrames > 0) this.mlp.setLearningRate(s.learningRate * Math.min(1, (this.trainedFrames + 1) / s.lrWarmupFrames));
+      if (this.hash) {
+        // One update + resolve per training frame (a hash grid has no steps; 0 steps = no training, as for the network).
+        const steps = this.warming && s.warmupStepsPerFrame > 0 ? s.warmupStepsPerFrame : s.stepsPerFrame;
+        if (steps > 0) {
+          this.hash.encodeUpdate(encoder);
+          this.trainedFrames++;
+          this.trainedSteps++;
+        }
+        return;
+      }
+      const mlp = this.mlp as MlpEngine;
+      if (s.lrWarmupFrames > 0) mlp.setLearningRate(s.learningRate * Math.min(1, (this.trainedFrames + 1) / s.lrWarmupFrames));
       const steps = this.warming && s.warmupStepsPerFrame > 0 ? s.warmupStepsPerFrame : s.stepsPerFrame;
-      for (let i = 0; i < steps; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
+      for (let i = 0; i < steps; i++) mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup as GPUBindGroup);
       if (steps > 0) {
         this.trainedFrames++;
         this.trainedSteps += steps;
@@ -775,7 +821,8 @@ export class NrcCache {
       }
       this.render.encode(encoder, 1);
     } else {
-      this.mlp.encodeInfer(encoder, this.queryCount, 0, this.renderInferGroup);
+      if (this.hash) this.hash.encodeLookup(encoder);
+      else (this.mlp as MlpEngine).encodeInfer(encoder, this.queryCount, 0, this.renderInferGroup as GPUBindGroup);
       if (inline && train) {
         encoder.clearBuffer(this.trainCount);
         this.encodeTargets(encoder);
@@ -818,7 +865,7 @@ export class NrcCache {
   /** Debug only (never in a frame loop): mean relative-L2 loss of the last training step over its batch (the frame's records). */
   async readLoss(): Promise<{ batch: number; loss: number }> {
     const { batch } = await this.readTrainCount();
-    if (batch === 0) return { batch, loss: NaN };
+    if (batch === 0 || !this.mlp) return { batch, loss: NaN };
     const n = Math.min(batch, this.mlp.loss.size / 4);
     const staging = this.device.createBuffer({ size: n * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const enc = this.device.createCommandEncoder();
@@ -840,7 +887,8 @@ export class NrcCache {
   destroy(): void {
     this.render.destroy();
     this.trainer?.destroy();
-    this.mlp.destroy();
+    this.mlp?.destroy();
+    this.hash?.destroy();
     for (const b of [this.hookParams, this.trainVerts, this.trainSums, this.trainRadiance, this.tailPred, this.trainSet, this.trainCount, this.tailCount, this.queries, this.preds, this.queryCount, this.box, this.targetParams, this.resolveParams, this.fixupParams]) b?.destroy();
   }
 }

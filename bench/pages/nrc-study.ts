@@ -44,6 +44,7 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { sponzaWhite, sponzaWhiteVknrc } from '../scenes/tier2/sponza-white.ts';
 import { NrcCache } from '../nrc/cache.ts';
+import { hashGridArgs } from '../nrc/hash-grid.ts';
 import { inferArmOptions } from './mlp-common.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -131,6 +132,7 @@ try {
   const arm = inferArmOptions(args.infer ?? 'sgm', gpu.adapter, device, DEFAULT_SHAPE, precision, { records: 64, subgroups: numberArg(args, 'subgroups', 4) });
   precision = arm.precision;
   const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width, height, camera, ...limits }, { min: lo as [number, number, number], max: hi as [number, number, number] }, {
+    ...(args.model === 'hash' ? { model: 'hash' as const, hash: hashGridArgs(args) } : {}),
     precision,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
     ...(arm.infer ? { infer: arm.infer } : {}),
@@ -166,7 +168,7 @@ try {
   };
   const median = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)] as number;
   const metrics: Record<string, number> = {};
-  const notes: Record<string, unknown> = { infer: arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, trainPaths: cache.trainPaths };
+  const notes: Record<string, unknown> = { infer: cache.hash ? cache.description : arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, trainPaths: cache.trainPaths };
 
   let ref: Image;
   if (refFull) ref = downsample(refFull, factor);
@@ -312,6 +314,15 @@ try {
     return { plain: compareImages(asImage(a), against).relMse, nrc: mb.relMse, nrcBias: mb.relBias };
   };
   const ts = [1, 2, 4, 8, 16, 32, 64];
+  /** Hash arm (M7): the fraction of the queries of the frames since `hashMark` that missed the grid (rendered 0), and the cells in use. */
+  const hashMark = () => cache.hash?.resetStats();
+  const hashMiss = async (tag: string, frames: number) => {
+    if (!cache.hash) return;
+    const st = await cache.hash.readStats();
+    metrics[`${tag}_hash_miss`] = st.misses / (frames * width * height);
+    metrics[`${tag}_hash_coarse`] = st.coarse / (frames * width * height);
+    metrics[`${tag}_hash_cells`] = st.cells;
+  };
   const warmAt = async (view: PtLookAtCamera) => {
     cache.resetNetwork();
     setCam(view);
@@ -319,11 +330,13 @@ try {
   };
   const curve = async (tag: string, against: Image) => {
     let t = 0;
+    hashMark();
     for (const T of ts) {
       while (t < T) {
         await rtFrame();
         t++;
       }
+      if (T === 1) await hashMiss(`${tag}_t1`, 1);
       const m = await single(against);
       metrics[`${tag}_nrc_relmse_t${T}`] = m.nrc;
       metrics[`${tag}_nrc_relbias_t${T}`] = m.nrcBias;
@@ -335,6 +348,7 @@ try {
     const pe: number[] = [];
     const ne: number[] = [];
     const nb: number[] = [];
+    hashMark();
     for (let i = 0; i < 8; i++) {
       await rtFrame();
       const m = await single(against);
@@ -345,6 +359,7 @@ try {
     metrics[`${tag}_plain_relmse`] = median(pe);
     metrics[`${tag}_steady_nrc_relmse`] = median(ne);
     metrics[`${tag}_steady_nrc_relbias`] = median(nb);
+    await hashMiss(`${tag}_steady`, 8);
   };
 
   if (runAdapt) {
@@ -414,7 +429,7 @@ try {
   }
 
   reportResult(
-    { scene: scene.name, renderer: 'nrc-study', config: { lighting, width, height, checkpoints, warm, steps, precision, infer: arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, queryDepth: cache.settings.queryDepth }, valid: deviceErrors.length === 0, metrics, notes },
+    { scene: scene.name, renderer: 'nrc-study', config: { lighting, width, height, checkpoints, warm, steps, precision, infer: arm.description, training: cache.settings.training, trainSelect: cache.settings.trainSelect, queryDepth: cache.settings.queryDepth, model: cache.settings.model, ...(cache.hash ? { hash: cache.hash.settings } : {}) }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },
   );
 } catch (error) {

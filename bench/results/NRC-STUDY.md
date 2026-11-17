@@ -93,6 +93,56 @@ subgroup-matrix kernel does the same queries ~4.4× faster on Dawn/Vulkan (3.85 
 cache frame near 0.8 of a plain sample (estimate: ~1.05 M queries per 720p frame), but Chrome on Windows does not offer subgroup
 matrices (D3D12). First load: the cache kernels compile in 2.1-2.4 s on DXC.
 
+## Hash grid vs network (M7 / Q4, RTX 3060 Laptop, 2026-11-18)
+
+Does the network beat a plain hash-grid radiance cache in the same time? The hash arm is `NrcCache` with `model: 'hash'`
+([nrc-hash-cache.md](../../docs/design/nrc-hash-cache.md)): the same render paths, training records, targets and resolve as the network
+arm, only the store differs (a multi-resolution world-space hash grid, 2^20 cells, 16 px cells, a 16- or 64-sample threshold, 3
+fallback levels; tuned at 640×360 first, nrc-hash-cache.md §6). Quality: `nrc-study model=hash scenario=all res=1280x720 steps=4
+ref=ours` (headless, deterministic for a seed; same seeds and references as the WN5 run above, so the network columns are copied from
+it). Time: `node bench/live-bench.ts --res 960x540,1280x720 --backends portable-f16,hash --repeat 2 --cool 58`, windowed Chrome 157,
+two rounds in opposite order (within 3%), card at 79-86 °C once warm: best effort.
+
+**Frame time (windowed, median of 20, ms):**
+
+| | 960×540 hash | 960×540 network | 1280×720 hash | 1280×720 network |
+|---|---|---|---|---|
+| Update + resolve (hash) / 4 training steps (network) | 2.9-3.0 | 5.0-5.5 | 3.0 | 5.7-5.9 |
+| Render pass | 21.9-22.8 | 22.2-22.3 | 38.2-38.4 | 38.3-39.1 |
+| Lookup (hash) / inference (network), + targets and resolve | 3.0-3.5 | 10.7-10.9 | 2.9-3.8 | 18.1-18.2 |
+| **Cache frame** | **28.4-28.7** | 38.0-38.6 | **44.3-45.0** | 62.1-63.2 |
+| Plain, 1 sample | 32.8-33.6 | 33.1-33.5 | 58.2-58.6 | 59.3-60.9 |
+| Cache frame / plain sample | **0.85** | 1.15 | **0.76** | 1.04 |
+
+**Quality at 720p (relMSE against our 4096 spp image; single frames unless noted):**
+
+| | Plain | Network | Hash, 64 samples | Hash, 16 samples |
+|---|---|---|---|---|
+| Steady state (warm, median of 8 frames) | 9.00 | **2.42** | 2.48 | 2.53 |
+| Warm, accumulated 256 frames | 0.0318 | 0.00869 | **0.0079** | 0.0080 |
+| Bias after 256 frames | +0.01% | +0.35% | **+0.18%** | +0.31% |
+| Flicker (still camera, relative frame-to-frame change) | 1.60 | **1.00** | 1.06 | 1.09 |
+| First frame after a cut | — | **2.38** | 2.43 | 2.45 |
+| First frame after a fly-through | — | **2.39** | 2.44 | 2.59 |
+| Fresh cache, frame 4 | — | **2.17** | 2.45 (−6.5%) | 2.77 (−4.1%) |
+| Unseen corridor, steady (plain 14.6) | 14.6 | **5.73** | 5.83 | 5.91 |
+| Unseen corridor, first frame after the cut | — | **5.61** | 5.81 | 5.99 |
+| Unseen corridor, fresh cache frame 4 | — | **5.10** | 5.68 | 6.12 |
+| Queries that miss the grid, first frame after the cut | — | — | 6.4% | 1.8% |
+
+**Per unit of time** (steady single frames, efficiency = relMSE × ms of plain over the same for the cache; higher is better): network
+**3.5×** plain, hash **4.8×** plain, so the hash grid is **1.37× more efficient than the network** on this machine. Per frame the network
+is ahead by 2-4% in steady state, after a cut and in flight, 11-13% on a fresh cache and in the unseen corridor (where its
+generalisation shows), and behind on the accumulated image (+0.35% bias vs +0.18%).
+
+**Reading (Q4):** on the RTX 3060 in Chrome, **no**: a plain hash grid fed by the same training paths is as good per frame within a few
+percent and costs 0.76 of a plain sample against the network's 1.04, because Chrome on Windows runs the network in its portable kernel
+(18 ms of inference at 720p, against 3 ms for the grid lookup). The network's edge is generalisation: a fresh cache and an unseen
+region, where it is 11-13% better. Caveats: sponza-white is one white Lambert material, which a view-independent grid cell represents
+exactly; the network's direction and albedo inputs would matter on glossy or textured scenes, which this study does not have. On the
+M5 Pro (subgroup-matrix inference, cache frame 0.61 of a plain sample) the gap would be smaller; on Windows with Dawn/Vulkan matrices
+(3.85 ms per million queries) the network frame would drop to ~0.8 of a plain sample, still above the grid.
+
 ## A region the cache never saw: the upper gallery
 
 View: inside the upper gallery's north corridor (camera (−8, 4.95, −4.5) looking along +x): its vault and back wall are not

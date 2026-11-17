@@ -144,6 +144,8 @@ function backendOptions(adapter: GPUAdapter, device: GPUDevice): void {
     options.push(['sgm-4', 'Subgroup matrix, 4 subgroups']);
     options.push(['sgm-1', 'Subgroup matrix, 1 subgroup']);
   }
+  // M7: the non-neural competitor in the network's place (same paths and training records, a world-space hash grid as the store).
+  options.push(['hash', 'Hash grid (no network)']);
   sel.replaceChildren(...options.map(([v, t]) => new Option(t, v)));
   sel.value = options.some(([v]) => v === keep) ? keep : (options[0]?.[0] ?? 'portable-f32');
   void adapter;
@@ -164,6 +166,7 @@ async function buildCache(l: Pick<Live, 'adapter' | 'device' | 'plain' | 'width'
   const trainWidth = Math.max(4, Math.round((trainHeight * l.width) / l.height / 4) * 4);
   const { caps, trace, sceneBuffers } = l.adapter.debug;
   const cache = await NrcCache.create(l.device, caps, l.plain, [trace, sceneBuffers], { width: l.width, height: l.height, camera: camera(), ...limits(l.scene) }, l.bounds, {
+    ...(backend === 'hash' ? { model: 'hash' as const } : {}),
     precision,
     ...(sgm ? { sgm } : {}),
     infer,
@@ -317,7 +320,7 @@ function frame(now: number): void {
     lastFrameMs = end - t0;
     if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
     lastFrameEnd = end;
-    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.width} × ${l.height} · ${fps.toFixed(0)} fps (GPU ${lastFrameMs.toFixed(1)} ms) · plain ${l.plain.samples} spp · NRC ${l.cache.samples} spp · ${l.cache.mlp.inferBackend} ${l.cache.mlp.precision}`);
+    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.width} × ${l.height} · ${fps.toFixed(0)} fps (GPU ${lastFrameMs.toFixed(1)} ms) · plain ${l.plain.samples} spp · NRC ${l.cache.samples} spp · ${l.cache.description}`);
   });
 }
 
@@ -366,7 +369,7 @@ async function benchmark(): Promise<void> {
     const nrcMs = trainerMs + trainMs + renderMs + inferMs;
     const perSpp = plainMs / plainSpp();
     const equal = Math.max(1, Math.round(nrcMs / perSpp));
-    (window as unknown as { __nrcBench: unknown }).__nrcBench = { trainerMs, trainMs, renderMs, inferMs, nrcMs, plainMs, perSpp, equal, backend: `${l.cache.mlp.inferBackend} ${l.cache.mlp.precision}` };
+    (window as unknown as { __nrcBench: unknown }).__nrcBench = { trainerMs, trainMs, renderMs, inferMs, nrcMs, plainMs, perSpp, equal, backend: `${l.cache.description}` };
     table.replaceChildren(
       row('Training paths + targets', trainerMs),
       row('Training steps', trainMs),

@@ -18,6 +18,7 @@ import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { PtMegakernel } from '@pmndrs/pathtracer';
 import type { Precision, SgmScalar } from '@pathtracer/mlp';
 import { NrcCache } from '../nrc/cache.ts';
+import { hashGridArgs } from '../nrc/hash-grid.ts';
 import { forwardArgs, forwardArmOptions, gradientArmOptions, inferArmOptions } from './mlp-common.ts';
 import { DEFAULT_SHAPE } from '@pathtracer/mlp';
 
@@ -68,6 +69,7 @@ try {
   const arm = inferArmOptions(args.infer ?? 'portable', gpu.adapter, device, DEFAULT_SHAPE, precision, { records: numberArg(args, 'sgmRecords', 64), subgroups: numberArg(args, 'subgroups', 4), ...(args.acc ? { accumulate: args.acc as SgmScalar } : {}), ...(args.layout ? { layout: args.layout as 'row' | 'blocked' } : {}), ...(args.pad ? { pad: numberArg(args, 'pad', 8) } : {}) });
   precision = arm.precision;
   const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width: WIDTH, height: WIDTH, camera, maxDepth }, { min: [-1, -1, -1], max: [1, 1, 1] }, {
+    ...(args.model === 'hash' ? { model: 'hash' as const, hash: hashGridArgs(args) } : {}),
     precision,
     ...(arm.sgm ? { sgm: arm.sgm } : {}),
     ...(arm.infer ? { infer: arm.infer } : {}),
@@ -135,7 +137,7 @@ try {
       config: { frames, queryDepth, trainDepth, precision, spp, infer: arm.description, training: cache.settings.training, updateBlock: cache.settings.updateBlock, trainSelect: cache.settings.trainSelect },
       valid: ok,
       metrics: { train_paths: cache.trainPaths, mean, expected, mean_rel_error: meanRel, max_rel_error: worst, plain_depth_limited: plainDepthLimited, train_records: trainCounts.records, train_batch: trainCounts.batch, queries_last_pass: queries },
-      notes: { infer: cache.mlp.inferBackend },
+      notes: { infer: cache.description },
     },
     { adapter: adapterSummary, deviceErrors },
   );
