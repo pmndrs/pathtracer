@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@meimu/mutracer": "0.3.1",
+    "@pmndrs/upscaler": "link:../../upscaler",
     "@types/three": "0.187.0",
     "denoiser": "link:../../Denoiser/packages/denoiser",
     "three": "0.187.0",

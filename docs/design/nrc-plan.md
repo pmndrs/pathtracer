@@ -70,6 +70,7 @@ Status: ✅ done · 🟡 in progress · ⬜ not started. Rows in TASKS.md carry 
 | M5 | Equal-time study | `nrc` runner page; tables on sponza-white: relMSE, FLIP, bias, stability vs plain PT at equal ms | Q2 answered on the M5 Pro | N6c | ✅ (windowed): warm cache 3.2-4.3× lower relMSE at equal frames, 5-7× per unit time; steady from frame 1 after a cut, even into an unseen corridor ([NRC-STUDY.md](../../bench/results/NRC-STUDY.md)) |
 | M6 | Windows / NVIDIA | Matrix path on the RTX 3060 (Dawn Vulkan vs D3D12), N2 table there, VkNRC native baseline | Q3 answered for NVIDIA; native vs web ratio | N0.3, N6.1, N6.2 | ⬜ handed off: [nrc-windows-handoff.md](nrc-windows-handoff.md) (WN1-WN7, branch `windows-nrc`) |
 | M7 | Hash-cache competitor | SHaRC-like non-neural cache at equal time | Q4 answered | N7 | ⬜ |
+| M9 | Pipeline demo | `nrc-pipeline` (demo) + `nrc-pipeline-study` (twin): both arms through the same denoiser (Denoiser SVGF) + upscaler (pmndrs/upscaler, 2×) chain at 960×540 → 1080p, equal time | Demo runs in Chrome, twin writes the A/B images and the equal-time table | N11, N11.1-N11.5 | ✅ built (Windows, 2026-11-17): cache arm 1.6-2.2× lower relMSE after the denoiser, 1.05-1.6× final, FLIP 17-30% lower, flicker 2× lower ([nrc-pipeline.md](nrc-pipeline.md), [NRC-PIPELINE.md](../../bench/results/NRC-PIPELINE.md)); quiet timing and the Mitsuba rerun open |
 | M8 | Write-up | `bench/results/NRC.md`, viewer report; gpuweb feedback (maintainer decides) | Maintainer review | N8, N9 | ⬜ |
 
 Order: M2 and M3 can run in parallel (M3 starts on the portable backend); M4 needs M3; M5 needs M4's runner twin.
@@ -106,6 +107,8 @@ Main's integrator already has the hooks a cache needs (docs/design/integrator.md
 ## 7. Progress log
 
 Newest first. One line per session: what changed, what it showed.
+
+- **2026-11-17 (Windows, M9).** The cache feeds a real-time chain: frame planes (the resolve now writes the demodulated plane of the primary vertex's class, identity exact) → the Denoiser's SVGF → pmndrs/upscaler temporal 2× (sampler owns the jitter, upscaler `jitter: false`), identical for both arms. At equal time on the 3060 (plain 1 spp, the cache frame is cheaper) the cache arm's error is 3.5-3.8× lower raw, 1.6-2.2× after SVGF and 1.05-1.6× after the upscaler, with 17-30% lower FLIP and half the flicker; the upscaler darkens both arms by 2.5-4% (N11.5). Timing best effort only (throttled GPU).
 
 - **2026-11-16 (Windows, N2r-c).** Constant-trip lane loops (no Tint loop counters) and a 4-wide ReLU take the blocked sgm kernel to 3.85 ms per million queries on the 3060 (old default 13.9, 3.6x); VkNRC inference is 2.35-2.47, so the gap is 1.6x, and the matrix work alone (2.67) is within 1.1x of it: what is left is the ReLU round trip WGSL forces.
 - **2026-11-16 (Windows, N2r-b).** The sgm inference kernel in the blocked layout (held weight tiles, f16 sums, ping-pong, padded stride, 1 subgroup x 32 records) runs 5.68 ms per million queries on the 3060 against 13.9-14.0 for the old one (2.45x), correct in `mlp-check` and the closed-room `nrc-check`. The gap to VkNRC inference is now 2.3-2.4x (was 5.6-6.0x). Apple and the default: N2r-c.

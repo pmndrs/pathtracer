@@ -42,6 +42,15 @@ function linkedDenoiserRoot(): string | null {
   }
 }
 
+/** The checkout of the linked `@pmndrs/upscaler` (nrc-pipeline, track N M9), or null when it is not linked. Its dist imports its own `three`. */
+function linkedUpscalerRoot(): string | null {
+  try {
+    return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'upscaler'));
+  } catch {
+    return null;
+  }
+}
+
 export const RESULTS_DIR = resolve(REPOSITORY_ROOT, 'bench', 'results');
 export const INCOMING_DIR = resolve(RESULTS_DIR, 'incoming');
 
@@ -126,7 +135,7 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
       // The runner reloads pages itself; hot reload and file watching would only add noise (and watch research/).
       hmr: false,
       // REFLECTIONS_REPO: a reflections checkout the `reflections-ab` page loads by path (P1.5; not a dependency).
-      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : []), ...(process.env.REFLECTIONS_REPO ? [process.env.REFLECTIONS_REPO] : [])] },
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : []), ...(linkedUpscalerRoot() ? [linkedUpscalerRoot() as string] : []), ...(process.env.REFLECTIONS_REPO ? [process.env.REFLECTIONS_REPO] : [])] },
       watch: null,
     },
     plugins: [

@@ -645,3 +645,19 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   a toggle) and `dump_shaders` (HLSL + DXIL in the console with `--verbose`).
 - Windows: the `caps` page used to set only `window.__benchResult`, so the runner always timed out on it; it now calls `reportResult`.
   Its subgroup-matrix probe compiles a result type the adapter lists (NVIDIA has no f32 or 8×8 config).
+- NRC pipeline (M9, docs/design/nrc-pipeline.md): `active` is a reserved WGSL word too (a uniform field named `active` fails only on the GPU). In frame mode the cache's
+  resolve must also write the demodulated planes (`resolveWgsl(frame)` in `bench/nrc/cache.ts`), or `diffuse x albedo + specular x specFactor` falls short of the beauty by
+  exactly the cache's light; `nrc-pipeline-study` checks the identity (`plane_identity_*`). rg16float / r16float are not storage formats in core WebGPU: the pipeline packs
+  into one buffer and `copyBufferToTexture`s (rows 256-byte aligned) instead of writing 12 storage textures (also past the 4-8 storage-texture limit).
+- pmndrs/upscaler is three-shaped (`new Upscaler({ renderer })`) but only uses `backend.device`, `backend.get(tex).texture` and `initTexture`: `UpscalerHost` in
+  `bench/nrc/pipeline.ts` stands in, no three renderer. Its dist imports its OWN `three` (0.186, from the upscaler checkout), not bench's 0.187: harmless because only
+  `.elements` of our camera stand-in's matrices cross over. Link: `@pmndrs/upscaler` `link:../../upscaler` (Windows worktree: junction `.claude/worktrees/upscaler` ->
+  `GitHub/upscaler/upscaler`); `bench/runner/server.ts` adds its realpath to `fs.allow`. Its `beginFrame` must still run with `jitter: false`: it snapshots the projection
+  `_writeReproject` reads.
+- Windows laptop (Intel UHD + RTX 3060): the desktop app's browser pane and a default Chrome window get the Intel GPU (`powerPreference` is ignored on Windows, crbug
+  369219127): `nrc-pipeline` ran at ~1 fps there. Use the runner (`--gpu nvidia`, pins the LUID) or set Chrome to "High performance" in Windows graphics settings.
+- The Mitsuba / pbrt reference PFMs are not on the Windows machine (only their JSON sidecars; references are git-ignored and were rendered on the Mac). `nrc-pipeline-study`
+  falls back to our own 4096 spp render (uploaded as `reference-ours-4096spp`; reuse it with `refFile=/bench/results/incoming/<run>/nrc-pipeline-study/reference-ours-4096spp.pfm`).
+- Git Bash (Windows) rewrites a page arg that starts with `/` into a Windows path (`refFile=/bench/...` became `C:/Program Files/Git/bench/...`): prefix the command with
+  `MSYS_NO_PATHCONV=1`. A page's `fetch` of a missing file logs a console 404 and the runner then FAILS the run even when the page reported its numbers: probe optional files
+  only when an arg asks for them (`nrc-pipeline-study ref=`).
