@@ -133,12 +133,13 @@ another 1.4-4% on the plain arm only.
 
 With OIDN in the same chain (same day): OIDN is 3-4× better than SVGF for both arms at 1 spp (plain + OIDN small, 0.027, already beats
 cache + SVGF, 0.060). The cache keeps a 1.3-1.4× relMSE lead on single frames (1.6× with albedo-only guides) and 2× less flicker in the
-final; once a still camera has 8-16 frames accumulated, both arms meet. A cold cache (30 warm-up frames) was worse than plain under OIDN
-in one run (N11.6). The progressive mode reaches 0.0073 at 8 still frames with the standard net, then holds the frame at zero cost.
+final; once a still camera has 8-16 frames accumulated, both arms meet. A fresh cache is worse than plain through either denoiser until it
+has trained: ~5-10 frames with SVGF, ~120-150 with OIDN (N11.6; the raw frame hides it). The progressive mode reaches 0.0073 at 8 still frames with the standard net, then holds the frame at zero cost.
 
 ## 7. Open choices (build both, then decide)
 
 * Upscaler-owned jitter vs sampler-owned (§4): needs a uniform camera-offset option in the frame kernel (byte-identical when off).
+* Warm-up gate (N11.6/N11.7): `NrcSettings.warmupFrames` ≈ 10 with SVGF, ≈ 150-200 with OIDN, vs more training steps while young.
 * SVGF vs OIDN as the default (§3): built and A/B'd for quality; needs quiet-pass cost and motion with the realtime preset. The Denoiser's
   `recurrent` filter (memory-lean) as a third arm.
 * Plain N spp vs plain at the same frame rate with a lower `maxDepth` (the realtime preset uses 2): equal time can be spent either way.

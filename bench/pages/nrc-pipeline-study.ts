@@ -22,6 +22,7 @@
  *       infer=tiled|portable|sgm  precision=f16  steps=4  ref=mitsuba|ours  refFile=<url>  refSpp=4096  flip=1  upload=1  scenarios=static,path
  *       sharpness=<0..1>  autoExposure=0|1  maxAccumulation=<n>  (upscaler A/B)
  *       denoiser=svgf|oidn|oidn-fast|oidn-std|none  oidnAux=albedo+normal|albedo  stillSamples=8  hold=1  oidnStill=balanced|high
+ *  5. coldstart (N11.6): per warm-up W in `warmups` (0,10,30,100,300): fresh network, W training frames at the view, a cut, then frames `coldFrames` (1,4).
  * Timing rows are wall clock per submit (best effort); the quality numbers do not depend on timing once N is fixed.
  */
 import type { PtLookAtCamera, PtMegakernel } from '@pmndrs/pathtracer';
@@ -285,6 +286,27 @@ try {
       else await device.queue.onSubmittedWorkDone();
     }
     await stability('path');
+  }
+
+  // 5. Cold start (N11.6): a fresh network trained W frames at the view, then a cut and single frames (the cache keeps training). Plain does not
+  // depend on W; it is measured each time as the noise control. The global `warm` and the timing pass are irrelevant here (fresh network).
+  if (scenarios.includes('coldstart')) {
+    const warmups = (args.warmups ?? '0,10,30,100,300').split(',').map(Number);
+    const coldFrames = (args.coldFrames ?? '1,4').split(',').map(Number);
+    for (const W of warmups) {
+      session.cache.resetNetwork();
+      session.cutNext();
+      for (let f = 0; f < W; f += 25) {
+        session.trainOnly(refCam, Math.min(25, W - f));
+        await device.queue.onSubmittedWorkDone();
+      }
+      session.cutNext();
+      for (let f = 1; f <= Math.max(...coldFrames); f++) {
+        await session.frame(refCam, { train: true });
+        if (coldFrames.includes(f)) await measure(`cold-w${W}`, f, false);
+        else await device.queue.onSubmittedWorkDone();
+      }
+    }
   }
 
   // Equal-time table (markdown) for the write-up.

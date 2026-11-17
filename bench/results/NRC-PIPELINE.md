@@ -65,13 +65,54 @@ What it shows:
   noise (N11.5). On the camera path it stays −2 … −3.5% for both denoisers (motion, not noise).
 * **Progressive mode**: the standard net at 8 still frames reaches 0.0073 denoised (plain and cache alike), then holds: no tracing, no
   denoising and zero flicker until the camera moves. The small net on the 16-frame mean ends lower (0.0059) only because it saw twice the samples.
-* **A cold cache is worse than none under OIDN** (one short smoke run, warm 30 frames instead of 300, `denoiser=oidn`): the cache arm read
-  0.036 vs plain 0.027 at frame 1 and 0.021 vs 0.0073 at 8 frames. OIDN removes white noise well but keeps the cache's low-frequency
-  prediction error. With SVGF this did not show (its ratios held from a warm start); a cold-start curve under OIDN is follow-up N11.6.
+* **A cold cache is worse than none, under both denoisers** (measured in the next section, N11.6): OIDN needs ~150 training frames
+  before the cache helps, SVGF ~10.
 
 **Cost (best effort, same throttled 3060, wall clock):** OIDN small 22-25 ms per frame at 960 × 540 (post − post without denoiser), standard
 48-66 ms; SVGF 2.8 ms. With the small net the cache arm's whole chain was 76-87 ms vs 72.6 ms with SVGF. The progressive mode spends the
 standard net once per still view and nothing after it.
+
+## Cold start (N11.6, 2026-11-17)
+
+How long must a fresh network train before the cache arm beats plain path tracing through the chain? Per warm-up W: fresh weights and
+optimizer (`resetNetwork`; zero output layer and warm-up EMA, the N6f defaults), W training frames at the reference view (4 steps of 16k
+records each), a cut, then frame 1 and frame 4 (the cache keeps training; OIDN denoises the 1- and 4-frame means). Plain is measured each
+time as the control. Runs `20261117T130444Z` (SVGF), `130811Z` + `131553Z` (OIDN small, albedo + normal), `131133Z` (OIDN small, albedo only).
+
+**Denoised relMSE, plain / NRC (ratio > 1: the cache helps), frame 1 after the cut:**
+
+| warm-up frames | SVGF | OIDN small, albedo + normal | OIDN small, albedo only |
+|---|---|---|---|
+| 0 | 0.107 / 0.247 (0.43×) | 0.027 / 0.221 (0.12×) | 0.038 / 0.220 (0.17×) |
+| 3 | 0.124 / 0.168 (0.74×) | 0.027 / 0.102 (0.26×) | 0.039 / 0.142 (0.28×) |
+| 10 | 0.133 / 0.105 (1.27×) | 0.026 / 0.058 (0.45×) | 0.037 / 0.072 (0.51×) |
+| 30 | 0.107 / 0.082 (1.31×) | 0.026 / 0.039 (0.66×) | 0.036 / 0.045 (0.80×) |
+| 100 | 0.124 / 0.072 (1.71×) | 0.026 / 0.028 (0.93×) | 0.038 / 0.036 (1.05×) |
+| 150 | | 0.027 / 0.024 (1.13×) | |
+| 200 | | 0.027 / 0.020 (1.32×) | |
+| 250 | | 0.026 / 0.020 (1.28×) | |
+| 300 | 0.120 / 0.064 (1.89×) | 0.026 / 0.019 (1.35×) | 0.038 / 0.028 (1.33×) |
+
+(Frame 4 tells the same story, with the OIDN crossover a little later: 0.72× at 100, 0.91× at 150, 1.09× at 200. Final-stage ratios follow
+the denoised ones within ~10%. Plain's spread between rows, 0.107-0.133 for SVGF, is its noise.)
+
+* **The raw frame hides it.** From W = 3 on, the cache arm's raw relMSE (2.2-2.5) and bias (|≤ 2.5%|) look the same as at W = 300. What
+  is left after a few hundred training steps is smooth, low-frequency error: invisible under 1-spp noise, intact after a denoiser removes
+  that noise. OIDN removes white noise best, so it exposes the cache's error most, and needs the longest training.
+* **Crossover:** SVGF ~5-10 frames; OIDN albedo + normal ~120-150 frames (plateau ~1.3× from 200); OIDN albedo only ~100. LDR-FLIP is
+  kinder to the cache (OIDN: the cache arm's FLIP is already lower at W = 100, 0.160 vs 0.176), so a perceptual crossover is earlier.
+* **W = 0** is −36% dark at frame 1 (the zero output layer predicts no indirect light) and overshoots at frame 4 (+9 … +17% raw bias):
+  N6f's damping fixed the raw error of a fresh cache, not the bias a denoiser shows.
+* What this means at run time: 150 frames at 4 steps is ~600 training steps of 16k records, ~2.5 s at 60 fps, ~10 s at the ~15 fps of a cache frame on this 3060.
+  It is per network, not per view: nrc-study found a cache warmed in one part of Sponza steady from the first frame in an unseen corridor
+  (raw error; through OIDN not yet measured).
+
+**Suggestion (maintainer's call): a warm-up gate per denoiser.** The cache arm shows plain path tracing while the network trains, and switches
+to the cache after G training frames; `NrcSettings.warmupFrames` already does exactly this (0 today). G ≈ 10 with SVGF, ≈ 150-200 with OIDN.
+Pros: never worse than plain at start-up or a scene load; one existing setting. Cons: a fixed count, not a measured readiness (a harder scene
+or fewer steps per frame needs more); start-up frames cost a full plain path. Alternative: more training steps per frame (or a higher
+learning rate) while the network is young, which shortens the gate instead of hiding it. A/B that settles it: this coldstart scenario with
+`warmupFrames` = 0 / 150 / 200 and with 8-16 steps per frame during warm-up, plus an unseen-region cut through OIDN (N11.7).
 
 ## Setup
 

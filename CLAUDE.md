@@ -666,3 +666,6 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   `quality` (fast = `_small`, balanced = base, high = `_large`) and the guides passed (albedo -> `_alb`, albedo + normal -> `_calb_cnrm`) pick it, and a change reloads
   the weights on the next call, so `bench/nrc/pipeline.ts` keeps one instance per (quality, guides, precision). `denoiseTextures` awaits its GPU work
   (`onSubmittedWorkDone`) but never maps a buffer; the pipeline's `post` / `session.frame` are async because of it.
+- Judge a young cache through the denoiser, not on the raw frame: after 3 training frames its raw relMSE and bias already look trained, but
+  its remaining error is low-frequency and survives SVGF / OIDN (OIDN needs ~150 training frames before the cache arm beats plain, N11.6).
+  `nrc-pipeline-study scenarios=coldstart warmups=...` measures it; `NrcSettings.warmupFrames` is the gate.
