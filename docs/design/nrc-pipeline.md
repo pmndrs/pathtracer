@@ -139,7 +139,10 @@ has trained: ~5-10 frames with SVGF, ~120-150 with OIDN (N11.6; the raw frame hi
 ## 7. Open choices (build both, then decide)
 
 * Upscaler-owned jitter vs sampler-owned (§4): needs a uniform camera-offset option in the frame kernel (byte-identical when off).
-* Warm-up gate (N11.6/N11.7): `NrcSettings.warmupFrames` ≈ 10 with SVGF, ≈ 150-200 with OIDN, vs more training steps while young.
+* Start-up (N11.6 found a young cache looks worse than plain through a denoiser; the training itself is not affected by what is displayed):
+  warm-up gate, plain + OIDN on screen while the network trains (`warmupFrames` ≈ 10 SVGF, ≈ 150-200 OIDN; N11.7, the maintainer's
+  preferred direction); a ramp instead of a switch (N11.8); a saved network per scene in IndexedDB (N11.9). More steps per frame while
+  young only if training stays stable; no learning-rate boost.
 * SVGF vs OIDN as the default (§3): built and A/B'd for quality; needs quiet-pass cost and motion with the realtime preset. The Denoiser's
   `recurrent` filter (memory-lean) as a third arm.
 * Plain N spp vs plain at the same frame rate with a lower `maxDepth` (the realtime preset uses 2): equal time can be spent either way.
