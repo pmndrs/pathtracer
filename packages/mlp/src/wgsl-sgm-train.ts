@@ -48,7 +48,7 @@ export function sgmTrainWorkgroupBytes(o: SgmOptions): number {
   const t = o.emulate ? 4 : o.config.componentType === 'f16' ? 2 : 4;
   const tr = o.emulate ? 4 : o.config.resultComponentType === 'f16' ? 2 : 4;
   const direct = blocked && o.config.resultComponentType === o.config.componentType;
-  const mask = blocked && (o.trainMask ?? 'bits') === 'bits' ? o.shape.hidden * o.records * Math.ceil(o.shape.width / 32) * 4 : 0;
+  const mask = blocked && (o.trainMask ?? 'global') === 'bits' ? o.shape.hidden * o.records * Math.ceil(o.shape.width / 32) * 4 : 0;
   return o.records * s * (direct ? 2 * t : t + tr) + o.records * 16 + mask;
 }
 
@@ -245,7 +245,7 @@ function trainSgmBlockedWgsl(o: SgmOptions, hooks: string): string {
    * keeps the bindings alive only.
    */
   const keep = probe === 'noStores' ? 'r > 0xfffffff0u' : 'r < params.capacity';
-  const bits = (o.trainMask ?? 'bits') === 'bits';
+  const bits = (o.trainMask ?? 'global') === 'bits';
   const words = Math.ceil(shape.width / 32);
   /** Mask word of a_L (L = 1..hidden) for row rl, columns col..col+run-1 (run divides 32, so one word). */
   const maskWord = (L: number) => `(${(L - 1) * R}u + rl) * ${words}u + col / 32u`;

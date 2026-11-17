@@ -645,3 +645,9 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   a toggle) and `dump_shaders` (HLSL + DXIL in the console with `--verbose`).
 - Windows: the `caps` page used to set only `window.__benchResult`, so the runner always timed out on it; it now calls `reportResult`.
   Its subgroup-matrix probe compiles a result type the adapter lists (NVIDIA has no f32 or 8×8 config).
+- Windows: a shell gate that counts processes by command line (`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'bvh-gpu-chrome' }`) run from
+  Git Bash matches its own `powershell` and `bash -c` wrappers and never reads 0: filter on `$_.Name -eq 'chrome.exe'` too. It stalled the N2r-d sweep for hours.
+- Windows: the Claude app's browser pane runs WebGPU on the Intel iGPU even with `powerPreference: 'high-performance'` (nrc-live 724 ms/frame): open demos in
+  Chrome (`Start-Process chrome <url>`). A headless Chrome from another session (profile `bvh-gpu-chrome`) shares the RTX 3060: check before timing.
+- Windows: in the blocked sgm training kernel a ReLU mask kept as bits in workgroup atomics (`atomicOr`/`atomicLoad`) was ~10% slower than re-reading a_l
+  from global memory (N2r-d); the sgm gradient sums whole K-record steps, so deltas up to `capacity` must be zero (the blocked forward-backward writes them).

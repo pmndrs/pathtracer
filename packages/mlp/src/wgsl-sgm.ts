@@ -81,7 +81,9 @@ export interface SgmOptions {
   /**
    * 'blocked' training: where the backward pass gets the ReLU mask [a_l > 0]. 'global' reads a_l back from `activations`
    * (N2r-d probe: ~0.13 of 0.42 ms on the 3060); 'bits' keeps one bit per hidden activation in workgroup memory
-   * (`atomicOr` in the forward ReLU pass, R × width × hidden / 8 bytes).
+   * (`atomicOr` in the forward ReLU pass, R × width × hidden / 8 bytes). Default 'global': on the RTX 3060 (Dawn Vulkan,
+   * 2026-11-17, ABAB x3 in one page) the training step read 0.51-0.56 ms with 'global' vs 0.60-0.63 with 'bits' (workgroup
+   * atomics cost more than the global re-read).
    */
   trainMask?: 'global' | 'bits';
 }
