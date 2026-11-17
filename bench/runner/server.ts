@@ -51,6 +51,12 @@ function linkedUpscalerRoot(): string | null {
   }
 }
 
+/** A `/@fs/` URL for an absolute path: forward slashes, one leading slash (Windows `C:\x` becomes `/@fs/C:/x`). */
+export function fsUrl(path: string): string {
+  const p = path.split('\\').join('/');
+  return `/@fs${p.startsWith('/') ? '' : '/'}${p}`;
+}
+
 export const RESULTS_DIR = resolve(REPOSITORY_ROOT, 'bench', 'results');
 export const INCOMING_DIR = resolve(RESULTS_DIR, 'incoming');
 
@@ -127,7 +133,7 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
     // Pages have no dependencies that need pre-bundling; skipping the scan keeps startup fast and quiet.
     optimizeDeps: { noDiscovery: true, include: [] },
     // Where the page finds the OIDN `.tza` weights of the linked Denoiser checkout (undefined when it is not linked).
-    define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? `/@fs${linkedDenoiserRoot()}/tzas` : null) },
+    define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? fsUrl(`${linkedDenoiserRoot()}/tzas`) : null) },
     server: {
       host: '127.0.0.1',
       port: 5291,

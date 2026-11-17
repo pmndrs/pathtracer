@@ -7,6 +7,8 @@
  * remodulated) -> composite -> pmndrs/upscaler temporal path (jitter: false; the path tracer's sampler owns the jitter) -> 1920 x 1080.
  * Left: plain path tracing at N spp per frame (Benchmark sets N for equal time when "Equal time" is on); right: path tracing + cache,
  * one sample per pixel per frame. The stage selector shows the raw frame, the denoised frame (render resolution) or the final output.
+ * Denoiser: SVGF (temporal), or OIDN from the Denoiser package (mutracer-style: the small network every frame while the camera moves, the
+ * standard network once after `stillSamples` still frames, then the frame is held), OIDN fast / standard every frame, or none.
  * No readback in the frame loop; one frame in flight. Headless twin: nrc-pipeline-study.
  */
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
@@ -147,6 +149,7 @@ async function build(): Promise<void> {
     const params = device.createBuffer({ label: 'nrc pipeline display params', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     live = { session, scene, context, pipeline, params, sampler, groups: new Map() };
+    applyDenoiser();
     session.cutNext();
     setStatus('');
   } catch (error) {
@@ -220,18 +223,28 @@ function frame(now: number): void {
   moveCamera(dt);
   l.session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
   // Only the arms on screen render, so a single side shows its own frame rate.
-  l.session.frame(camera(), { arms: armsOnScreen(), train: checked('train'), denoise: checked('denoise') });
-  encodeDisplay(l);
   busy = true;
   const t0 = performance.now();
-  void l.session.device.queue.onSubmittedWorkDone().then(() => {
-    busy = false;
-    const end = performance.now();
-    lastFrameMs = end - t0;
-    if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
-    lastFrameEnd = end;
-    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps (wait ${lastFrameMs.toFixed(1)} ms) · plain ${l.session.plainSpp} spp · ${l.session.inferDescription}`);
-  });
+  // OIDN is awaited inside frame(); one frame in flight.
+  void l.session
+    .frame(camera(), { arms: armsOnScreen(), train: checked('train') })
+    .then(() => {
+      encodeDisplay(l);
+      return l.session.device.queue.onSubmittedWorkDone();
+    })
+    .then(() => {
+      busy = false;
+      const end = performance.now();
+      lastFrameMs = end - t0;
+      if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
+      lastFrameEnd = end;
+      const den = l.session.arms.nrc.lastDenoiser || l.session.arms.plain.lastDenoiser;
+      if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps (wait ${lastFrameMs.toFixed(1)} ms) · plain ${l.session.plainSpp} spp · ${l.session.inferDescription} · ${den}`);
+    })
+    .catch((error: unknown) => {
+      busy = false;
+      setStatus(error instanceof Error ? error.message : String(error), true);
+    });
 }
 
 async function benchmark(): Promise<void> {
@@ -314,6 +327,17 @@ window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
 for (const id of ['scene', 'res', 'backend']) $(id).addEventListener('change', () => void build());
+/** The denoiser selector: both arms switch together (same chain). */
+function applyDenoiser(): void {
+  const v = value('denoiserSel');
+  const stillSamples = Math.max(1, Math.round(num('stillSamples')));
+  const aux = value('oidnAux') === 'albedo' ? 'albedo' : 'albedo+normal';
+  if (v === 'oidn') live?.session.setDenoiser('oidn', { aux, stillSamples });
+  else if (v === 'oidn-fast') live?.session.setDenoiser('oidn', { aux, moving: 'fast', stillSamples: Infinity, hold: false });
+  else if (v === 'oidn-std') live?.session.setDenoiser('oidn', { aux, moving: 'balanced', stillSamples: Infinity, hold: false });
+  else live?.session.setDenoiser(v === 'none' ? 'none' : 'svgf');
+}
+for (const id of ['denoiserSel', 'oidnAux', 'stillSamples']) $(id).addEventListener('change', applyDenoiser);
 $('plainSpp').addEventListener('change', () => {
   if (live) live.session.plainSpp = Math.max(1, Math.round(num('plainSpp')));
 });
@@ -334,6 +358,10 @@ $('pause').addEventListener('click', () => {
 const args = new URLSearchParams(location.search);
 if (args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
+// ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8
+if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;
+if (args.get('oidnAux')) $<HTMLSelectElement>('oidnAux').value = args.get('oidnAux') as string;
+if (args.get('stillSamples')) $<HTMLInputElement>('stillSamples').value = args.get('stillSamples') as string;
 await build();
 requestAnimationFrame(frame);
 
@@ -345,7 +373,7 @@ async function step(n: number): Promise<void> {
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
     for (let i = 0; i < n; i++) {
-      l.session.frame(camera(), { arms: armsOnScreen(), train: checked('train'), denoise: checked('denoise') });
+      await l.session.frame(camera(), { arms: armsOnScreen(), train: checked('train') });
       encodeDisplay(l);
       await l.session.device.queue.onSubmittedWorkDone();
     }

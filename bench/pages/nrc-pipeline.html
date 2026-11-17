@@ -66,7 +66,7 @@
       <aside>
         <div>
           <h1>NRC → denoiser → upscaler</h1>
-          <p class="note">Both sides run the same chain: frame planes → Denoiser SVGF (diffuse + specular) → pmndrs/upscaler (temporal, 2×). Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>Shift</kbd>-drag the divider.</p>
+          <p class="note">Both sides run the same chain: frame planes → denoiser (SVGF, or OIDN: small net while moving, standard net after a few still samples, then held) → pmndrs/upscaler (temporal, 2×). Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>Shift</kbd>-drag the divider.</p>
         </div>
         <fieldset>
           <h2>Scene</h2>
@@ -77,7 +77,9 @@
           <h2>View</h2>
           <label>Show <select id="view"><option value="split">Split</option><option value="plain">Path tracing only</option><option value="nrc">With NRC only</option></select></label>
           <label>Stage <select id="stageSel"><option value="final" selected>Final (denoised + upscaled)</option><option value="denoised">Denoised (render res)</option><option value="raw">Raw (render res)</option></select></label>
-          <label class="check"><input id="denoise" type="checkbox" checked /> Denoise before upscaling</label>
+          <label>Denoiser <select id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still, hold</option><option value="oidn-fast">OIDN small net always (no hold)</option><option value="oidn-std">OIDN standard net always (no hold)</option><option value="none">None (raw to upscaler)</option></select></label>
+          <label>OIDN guides <select id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
+          <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once and the frame is held">OIDN still samples <input id="stillSamples" type="number" min="1" max="64" value="8" /></label>
           <label>Exposure <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
           <div class="row"><button id="pause">Pause</button><button id="resetView">Reset view</button></div>
         </fieldset>

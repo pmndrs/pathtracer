@@ -14,7 +14,7 @@ import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { inferArmOptions } from '../pages/mlp-common.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { NrcCache, type NrcSettings } from './cache.ts';
-import { PipelineArm, type PipelineSettings } from './pipeline.ts';
+import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from './pipeline.ts';
 
 export interface SessionOptions {
   scene: SceneDesc;
@@ -30,6 +30,9 @@ export interface SessionOptions {
   cache?: Partial<NrcSettings>;
   denoiser?: PipelineSettings['denoiser'];
   upscaler?: PipelineSettings['upscaler'];
+  /** Denoiser of both arms: 'svgf' (default), 'oidn' (with `oidn` settings), 'none'. */
+  denoise?: DenoiserKind;
+  oidn?: Partial<OidnArmSettings>;
 }
 
 export type ArmName = 'plain' | 'nrc';
@@ -74,7 +77,7 @@ export class NrcPipelineSession {
       training: 'inline',
       ...(o.cache ?? {}),
     });
-    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}) };
+    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}) };
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
     return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: arm.description });
   }
@@ -105,18 +108,27 @@ export class NrcPipelineSession {
     this.camera = camera;
   }
 
+  /** Both arms switch denoiser (the comparison needs the same chain). */
+  setDenoiser(kind: DenoiserKind, oidn: Partial<OidnArmSettings> = {}): void {
+    this.arms.plain.setDenoiser(kind, oidn);
+    this.arms.nrc.setDenoiser(kind, oidn);
+  }
+
   /**
    * One frame of the chosen arms: path tracing (plain N spp / cache frame) + pack in one submit, then denoise + composite + upscale
-   * (each arm submits its own). `train`: the cache trains this frame. `denoise: false` sends the raw image to the upscaler.
+   * (each arm submits its own; OIDN is awaited). `train`: the cache trains this frame (also while its image is held). `denoise: false`
+   * sends the raw image to the upscaler. An arm whose OIDN still frame is held for this camera neither traces nor denoises.
+   * Returns the arms that rendered.
    */
-  frame(camera: PtLookAtCamera, o: { arms?: readonly ArmName[]; train?: boolean; denoise?: boolean } = {}): void {
-    const arms = o.arms ?? ['plain', 'nrc'];
-    this.setCamera(camera);
+  async frame(camera: PtLookAtCamera, o: { arms?: readonly ArmName[]; train?: boolean; denoise?: boolean } = {}): Promise<ArmName[]> {
+    this.setCamera(camera); // first: a cut resets the arms, which releases a held frame
+    const arms = (o.arms ?? ['plain', 'nrc']).filter((a) => o.denoise === false || !this.arms[a].heldFor(camera));
     const encoder = this.device.createCommandEncoder({ label: 'nrc pipeline frame' });
     if (arms.includes('plain')) this.encodePlain(encoder);
     if (arms.includes('nrc')) this.encodeCache(encoder, o.train !== false);
     this.device.queue.submit([encoder.finish()]);
-    for (const a of arms) this.arms[a].post(camera, { ...(o.denoise === false ? { denoise: false } : {}) });
+    for (const a of arms) await this.arms[a].post(camera, { ...(o.denoise === false ? { denoise: false } : {}) });
+    return arms;
   }
 
   /** The cache side only, no image chain (warming the network). */
@@ -164,12 +176,22 @@ export class NrcPipelineSession {
       return performance.now() - t0;
     };
     const post = async (arm: PipelineArm, denoise: boolean): Promise<number> => {
+      // A history reset per call keeps OIDN on its `moving` network (the per-frame cost while the camera moves).
+      arm.resetHistory();
       const t0 = performance.now();
-      arm.post(camera, { denoise });
+      await arm.post(camera, { denoise });
       await this.device.queue.onSubmittedWorkDone();
       return performance.now() - t0;
     };
-    const t: Record<string, number[]> = { plainSpp: [], cacheFrame: [], plainPack: [], post: [], postNoDenoise: [] };
+    const oidnStill = async (arm: PipelineArm): Promise<number> => {
+      arm.primeStill(camera);
+      const t0 = performance.now();
+      await arm.denoiseOidn(camera, false);
+      await this.device.queue.onSubmittedWorkDone();
+      return performance.now() - t0;
+    };
+    await this.arms.plain.ready();
+    const t: Record<string, number[]> = { plainSpp: [], cacheFrame: [], plainPack: [], post: [], postNoDenoise: [], ...(this.arms.plain.kind === 'oidn' ? { oidnStill: [] } : {}) };
     for (let f = 0; f < frames + 3; f++) {
       const keep = f >= 3;
       const ms = {
@@ -182,6 +204,7 @@ export class NrcPipelineSession {
         }),
         post: await post(this.arms.plain, true),
         postNoDenoise: await post(this.arms.plain, false),
+        ...(this.arms.plain.kind === 'oidn' ? { oidnStill: await oidnStill(this.arms.plain) } : {}),
       };
       if (keep) for (const [k, v] of Object.entries(ms)) t[k]!.push(v);
     }

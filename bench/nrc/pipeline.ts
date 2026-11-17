@@ -14,7 +14,7 @@
 import { DiffuseSpecularDenoiser } from 'denoiser/realtime';
 import { Upscaler } from '@pmndrs/upscaler';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
-import { PIPE_FAR, PIPE_NEAR, projectionMatrix, viewMatrix, worldMatrix } from './pipeline-math.ts';
+import { cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix, worldMatrix } from './pipeline-math.ts';
 
 export { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './pipeline-math.ts';
 
@@ -215,6 +215,84 @@ fn pipeFlicker(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+/**
+ * OIDN input (the `oidn` denoiser): progressive mean of the raw beauty, albedo factor and normal while the camera stays still (reset on
+ * motion or a cut), normal rotated to view space (OIDN's aux convention: x right, y up, z toward the camera; 0 where nothing was hit).
+ */
+const OIDN_PREP_WGSL = /* wgsl */ `
+struct P { reset: u32, w: u32, h: u32, count: f32, right: vec4f, up: vec4f, back: vec4f }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var raw: texture_2d<f32>;
+@group(0) @binding(2) var albedoIn: texture_2d<f32>;
+@group(0) @binding(3) var normalIn: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read_write> prog: array<vec4f>;
+@group(0) @binding(5) var outColor: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(6) var outAlbedo: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(7) var outNormal: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn pipeOidnPrep(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x >= p.w || gid.y >= p.h) { return; }
+  let q = gid.xy;
+  let i = (gid.y * p.w + gid.x) * 3u;
+  var sc = vec4f(textureLoad(raw, q, 0).xyz, 0.0);
+  var sa = vec4f(textureLoad(albedoIn, q, 0).xyz, 0.0);
+  var sn = vec4f(textureLoad(normalIn, q, 0).xyz, 0.0);
+  if (p.reset == 0u) {
+    sc += prog[i];
+    sa += prog[i + 1u];
+    sn += prog[i + 2u];
+  }
+  prog[i] = sc;
+  prog[i + 1u] = sa;
+  prog[i + 2u] = sn;
+  let inv = 1.0 / p.count;
+  let l = length(sn.xyz);
+  var nv = vec3f(0.0);
+  if (l > 1e-6) {
+    let u = sn.xyz / l;
+    nv = vec3f(dot(u, p.right.xyz), dot(u, p.up.xyz), dot(u, p.back.xyz));
+  }
+  textureStore(outColor, q, vec4f(max(sc.xyz * inv, vec3f(0.0)), 1.0));
+  textureStore(outAlbedo, q, vec4f(clamp(sa.xyz * inv, vec3f(0.0), vec3f(1.0)), 1.0));
+  textureStore(outNormal, q, vec4f(nv, 1.0));
+}
+`;
+
+/** OIDN network size (the Denoiser package's quality): fast = `*_small`, balanced = the base network, high = `*_large` (clean aux only). */
+export type OidnQuality = 'fast' | 'balanced' | 'high';
+
+export interface OidnArmSettings {
+  /** Guides: albedo + normal (`rt_hdr_calb_cnrm*`; our 1-spp guides are nearly noise-free) or albedo only (`rt_hdr_alb*`). */
+  aux: 'albedo+normal' | 'albedo';
+  /** Network while the camera moves and until `stillSamples` still frames have accumulated. Default fast (the small network, every frame). */
+  moving: OidnQuality;
+  /** Network once `stillSamples` frames of a still camera have accumulated. Default balanced (the standard network). */
+  still: OidnQuality;
+  /** Still frames accumulated before the `still` network runs (mutracer-style: a few samples are enough for the standard net). Default 8. */
+  stillSamples: number;
+  /** After the `still` network ran, hold the frame: the arm stops tracing and denoising until the camera moves. Default true. */
+  hold: boolean;
+  precision: 'fp16' | 'fp32';
+}
+
+export const DEFAULT_OIDN_ARM: OidnArmSettings = { aux: 'albedo+normal', moving: 'fast', still: 'balanced', stillSamples: 8, hold: true, precision: 'fp16' };
+
+type OidnDenoiser = { denoiseTextures(o: unknown): Promise<GPUTexture | undefined> };
+declare const __BENCH_DENOISER_TZAS__: string | null | undefined;
+/** One Denoiser per (device, quality, aux, precision), shared by both arms: a network switch reloads weights; calls are awaited in turn. */
+const oidnInstances = new Map<string, { device: GPUDevice; denoiser: Promise<OidnDenoiser> }>();
+function oidnFor(device: GPUDevice, quality: OidnQuality, aux: OidnArmSettings['aux'], precision: OidnArmSettings['precision']): Promise<OidnDenoiser> {
+  const prec = precision === 'fp16' && device.features.has('shader-f16') ? 'fp16' : 'fp32';
+  const key = `${quality}|${aux}|${prec}`;
+  const hit = oidnInstances.get(key);
+  if (hit && hit.device === device) return hit.denoiser;
+  const tzaUrl = typeof __BENCH_DENOISER_TZAS__ === 'string' ? __BENCH_DENOISER_TZAS__ : undefined;
+  if (!tzaUrl) throw new Error('OIDN: no weights (link the Denoiser checkout as the bench dev dependency `denoiser`)');
+  const denoiser = import('denoiser').then(({ Denoiser }) => (Denoiser as unknown as { create(o: unknown): Promise<OidnDenoiser> }).create({ device, precision: prec, quality, tzaUrl }));
+  oidnInstances.set(key, { device, denoiser });
+  return denoiser;
+}
+
 // ---------------------------------------------------------------- arm
 
 export interface PipelineSettings {
@@ -224,8 +302,11 @@ export interface PipelineSettings {
   /** Display (output) size; 2x the render film by default (960x540 -> 1920x1080). */
   displayWidth: number;
   displayHeight: number;
-  /** Denoiser options (`DiffuseSpecularDenoiser`); `remodulate` is always on. Default: the Denoiser's defaults (SVGF, anti-lag auto). */
+  /** SVGF options (`DiffuseSpecularDenoiser`); `remodulate` is always on. Default: the Denoiser's defaults (SVGF, anti-lag auto). */
   denoiser?: Record<string, unknown>;
+  /** Which denoiser the arm runs (switchable with `setDenoiser`): 'svgf' (default), 'oidn', or 'none' (raw to the upscaler). */
+  denoise?: DenoiserKind;
+  oidn?: Partial<OidnArmSettings>;
   /** Upscaler runtime settings overrides (`Upscaler.settings`). */
   upscaler?: Record<string, unknown>;
 }
@@ -233,6 +314,7 @@ export interface PipelineSettings {
 const align = (n: number, a: number) => Math.ceil(n / a) * a;
 
 export type PipelineStage = 'raw' | 'denoised' | 'final';
+export type DenoiserKind = 'svgf' | 'oidn' | 'none';
 
 export interface PipelineFrameBuffers {
   accum: GPUBuffer;
@@ -272,6 +354,20 @@ export class PipelineArm {
   private prevProj: Float32Array | null = null;
   private resetNext = true;
   private flicker: { state: GPUBuffer; params: GPUBuffer; group: GPUBindGroup; w: number; h: number; frames: number }[] = [];
+  /** The denoiser this arm runs, and the OIDN settings (`setDenoiser`). */
+  kind: DenoiserKind = 'svgf';
+  oidn: OidnArmSettings = { ...DEFAULT_OIDN_ARM };
+  private readonly oidnPrepPipe!: GPUComputePipeline;
+  private readonly oidnParams!: GPUBuffer;
+  private readonly oidnProg!: GPUBuffer;
+  private readonly oidnTex!: { color: GPUTexture; albedo: GPUTexture; normal: GPUTexture };
+  private oidnGroup: GPUBindGroup | null = null;
+  /** OIDN: frames in the progressive mean, the camera they share, and whether the still frame is held. */
+  private oidnCount = 0;
+  private oidnCamera = '';
+  private oidnHeld = false;
+  /** What the last `post` ran (the OIDN network and spp, or the denoiser kind). */
+  lastDenoiser = '';
 
   private constructor(init: Record<string, unknown>) {
     Object.assign(this, init);
@@ -307,11 +403,15 @@ export class PipelineArm {
     const depth = mk('depth', 'depth32float', TEX | GPUTextureUsage.RENDER_ATTACHMENT);
     const color = mk('color', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T | COPY_DST_T);
     const module = (code: string, name: string) => device.createShaderModule({ label: `${label} ${name}`, code });
-    const [accumPipe, packPipe, compositePipe, flickerPipe, depthPipe] = await Promise.all([
+    const oidnTex = { color: mk('oidn color', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING), albedo: mk('oidn albedo', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING), normal: mk('oidn normal', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING) };
+    const oidnProg = device.createBuffer({ label: `${label} oidn progressive`, size: n * 3 * 16, usage: GPUBufferUsage.STORAGE });
+    const oidnParams = device.createBuffer({ label: `${label} oidn params`, size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const [accumPipe, packPipe, compositePipe, flickerPipe, oidnPrepPipe, depthPipe] = await Promise.all([
       device.createComputePipelineAsync({ label: `${label} accumulate`, layout: 'auto', compute: { module: module(ACCUM_WGSL, 'accumulate'), entryPoint: 'pipeAccumulate' } }),
       device.createComputePipelineAsync({ label: `${label} pack`, layout: 'auto', compute: { module: module(PACK_WGSL, 'pack'), entryPoint: 'pipePack' } }),
       device.createComputePipelineAsync({ label: `${label} composite`, layout: 'auto', compute: { module: module(COMPOSITE_WGSL, 'composite'), entryPoint: 'pipeComposite' } }),
       device.createComputePipelineAsync({ label: `${label} flicker`, layout: 'auto', compute: { module: module(FLICKER_WGSL, 'flicker'), entryPoint: 'pipeFlicker' } }),
+      device.createComputePipelineAsync({ label: `${label} oidn prep`, layout: 'auto', compute: { module: module(OIDN_PREP_WGSL, 'oidn prep'), entryPoint: 'pipeOidnPrep' } }),
       device.createRenderPipelineAsync({
         label: `${label} depth`,
         layout: 'auto',
@@ -334,7 +434,41 @@ export class PipelineArm {
     Object.assign(upscaler.settings, s.upscaler ?? {});
     const keys = { color: host.texture(color, `${label} color`), depth: host.texture(depth, `${label} depth`), velocity: host.texture(tex.motion, `${label} motion`) };
     // The accumulate and pack groups need the kernel's planes buffer: built on the first `accumulate`.
-    return new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys });
+    const arm = new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys, oidnPrepPipe, oidnParams, oidnProg, oidnTex });
+    arm.setDenoiser(s.denoise ?? 'svgf', s.oidn ?? {});
+    return arm;
+  }
+
+  /** Switches the denoiser (compare arms with the same one). Drops the progressive OIDN mean, the held frame and the histories. */
+  setDenoiser(kind: DenoiserKind, oidn: Partial<OidnArmSettings> = {}): void {
+    this.kind = kind;
+    this.oidn = { ...DEFAULT_OIDN_ARM, ...oidn };
+    this.oidnCount = 0;
+    this.oidnCamera = '';
+    this.oidnHeld = false;
+    this.resetNext = true;
+    if (kind === 'oidn') {
+      // Load the networks now, so the first frames do not wait for weights.
+      void oidnFor(this.device, this.oidn.moving, this.oidn.aux, this.oidn.precision);
+      void oidnFor(this.device, this.oidn.still, this.oidn.aux, this.oidn.precision);
+    }
+  }
+
+  /** Loads the OIDN networks of the current settings (await before timing). */
+  async ready(): Promise<void> {
+    if (this.kind !== 'oidn') return;
+    await Promise.all([oidnFor(this.device, this.oidn.moving, this.oidn.aux, this.oidn.precision), oidnFor(this.device, this.oidn.still, this.oidn.aux, this.oidn.precision)]);
+  }
+
+  /** Timing helper: the next `denoiseOidn(camera, false)` runs the `still` network (as if `stillSamples` - 1 frames had accumulated). */
+  primeStill(camera: PtLookAtCamera): void {
+    this.oidnCamera = cameraKey(camera);
+    this.oidnCount = Math.max(0, this.oidn.stillSamples - 1);
+  }
+
+  /** OIDN with `hold`: true while this camera's still frame is held (the session then skips tracing and post for the arm). */
+  heldFor(camera: PtLookAtCamera): boolean {
+    return this.kind === 'oidn' && this.oidnHeld && !this.resetNext && cameraKey(camera) === this.oidnCamera;
   }
 
   /** Start of a frame: clears the sample sums. */
@@ -390,7 +524,7 @@ export class PipelineArm {
    * Denoise, composite, upscale. Call after the frame's path tracing + `pack` were submitted. `camera` = this frame's (unjittered) camera;
    * the previous one is remembered. Records and submits its own work (the denoiser and the upscaler submit theirs).
    */
-  post(camera: PtLookAtCamera, options: { denoise?: boolean; deltaTime?: number } = {}): void {
+  async post(camera: PtLookAtCamera, options: { denoise?: boolean; deltaTime?: number } = {}): Promise<void> {
     const { width: w, height: h } = this.s;
     const aspect = w / h;
     const view = viewMatrix(camera);
@@ -403,32 +537,86 @@ export class PipelineArm {
       this.prevProj = proj;
     }
     const t = this.tex;
-    let dOut: { diffuse: GPUTexture; specular: GPUTexture } | null = null;
-    if (options.denoise !== false) {
-      dOut = this.denoiser.dispatchBoth(
+    const kind: DenoiserKind = options.denoise === false ? 'none' : this.kind;
+    if (kind === 'svgf') {
+      const dOut = this.denoiser.dispatchBoth(
         { diffuse: { radiance: t.diffuse, hitDistance: t.hitD }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF } } as never,
         { depth: this.depth, normal: t.normal, motion: t.motion, roughness: t.roughness, albedo: t.albedo, viewZ: t.viewZ, motionZ: t.motionZ },
         { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near: PIPE_NEAR, far: PIPE_FAR, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };
-    }
-    const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
-    if (dOut) {
+      const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
       const group = this.device.createBindGroup({ layout: this.compositePipe.getBindGroupLayout(0), entries: [dOut.diffuse.createView(), dOut.specular.createView(), t.raw.createView(), t.specF.createView(), this.color.createView()].map((resource, binding) => ({ binding, resource })) });
       const pass = encoder.beginComputePass({ label: 'pipe composite' });
       pass.setPipeline(this.compositePipe);
       pass.setBindGroup(0, group);
       pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
       pass.end();
+      this.device.queue.submit([encoder.finish()]);
+      this.lastDenoiser = 'svgf';
+    } else if (kind === 'oidn') {
+      await this.denoiseOidn(camera, reset);
     } else {
+      const encoder = this.device.createCommandEncoder({ label: 'pipe raw' });
       encoder.copyTextureToTexture({ texture: t.raw }, { texture: this.color }, { width: w, height: h });
+      this.device.queue.submit([encoder.finish()]);
+      this.lastDenoiser = 'none';
     }
-    this.device.queue.submit([encoder.finish()]);
     this.upCamera.set(camera, aspect);
     this.upscaler.beginFrame(this.upCamera as never);
     this.upscaler.endFrame(this.upCamera as never);
     this.upscaler.dispatch({ color: this.keys.color, depth: this.keys.depth, velocity: this.keys.velocity, reset, deltaTime: options.deltaTime ?? 1 / 60 } as never, this.upCamera as never);
     this.prevView = view;
     this.prevProj = proj;
+  }
+
+  /**
+   * OIDN on this frame: the progressive mean (restarted when the camera changed or after a cut), the `moving` network until `stillSamples`
+   * frames have accumulated, then the `still` network (and the frame is held with `hold`). Awaits the Denoiser package (it waits for its GPU
+   * work; no readback). Writes `color`.
+   */
+  async denoiseOidn(camera: PtLookAtCamera, cut: boolean): Promise<void> {
+    const { width: w, height: h } = this.s;
+    const key = cameraKey(camera);
+    const moved = cut || key !== this.oidnCamera;
+    this.oidnCamera = key;
+    this.oidnCount = moved ? 1 : this.oidnCount + 1;
+    this.oidnHeld = false;
+    const o = this.oidn;
+    const f = norm(sub(camera.target, camera.position));
+    const r = norm(cross(f, camera.up));
+    const u = cross(r, f);
+    const p = new ArrayBuffer(64);
+    new Uint32Array(p, 0, 3).set([moved ? 1 : 0, w, h]);
+    new Float32Array(p, 12, 1).set([this.oidnCount]);
+    new Float32Array(p, 16, 12).set([r[0], r[1], r[2], 0, u[0], u[1], u[2], 0, -f[0], -f[1], -f[2], 0]);
+    this.device.queue.writeBuffer(this.oidnParams, 0, p);
+    this.oidnGroup ??= this.device.createBindGroup({
+      layout: this.oidnPrepPipe.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.oidnParams } },
+        { binding: 1, resource: this.tex.raw.createView() },
+        { binding: 2, resource: this.tex.albedo.createView() },
+        { binding: 3, resource: this.tex.normal.createView() },
+        { binding: 4, resource: { buffer: this.oidnProg } },
+        { binding: 5, resource: this.oidnTex.color.createView() },
+        { binding: 6, resource: this.oidnTex.albedo.createView() },
+        { binding: 7, resource: this.oidnTex.normal.createView() },
+      ],
+    });
+    const encoder = this.device.createCommandEncoder({ label: 'pipe oidn prep' });
+    const pass = encoder.beginComputePass({ label: 'pipe oidn prep' });
+    pass.setPipeline(this.oidnPrepPipe);
+    pass.setBindGroup(0, this.oidnGroup);
+    pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
+    const still = this.oidnCount >= o.stillSamples;
+    const quality = still ? o.still : o.moving;
+    const net = await oidnFor(this.device, quality, o.aux, o.precision);
+    const out = await net.denoiseTextures({ color: this.oidnTex.color, albedo: this.oidnTex.albedo, ...(o.aux === 'albedo+normal' ? { normal: this.oidnTex.normal } : {}), hdr: true, output: this.color, transfer: 'linear' });
+    if (!out) throw new Error('OIDN: the run was aborted');
+    this.lastDenoiser = `oidn ${quality} ${o.aux} (${this.oidnCount} spp)`;
+    if (still && o.hold) this.oidnHeld = true;
   }
 
   /** The texture of a stage: raw beauty and denoised colour at render resolution, the upscaled output at display resolution. */
@@ -490,8 +678,8 @@ export class PipelineArm {
   destroy(): void {
     this.denoiser.dispose();
     this.upscaler.dispose();
-    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams]) b.destroy();
-    for (const t of [...Object.values(this.tex), this.depth, this.color]) t.destroy();
+    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams, this.oidnParams, this.oidnProg]) b.destroy();
+    for (const t of [...Object.values(this.tex), ...Object.values(this.oidnTex), this.depth, this.color]) t.destroy();
     for (const f of this.flicker) {
       f.state.destroy();
       f.params.destroy();

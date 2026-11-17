@@ -21,6 +21,7 @@
  * Args: res=960x540 (display = 2x)  warm=300  frames=64  checkpoints=1,4,16,64  stableFrom=16  path=48  pathCheckpoints=1,4,16  plainSpp=auto|n
  *       infer=tiled|portable|sgm  precision=f16  steps=4  ref=mitsuba|ours  refFile=<url>  refSpp=4096  flip=1  upload=1  scenarios=static,path
  *       sharpness=<0..1>  autoExposure=0|1  maxAccumulation=<n>  (upscaler A/B)
+ *       denoiser=svgf|oidn|oidn-fast|oidn-std|none  oidnAux=albedo+normal|albedo  stillSamples=8  hold=1  oidnStill=balanced|high
  * Timing rows are wall clock per submit (best effort); the quality numbers do not depend on timing once N is fixed.
  */
 import type { PtLookAtCamera, PtMegakernel } from '@pmndrs/pathtracer';
@@ -33,9 +34,24 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
-import { readTextureRgba16f, resample, type PipelineStage } from '../nrc/pipeline.ts';
+import { readTextureRgba16f, resample, type DenoiserKind, type OidnArmSettings, type OidnQuality, type PipelineStage } from '../nrc/pipeline.ts';
 
 let adapterSummary: AdapterSummary | null = null;
+
+/**
+ * `denoiser=svgf` (default) | `oidn` (small net until `stillSamples` still frames, then the standard net once, then held) | `oidn-fast` / `oidn-std`
+ * (that net every frame, no hold) | `none`. Every OIDN mode denoises the progressive mean of the frames since the camera last moved (1 frame while
+ * it moves), so a still camera's frame 16 is a 16-frame mean; `oidnAux=albedo+normal|albedo`, `stillSamples=8`, `hold=1`, `oidnStill=balanced|high`.
+ */
+function denoiserOptions(args: Record<string, string>): { denoise: DenoiserKind; oidn?: Partial<OidnArmSettings> } {
+  const d = args.denoiser ?? 'svgf';
+  const aux = args.oidnAux === 'albedo' ? 'albedo' : 'albedo+normal';
+  if (d === 'oidn') return { denoise: 'oidn', oidn: { aux, stillSamples: numberArg(args, 'stillSamples', 8), hold: (args.hold ?? '1') === '1', ...(args.oidnStill ? { still: args.oidnStill as OidnQuality } : {}) } };
+  if (d === 'oidn-fast') return { denoise: 'oidn', oidn: { aux, moving: 'fast', stillSamples: Infinity, hold: false } };
+  if (d === 'oidn-std') return { denoise: 'oidn', oidn: { aux, moving: 'balanced', stillSamples: Infinity, hold: false } };
+  if (d === 'none' || d === 'svgf') return { denoise: d };
+  throw new Error(`denoiser must be svgf, oidn, oidn-fast, oidn-std or none, got ${d}`);
+}
 let deviceErrors: string[] = [];
 
 type Img = { width: number; height: number; channels: number; data: Float32Array };
@@ -135,6 +151,7 @@ try {
     infer: args.infer ?? 'tiled',
     precision: args.precision === 'f32' ? 'f32' : 'f16',
     cache: { stepsPerFrame: steps },
+    ...denoiserOptions(args),
     // Upscaler A/B knobs (defaults: the upscaler's own: sharpness 0.8, auto exposure, 24 frames).
     upscaler: {
       ...(args.sharpness !== undefined ? { sharpness: Number(args.sharpness) } : {}),
@@ -147,7 +164,8 @@ try {
   deviceErrors = watchDevice(device);
   const refCam = sponzaWhite.camera as PtLookAtCamera;
   notes.infer = session.inferDescription;
-  notes.denoiser = session.arms.plain.denoiser.name;
+  notes.denoiser = session.arms.plain.kind === 'oidn' ? `oidn ${JSON.stringify(session.arms.plain.oidn)}` : session.arms.plain.kind === 'svgf' ? session.arms.plain.denoiser.name : 'none';
+  await session.arms.plain.ready();
 
   // 1. Warm-up at the reference view.
   session.cutNext();
@@ -199,7 +217,7 @@ try {
   if (scenarios.includes('static')) {
     session.cutNext();
     for (let f = 1; f <= frames; f++) {
-      session.frame(refCam, { train: true });
+      await session.frame(refCam, { train: true });
       if (f === stableFrom) {
         session.arms.plain.startFlicker();
         session.arms.nrc.startFlicker();
@@ -248,7 +266,7 @@ try {
     const hold = Math.max(...pathCheckpoints);
     session.cutNext();
     for (let f = 0; f < pathFrames; f++) {
-      session.frame(camAt(f / (pathFrames - 1)), { train: true });
+      await session.frame(camAt(f / (pathFrames - 1)), { train: true });
       if (f === Math.floor(pathFrames / 2) && doUpload) {
         await device.queue.onSubmittedWorkDone();
         for (const arm of ['plain', 'nrc'] as const) for (const stage of ['raw', 'denoised', 'final'] as const) await uploadImage(`path-mid-${arm}-${stage}`, await readTextureRgba16f(device, session.arms[arm].stage(stage)));
@@ -260,7 +278,7 @@ try {
     }
     // The last path frame is the reference pose: arrival frame 1 is the first frame AFTER the path (the hold).
     for (let h = 1; h <= hold; h++) {
-      session.frame(refCam, { train: true });
+      await session.frame(refCam, { train: true });
       session.arms.plain.stepFlicker();
       session.arms.nrc.stepFlicker();
       if (pathCheckpoints.includes(h)) await measure('path', h, h === pathCheckpoints[0]);
@@ -289,7 +307,7 @@ try {
   console.log(notes.stabilityTable);
 
   reportResult(
-    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
+    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },
   );
 } catch (error) {

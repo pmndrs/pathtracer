@@ -10,13 +10,18 @@ export const PIPE_FAR = 200;
 
 
 type V3 = [number, number, number];
-const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!];
-const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
-const cross = (a: readonly number[], b: readonly number[]): V3 => [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
-const norm = (a: readonly number[]): V3 => {
+export const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!];
+export const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+export const cross = (a: readonly number[], b: readonly number[]): V3 => [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
+export const norm = (a: readonly number[]): V3 => {
   const l = Math.hypot(a[0]!, a[1]!, a[2]!);
   return [a[0]! / l, a[1]! / l, a[2]! / l];
 };
+
+/** Exact identity of a camera (a moved camera restarts progressive accumulation). */
+export function cameraKey(c: PtLookAtCamera): string {
+  return [...c.position, ...c.target, ...c.up, c.yFovDeg].join(',');
+}
 
 /** World -> view (column-major), the same basis as `ptCameraBasis` (right = forward x up). */
 export function viewMatrix(c: PtLookAtCamera): Float32Array {

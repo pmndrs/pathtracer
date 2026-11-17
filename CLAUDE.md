@@ -661,3 +661,8 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Git Bash (Windows) rewrites a page arg that starts with `/` into a Windows path (`refFile=/bench/...` became `C:/Program Files/Git/bench/...`): prefix the command with
   `MSYS_NO_PATHCONV=1`. A page's `fetch` of a missing file logs a console 404 and the runner then FAILS the run even when the page reported its numbers: probe optional files
   only when an arg asks for them (`nrc-pipeline-study ref=`).
+- OIDN in the bench on Windows: `__BENCH_DENOISER_TZAS__` was `/@fs` + a backslash realpath (`/@fsC:\...\tzas`), so every `.tza` 404'd (the error then names
+  `rt_ldr_small.tza`, because `Denoiser.create` first loads the default LDR model); `server.ts` builds it with `fsUrl()` now. One Denoiser instance loads ONE network:
+  `quality` (fast = `_small`, balanced = base, high = `_large`) and the guides passed (albedo -> `_alb`, albedo + normal -> `_calb_cnrm`) pick it, and a change reloads
+  the weights on the next call, so `bench/nrc/pipeline.ts` keeps one instance per (quality, guides, precision). `denoiseTextures` awaits its GPU work
+  (`onSubmittedWorkDone`) but never maps a buffer; the pipeline's `post` / `session.frame` are async because of it.

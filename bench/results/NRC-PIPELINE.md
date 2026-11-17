@@ -3,7 +3,8 @@
 **Question:** the cache's raw frame is still noisy at one sample per pixel. Does its lower-noise input survive a real-time chain
 (SVGF denoiser at 960 × 540, then a temporal upscaler to 1920 × 1080) as a better final image than plain path tracing in the same time?
 
-**Answer on the RTX 3060 Laptop, sponza-white: yes, but the chain eats most of the gap.** At equal time (plain gets 1 sample per
+**Answer on the RTX 3060 Laptop, sponza-white: yes, but the chain eats most of the gap.** (With SVGF; OIDN, added the same day, is far better
+than SVGF for both arms and keeps a 1.3-1.6× cache lead on single frames and 2× less flicker: see "OIDN in the same chain".) At equal time (plain gets 1 sample per
 pixel per frame; a cache frame cost less than that here, see Timing) the cache arm's error is
 
 | stage | relMSE ratio plain / NRC | FLIP plain → NRC | frame-to-frame flicker plain / NRC |
@@ -17,6 +18,60 @@ arm's denoised frame is visibly cleaner (`static-f64-*-denoised.pfm`). After the
 keeps averaging a static view, both finals converge toward a floor that is mostly common to both (resampling mismatch against the
 reference and a shared upscaler bias, below), so relMSE alone undersells the cache; FLIP and flicker keep a clear lead. Both arms lose
 2.5-4% of the mean in the upscaler stage (section "Bias in the chain").
+
+## OIDN in the same chain (added 2026-11-17, TASKS N11.3)
+
+Same scene, camera, warm cache (300 frames), reference and upscaler; only the denoiser changes, for both arms. OIDN is the Denoiser package's
+(WGSL on our device, fp16), fed the raw beauty, the primary-hit albedo factor and the view-space normal. While the camera is still, every OIDN
+mode denoises the **progressive mean** of the frames since it last moved (1 frame while it moves), the idea from mutracer's docs: the small
+network while moving, the standard one once a few still samples exist. Modes: `oidn` = small net until 8 still frames, then the standard net
+once and the frame is held (no more tracing or denoising until the camera moves); `oidn-fast` / `oidn-std` = that net on every frame, no hold.
+Runs `20261117T123742Z` (oidn), `124015Z` (oidn-fast), `124324Z` (oidn-fast, albedo only), `124631Z` (oidn-std); SVGF = the run above.
+
+**Denoised stage (960 × 540), relMSE plain / NRC (ratio):**
+
+| denoiser | static frame 1 (1 spp) | static frame 4 | static frame 16 (oidn: held at 8) | path, arrival frame 1 | path, frame 16 after |
+|---|---|---|---|---|---|
+| SVGF | 0.107 / 0.060 (1.77×) | 0.082 / 0.042 (1.97×) | 0.057 / 0.036 (1.58×) | 0.061 / 0.038 (1.62×) | 0.059 / 0.037 (1.60×) |
+| OIDN small (`oidn-fast`), albedo + normal | 0.027 / 0.020 (1.37×) | 0.012 / 0.0097 (1.27×) | 0.0059 / 0.0061 (0.97×) | 0.017 / 0.012 (1.42×) | 0.0059 / 0.0057 (1.05×) |
+| OIDN small, albedo only | 0.038 / 0.028 (1.37×) | 0.016 / 0.012 (1.39×) | 0.0076 / 0.0067 (1.14×) | 0.024 / 0.015 (1.63×) | 0.0074 / 0.0063 (1.16×) |
+| OIDN standard (`oidn-std`) | 0.023 / 0.017 (1.37×) | 0.010 / 0.0086 (1.19×) | 0.0053 / 0.0053 (0.99×) | 0.015 / 0.011 (1.38×) | 0.0052 / 0.0048 (1.09×) |
+| OIDN progressive (`oidn`, standard at 8, hold) | 0.027 / 0.020 (1.34×) | 0.012 / 0.0099 (1.24×) | 0.0073 / 0.0072 (1.02×) | 0.019 / 0.013 (1.46×) | (frame 8) 0.0073 / 0.0066 (1.12×) |
+
+**Final stage (1920 × 1080), relMSE plain / NRC, and flicker of the final:**
+
+| denoiser | static frame 1 | static frame 16 | path arrival | final flicker plain / NRC (static, path) |
+|---|---|---|---|---|
+| SVGF | 0.100 / 0.063 | 0.032 / 0.027 | 0.028 / 0.026 | 1.97×, 2.04× (from frame 16; the others from frame 2) |
+| OIDN small, albedo + normal | 0.030 / 0.023 | 0.0091 / 0.0089 | 0.020 / 0.018 | 1.89×, 2.02× |
+| OIDN small, albedo only | 0.043 / 0.032 | 0.012 / 0.010 | 0.032 / 0.026 | 2.00×, 2.16× |
+| OIDN standard | 0.026 / 0.019 | 0.0081 / 0.0079 | 0.018 / 0.014 | 1.93×, 2.15× |
+| OIDN progressive | 0.030 / 0.023 | 0.011 / 0.011 (held) | 0.021 / 0.019 | 1.98×, 2.51× |
+
+What it shows:
+
+* **OIDN beats SVGF by a wide margin on our 1-spp input:** at frame 1 the plain arm's denoised relMSE drops 4× (0.107 → 0.027 with the small
+  net), the cache arm's 3× (0.060 → 0.020); the final, 3.3× / 2.7×. Plain + OIDN small (0.027) is already better than cache + SVGF (0.060).
+  Not using OIDN here would indeed have been a mistake.
+* **The cache still helps under OIDN, less than under SVGF:** 1.3-1.4× lower relMSE on single frames (frame 1, arrival after the path), 1.6×
+  with albedo-only guides; once a still camera has accumulated 8-16 frames both arms meet (0.97-1.1×), because OIDN on a 16-frame mean is
+  already near the floor. Final-stage flicker stays **2× lower** with the cache in every OIDN mode (2.5× on the path with the progressive mode).
+* **relMSE flatters OIDN's smoothing.** LDR-FLIP at frame 1: plain 0.202 (SVGF) → 0.178 (OIDN small); cache 0.141 (SVGF) vs 0.147 (OIDN small),
+  0.133 (OIDN standard). The small net paints over fine detail (curtain folds, capitals; `static-f1-*-denoised.pfm`) where SVGF keeps edges
+  with speckle. FLIP ranks cache + SVGF level with cache + OIDN small at frame 1.
+* **Albedo-only guides** cost ~40% relMSE against albedo + normal on single frames, and the cache's lead grows (1.4-1.6×): without normals,
+  OIDN leans more on the colour, and the cache's colour is cleaner. That is the configuration where the cache pays most.
+* **The upscaler bias shrinks with OIDN:** −0.1 … −1.7% on the static view (SVGF: −1.8 … −6.1%), consistent with the bias depending on residual
+  noise (N11.5). On the camera path it stays −2 … −3.5% for both denoisers (motion, not noise).
+* **Progressive mode**: the standard net at 8 still frames reaches 0.0073 denoised (plain and cache alike), then holds: no tracing, no
+  denoising and zero flicker until the camera moves. The small net on the 16-frame mean ends lower (0.0059) only because it saw twice the samples.
+* **A cold cache is worse than none under OIDN** (one short smoke run, warm 30 frames instead of 300, `denoiser=oidn`): the cache arm read
+  0.036 vs plain 0.027 at frame 1 and 0.021 vs 0.0073 at 8 frames. OIDN removes white noise well but keeps the cache's low-frequency
+  prediction error. With SVGF this did not show (its ratios held from a warm start); a cold-start curve under OIDN is follow-up N11.6.
+
+**Cost (best effort, same throttled 3060, wall clock):** OIDN small 22-25 ms per frame at 960 × 540 (post − post without denoiser), standard
+48-66 ms; SVGF 2.8 ms. With the small net the cache arm's whole chain was 76-87 ms vs 72.6 ms with SVGF. The progressive mode spends the
+standard net once per still view and nothing after it.
 
 ## Setup
 
