@@ -189,7 +189,8 @@ function encodeDisplay(l: Live): void {
   $('tagLeft').hidden = mode === 2;
   $('tagRight').hidden = mode === 1;
   $('tagLeft').textContent = `Path tracing · ${l.session.plainSpp} spp/frame`;
-  $('tagRight').textContent = 'Path tracing + NRC · 1 spp/frame';
+  const c = l.session.cache;
+  $('tagRight').textContent = c.warming ? `NRC warming ${c.trained.frames}/${c.settings.warmupFrames}: path tracing · 1 spp/frame` : 'Path tracing + NRC · 1 spp/frame';
 }
 
 function moveCamera(dt: number): boolean {
@@ -215,13 +216,35 @@ function armsOnScreen(): ArmName[] {
   return v === 'plain' ? ['plain'] : v === 'nrc' ? ['nrc'] : ['plain', 'nrc'];
 }
 
+/**
+ * Warm-up gate for the current denoiser (N11.7, D30): a training-step budget, the point where the cache stops being worse than plain
+ * through that denoiser on any metric (NRC-PIPELINE.md "Warm-up gate"): SVGF 120 steps, OIDN 600, no denoiser 12. In frames: the budget over
+ * the steps per gated frame.
+ */
+function autoGateFrames(denoiser: string, stepsPerGatedFrame: number): number {
+  const steps = denoiser === 'svgf' ? 120 : denoiser.startsWith('oidn') ? 600 : 12;
+  return Math.ceil(steps / Math.max(1, stepsPerGatedFrame));
+}
+
+function gateFrames(): number {
+  const g = value('gate');
+  const perFrame = num('gateSteps') > 0 ? num('gateSteps') : num('steps');
+  return g === 'off' ? 0 : g === 'custom' ? Math.max(0, Math.round(num('gateFrames'))) : autoGateFrames(value('denoiserSel'), perFrame);
+}
+
+/** Training steps and the warm-up gate from the controls (every frame: rAF loop and `step`). */
+function applyCacheSettings(session: NrcPipelineSession): void {
+  session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
+  session.setGate(gateFrames(), num('gateSteps'));
+}
+
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const l = live;
   if (!l || busy || building || paused) return;
   const dt = lastFrameEnd ? Math.min(0.1, (now - lastFrameEnd) / 1000) : 0;
   moveCamera(dt);
-  l.session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
+  applyCacheSettings(l.session);
   // Only the arms on screen render, so a single side shows its own frame rate.
   busy = true;
   const t0 = performance.now();
@@ -239,7 +262,8 @@ function frame(now: number): void {
       if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
       lastFrameEnd = end;
       const den = l.session.arms.nrc.lastDenoiser || l.session.arms.plain.lastDenoiser;
-      if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps (wait ${lastFrameMs.toFixed(1)} ms) · plain ${l.session.plainSpp} spp · ${l.session.inferDescription} · ${den}`);
+      const gate = l.session.cache.warming ? ` · NRC gate closed: plain while training (${l.session.cache.trained.frames}/${l.session.cache.settings.warmupFrames})` : '';
+      if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps (wait ${lastFrameMs.toFixed(1)} ms) · plain ${l.session.plainSpp} spp · ${l.session.inferDescription} · ${den}${gate}`);
     })
     .catch((error: unknown) => {
       busy = false;
@@ -362,6 +386,14 @@ if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as stri
 if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;
 if (args.get('oidnAux')) $<HTMLSelectElement>('oidnAux').value = args.get('oidnAux') as string;
 if (args.get('stillSamples')) $<HTMLInputElement>('stillSamples').value = args.get('stillSamples') as string;
+// ?gate=auto|off|<frames>  ?gateSteps=<n>
+const gateArg = args.get('gate');
+if (gateArg === 'auto' || gateArg === 'off') $<HTMLSelectElement>('gate').value = gateArg;
+else if (gateArg) {
+  $<HTMLSelectElement>('gate').value = 'custom';
+  $<HTMLInputElement>('gateFrames').value = gateArg;
+}
+if (args.get('gateSteps')) $<HTMLInputElement>('gateSteps').value = args.get('gateSteps') as string;
 await build();
 requestAnimationFrame(frame);
 
@@ -373,6 +405,7 @@ async function step(n: number): Promise<void> {
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
     for (let i = 0; i < n; i++) {
+      applyCacheSettings(l.session);
       await l.session.frame(camera(), { arms: armsOnScreen(), train: checked('train') });
       encodeDisplay(l);
       await l.session.device.queue.onSubmittedWorkDone();

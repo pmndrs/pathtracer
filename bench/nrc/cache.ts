@@ -438,8 +438,13 @@ export interface NrcSettings {
   seed: number;
   /** Damping a fresh cache (N6f). Output layer of a fresh network: 'zero' (default: it predicts 0 at first) or 'he' (random, like the rest). */
   outputInit: 'he' | 'zero';
-  /** Plain path tracing in the image (no cache) until the cache has trained this many frames. */
+  /**
+   * Warm-up gate (N11.7): plain path tracing in the image (no cache) until the cache has trained this many frames; the training tiles of
+   * the same pass keep recording, so the network trains exactly as it would with the cache on screen. 0 = no gate.
+   */
   warmupFrames: number;
+  /** Training steps per frame during the warm-up gate (0 = `stepsPerFrame`). More steps while young shorten the gate (N11.7 fast arm). */
+  warmupStepsPerFrame: number;
   /** Learning rate ramps linearly from 1/n to full over this many training frames. */
   lrWarmupFrames: number;
   /** Inference weights: 'warmup' EMA (default; min(0.99, (1 + t) / (10 + t))), 'plain' EMA, or 'off' (the trained weights). */
@@ -464,6 +469,7 @@ export const DEFAULT_NRC_SETTINGS: NrcSettings = {
   // (2.36 vs 4.67 ground floor, 5.36 vs 11.0 unseen corridor) and bias to 3-4% by frame 8, with no lag after a cut.
   outputInit: 'zero',
   warmupFrames: 0,
+  warmupStepsPerFrame: 0,
   lrWarmupFrames: 0,
   ema: 'warmup',
 };
@@ -660,6 +666,7 @@ export class NrcCache {
   resetNetwork(): void {
     this.mlp.uploadWeights(NrcCache.freshWeights(this.settings, this.settings.seed + this.frame));
     this.trainedFrames = 0;
+    this.trainedSteps = 0;
   }
 
   /** He-initialised weights; with outputInit 'zero' the output layer starts at 0, so a fresh cache predicts no light. */
@@ -671,12 +678,23 @@ export class NrcCache {
 
   /** Frames trained since the network was (re)initialised. */
   private trainedFrames = 0;
+  private trainedSteps = 0;
+
+  /** Training frames and steps since the network was (re)initialised. */
+  get trained(): { frames: number; steps: number } {
+    return { frames: this.trainedFrames, steps: this.trainedSteps };
+  }
+
+  /** The warm-up gate is closed: the image is plain path tracing while the network trains (`warmupFrames`). */
+  get warming(): boolean {
+    return this.trainedFrames < this.settings.warmupFrames;
+  }
   private stopWritten = -1;
 
   /** The hook's stop depth for this frame: no cache (0xffffffff) during warm-up frames, else the query depth. */
   private applyStopDepth(): void {
     const s = this.settings;
-    const stop = this.trainedFrames < s.warmupFrames ? 0xffffffff : s.queryDepth;
+    const stop = this.warming ? 0xffffffff : s.queryDepth;
     if (stop === this.stopWritten) return;
     this.stopWritten = stop;
     const M = s.trainDepth;
@@ -742,8 +760,12 @@ export class NrcCache {
       this.encodeTargets(encoder);
     } else if (stage === 'trainSteps') {
       if (s.lrWarmupFrames > 0) this.mlp.setLearningRate(s.learningRate * Math.min(1, (this.trainedFrames + 1) / s.lrWarmupFrames));
-      for (let i = 0; i < s.stepsPerFrame; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
-      if (s.stepsPerFrame > 0) this.trainedFrames++;
+      const steps = this.warming && s.warmupStepsPerFrame > 0 ? s.warmupStepsPerFrame : s.stepsPerFrame;
+      for (let i = 0; i < steps; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
+      if (steps > 0) {
+        this.trainedFrames++;
+        this.trainedSteps += steps;
+      }
     } else if (stage === 'renderPass') {
       this.applyStopDepth();
       encoder.clearBuffer(this.queryCount, 0, 4); // word 1 is the frame counter
@@ -791,6 +813,24 @@ export class NrcCache {
   async readTrainCount(): Promise<{ batch: number; records: number }> {
     const v = new Uint32Array(await readU32s(this.device, this.trainCount, 2));
     return { batch: v[0] as number, records: v[1] as number };
+  }
+
+  /** Debug only (never in a frame loop): mean relative-L2 loss of the last training step over its batch (the frame's records). */
+  async readLoss(): Promise<{ batch: number; loss: number }> {
+    const { batch } = await this.readTrainCount();
+    if (batch === 0) return { batch, loss: NaN };
+    const n = Math.min(batch, this.mlp.loss.size / 4);
+    const staging = this.device.createBuffer({ size: n * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.mlp.loss, 0, staging, 0, n * 4);
+    this.device.queue.submit([enc.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const v = new Float32Array(staging.getMappedRange());
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += v[i] as number;
+    staging.unmap();
+    staging.destroy();
+    return { batch, loss: sum / n };
   }
 
   async readQueryCount(): Promise<number> {

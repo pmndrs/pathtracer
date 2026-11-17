@@ -669,3 +669,11 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Judge a young cache through the denoiser, not on the raw frame: after 3 training frames its raw relMSE and bias already look trained, but
   its remaining error is low-frequency and survives SVGF / OIDN (OIDN needs ~150 training frames before the cache arm beats plain, N11.6).
   `nrc-pipeline-study scenarios=coldstart warmups=...` measures it; `NrcSettings.warmupFrames` is the gate.
+- The NRC warm-up gate (N11.7, D30) is a budget of training STEPS (120 SVGF, 600 OIDN), not frames: `warmupFrames` counts trained frames, so
+  with `warmupStepsPerFrame` set divide the budget by it (`autoGateFrames` in `nrc-pipeline.ts`). `cache.warming` is read before the frame;
+  the gated frame is plain path tracing at 1 spp. The demo's headless `step()` must apply the controls too (`applyCacheSettings`), or it
+  silently runs with the settings of the last rAF frame (a hidden pane runs none).
+- A reference's own noise is a relMSE floor of about (raw 1-spp relMSE) / spp: the dim upper corridor at 2048 spp sits near 7e-3, the size of
+  a 4-frame OIDN mean's error there, so ratios against it are pulled toward 1. Estimate the floor before quoting a small-error ratio.
+- `NrcCache.readLoss()` is the last step's loss on ONE frame's noisy targets (relative L2: 30-190 on sponza-white, frame to frame): check it
+  for drift or NaN (training stability), never read it as a convergence curve; convergence is the image error through the chain.

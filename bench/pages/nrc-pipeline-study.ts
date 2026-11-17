@@ -23,6 +23,13 @@
  *       sharpness=<0..1>  autoExposure=0|1  maxAccumulation=<n>  (upscaler A/B)
  *       denoiser=svgf|oidn|oidn-fast|oidn-std|none  oidnAux=albedo+normal|albedo  stillSamples=8  hold=1  oidnStill=balanced|high
  *  5. coldstart (N11.6): per warm-up W in `warmups` (0,10,30,100,300): fresh network, W training frames at the view, a cut, then frames `coldFrames` (1,4).
+ *  6. gate (N11.7, the warm-up gate): per arm in `gates` (`G` or `G:s`; default 0,150): a fresh network gated for G training frames (s steps per frame
+ *     during the gate, default `steps`), then a start-up timeline of `gateFrames` (300) frames: the camera looks around near the reference view
+ *     (a slow pan, so the moving-camera denoiser path runs and the network trains on nearby views); at each frame in `gateCheckpoints` a cut to the
+ *     reference view and a measured single frame (both arms; the cache arm shows plain path tracing while its gate is closed). The training loss of
+ *     the last step is read every `lossEvery` (10) frames. `gateUnseen=1` (default): after the timeline, a cut into the upper gallery's corridor
+ *     (nrc-study's view C, never seen by the timeline) and frames 1 and 4 against our own `refCSpp` (2048) reference there (`refCFile=<url>` loads
+ *     a saved one): is the gate per network, or does an unseen view need another one?
  * Timing rows are wall clock per submit (best effort); the quality numbers do not depend on timing once N is fixed.
  */
 import type { PtLookAtCamera, PtMegakernel } from '@pmndrs/pathtracer';
@@ -70,13 +77,13 @@ async function fetchPfmOrNull(path: string): Promise<Img | null> {
 const lum = (d: Float32Array, i: number, c: number) => 0.2126 * (d[i * c] as number) + 0.7152 * (d[i * c + 1] as number) + 0.0722 * (d[i * c + 2] as number);
 
 /** Our own reference: the plain path tracer (accumulating kernel, same scene settings) at `spp`, 1280x720, the reference camera. */
-async function renderOwnReference(spp: number): Promise<Img> {
+async function renderOwnReference(spp: number, camera = sponzaWhite.camera as PtLookAtCamera): Promise<Img> {
   const adapter = new PtMegakernelAdapter({ nee: true });
   await adapter.load(sponzaWhite);
   const kernel = adapter.renderer as PtMegakernel;
   const device = adapter.gpuContext!.device;
   kernel.setFilm(1280, 720);
-  kernel.setCamera(sponzaWhite.camera as PtLookAtCamera);
+  kernel.setCamera(camera);
   kernel.setLimits({ maxDepth: sponzaWhite.integrator.maxDepth, ...(sponzaWhite.integrator.rrStartDepth ? { rrStartDepth: sponzaWhite.integrator.rrStartDepth } : {}) });
   kernel.setSeed(4242);
   {
@@ -307,6 +314,95 @@ try {
         else await device.queue.onSubmittedWorkDone();
       }
     }
+  }
+
+  // 6. Warm-up gate (N11.7): start-up timelines from a fresh network, gated or not.
+  if (scenarios.includes('gate')) {
+    const gateArms = (args.gates ?? '0,150').split(',').map((a) => a.split(':').map(Number) as [number, number?]);
+    const T = numberArg(args, 'gateFrames', 300);
+    const cps = (args.gateCheckpoints ?? '1,10,30,60,100,150,151,155,200,300').split(',').map(Number).filter((f) => f <= T);
+    const lossEvery = numberArg(args, 'lossEvery', 10);
+    // Looking around near the reference view: yaw +-10 degrees and a 0.5 m sway, one cycle per 120 frames.
+    const look = (t: number): PtLookAtCamera => {
+      const a = (2 * Math.PI * t) / 120;
+      const yaw = ((10 * Math.PI) / 180) * Math.sin(a);
+      const d = [refCam.target[0] - refCam.position[0], refCam.target[1] - refCam.position[1], refCam.target[2] - refCam.position[2]] as [number, number, number];
+      const pos: [number, number, number] = [refCam.position[0], refCam.position[1], refCam.position[2] + 0.5 * Math.sin(0.5 * a)];
+      const tgt: [number, number, number] = [pos[0] + d[0] * Math.cos(yaw) - d[2] * Math.sin(yaw), pos[1] + d[1], pos[2] + d[0] * Math.sin(yaw) + d[2] * Math.cos(yaw)];
+      return { ...refCam, position: pos, target: tgt };
+    };
+    // Unseen view: our own reference there (the Mitsuba references only cover the scene camera).
+    const viewC: PtLookAtCamera = { ...refCam, position: [-8, 4.95, -4.5], target: [10, 4.95, -4.5] };
+    let refC: Img | null = null;
+    if ((args.gateUnseen ?? '1') === '1') {
+      if (args.refCFile) {
+        refC = await fetchPfmOrNull(args.refCFile);
+        if (!refC) throw new Error(`refCFile ${args.refCFile}: not found`);
+        notes.reference_unseen = `refCFile ${args.refCFile}`;
+      } else {
+        const spp = numberArg(args, 'refCSpp', 2048);
+        const t0 = performance.now();
+        refC = await renderOwnReference(spp, viewC);
+        notes.reference_unseen = `ours: plain megakernel, ${spp} spp, 1280x720, view C ${JSON.stringify(viewC.position)} -> ${JSON.stringify(viewC.target)}`;
+        notes.reference_unseen_render_s = (performance.now() - t0) / 1000;
+        if (doUpload) await uploadImage(`reference-ours-corridor-${spp}spp`, refC as never);
+      }
+    }
+    const refCRender = refC ? resample(refC, width, height) : null;
+    const refCDisplay = refC ? resample(refC, displayWidth, displayHeight) : null;
+    const lossCurves: Record<string, [number, number, number][]> = {};
+    for (const [G, gs] of gateArms) {
+      const tag = `gate-g${G}${gs ? `s${gs}` : ''}`;
+      session.setGate(G, gs ?? 0);
+      session.cache.resetNetwork();
+      session.cutNext();
+      const curve: [number, number, number][] = [];
+      for (let t = 1; t <= T; t++) {
+        const warming = session.cache.warming;
+        if (cps.includes(t)) {
+          session.cutNext();
+          await session.frame(refCam, { train: true });
+          metrics[`${tag}_f${t}_warming`] = warming ? 1 : 0;
+          metrics[`${tag}_f${t}_trained_steps`] = session.cache.trained.steps;
+          await measure(tag, t, false);
+          session.cutNext();
+        } else {
+          await session.frame(look(t), { train: true });
+          await device.queue.onSubmittedWorkDone(); // one frame in flight
+        }
+        if (t % lossEvery === 0 || t <= 3) {
+          const { loss } = await session.cache.readLoss();
+          curve.push([t, session.cache.trained.steps, loss]);
+        }
+      }
+      lossCurves[tag] = curve;
+      for (const [t, , loss] of curve) metrics[`${tag}_loss_f${t}`] = loss;
+      // The cut into the unseen corridor (the gate has long opened: per network, not per view?).
+      if (refCRender && refCDisplay) {
+        const scenario = `${tag}-unseen`;
+        session.cutNext();
+        for (let f = 1; f <= 4; f++) {
+          await session.frame(viewC, { train: true });
+          await device.queue.onSubmittedWorkDone();
+          if (f !== 1 && f !== 4) continue;
+          for (const arm of ['plain', 'nrc'] as const)
+            for (const stage of ['raw', 'denoised', 'final'] as const) {
+              const img = await readTextureRgba16f(device, session.arms[arm].stage(stage));
+              const r = stage === 'final' ? refCDisplay : refCRender;
+              const m = compareImages(img as unknown as Image, r as unknown as Image);
+              const flip = doFlip ? flipLdr(img as unknown as Image, r as unknown as Image).mean : null;
+              rows.push({ scenario, frame: f, arm, stage, relMse: m.relMse, relBias: m.relBias, flip });
+              const key = `${scenario}_f${f}_${arm}_${stage}`;
+              metrics[`${key}_relmse`] = m.relMse;
+              metrics[`${key}_relbias`] = m.relBias;
+              if (flip !== null) metrics[`${key}_flip`] = flip;
+              if (f === 1 && doUpload && stage !== 'raw') await uploadImage(`${scenario}-f${f}-${arm}-${stage}`, img);
+            }
+        }
+      }
+    }
+    session.setGate(0);
+    notes.lossCurves = lossCurves;
   }
 
   // Equal-time table (markdown) for the write-up.

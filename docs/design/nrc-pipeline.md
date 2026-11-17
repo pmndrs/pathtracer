@@ -136,13 +136,17 @@ cache + SVGF, 0.060). The cache keeps a 1.3-1.4× relMSE lead on single frames (
 final; once a still camera has 8-16 frames accumulated, both arms meet. A fresh cache is worse than plain through either denoiser until it
 has trained: ~5-10 frames with SVGF, ~120-150 with OIDN (N11.6; the raw frame hides it). The progressive mode reaches 0.0073 at 8 still frames with the standard net, then holds the frame at zero cost.
 
+Warm-up gate (N11.7, D30): the cache arm shows plain path tracing until the network has trained 120 steps (SVGF) / 600 (OIDN), so the start-up
+is never worse than plain; the first cache frame equals an ungated network at the same steps (training does not notice the gate). 16 steps per
+gated frame open the OIDN gate after 40 frames instead of 150, stable in loss and image here. Through OIDN a cut into a region the network has not
+trained on is level with plain at frame 1 and worse at frame 4, even after 300 frames elsewhere (N11.10); with SVGF it is 1.3-1.4× better.
+
 ## 7. Open choices (build both, then decide)
 
 * Upscaler-owned jitter vs sampler-owned (§4): needs a uniform camera-offset option in the frame kernel (byte-identical when off).
-* Start-up (N11.6 found a young cache looks worse than plain through a denoiser; the training itself is not affected by what is displayed):
-  warm-up gate, plain + OIDN on screen while the network trains (`warmupFrames` ≈ 10 SVGF, ≈ 150-200 OIDN; N11.7, the maintainer's
-  preferred direction); a ramp instead of a switch (N11.8); a saved network per scene in IndexedDB (N11.9). More steps per frame while
-  young only if training stays stable; no learning-rate boost.
+* Start-up: the warm-up gate is built (N11.7, D30: 120 / 600 steps for SVGF / OIDN). Still open: more steps per gated frame (16 measured
+  stable, gate 40 frames instead of 150; the maintainer's call), a ramp instead of a switch (N11.8), a saved network per scene in IndexedDB
+  (N11.9), and a cut into an unseen region through OIDN (N11.10: re-gate, ramp, or accept).
 * SVGF vs OIDN as the default (§3): built and A/B'd for quality; needs quiet-pass cost and motion with the realtime preset. The Denoiser's
   `recurrent` filter (memory-lean) as a third arm.
 * Plain N spp vs plain at the same frame rate with a lower `maxDepth` (the realtime preset uses 2): equal time can be spent either way.

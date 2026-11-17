@@ -108,6 +108,16 @@ export class NrcPipelineSession {
     this.camera = camera;
   }
 
+  /**
+   * Warm-up gate (N11.7): the cache arm shows plain path tracing (1 spp, through the same chain) until the network has trained `frames`
+   * frames, training on the same pass meanwhile; `steps` training steps per frame during the gate (0 = the cache's `stepsPerFrame`).
+   * Takes effect on the next frame; a gate already passed stays open (set it before `cache.resetNetwork()` to gate a fresh network).
+   */
+  setGate(frames: number, steps = 0): void {
+    this.cache.settings.warmupFrames = Math.max(0, Math.round(frames));
+    this.cache.settings.warmupStepsPerFrame = Math.max(0, Math.round(steps));
+  }
+
   /** Both arms switch denoiser (the comparison needs the same chain). */
   setDenoiser(kind: DenoiserKind, oidn: Partial<OidnArmSettings> = {}): void {
     this.arms.plain.setDenoiser(kind, oidn);

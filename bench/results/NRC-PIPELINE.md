@@ -66,7 +66,7 @@ What it shows:
 * **Progressive mode**: the standard net at 8 still frames reaches 0.0073 denoised (plain and cache alike), then holds: no tracing, no
   denoising and zero flicker until the camera moves. The small net on the 16-frame mean ends lower (0.0059) only because it saw twice the samples.
 * **A cold cache is worse than none, under both denoisers** (measured in the next section, N11.6): OIDN needs ~150 training frames
-  before the cache helps, SVGF ~10.
+  before the cache helps, SVGF ~10. The warm-up gate (N11.7, section "Warm-up gate") shows plain path tracing until then: never worse than plain at start-up.
 
 **Cost (best effort, same throttled 3060, wall clock):** OIDN small 22-25 ms per frame at 960 × 540 (post − post without denoiser), standard
 48-66 ms; SVGF 2.8 ms. With the small net the cache arm's whole chain was 76-87 ms vs 72.6 ms with SVGF. The progressive mode spends the
@@ -112,7 +112,68 @@ to the cache after G training frames; `NrcSettings.warmupFrames` already does ex
 Pros: never worse than plain at start-up or a scene load; one existing setting. Cons: a fixed count, not a measured readiness (a harder scene
 or fewer steps per frame needs more); start-up frames cost a full plain path. Alternative: more training steps per frame (or a higher
 learning rate) while the network is young, which shortens the gate instead of hiding it. A/B that settles it: this coldstart scenario with
-`warmupFrames` = 0 / 150 / 200 and with 8-16 steps per frame during warm-up, plus an unseen-region cut through OIDN (N11.7).
+`warmupFrames` = 0 / 150 / 200 and with 8-16 steps per frame during warm-up, plus an unseen-region cut through OIDN (N11.7). **Built and measured: next section.**
+
+## Warm-up gate (N11.7, 2026-11-17)
+
+**Question:** at start-up, can the cache arm show plain path tracing through the chain while the network trains in the background, and
+switch to the cache once it has trained, so that it is never worse than plain? (The maintainer's idea, which is `NrcSettings.warmupFrames`: the
+hook runs full paths for the image while the same pass's training tiles keep recording, so training is exactly what it would be with the cache on
+screen.)
+
+**Setup:** twin `scenarios=gate` (nrc-pipeline-study.ts §6). Per arm: fresh network (`resetNetwork`), gate G (frames) at s steps per gated frame,
+then a 300-frame start-up timeline. The camera looks around near the reference view (yaw ±10°, 0.5 m sway, 120-frame cycle: the moving-camera
+denoiser path runs and the network trains on nearby views). At each checkpoint frame there is a cut to the reference view and one measured frame
+(both arms; plain runs 1 spp, N = 1 here). After the timeline there is a cut into the upper gallery's corridor (nrc-study's view C, which the
+timeline never sees), and frames 1 and 4 are measured against our own 2048 spp reference there. Runs `20261117T162022Z` (SVGF: G = 0, 10, 30) and
+`20261117T163133Z` (OIDN small net, albedo + normal: G = 0, 150, 200, and 40 frames × 16 steps, 75 × 8). Quality only: no timing taken
+from these runs.
+
+**Denoised relMSE ratio plain / NRC (> 1: the cache arm is better) and FLIP of the cache arm, single frame after a cut:**
+
+| frame (steps if 4/frame) | SVGF G = 0 | SVGF G = 10 | SVGF G = 30 | OIDN G = 0 | OIDN G = 150 | OIDN G = 200 | OIDN 40 × 16 steps | OIDN 75 × 8 steps |
+|---|---|---|---|---|---|---|---|---|
+| 1 (4) | 0.43×, FLIP 0.54 vs 0.20 | gated 1.00× | gated 1.25× | 0.12×, 0.55 vs 0.18 | gated 1.02× | gated 0.99× | gated 1.03× | gated 0.95× |
+| 10 (40) | 0.99×, 0.24 vs 0.19 | gated 1.25× | gated 0.75× | 0.35×, 0.25 vs 0.18 | gated 0.97× | gated 0.95× | gated 1.09× | gated 0.96× |
+| 11 / 31 / 41 (first cache frame) | | **1.17×, FLIP 0.225 vs 0.198** | **1.37×, 0.193 vs 0.202** | | | | **1.16×, 0.153 vs 0.174** (644 steps) | |
+| 15 (60) | 1.09×, 0.218 vs 0.196 | 1.33×, 0.203 vs 0.198 | gated 1.06× | | | | | |
+| 40 (160) | | | | 0.79×, 0.190 vs 0.179 | gated 0.95× | gated 0.96× | gated 0.99× | gated 1.01× |
+| 76 (304) | | | | 0.88×, 0.176 vs 0.177 | gated 0.99× | gated 1.02× | 1.25× | **1.14×, 0.153 vs 0.176** (604 steps) |
+| 100 (400) | 2.23× | 1.71× | 1.99× | 1.01×, 0.164 vs 0.176 | gated 1.01× | gated 1.04× | 1.24× | 1.18× |
+| 151 (604) | | | | 1.12×, 0.158 vs 0.178 | **1.17×, 0.158 vs 0.176** | gated 1.03× | 1.32× | 1.27× |
+| 201 (804) | | | | 1.12× | 1.17× | **1.19×, 0.151 vs 0.177** | 1.42× | 1.19× |
+| 300 (1200) | 1.78× | 1.89× | 2.02× | 1.31× | 1.34× | 1.46× | 1.51× (1680 steps) | 1.35× (1500 steps) |
+| unseen corridor, frame 1 | 1.27× | 1.44× | 1.40× | 0.96×, 0.149 vs 0.151 | 1.02× | 1.08× | 0.85× | 0.99× |
+| unseen corridor, frame 4 | 1.44× | 1.45× | 1.36× | 0.76×, 0.122 vs 0.109 | 0.72× | 0.85× | 0.69× | 0.82× |
+
+(SVGF single frames after a cut spread a lot: plain alone reads 0.106-0.157 between checkpoints, so a gated row of 0.75× or 1.25× is plain vs
+plain noise. OIDN's spread is ±5%. Final-stage ratios follow the denoised ones within ~10%; tables per frame: `node gate.ts <run>` in the session
+scratchpad, metrics `gate-g<G>[s<s>]_f<t>_*` in the run JSON.)
+
+* **The gate does what it should.** While it is closed, the cache arm IS plain path tracing (denoised 0.95-1.09× with OIDN, final 0.93-1.06× with
+  SVGF: plain-vs-plain noise; bias as plain). The first cache frame after it opens is as good as an ungated network after the same number of steps (OIDN G = 150 at
+  frame 151: 1.17× vs 1.12×; SVGF G = 30 at frame 31: 1.37× vs 1.53×, within SVGF's spread). Training does not notice the gate: per-frame loss,
+  step counts and the frame-300 error match the ungated arm.
+* **Ungated, the young cache is worse than plain for a long time:** OIDN until ~100 frames by relMSE (0.12× at frame 1, 0.35× at 10, 0.79× at 40)
+  and ~75 by FLIP; SVGF until ~10-15 frames by relMSE and ~30 by FLIP (the frame-10 cache is level in relMSE but 0.24 vs 0.19 in FLIP).
+  That matches N11.6's offline curve, now on a moving start-up timeline.
+* **The gate is a budget of training steps, not frames.** OIDN: 150 frames × 4, 75 × 8 and 40 × 16 steps open at 600-644 steps, and the first cache
+  frame reads the same (1.17×, 1.14×, 1.16×; FLIP 0.153-0.158). SVGF: G = 10 (40 steps) still loses on FLIP for 5 frames (0.225 vs 0.198 at frame 11,
+  0.203 vs 0.198 at 15), G = 30 (120 steps) never does. **Setting (D30): 120 steps with SVGF, 600 with OIDN** (30 and 150 frames at 4 steps).
+* **More steps per gated frame shortened the gate with no sign of instability** (the maintainer's concern). With 16 steps per frame the OIDN gate
+  opens after 40 frames instead of 150. The per-frame loss of the 16-step arm stays in the same band as the 4-step arms (30-190, the noise of one
+  frame's targets, no drift and no NaN). After the switch it stays ahead of the 4-step arms at equal frames (1.32× vs 1.12-1.17× at frame 151), because
+  it has had more steps. One scene, one seed, the default learning rate (no boost). Cost: 12 more steps per gated frame. Training measured
+  ~5 ms per 4 steps in M6 (best effort), so about +15 ms on a ~62 ms frame, for 40 frames instead of 150. The maintainer decides whether the
+  demo's auto mode uses it (default today: the frame's own steps).
+* **A cut into an unseen region is not covered by the gate under OIDN.** With SVGF, a network warmed for 300 frames on the ground floor is
+  1.3-1.4× better than plain at frame 1 in the corridor: one gate per network is enough. With OIDN it is only level at frame 1 (0.85-1.08×) and
+  worse at frame 4 (0.69-0.85×, FLIP 0.12-0.13 vs 0.11), whatever the steps spent elsewhere (1200-1680). The cache's raw error there is 2.6×
+  below plain's and its bias is level (±2%). It is the low-frequency error again, now in a region the network has not trained on, and OIDN's
+  4-frame mean exposes it. Caveat: the 2048 spp corridor reference has a floor of about 7e-3 relMSE (raw 1-spp relMSE 14.5 / 2048), the
+  same size as the frame-4 values (8-12e-3). So the frame-4 ratios are compressed toward 1, and the true gap is larger, not smaller. FLIP
+  agrees on the direction. Follow-up N11.10: how many frames in the new region until the cache wins again, against a 16k spp reference. Then
+  either re-gate on a cut into poorly trained space, or use the ramp (N11.8).
 
 ## Setup
 
