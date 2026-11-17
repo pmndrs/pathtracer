@@ -651,3 +651,6 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   Chrome (`Start-Process chrome <url>`). A headless Chrome from another session (profile `bvh-gpu-chrome`) shares the RTX 3060: check before timing.
 - Windows: in the blocked sgm training kernel a ReLU mask kept as bits in workgroup atomics (`atomicOr`/`atomicLoad`) was ~10% slower than re-reading a_l
   from global memory (N2r-d); the sgm gradient sums whole K-record steps, so deltas up to `capacity` must be zero (the blocked forward-backward writes them).
+- Windows: `nrc-live`'s own requestAnimationFrame loop keeps the RTX 3060 at full load (80-88 °C within seconds); pause it (`__nrcLive.pause(true)`) and cool the card
+  before timing. `node bench/live-bench.ts` does that and presses Benchmark over CDP; the page's idle status is the fps line, not empty. A 404 in a page's console fails a runner
+  run even when the page handles it: `nrc-study ref=ours` does not ask for the (git-ignored, absent on Windows) Mitsuba PFMs.

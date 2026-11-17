@@ -51,6 +51,48 @@ still camera: 1.00 vs 1.60 (−38%, 720p), 1.06 vs 1.61 (360p).
 Steady state (cache warmed at the view): 2.43; plain path tracing: 9.01. After a cut or a flight the cache is at its steady
 error on the first frame; a fresh network settles in 4-8 frames (0.1-0.25 s at 720p) and overshoots on frames 1-2.
 
+## RTX 3060 Laptop, Windows (M6 / WN5, 2026-11-18)
+
+Same page and settings (`nrc-study.html?scenario=all&res=1280x720&steps=4`), windowed Chrome 157 on D3D12 over CDP
+(`node bench/runner/run.ts --page nrc-study --gpu nvidia --headed`), per-record f16 network (`infer=portable`: Chrome on Windows has
+no subgroup matrices, and per-record beats tiled on NVIDIA). **Reference: our own path tracer at 4096 spp** (`ref=ours`; the Mitsuba
+PFMs are not on this machine), so the bias column is against our converged image, not Mitsuba's. Quality numbers are deterministic for
+a seed; the run itself was thermally throttled, so its timing rows are not used (the frame times below come from the demo).
+
+**Warm cache, error after N frames (720p, relMSE; plain 1 spp per frame):**
+
+| Frames | Plain | Cache | Ratio (3060) | Ratio (M5 Pro) | Cache bias | FLIP plain / cache |
+|---|---|---|---|---|---|---|
+| 1 | 8.98 | 2.40 | 3.7× | 3.8× | +0.24% | 0.487 / 0.322 |
+| 4 | 2.14 | 0.527 | 4.1× | 4.0× | +0.14% | 0.318 / 0.212 |
+| 16 | 0.504 | 0.116 | 4.4× | 4.3× | +0.23% | 0.216 / 0.127 |
+| 64 | 0.125 | 0.0282 | 4.4× | 4.2× | +0.20% | 0.143 / 0.080 |
+| 256 | 0.0318 | 0.00869 | 3.7× | 3.2× | +0.35% | 0.088 / 0.060 |
+
+Flicker on a still camera 1.00 vs 1.60 (−38%, as on the Mac). Adaptation (single frames): steady 2.42 vs plain 9.00; after a cut 2.38 and
+after the flight 2.39 on the first frame; a fresh network 2.33 at frame 1 (−35% bias), 2.17 by frame 4. Unseen corridor: plain 14.6,
+steady 5.73, first frame after the cut 5.61 (+1.5% bias), fresh 5.19 (−32%) then 5.10 by frame 4. **The quality answer is the Mac's.**
+
+**Frame times (the demo's Benchmark, `node bench/live-bench.ts --repeat 2 --cool 58`):** windowed Chrome 157, wall clock per submit,
+median of 20 frames, the demo's loop paused and the card cooled below 58 °C before each cell; each 60-frame warm-up brings it back to
+80-87 °C at 1.7-1.85 GHz, so these are best effort. Two rounds in opposite order agree within 2%.
+
+| ms | 960×540 tiled | 960×540 per-record | 1280×720 tiled | 1280×720 per-record |
+|---|---|---|---|---|
+| Training steps (4) | 5.0-5.2 | 5.1-5.2 | 5.0-5.1 | 5.3-5.8 |
+| Render pass (cache side) | 22.3-22.4 | 22.2-22.6 | 38.5-39.0 | 38.5-38.7 |
+| Inference + resolve | 15.7-16.0 | 10.2-10.7 | 27.2 | 17.8-18.0 |
+| **Cache frame** | 43.0-43.6 | **37.5-38.5** | 70.7-71.3 | **62.0-62.1** |
+| Plain, 1 sample | 32.2-32.6 | 33.2-33.3 | 58.0-59.1 | 59.9-60.2 |
+| Cache frame / plain sample | 1.33 | **1.14** | 1.21 | **1.03** |
+
+**Reading:** on the 3060 in Chrome a cache frame costs about one plain sample (1.03× at 720p, 1.14× at 540p), not 0.61× as on the
+M5 Pro, so the lead per unit of time equals the lead per frame (3.7-4.4×) instead of 5-7×. The render pass is cheap (0.65 of a plain
+sample: paths stop at the cache vertex); the network is what costs: inference 18 ms at 720p in Chrome's portable kernel. Our blocked
+subgroup-matrix kernel does the same queries ~4.4× faster on Dawn/Vulkan (3.85 vs 17 ms per million, N2r-c), which would put the
+cache frame near 0.8 of a plain sample (estimate: ~1.05 M queries per 720p frame), but Chrome on Windows does not offer subgroup
+matrices (D3D12). First load: the cache kernels compile in 2.1-2.4 s on DXC.
+
 ## A region the cache never saw: the upper gallery
 
 View: inside the upper gallery's north corridor (camera (−8, 4.95, −4.5) looking along +x): its vault and back wall are not
