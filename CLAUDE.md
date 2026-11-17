@@ -654,3 +654,35 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Windows: `nrc-live`'s own requestAnimationFrame loop keeps the RTX 3060 at full load (80-88 °C within seconds); pause it (`__nrcLive.pause(true)`) and cool the card
   before timing. `node bench/live-bench.ts` does that and presses Benchmark over CDP; the page's idle status is the fps line, not empty. A 404 in a page's console fails a runner
   run even when the page handles it: `nrc-study ref=ours` does not ask for the (git-ignored, absent on Windows) Mitsuba PFMs.
+- NRC pipeline (M9, docs/design/nrc-pipeline.md): `active` is a reserved WGSL word too (a uniform field named `active` fails only on the GPU). In frame mode the cache's
+  resolve must also write the demodulated planes (`resolveWgsl(frame)` in `bench/nrc/cache.ts`), or `diffuse x albedo + specular x specFactor` falls short of the beauty by
+  exactly the cache's light; `nrc-pipeline-study` checks the identity (`plane_identity_*`). rg16float / r16float are not storage formats in core WebGPU: the pipeline packs
+  into one buffer and `copyBufferToTexture`s (rows 256-byte aligned) instead of writing 12 storage textures (also past the 4-8 storage-texture limit).
+- pmndrs/upscaler is three-shaped (`new Upscaler({ renderer })`) but only uses `backend.device`, `backend.get(tex).texture` and `initTexture`: `UpscalerHost` in
+  `bench/nrc/pipeline.ts` stands in, no three renderer. Its dist imports its OWN `three` (0.186, from the upscaler checkout), not bench's 0.187: harmless because only
+  `.elements` of our camera stand-in's matrices cross over. Link: `@pmndrs/upscaler` `link:../../upscaler` (Windows worktree: junction `.claude/worktrees/upscaler` ->
+  `GitHub/upscaler/upscaler`); `bench/runner/server.ts` adds its realpath to `fs.allow`. Its `beginFrame` must still run with `jitter: false`: it snapshots the projection
+  `_writeReproject` reads.
+- Windows laptop (Intel UHD + RTX 3060): the desktop app's browser pane and a default Chrome window get the Intel GPU (`powerPreference` is ignored on Windows, crbug
+  369219127): `nrc-pipeline` ran at ~1 fps there. Use the runner (`--gpu nvidia`, pins the LUID) or set Chrome to "High performance" in Windows graphics settings.
+- The Mitsuba / pbrt reference PFMs are not on the Windows machine (only their JSON sidecars; references are git-ignored and were rendered on the Mac). `nrc-pipeline-study`
+  falls back to our own 4096 spp render (uploaded as `reference-ours-4096spp`; reuse it with `refFile=/bench/results/incoming/<run>/nrc-pipeline-study/reference-ours-4096spp.pfm`).
+- Git Bash (Windows) rewrites a page arg that starts with `/` into a Windows path (`refFile=/bench/...` became `C:/Program Files/Git/bench/...`): prefix the command with
+  `MSYS_NO_PATHCONV=1`. A page's `fetch` of a missing file logs a console 404 and the runner then FAILS the run even when the page reported its numbers: probe optional files
+  only when an arg asks for them (`nrc-pipeline-study ref=`).
+- OIDN in the bench on Windows: `__BENCH_DENOISER_TZAS__` was `/@fs` + a backslash realpath (`/@fsC:\...\tzas`), so every `.tza` 404'd (the error then names
+  `rt_ldr_small.tza`, because `Denoiser.create` first loads the default LDR model); `server.ts` builds it with `fsUrl()` now. One Denoiser instance loads ONE network:
+  `quality` (fast = `_small`, balanced = base, high = `_large`) and the guides passed (albedo -> `_alb`, albedo + normal -> `_calb_cnrm`) pick it, and a change reloads
+  the weights on the next call, so `bench/nrc/pipeline.ts` keeps one instance per (quality, guides, precision). `denoiseTextures` awaits its GPU work
+  (`onSubmittedWorkDone`) but never maps a buffer; the pipeline's `post` / `session.frame` are async because of it.
+- Judge a young cache through the denoiser, not on the raw frame: after 3 training frames its raw relMSE and bias already look trained, but
+  its remaining error is low-frequency and survives SVGF / OIDN (OIDN needs ~150 training frames before the cache arm beats plain, N11.6).
+  `nrc-pipeline-study scenarios=coldstart warmups=...` measures it; `NrcSettings.warmupFrames` is the gate.
+- The NRC warm-up gate (N11.7, D30) is a budget of training STEPS (120 SVGF, 600 OIDN), not frames: `warmupFrames` counts trained frames, so
+  with `warmupStepsPerFrame` set divide the budget by it (`autoGateFrames` in `nrc-pipeline.ts`). `cache.warming` is read before the frame;
+  the gated frame is plain path tracing at 1 spp. The demo's headless `step()` must apply the controls too (`applyCacheSettings`), or it
+  silently runs with the settings of the last rAF frame (a hidden pane runs none).
+- A reference's own noise is a relMSE floor of about (raw 1-spp relMSE) / spp: the dim upper corridor at 2048 spp sits near 7e-3, the size of
+  a 4-frame OIDN mean's error there, so ratios against it are pulled toward 1. Estimate the floor before quoting a small-error ratio.
+- `NrcCache.readLoss()` is the last step's loss on ONE frame's noisy targets (relative L2: 30-190 on sponza-white, frame to frame): check it
+  for drift or NaN (training stability), never read it as a convergence curve; convergence is the image error through the chain.

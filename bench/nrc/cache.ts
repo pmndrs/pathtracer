@@ -327,14 +327,36 @@ fn nrcFinish() {
 }
 `;
 
-const RESOLVE_WGSL = /* wgsl */ `
-struct P { capacity: u32, _a: u32, _b: u32, _c: u32 }
+/**
+ * Frame mode (`integrator.frame`, P4.1 planes; docs/design/nrc-pipeline.md §2): the cache's indirect light is part of the primary vertex's
+ * class, so it also lands in the demodulated diffuse (plane 0) or specular (plane 1) plane, divided by that plane's stored factor (plane 4
+ * rgb / plane 5 rgb; plane 4 alpha = 1 marks a specular-class primary). `diffuse * albedo + specular * specFactor = beauty` stays exact.
+ * Empty when off, so the plain resolve text is unchanged.
+ */
+function nrcPlanesWgsl(frame: boolean, binding: number): string {
+  if (!frame) return '';
+  return /* wgsl */ `
+@group(0) @binding(${binding}) var<storage, read_write> planes: array<vec4f>;
+fn nrcPlaneAdd(px: u32, n: u32, v: vec3f) {
+  if (planes[4u * n + px].w == 1.0) {
+    planes[n + px] = planes[n + px] + vec4f(v / planes[5u * n + px].xyz, 0.0);
+  } else {
+    planes[px] = planes[px] + vec4f(v / planes[4u * n + px].xyz, 0.0);
+  }
+}
+`;
+}
+
+/** The resolve pass; `frame`: also add into the demodulated planes (`nrcPlanesWgsl`); `p.npix` = pixel count. */
+function resolveWgsl(frame: boolean): string {
+  return /* wgsl */ `
+struct P { capacity: u32, npix: u32, _b: u32, _c: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> queries: array<vec4f>;
 @group(0) @binding(2) var<storage, read> preds: array<vec4f>;
 @group(0) @binding(3) var<storage, read_write> count: array<u32>;
 @group(0) @binding(4) var<storage, read_write> accum: array<vec4f>;
-
+${nrcPlanesWgsl(frame, 5)}
 @compute @workgroup_size(64)
 fn nrcResolve(@builtin(global_invocation_id) gid: vec3u) {
   let r = gid.x;
@@ -346,22 +368,25 @@ fn nrcResolve(@builtin(global_invocation_id) gid: vec3u) {
   if (queries[b + 3u].w != 1.0) { return; } // a training path's tail: training only
   let px = u32(queries[b].w);
   let beta = queries[b + 3u].xyz;
-  accum[px] = accum[px] + vec4f(beta * max(preds[r].xyz, vec3f(0.0)), 0.0);
+  let add = beta * max(preds[r].xyz, vec3f(0.0));
+  accum[px] = accum[px] + vec4f(add, 0.0);${frame ? '\n  nrcPlaneAdd(px, p.npix, add);' : ''}
 }
 `;
+}
 
 /**
  * Inline training, after the resolve: a training path's pixel already holds everything the path gathered (the integrator added it);
  * remove what it gathered beyond the cache vertex K (reported values with index > K, summed per path by ptOnRadiance), so the pixel
  * keeps the same estimate as every other pixel (its display query at K was resolved into the image). Only when K < M.
  */
-const FIXUP_WGSL = /* wgsl */ `
-struct P { slots: u32, queryDepth: u32, trainDepth: u32, _c: u32 }
+function fixupWgsl(frame: boolean): string {
+  return /* wgsl */ `
+struct P { slots: u32, queryDepth: u32, trainDepth: u32, npix: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> verts: array<vec4f>;
 @group(0) @binding(2) var<storage, read> sums: array<vec4f>;
 @group(0) @binding(3) var<storage, read_write> accum: array<vec4f>;
-
+${nrcPlanesWgsl(frame, 4)}
 @compute @workgroup_size(64)
 fn nrcFixup(@builtin(global_invocation_id) gid: vec3u) {
   let slot = gid.x;
@@ -372,9 +397,10 @@ fn nrcFixup(@builtin(global_invocation_id) gid: vec3u) {
   var beyond = vec3f(0.0);
   for (var j = p.queryDepth + 1u; j <= p.trainDepth; j++) { beyond += sums[s0 + j].xyz; }
   let px = u32(verts[v0].w);
-  accum[px] = accum[px] - vec4f(beyond, 0.0);
+  accum[px] = accum[px] - vec4f(beyond, 0.0);${frame ? '\n  nrcPlaneAdd(px, p.npix, -beyond);' : ''}
 }
 `;
+}
 
 export interface NrcSettings {
   /**
@@ -412,8 +438,13 @@ export interface NrcSettings {
   seed: number;
   /** Damping a fresh cache (N6f). Output layer of a fresh network: 'zero' (default: it predicts 0 at first) or 'he' (random, like the rest). */
   outputInit: 'he' | 'zero';
-  /** Plain path tracing in the image (no cache) until the cache has trained this many frames. */
+  /**
+   * Warm-up gate (N11.7): plain path tracing in the image (no cache) until the cache has trained this many frames; the training tiles of
+   * the same pass keep recording, so the network trains exactly as it would with the cache on screen. 0 = no gate.
+   */
   warmupFrames: number;
+  /** Training steps per frame during the warm-up gate (0 = `stepsPerFrame`). More steps while young shorten the gate (N11.7 fast arm). */
+  warmupStepsPerFrame: number;
   /** Learning rate ramps linearly from 1/n to full over this many training frames. */
   lrWarmupFrames: number;
   /** Inference weights: 'warmup' EMA (default; min(0.99, (1 + t) / (10 + t))), 'plain' EMA, or 'off' (the trained weights). */
@@ -438,6 +469,7 @@ export const DEFAULT_NRC_SETTINGS: NrcSettings = {
   // (2.36 vs 4.67 ground floor, 5.36 vs 11.0 unseen corridor) and bias to 3-4% by frame 8, with no lag after a cut.
   outputInit: 'zero',
   warmupFrames: 0,
+  warmupStepsPerFrame: 0,
   lrWarmupFrames: 0,
   ema: 'warmup',
 };
@@ -496,6 +528,9 @@ export class NrcCache {
   static async create(device: GPUDevice, caps: Caps, plain: PtMegakernel, sceneBuffers: Parameters<PtMegakernel['setScene']>, film: { width: number; height: number; camera: PtLookAtCamera; maxDepth: number; rrStartDepth?: number }, bounds: { min: [number, number, number]; max: [number, number, number] }, settings: Partial<NrcSettings> = {}): Promise<NrcCache> {
     const s: NrcSettings = { ...DEFAULT_NRC_SETTINGS, ...settings };
     const inline = s.training === 'inline';
+    // Frame mode (the real-time planes, nrc-pipeline): the resolve and fix-up also write the demodulated planes.
+    const frame = !!plain.options.integrator?.frame;
+    if (frame && !inline) throw new Error("NrcCache: frame mode (integrator.frame) supports training: 'inline' only");
     const M = s.trainDepth;
     const pixels = film.width * film.height;
     const B = Math.max(1, Math.floor(s.updateBlock));
@@ -583,7 +618,7 @@ export class NrcCache {
     const [targetsPipeline, finishPipeline, resolvePipeline] = await Promise.all([
       device.createComputePipelineAsync({ label: 'nrc targets', layout: 'auto', compute: { module: targetsModule, entryPoint: 'nrcTargets' } }),
       device.createComputePipelineAsync({ label: 'nrc finish', layout: 'auto', compute: { module: targetsModule, entryPoint: 'nrcFinish' } }),
-      device.createComputePipelineAsync({ label: 'nrc resolve', layout: 'auto', compute: { module: device.createShaderModule({ label: 'nrc resolve', code: RESOLVE_WGSL }), entryPoint: 'nrcResolve' } }),
+      device.createComputePipelineAsync({ label: 'nrc resolve', layout: 'auto', compute: { module: device.createShaderModule({ label: 'nrc resolve', code: resolveWgsl(frame) }), entryPoint: 'nrcResolve' } }),
     ]);
     const targetParams = buf('nrc targets params', 16, UNIFORM | COPY_DST);
     device.queue.writeBuffer(targetParams, 0, new Uint32Array([trainPaths, M, s.batch, capacity]));
@@ -592,20 +627,20 @@ export class NrcCache {
     // nrcFinish uses the params and the count only (auto layout drops the rest).
     const finishGroup = device.createBindGroup({ layout: finishPipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: targetParams } }, { binding: targetBuffers.length - 1, resource: { buffer: trainCount } }] });
     const resolveParams = buf('nrc resolve params', 16, UNIFORM | COPY_DST);
-    device.queue.writeBuffer(resolveParams, 0, new Uint32Array([queryCapacity, 0, 0, 0]));
+    device.queue.writeBuffer(resolveParams, 0, new Uint32Array([queryCapacity, pixels, 0, 0]));
     const resolveGroup = device.createBindGroup({
       layout: resolvePipeline.getBindGroupLayout(0),
-      entries: [resolveParams, queries, preds, queryCount, render.accumulator as GPUBuffer].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: [resolveParams, queries, preds, queryCount, render.accumulator as GPUBuffer, ...(frame ? [render.frameBuffers.planes] : [])].map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
     // Inline training: the fix-up that gives training pixels the same image estimate as the rest.
     let fixupPipeline: GPUComputePipeline | null = null;
     let fixupGroup: GPUBindGroup | null = null;
     let fixupParams: GPUBuffer | null = null;
     if (inline) {
-      fixupPipeline = await device.createComputePipelineAsync({ label: 'nrc fixup', layout: 'auto', compute: { module: device.createShaderModule({ label: 'nrc fixup', code: FIXUP_WGSL }), entryPoint: 'nrcFixup' } });
+      fixupPipeline = await device.createComputePipelineAsync({ label: 'nrc fixup', layout: 'auto', compute: { module: device.createShaderModule({ label: 'nrc fixup', code: fixupWgsl(frame) }), entryPoint: 'nrcFixup' } });
       fixupParams = buf('nrc fixup params', 16, UNIFORM | COPY_DST);
-      device.queue.writeBuffer(fixupParams, 0, new Uint32Array([trainPaths, s.queryDepth, M, 0]));
-      fixupGroup = device.createBindGroup({ layout: fixupPipeline.getBindGroupLayout(0), entries: [fixupParams, trainVerts, trainSums as GPUBuffer, render.accumulator as GPUBuffer].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+      device.queue.writeBuffer(fixupParams, 0, new Uint32Array([trainPaths, s.queryDepth, M, pixels]));
+      fixupGroup = device.createBindGroup({ layout: fixupPipeline.getBindGroupLayout(0), entries: [fixupParams, trainVerts, trainSums as GPUBuffer, render.accumulator as GPUBuffer, ...(frame ? [render.frameBuffers.planes] : [])].map((buffer, binding) => ({ binding, resource: { buffer } })) });
     }
 
     return new NrcCache({
@@ -631,6 +666,7 @@ export class NrcCache {
   resetNetwork(): void {
     this.mlp.uploadWeights(NrcCache.freshWeights(this.settings, this.settings.seed + this.frame));
     this.trainedFrames = 0;
+    this.trainedSteps = 0;
   }
 
   /** He-initialised weights; with outputInit 'zero' the output layer starts at 0, so a fresh cache predicts no light. */
@@ -642,12 +678,23 @@ export class NrcCache {
 
   /** Frames trained since the network was (re)initialised. */
   private trainedFrames = 0;
+  private trainedSteps = 0;
+
+  /** Training frames and steps since the network was (re)initialised. */
+  get trained(): { frames: number; steps: number } {
+    return { frames: this.trainedFrames, steps: this.trainedSteps };
+  }
+
+  /** The warm-up gate is closed: the image is plain path tracing while the network trains (`warmupFrames`). */
+  get warming(): boolean {
+    return this.trainedFrames < this.settings.warmupFrames;
+  }
   private stopWritten = -1;
 
   /** The hook's stop depth for this frame: no cache (0xffffffff) during warm-up frames, else the query depth. */
   private applyStopDepth(): void {
     const s = this.settings;
-    const stop = this.trainedFrames < s.warmupFrames ? 0xffffffff : s.queryDepth;
+    const stop = this.warming ? 0xffffffff : s.queryDepth;
     if (stop === this.stopWritten) return;
     this.stopWritten = stop;
     const M = s.trainDepth;
@@ -657,6 +704,12 @@ export class NrcCache {
 
   setCamera(camera: PtLookAtCamera): void {
     this.render.setCamera(camera);
+    this.trainer?.setCamera(camera);
+  }
+
+  /** Frame mode: the next frame's camera (the current one becomes the previous camera the motion vectors reproject to). */
+  nextCamera(camera: PtLookAtCamera): void {
+    this.render.nextFrame(camera);
     this.trainer?.setCamera(camera);
   }
 
@@ -707,8 +760,12 @@ export class NrcCache {
       this.encodeTargets(encoder);
     } else if (stage === 'trainSteps') {
       if (s.lrWarmupFrames > 0) this.mlp.setLearningRate(s.learningRate * Math.min(1, (this.trainedFrames + 1) / s.lrWarmupFrames));
-      for (let i = 0; i < s.stepsPerFrame; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
-      if (s.stepsPerFrame > 0) this.trainedFrames++;
+      const steps = this.warming && s.warmupStepsPerFrame > 0 ? s.warmupStepsPerFrame : s.stepsPerFrame;
+      for (let i = 0; i < steps; i++) this.mlp.encodeTrainStep(encoder, this.trainCount, 0, this.trainHookGroup);
+      if (steps > 0) {
+        this.trainedFrames++;
+        this.trainedSteps += steps;
+      }
     } else if (stage === 'renderPass') {
       this.applyStopDepth();
       encoder.clearBuffer(this.queryCount, 0, 4); // word 1 is the frame counter
@@ -756,6 +813,24 @@ export class NrcCache {
   async readTrainCount(): Promise<{ batch: number; records: number }> {
     const v = new Uint32Array(await readU32s(this.device, this.trainCount, 2));
     return { batch: v[0] as number, records: v[1] as number };
+  }
+
+  /** Debug only (never in a frame loop): mean relative-L2 loss of the last training step over its batch (the frame's records). */
+  async readLoss(): Promise<{ batch: number; loss: number }> {
+    const { batch } = await this.readTrainCount();
+    if (batch === 0) return { batch, loss: NaN };
+    const n = Math.min(batch, this.mlp.loss.size / 4);
+    const staging = this.device.createBuffer({ size: n * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = this.device.createCommandEncoder();
+    enc.copyBufferToBuffer(this.mlp.loss, 0, staging, 0, n * 4);
+    this.device.queue.submit([enc.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const v = new Float32Array(staging.getMappedRange());
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += v[i] as number;
+    staging.unmap();
+    staging.destroy();
+    return { batch, loss: sum / n };
   }
 
   async readQueryCount(): Promise<number> {

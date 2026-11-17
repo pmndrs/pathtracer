@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NRC pipeline</title>
+    <style>
+      :root {
+        /* Layout: the image fills the left, one control column on the right; stacks under 900px. */
+        --bg: #f3f4f6;
+        --panel: #ffffff;
+        --fg: #16191f;
+        --muted: #5b6372;
+        --line: #d9dde4;
+        --accent: #1f6feb;
+        --warn: #b45309;
+        --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+        --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #0e1013; --panel: #171a1f; --fg: #e6e8ec; --muted: #9aa3b2; --line: #2a2f37; --accent: #5b9cff; --warn: #f0a04b; color-scheme: dark; }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); }
+      .app { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; height: 100%; padding: 12px max(12px, env(safe-area-inset-right, 0px)) 12px max(12px, env(safe-area-inset-left, 0px)); }
+      @media (max-width: 900px) { .app { grid-template-columns: 1fr; height: auto; } }
+      .view { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+      .stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; }
+      canvas { display: block; max-width: 100%; max-height: 100%; cursor: grab; touch-action: none; }
+      canvas:active { cursor: grabbing; }
+      .tag { position: absolute; top: 8px; padding: 2px 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 12px; pointer-events: none; }
+      .tag.l { left: 8px; }
+      .tag.r { right: 8px; }
+      .status { color: var(--muted); font-family: var(--mono); font-size: 12px; min-height: 1.5em; }
+      .status.err { color: var(--warn); white-space: pre-wrap; }
+      aside { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+      h1 { font-size: 15px; margin: 0; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+      fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+      label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      label.check { justify-content: flex-start; }
+      select, input[type='number'] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; max-width: 160px; }
+      input[type='range'] { width: 140px; }
+      button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; }
+      table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+      td { padding: 2px 0; border-bottom: 1px solid var(--line); }
+      td.v { text-align: right; }
+      .note { color: var(--muted); font-size: 12px; margin: 0; }
+      kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="view">
+        <div class="stage" id="stage">
+          <canvas id="canvas" width="1920" height="1080" aria-label="Split view: plain path tracing on the left, path tracing with the neural radiance cache on the right, both denoised and upscaled"></canvas>
+          <span class="tag l" id="tagLeft">Path tracing</span>
+          <span class="tag r" id="tagRight">Path tracing + NRC</span>
+        </div>
+        <div class="status" id="status">Loading…</div>
+      </div>
+      <aside>
+        <div>
+          <h1>NRC → denoiser → upscaler</h1>
+          <p class="note">Both sides run the same chain: frame planes → denoiser (SVGF, or OIDN: small net while moving, standard net after a few still samples, then held) → pmndrs/upscaler (temporal, 2×). Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>Shift</kbd>-drag the divider.</p>
+        </div>
+        <fieldset>
+          <h2>Scene</h2>
+          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="cornell">Cornell box</option></select></label>
+          <label>Render → display <select id="res"><option value="640x360">640 × 360 → 1280 × 720</option><option value="960x540" selected>960 × 540 → 1920 × 1080</option></select></label>
+        </fieldset>
+        <fieldset>
+          <h2>View</h2>
+          <label>Show <select id="view"><option value="split">Split</option><option value="plain">Path tracing only</option><option value="nrc">With NRC only</option></select></label>
+          <label>Stage <select id="stageSel"><option value="final" selected>Final (denoised + upscaled)</option><option value="denoised">Denoised (render res)</option><option value="raw">Raw (render res)</option></select></label>
+          <label>Denoiser <select id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still, hold</option><option value="oidn-fast">OIDN small net always (no hold)</option><option value="oidn-std">OIDN standard net always (no hold)</option><option value="none">None (raw to upscaler)</option></select></label>
+          <label>OIDN guides <select id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
+          <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once and the frame is held">OIDN still samples <input id="stillSamples" type="number" min="1" max="64" value="8" /></label>
+          <label>Exposure <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
+          <div class="row"><button id="pause">Pause</button><button id="resetView">Reset view</button></div>
+        </fieldset>
+        <fieldset>
+          <h2>Time per frame</h2>
+          <label>Plain samples / frame <input id="plainSpp" type="number" min="1" max="16" value="1" /></label>
+          <label class="check"><input id="equalTime" type="checkbox" checked /> Equal time (set by Benchmark)</label>
+        </fieldset>
+        <fieldset>
+          <h2>Cache</h2>
+          <label>Network <select id="backend"></select></label>
+          <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
+          <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="4" /></label>
+          <label title="Warm-up gate (N11.7): the NRC side shows plain path tracing through the same chain while the network trains, then switches to the cache. Auto: a training-step budget per denoiser (SVGF 120, OIDN 600)">Warm-up gate <select id="gate"><option value="auto" selected>Auto (per denoiser)</option><option value="off">Off</option><option value="custom">Custom</option></select></label>
+          <label>Gate frames (custom) <input id="gateFrames" type="number" min="0" max="2000" value="150" /></label>
+          <label title="Training steps per frame while the gate is closed (0 = the steps above)">Steps / frame while gated <input id="gateSteps" type="number" min="0" max="32" value="0" /></label>
+          <div class="row"><button id="resetCache">Reset cache</button></div>
+        </fieldset>
+        <fieldset>
+          <h2>Measure</h2>
+          <div class="row"><button class="primary" id="bench">Benchmark</button><button id="save">Save A/B</button></div>
+          <table id="timings" aria-label="Benchmark results"><tbody><tr><td>Press Benchmark to time each stage (wall clock per submit, best effort).</td><td class="v"></td></tr></tbody></table>
+          <p class="note" id="saveNote"></p>
+        </fieldset>
+      </aside>
+    </div>
+    <script type="module" src="./nrc-pipeline.ts"></script>
+  </body>
+</html>
