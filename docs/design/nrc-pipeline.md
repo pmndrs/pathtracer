@@ -144,8 +144,8 @@ trained on is level with plain at frame 1 and worse at frame 4, even after 300 f
 ## 7. Open choices (build both, then decide)
 
 * Upscaler-owned jitter vs sampler-owned (§4): needs a uniform camera-offset option in the frame kernel (byte-identical when off).
-* Start-up: the warm-up gate is built (N11.7, D30: 120 / 600 steps for SVGF / OIDN). Still open: more steps per gated frame (16 measured
-  stable, gate 40 frames instead of 150; the maintainer's call), a ramp instead of a switch (N11.8), a saved network per scene in IndexedDB
+* Start-up: the warm-up gate is built (N11.7, D30: 120 / 600 steps for SVGF / OIDN). 16 training steps per gated frame are the default
+  (2026-11-18, a setting; the OIDN gate opens after 38 frames instead of 150). Still open: a ramp instead of a switch (N11.8), a saved network per scene in IndexedDB
   (N11.9), and a cut into an unseen region through OIDN (N11.10: re-gate, ramp, or accept).
 * SVGF vs OIDN as the default (§3): built and A/B'd for quality; needs quiet-pass cost and motion with the realtime preset. The Denoiser's
   `recurrent` filter (memory-lean) as a third arm.

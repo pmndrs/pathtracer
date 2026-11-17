@@ -164,8 +164,9 @@ scratchpad, metrics `gate-g<G>[s<s>]_f<t>_*` in the run JSON.)
   opens after 40 frames instead of 150. The per-frame loss of the 16-step arm stays in the same band as the 4-step arms (30-190, the noise of one
   frame's targets, no drift and no NaN). After the switch it stays ahead of the 4-step arms at equal frames (1.32× vs 1.12-1.17× at frame 151), because
   it has had more steps. One scene, one seed, the default learning rate (no boost). Cost: 12 more steps per gated frame. Training measured
-  ~5 ms per 4 steps in M6 (best effort), so about +15 ms on a ~62 ms frame, for 40 frames instead of 150. The maintainer decides whether the
-  demo's auto mode uses it (default today: the frame's own steps).
+  ~5 ms per 4 steps in M6 (best effort), so about +15 ms on a ~62 ms frame, for 40 frames instead of 150. **Default since 2026-11-18
+  (maintainer, D30): 16 steps per gated frame**, a setting (`warmupStepsPerFrame`, demo "Steps / frame while gated"); the auto gate opens after
+  38 frames with OIDN and 8 with SVGF. The per-frame cost stays best effort until the quiet pass (N11.1).
 * **A cut into an unseen region is not covered by the gate under OIDN.** With SVGF, a network warmed for 300 frames on the ground floor is
   1.3-1.4× better than plain at frame 1 in the corridor: one gate per network is enough. With OIDN it is only level at frame 1 (0.85-1.08×) and
   worse at frame 4 (0.69-0.85×, FLIP 0.12-0.13 vs 0.11), whatever the steps spent elsewhere (1200-1680). The cache's raw error there is 2.6×
