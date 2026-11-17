@@ -79,7 +79,7 @@ export class NrcPipelineSession {
     });
     const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}) };
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
-    return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: arm.description });
+    return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: cache.hash ? cache.description : arm.description });
   }
 
   static limits(o: SessionOptions): { maxDepth: number; rrStartDepth?: number } {

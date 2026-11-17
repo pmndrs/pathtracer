@@ -22,6 +22,7 @@
  *       infer=tiled|portable|sgm  precision=f16  steps=4  ref=mitsuba|ours  refFile=<url>  refSpp=4096  flip=1  upload=1  scenarios=static,path
  *       sharpness=<0..1>  autoExposure=0|1  maxAccumulation=<n>  (upscaler A/B)
  *       denoiser=svgf|oidn|oidn-fast|oidn-std|none  oidnAux=albedo+normal|albedo  stillSamples=8  hold=1  oidnStill=balanced|high
+ *       model=hash (M7 / N7c: the hash grid in the network's place, `hg*` args as in nrc-study; the "nrc" arm is then the grid)
  *  5. coldstart (N11.6): per warm-up W in `warmups` (0,10,30,100,300): fresh network, W training frames at the view, a cut, then frames `coldFrames` (1,4).
  *  6. gate (N11.7, the warm-up gate): per arm in `gates` (`G` or `G:s`; default 0,150): a fresh network gated for G training frames (s steps per frame
  *     during the gate, default `steps`), then a start-up timeline of `gateFrames` (300) frames: the camera looks around near the reference view
@@ -42,6 +43,7 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
+import { hashGridArgs } from '../nrc/hash-grid.ts';
 import { readTextureRgba16f, resample, type DenoiserKind, type OidnArmSettings, type OidnQuality, type PipelineStage } from '../nrc/pipeline.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -158,7 +160,7 @@ try {
     displayHeight,
     infer: args.infer ?? 'tiled',
     precision: args.precision === 'f32' ? 'f32' : 'f16',
-    cache: { stepsPerFrame: steps },
+    cache: { stepsPerFrame: steps, ...(args.model === 'hash' ? { model: 'hash' as const, hash: hashGridArgs(args) } : {}) },
     ...denoiserOptions(args),
     // Upscaler A/B knobs (defaults: the upscaler's own: sharpness 0.8, auto exposure, 24 frames).
     upscaler: {
@@ -425,7 +427,7 @@ try {
   console.log(notes.stabilityTable);
 
   reportResult(
-    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
+    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { model: session.cache.settings.model, ...(session.cache.hash ? { hash: session.cache.hash.settings } : {}), denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },
   );
 } catch (error) {

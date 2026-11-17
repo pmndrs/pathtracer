@@ -107,6 +107,8 @@ function backendOptions(device: GPUDevice): void {
   if (device.features.has('shader-f16')) options.push(['tiled-f16', 'Tiled f16'], ['portable-f16', 'Per-record f16']);
   options.push(['tiled-f32', 'Tiled f32'], ['portable-f32', 'Per-record f32']);
   if (hasSubgroupMatrix(device)) options.push(['sgm-f16', 'Subgroup matrix, 4 subgroups']);
+  // M7 / N7c: the hash grid in the network's place (same paths and training records).
+  options.push(['hash', 'Hash grid (no network)']);
   sel.replaceChildren(...options.map(([v, t]) => new Option(t, v)));
   sel.value = options.some(([v]) => v === keep) ? keep : (options[0]?.[0] as string);
 }
@@ -132,7 +134,7 @@ async function build(): Promise<void> {
       displayHeight: 2 * h,
       infer: kind === 'sgm' ? 'sgm' : kind === 'portable' ? 'portable' : 'tiled',
       precision: prec === 'f32' ? 'f32' : 'f16',
-      cache: { stepsPerFrame: num('steps') },
+      cache: { stepsPerFrame: num('steps'), ...(backend === 'hash' ? { model: 'hash' as const } : {}) },
     });
     const device = session.device;
     device.addEventListener('uncapturederror', (e) => setStatus(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`, true));
@@ -229,7 +231,11 @@ function autoGateFrames(denoiser: string, stepsPerGatedFrame: number): number {
 function gateFrames(): number {
   const g = value('gate');
   const perFrame = num('gateSteps') > 0 ? num('gateSteps') : num('steps');
-  return g === 'off' ? 0 : g === 'custom' ? Math.max(0, Math.round(num('gateFrames'))) : autoGateFrames(value('denoiserSel'), perFrame);
+  if (g === 'off') return 0;
+  if (g === 'custom') return Math.max(0, Math.round(num('gateFrames')));
+  // The hash grid updates once per frame and is ahead of plain after ~10 frames under both denoisers (N7c, NRC-PIPELINE.md).
+  if (value('backend') === 'hash') return 10;
+  return autoGateFrames(value('denoiserSel'), perFrame);
 }
 
 /** Training steps and the warm-up gate from the controls (every frame: rAF loop and `step`). */

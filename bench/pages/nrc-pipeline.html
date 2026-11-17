@@ -90,7 +90,7 @@
         </fieldset>
         <fieldset>
           <h2>Cache</h2>
-          <label>Network <select id="backend"></select></label>
+          <label>Cache <select id="backend"></select></label>
           <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
           <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="4" /></label>
           <label title="Warm-up gate (N11.7): the NRC side shows plain path tracing through the same chain while the network trains, then switches to the cache. Auto: a training-step budget per denoiser (SVGF 120, OIDN 600)">Warm-up gate <select id="gate"><option value="auto" selected>Auto (per denoiser)</option><option value="off">Off</option><option value="custom">Custom</option></select></label>

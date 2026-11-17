@@ -72,6 +72,57 @@ What it shows:
 48-66 ms; SVGF 2.8 ms. With the small net the cache arm's whole chain was 76-87 ms vs 72.6 ms with SVGF. The progressive mode spends the
 standard net once per still view and nothing after it.
 
+## Hash grid in the same chain (M7 / N7c, 2026-11-18)
+
+The cache arm with the hash grid in the network's place (`nrc-pipeline-study model=hash`, [nrc-hash-cache.md](../../docs/design/nrc-hash-cache.md);
+same paths, records and resolve), against the network re-run today with identical arguments (`warm=300 frames=16 checkpoints=1,4,16
+pathCheckpoints=1,4,16 stableFrom=2`, the saved 4096 spp reference of run `20261117T113629Z`). Plain gets 1 spp per frame in every run (both
+cache frames are cheaper than a plain sample, so plain has more time). Runs `20261117T222843Z` (hash, SVGF), `223018Z` (network, SVGF),
+`223154Z` (hash, OIDN small, albedo + normal), `223329Z` (network, OIDN small), `223511Z` / `223734Z` (hash cold start, SVGF / OIDN).
+
+**relMSE plain / network / hash (960 × 540 denoised; 1920 × 1080 final):**
+
+| | SVGF denoised | SVGF final | OIDN denoised | OIDN final |
+|---|---|---|---|---|
+| static frame 1 | 0.107 / 0.060 / **0.057** | 0.100 / 0.063 / **0.060** | 0.027 / 0.020 / **0.016** | 0.030 / 0.023 / **0.019** |
+| static frame 4 | 0.082 / 0.041 / **0.039** | 0.050 / 0.036 / **0.033** | 0.012 / 0.0098 / **0.0074** | 0.016 / 0.013 / **0.010** |
+| static frame 16 | 0.057 / 0.036 / **0.033** | 0.032 / 0.027 / **0.024** | 0.0059 / 0.0061 / **0.0038** | 0.0091 / 0.0090 / **0.0062** |
+| path, arrival frame 1 | 0.064 / 0.038 / **0.035** | 0.029 / 0.025 / **0.022** | 0.017 / 0.013 / **0.010** | 0.020 / 0.018 / **0.014** |
+| path, frame 16 after | 0.058 / 0.038 / **0.035** | 0.026 / 0.024 / **0.021** | 0.0059 / 0.0058 / **0.0039** | 0.0097 / 0.0099 / **0.0071** |
+| final flicker, plain / cache (static, path) | | 2.06×, 1.98× (network); 1.98×, 1.94× (hash) | | 1.89×, 2.03× (network); 1.88×, 2.05× (hash) |
+
+* **The grid's lead over plain survives OIDN; the network's does not.** Under OIDN the hash arm stays 1.5-1.7× ahead of plain at every
+  checkpoint (static frame 16 denoised 1.53×, final 1.48×), where the network falls to 0.97-1.02× once a still camera has accumulated. Raw, the
+  two caches are equal (single-frame relMSE 2.36 vs 2.31, the network marginally lower): what differs is the KIND of error. The network's
+  error is smooth and structured (an approximation that does not average out over frames, nrc-study's warm 256-frame image: 0.0087 vs the
+  grid's 0.0079), and OIDN, which removes white noise best, exposes it; the grid's cells converge to their local mean, and what is left is
+  blur at cell scale, which the denoised frame tolerates.
+* Under SVGF the grid is 5-15% better than the network at every stage; flicker is the same (2× lower than plain for both).
+* Same FLIP story (OIDN static frame 1: plain 0.178, network 0.144, hash 0.137; frame 16: 0.092 / 0.081 / 0.068).
+* **Cost** (headless, best effort, 960 × 540): cache frame 24 ms (hash) vs 40 ms (network) vs 49-57 ms per plain sample; whole arm with OIDN
+  small: 50 / 66 / 82 ms.
+
+**Cold start of the hash grid** (fresh grid, W training frames at the view, a cut; denoised relMSE ratio plain / hash at frame 1, and the
+grid's bias; compare the network's crossover at ~120-150 frames under OIDN, section "Cold start"):
+
+| W | SVGF ratio | SVGF bias | OIDN ratio | OIDN bias | OIDN FLIP plain / hash |
+|---|---|---|---|---|---|
+| 0 | 0.43× | −36% | 0.12× | −35% | 0.178 / 0.547 |
+| 3 | 1.87× | −8.8% | 1.08× | −7.6% | 0.173 / 0.199 |
+| 10 | 1.93× | −3.2% | **1.38×** | −2.7% | 0.177 / **0.146** |
+| 30 | 1.73× | −1.9% | 1.56× | −2.0% | 0.177 / 0.139 |
+| 100 | 1.97× | −0.2% | 1.68× | −0.3% | 0.176 / 0.131 |
+| 300 | 2.02× | −0.7% | 1.68× | −0.8% | 0.176 / 0.131 |
+
+An empty grid renders the cache's light as 0 (−35%); after 3 frames it is ahead in relMSE but still dark and worse in FLIP; from 10 frames it
+is ahead on every measure under both denoisers. So the grid's warm-up gate is **10 frames** (one update per frame), against a 120 / 600
+training-step budget (30 / 150 frames at 4 steps) for the network: `nrc-pipeline`'s "Hash grid" cache entry uses that as its auto gate.
+
+**Reading:** through a real-time chain the hash grid is the better cache on this scene by every measure taken: lower error after both
+denoisers (1.2-1.6× lower than the network under OIDN), the same flicker, a 10-frame instead of 150-frame warm-up, and 60% of the frame
+cost. The network keeps its advantage only where it must generalise (a fresh cache before 10 frames, an unseen region: nrc-study), and
+the scene (one white Lambert material) gives its extra inputs nothing to do (N7b).
+
 ## Cold start (N11.6, 2026-11-17)
 
 How long must a fresh network train before the cache arm beats plain path tracing through the chain? Per warm-up W: fresh weights and

@@ -103,3 +103,10 @@ What mattered: blotches of single noisy samples in young cells (after a cut, a c
 and the LOD level of a surface changes) caused every spike; a sample threshold removes them, and the pyramid keeps the
 threshold from turning into dark misses. Bigger cells (16 px) help steady state. Jitter makes it much worse (it smears
 young cells across neighbours' lookups).
+
+## 7. Through the M9 chain (N7c)
+
+`nrc-pipeline-study model=hash` and the `nrc-pipeline` demo's "Hash grid" cache entry (auto warm-up gate: 10 frames). After SVGF and OIDN
+the grid beats the network at every checkpoint, keeps a 1.5× lead over plain under OIDN on an accumulated still view (the network's falls to
+1×), and is ahead of plain on every measure from 10 training frames. Tables: [NRC-PIPELINE.md](../../bench/results/NRC-PIPELINE.md) "Hash grid
+in the same chain".
