@@ -95,7 +95,7 @@
           <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="4" /></label>
           <label title="Warm-up gate (N11.7): the NRC side shows plain path tracing through the same chain while the network trains, then switches to the cache. Auto: a training-step budget per denoiser (SVGF 120, OIDN 600)">Warm-up gate <select id="gate"><option value="auto" selected>Auto (per denoiser)</option><option value="off">Off</option><option value="custom">Custom</option></select></label>
           <label>Gate frames (custom) <input id="gateFrames" type="number" min="0" max="2000" value="150" /></label>
-          <label title="Training steps per frame while the gate is closed (0 = the steps above)">Steps / frame while gated <input id="gateSteps" type="number" min="0" max="32" value="0" /></label>
+          <label title="Training steps per frame while the gate is closed (0 = the steps above; default 16, D30)">Steps / frame while gated <input id="gateSteps" type="number" min="0" max="32" value="16" /></label>
           <div class="row"><button id="resetCache">Reset cache</button></div>
         </fieldset>
         <fieldset>

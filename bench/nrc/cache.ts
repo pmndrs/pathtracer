@@ -468,7 +468,10 @@ export interface NrcSettings {
    * the same pass keep recording, so the network trains exactly as it would with the cache on screen. 0 = no gate.
    */
   warmupFrames: number;
-  /** Training steps per frame during the warm-up gate (0 = `stepsPerFrame`). More steps while young shorten the gate (N11.7 fast arm). */
+  /**
+   * Training steps per frame during the warm-up gate (0 = `stepsPerFrame`). Default 16 (maintainer, 2026-11-18, D30): the gate is a step
+   * budget, so 16 steps open a 600-step OIDN gate after 38 frames instead of 150, with the same first cache frame and no instability (N11.7).
+   */
   warmupStepsPerFrame: number;
   /** Learning rate ramps linearly from 1/n to full over this many training frames. */
   lrWarmupFrames: number;
@@ -496,7 +499,7 @@ export const DEFAULT_NRC_SETTINGS: NrcSettings = {
   // (2.36 vs 4.67 ground floor, 5.36 vs 11.0 unseen corridor) and bias to 3-4% by frame 8, with no lag after a cut.
   outputInit: 'zero',
   warmupFrames: 0,
-  warmupStepsPerFrame: 0,
+  warmupStepsPerFrame: 16,
   lrWarmupFrames: 0,
   ema: 'warmup',
 };
