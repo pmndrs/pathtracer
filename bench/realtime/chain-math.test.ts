@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 import { ptCameraBasis } from '@pmndrs/pathtracer';
-import { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './pipeline-math.ts';
+import { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './chain-math.ts';
 
 const cam: PtLookAtCamera = { position: [-8, 1.7, 0], target: [10, 2.6, 0], up: [0, 1, 0], yFovDeg: 60 };
 

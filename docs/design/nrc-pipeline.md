@@ -19,7 +19,7 @@ path tracer, frame mode (integrator.frame)          960 x 540, 6 planes + beauty
                 pmndrs/upscaler, temporal path, jitter: false                                1920 x 1080
 ```
 
-Code: [`bench/nrc/pipeline.ts`](../../bench/nrc/pipeline.ts) (`PipelineArm`: the chain), [`bench/nrc/pipeline-session.ts`](../../bench/nrc/pipeline-session.ts)
+Code: [`bench/realtime/chain.ts`](../../bench/realtime/chain.ts) (`PipelineArm`: the chain, shared with the cache-free real-time session since P4.5; moved from `bench/nrc/pipeline.ts`), [`bench/nrc/pipeline-session.ts`](../../bench/nrc/pipeline-session.ts)
 (scene, both arms, one frame, stage timing), [`bench/nrc/cache.ts`](../../bench/nrc/cache.ts) (frame-mode resolve). Demo:
 `node bench/live.ts nrc-pipeline`; headless twin: `node bench/runner/run.ts --page nrc-pipeline-study --gpu nvidia --timeout 3600000 [--args ref=ours]` (the default
 `ref=mitsuba` needs the git-ignored Mitsuba PFM, which only the Mac has).
@@ -89,7 +89,7 @@ weights). `denoiseTextures` waits for its GPU work (no buffer is mapped), so `po
 The only upscaler sibling is pmndrs/upscaler (`GitHub/upscaler/upscaler` on Windows, `~/Developer/upscaler` on the Mac; bench links it as
 `@pmndrs/upscaler` via `link:../../upscaler`, a worktree needs the `.claude/worktrees/upscaler` junction). Its API wants three's
 `WebGPURenderer`, but it only touches `backend.device`, `backend.get(texture).texture` and `initTexture(texture)` for its own
-StorageTextures. `UpscalerHost` (pipeline.ts) provides those three from our device, so no three renderer runs; its camera stand-in gives
+StorageTextures. `UpscalerHost` (bench/realtime/chain.ts) provides those three from our device, so no three renderer runs; its camera stand-in gives
 `near`, `far`, `projectionMatrix`, `matrixWorld`, `matrixWorldInverse`. Inputs: colour (rgba16float, denoised), depth (depth32float from
 viewZ), velocity (our motion plane: NDC current − previous, the same convention as three's `velocity` node). Settings: defaults
 (sharpness 0.8, auto exposure, 24-frame accumulation), the same in both arms.
@@ -128,7 +128,8 @@ At equal time the cache arm wins at every stage, but the chain narrows the gap: 
 SVGF, **1.05-1.6×** final (1.6× right after a cut, ~1.1× once the upscaler's 24-frame history is full); LDR-FLIP of the final 17-30% lower;
 frame-to-frame flicker **2× lower** at the final stage, on the static view and after the camera path. The denoised plain frame shows SVGF's
 1-spp artifacts that the cache arm avoids. The plane identity holds exactly with the cache. Both arms lose 2.5-4% of the mean in the
-upscaler (not removed by sharpness 0 or exposure 1; suspected: accumulation in Reinhard space on residual noise, N11.5), and SVGF loses
+upscaler (not removed by sharpness 0 or exposure 1; N11.5 since answered on the plain real-time kernel without a cache, [realtime.md](realtime.md) section 5: the upscaler is
+unbiased on noise-free input (+0.2%) and loses 1.5-7% behind SVGF, 90% on a raw 1-spp frame, so it is the residual noise it clips, not an offset), and SVGF loses
 another 1.4-4% on the plain arm only.
 
 With OIDN in the same chain (same day): OIDN is 3-4× better than SVGF for both arms at 1 spp (plain + OIDN small, 0.027, already beats

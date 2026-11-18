@@ -17,7 +17,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 import { cornell } from '../scenes/tier0/index.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
-import { readTextureRgba16f, type PipelineStage } from '../nrc/pipeline.ts';
+import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
 import { hasSubgroupMatrix } from './mlp-common.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;

@@ -1,5 +1,5 @@
 /**
- * NRC pipeline session (track N, M9): one scene, two arms through the identical denoise + upscale chain (`pipeline.ts`).
+ * NRC pipeline session (track N, M9): one scene, two arms through the identical denoise + upscale chain (`bench/realtime/chain.ts`).
  *
  *  - plain: the frame-mode megakernel at N samples per pixel per frame (N >= 1, set for equal time);
  *  - nrc:   the same kernel + the cache hook (`NrcCache`, training inline), one sample per pixel per frame.
@@ -14,7 +14,7 @@ import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { inferArmOptions } from '../pages/mlp-common.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { NrcCache, type NrcSettings } from './cache.ts';
-import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from './pipeline.ts';
+import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from '../realtime/chain.ts';
 
 export interface SessionOptions {
   scene: SceneDesc;

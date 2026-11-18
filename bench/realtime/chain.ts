@@ -8,15 +8,18 @@
  * `jitter` [0, 0] and the upscaler runs with `jitter: false` (it reprojects, clips and accumulates, but adds no camera offset). Motion is
  * jitter-free by construction (the planes project world points through the two unjittered cameras).
  *
+ * Shared by `bench/nrc/pipeline-session.ts` (the cache arms) and `bench/realtime/session.ts` (the plain real-time kernel, P4.5 / P4.6, no cache):
+ * the chain does not care what filled the frame planes.
+ *
  * Per frame:  arm.beginFrame(encoder); { pt.encode(encoder, 1); arm.accumulate(encoder, pt.frameBuffers) } x N; arm.pack(encoder, N);
  *             submit; arm.post(camera, reset)  (the denoiser and the upscaler record and submit their own command buffers; no readback)
  */
 import { DiffuseSpecularDenoiser } from 'denoiser/realtime';
 import { Upscaler } from '@pmndrs/upscaler';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
-import { cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix, worldMatrix } from './pipeline-math.ts';
+import { cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix, worldMatrix } from './chain-math.ts';
 
-export { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './pipeline-math.ts';
+export { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './chain-math.ts';
 
 
 const TEX = GPUTextureUsage.TEXTURE_BINDING;
@@ -216,6 +219,42 @@ fn pipeFlicker(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 /**
+ * Reactive mask for the upscaler (P4.6, R7): `r = strength * clamp(1 - (n - 1) / cap, 0, 1)` from the SVGF history length n (alpha of its
+ * accumulation texture, 1 = fresh or disoccluded). Fresh pixels favour the current frame in the upscaler's accumulation, long histories do not.
+ */
+const REACTIVE_WGSL = /* wgsl */ `
+struct P { cap: f32, strength: f32, _a: f32, _b: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var accum: texture_2d<f32>;
+@group(0) @binding(2) var outMask: texture_storage_2d<rgba8unorm, write>;
+@compute @workgroup_size(8, 8)
+fn pipeReactive(@builtin(global_invocation_id) gid: vec3u) {
+  let size = textureDimensions(outMask);
+  if (gid.x >= size.x || gid.y >= size.y) { return; }
+  let n = textureLoad(accum, gid.xy, 0).w;
+  let r = p.strength * clamp(1.0 - (n - 1.0) / p.cap, 0.0, 1.0);
+  textureStore(outMask, gid.xy, vec4f(r, 0.0, 0.0, 1.0));
+}
+`;
+
+/** Display transform (the last stage of the chain): exposure, ACES fit (Narkowicz), sRGB encode, rgba8unorm. */
+const TONEMAP_WGSL = /* wgsl */ `
+struct P { exposure: f32, _a: f32, _b: f32, _c: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba8unorm, write>;
+fn aces(x: vec3f) -> vec3f { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0)); }
+fn encode(c: vec3f) -> vec3f { return select(12.92 * c, 1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055, c > vec3f(0.0031308)); }
+@compute @workgroup_size(8, 8)
+fn pipeTonemap(@builtin(global_invocation_id) gid: vec3u) {
+  let size = textureDimensions(dst);
+  if (gid.x >= size.x || gid.y >= size.y) { return; }
+  let c = max(textureLoad(src, gid.xy, 0).xyz, vec3f(0.0)) * p.exposure;
+  textureStore(dst, gid.xy, vec4f(encode(aces(c)), 1.0));
+}
+`;
+
+/**
  * OIDN input (the `oidn` denoiser): progressive mean of the raw beauty, albedo factor and normal while the camera stays still (reset on
  * motion or a cut), normal rotated to view space (OIDN's aux convention: x right, y up, z toward the camera; 0 where nothing was hit).
  */
@@ -309,6 +348,11 @@ export interface PipelineSettings {
   oidn?: Partial<OidnArmSettings>;
   /** Upscaler runtime settings overrides (`Upscaler.settings`). */
   upscaler?: Record<string, unknown>;
+  /**
+   * Reactive mask from the SVGF history length (P4.6; `svgf` only; default off: the track N chain is unchanged). `cap`: frames of history after which a
+   * pixel is no longer reactive (default 8); `strength`: mask value of a fresh pixel (default 1). Reads the denoiser's `accum` debug texture (internal API).
+   */
+  reactive?: { cap?: number; strength?: number } | false;
 }
 
 const align = (n: number, a: number) => Math.ceil(n / a) * a;
@@ -349,7 +393,15 @@ export class PipelineArm {
   readonly depth!: GPUTexture;
   /** Denoised + composited colour (render res): the upscaler's input. */
   readonly color!: GPUTexture;
-  private readonly keys!: { color: object; depth: object; velocity: object };
+  private readonly keys!: { color: object; depth: object; velocity: object; reactive?: object };
+  /** Reactive mask (rgba8unorm, `.r`, render res; only with `settings.reactive`) and the display-referred output (rgba8unorm sRGB, display res). */
+  readonly reactiveMask?: GPUTexture;
+  readonly display!: GPUTexture;
+  private readonly reactivePipe?: GPUComputePipeline;
+  private readonly reactiveParams?: GPUBuffer;
+  private readonly tonemapPipe!: GPUComputePipeline;
+  private readonly tonemapParams!: GPUBuffer;
+  private tonemapGroup: GPUBindGroup | null = null;
   private prevView: Float32Array | null = null;
   private prevProj: Float32Array | null = null;
   private resetNext = true;
@@ -366,6 +418,8 @@ export class PipelineArm {
   private oidnCount = 0;
   private oidnCamera = '';
   private oidnHeld = false;
+  /** With `settings.reactive`: whether the mask is passed to the upscaler (runtime A/B switch; the mask pass itself always runs). */
+  reactiveEnabled = true;
   /** What the last `post` ran (the OIDN network and spp, or the denoiser kind). */
   lastDenoiser = '';
 
@@ -406,7 +460,9 @@ export class PipelineArm {
     const oidnTex = { color: mk('oidn color', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING), albedo: mk('oidn albedo', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING), normal: mk('oidn normal', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING) };
     const oidnProg = device.createBuffer({ label: `${label} oidn progressive`, size: n * 3 * 16, usage: GPUBufferUsage.STORAGE });
     const oidnParams = device.createBuffer({ label: `${label} oidn params`, size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const [accumPipe, packPipe, compositePipe, flickerPipe, oidnPrepPipe, depthPipe] = await Promise.all([
+    const [tonemapPipe, reactivePipe, accumPipe, packPipe, compositePipe, flickerPipe, oidnPrepPipe, depthPipe] = await Promise.all([
+      device.createComputePipelineAsync({ label: `${label} tonemap`, layout: 'auto', compute: { module: module(TONEMAP_WGSL, 'tonemap'), entryPoint: 'pipeTonemap' } }),
+      s.reactive ? device.createComputePipelineAsync({ label: `${label} reactive`, layout: 'auto', compute: { module: module(REACTIVE_WGSL, 'reactive'), entryPoint: 'pipeReactive' } }) : Promise.resolve(undefined),
       device.createComputePipelineAsync({ label: `${label} accumulate`, layout: 'auto', compute: { module: module(ACCUM_WGSL, 'accumulate'), entryPoint: 'pipeAccumulate' } }),
       device.createComputePipelineAsync({ label: `${label} pack`, layout: 'auto', compute: { module: module(PACK_WGSL, 'pack'), entryPoint: 'pipePack' } }),
       device.createComputePipelineAsync({ label: `${label} composite`, layout: 'auto', compute: { module: module(COMPOSITE_WGSL, 'composite'), entryPoint: 'pipeComposite' } }),
@@ -427,14 +483,20 @@ export class PipelineArm {
 
     const denoiser = new DiffuseSpecularDenoiser(device, { ...(s.denoiser ?? {}), remodulate: true } as never);
     denoiser.configure({ width: w, height: h });
+    const tonemapParams = device.createBuffer({ label: `${label} tonemap params`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(tonemapParams, 0, new Float32Array([1, 0, 0, 0]));
+    const display = device.createTexture({ label: `${label} display`, size: { width: s.displayWidth, height: s.displayHeight }, format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | TEX | COPY_SRC_T });
+    const reactiveMask = s.reactive ? mk('reactive', 'rgba8unorm', TEX | GPUTextureUsage.STORAGE_BINDING) : undefined;
+    const reactiveParams = s.reactive ? device.createBuffer({ label: `${label} reactive params`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : undefined;
+    if (reactiveParams && s.reactive) device.queue.writeBuffer(reactiveParams, 0, new Float32Array([s.reactive.cap ?? 8, s.reactive.strength ?? 1, 0, 0]));
     const host = new UpscalerHost(device);
     const upscaler = new Upscaler({ renderer: host as never });
     upscaler.configure({ displayWidth: s.displayWidth, displayHeight: s.displayHeight, renderWidth: w, renderHeight: h, path: 'temporal', jitter: false });
     await upscaler.init();
     Object.assign(upscaler.settings, s.upscaler ?? {});
-    const keys = { color: host.texture(color, `${label} color`), depth: host.texture(depth, `${label} depth`), velocity: host.texture(tex.motion, `${label} motion`) };
+    const keys = { color: host.texture(color, `${label} color`), depth: host.texture(depth, `${label} depth`), velocity: host.texture(tex.motion, `${label} motion`), ...(reactiveMask ? { reactive: host.texture(reactiveMask, `${label} reactive`) } : {}) };
     // The accumulate and pack groups need the kernel's planes buffer: built on the first `accumulate`.
-    const arm = new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys, oidnPrepPipe, oidnParams, oidnProg, oidnTex });
+    const arm = new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys, oidnPrepPipe, oidnParams, oidnProg, oidnTex, display, reactiveMask, reactivePipe, reactiveParams, tonemapPipe, tonemapParams });
     arm.setDenoiser(s.denoise ?? 'svgf', s.oidn ?? {});
     return arm;
   }
@@ -524,7 +586,7 @@ export class PipelineArm {
    * Denoise, composite, upscale. Call after the frame's path tracing + `pack` were submitted. `camera` = this frame's (unjittered) camera;
    * the previous one is remembered. Records and submits its own work (the denoiser and the upscaler submit theirs).
    */
-  async post(camera: PtLookAtCamera, options: { denoise?: boolean; deltaTime?: number } = {}): Promise<void> {
+  async post(camera: PtLookAtCamera, options: { denoise?: boolean; deltaTime?: number; tonemap?: boolean } = {}): Promise<void> {
     const { width: w, height: h } = this.s;
     const aspect = w / h;
     const view = viewMatrix(camera);
@@ -551,6 +613,17 @@ export class PipelineArm {
       pass.setBindGroup(0, group);
       pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
       pass.end();
+      if (this.reactivePipe && this.reactiveMask && this.reactiveParams) {
+        // History length (alpha of the diffuse signal's accumulation texture) -> the upscaler's reactive mask.
+        const accum = (this.denoiser as unknown as { pipes: { debugTexture(n: string): GPUTexture | undefined }[] }).pipes[0]?.debugTexture('accum');
+        if (!accum) throw new Error('reactive mask: the denoiser has no accum debug texture');
+        const rg = this.device.createBindGroup({ layout: this.reactivePipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.reactiveParams } }, { binding: 1, resource: accum.createView() }, { binding: 2, resource: this.reactiveMask.createView() }] });
+        const rp = encoder.beginComputePass({ label: 'pipe reactive' });
+        rp.setPipeline(this.reactivePipe);
+        rp.setBindGroup(0, rg);
+        rp.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+        rp.end();
+      }
       this.device.queue.submit([encoder.finish()]);
       this.lastDenoiser = 'svgf';
     } else if (kind === 'oidn') {
@@ -561,12 +634,31 @@ export class PipelineArm {
       this.device.queue.submit([encoder.finish()]);
       this.lastDenoiser = 'none';
     }
-    this.upCamera.set(camera, aspect);
-    this.upscaler.beginFrame(this.upCamera as never);
-    this.upscaler.endFrame(this.upCamera as never);
-    this.upscaler.dispatch({ color: this.keys.color, depth: this.keys.depth, velocity: this.keys.velocity, reset, deltaTime: options.deltaTime ?? 1 / 60 } as never, this.upCamera as never);
+    this.upscale(camera, reset, options.deltaTime ?? 1 / 60, kind === 'svgf' && this.reactiveEnabled);
+    if (options.tonemap) this.tonemap();
     this.prevView = view;
     this.prevProj = proj;
+  }
+
+  /** The upscaler on `color` (render res -> display res). `reactive`: pass the reactive mask (only when `settings.reactive` and the SVGF branch wrote it this frame). */
+  upscale(camera: PtLookAtCamera, reset: boolean, deltaTime = 1 / 60, reactive = false): void {
+    this.upCamera.set(camera, this.s.width / this.s.height);
+    this.upscaler.beginFrame(this.upCamera as never);
+    this.upscaler.endFrame(this.upCamera as never);
+    this.upscaler.dispatch({ color: this.keys.color, depth: this.keys.depth, velocity: this.keys.velocity, ...(reactive && this.keys.reactive ? { reactive: this.keys.reactive } : {}), reset, deltaTime } as never, this.upCamera as never);
+  }
+
+  /** The display stage: exposure, ACES, sRGB -> `display` (rgba8unorm, display res) from the upscaler's output. */
+  tonemap(exposure = 1): void {
+    this.device.queue.writeBuffer(this.tonemapParams, 0, new Float32Array([exposure, 0, 0, 0]));
+    this.tonemapGroup ??= this.device.createBindGroup({ layout: this.tonemapPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.tonemapParams } }, { binding: 1, resource: this.stage('final').createView() }, { binding: 2, resource: this.display.createView() }] });
+    const encoder = this.device.createCommandEncoder({ label: 'pipe tonemap' });
+    const pass = encoder.beginComputePass({ label: 'pipe tonemap' });
+    pass.setPipeline(this.tonemapPipe);
+    pass.setBindGroup(0, this.tonemapGroup);
+    pass.dispatchWorkgroups(Math.ceil(this.s.displayWidth / 8), Math.ceil(this.s.displayHeight / 8));
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
   }
 
   /**
@@ -678,8 +770,8 @@ export class PipelineArm {
   destroy(): void {
     this.denoiser.dispose();
     this.upscaler.dispose();
-    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams, this.oidnParams, this.oidnProg]) b.destroy();
-    for (const t of [...Object.values(this.tex), ...Object.values(this.oidnTex), this.depth, this.color]) t.destroy();
+    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams, this.oidnParams, this.oidnProg, this.tonemapParams, ...(this.reactiveParams ? [this.reactiveParams] : [])]) b.destroy();
+    for (const t of [...Object.values(this.tex), ...Object.values(this.oidnTex), this.depth, this.color, this.display, ...(this.reactiveMask ? [this.reactiveMask] : [])]) t.destroy();
     for (const f of this.flicker) {
       f.state.destroy();
       f.params.destroy();

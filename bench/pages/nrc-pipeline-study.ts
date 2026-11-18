@@ -44,7 +44,7 @@ import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
 import { hashGridArgs } from '../nrc/hash-grid.ts';
-import { readTextureRgba16f, resample, type DenoiserKind, type OidnArmSettings, type OidnQuality, type PipelineStage } from '../nrc/pipeline.ts';
+import { readTextureRgba16f, resample, type DenoiserKind, type OidnArmSettings, type OidnQuality, type PipelineStage } from '../realtime/chain.ts';
 
 let adapterSummary: AdapterSummary | null = null;
 

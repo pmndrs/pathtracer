@@ -1,6 +1,6 @@
 /**
  * NRC pipeline math (track N, M9): camera matrices in three.js conventions (column-major, view looks down -Z, WebGPU depth [0, 1]) and
- * the reference resample. No GPU globals, so unit tests import it (pipeline-math.test.ts).
+ * the reference resample. No GPU globals, so unit tests import it (chain-math.test.ts).
  */
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 
