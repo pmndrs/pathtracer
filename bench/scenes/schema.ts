@@ -258,4 +258,4 @@ export type ExpectedDesc =
   /** Every pixel should equal this value (white furnace with an energy-conserving material). */
   | { type: 'uniform'; value: Rgb; tolerance: number }
   /** Mean over the image should equal this value. */
-  | { type: 'mean'; value: Rgb; tolerance: number };
+  | { type: 'mean'; value: Rgb; tolerance: number; /** `false`: judge the image mean only (a stochastic estimator, e.g. media, has noisy pixels: P5). Default: the pixels are checked against `tolerance` too. */ pixelwise?: boolean };

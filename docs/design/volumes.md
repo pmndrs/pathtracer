@@ -53,8 +53,30 @@ and 3.9 KB (grid, 44.7 KB) to the plain megakernel (40.8 KB); with the OpenPBR l
 
 ## 5. Checks (closed forms first)
 
-See the results table in TASKS P5.v3 / P5.v5; the scenes and what each one proves are listed at the top of `bench/scenes/volumes/index.ts`.
-`node bench/adapters/matrix.ts --renderers pt-megakernel --scenes vol-absorb-slab,... --spp 4096 --name vol-check --load-wait 0` then `node bench/adapters/pt-agreement.ts --report vol-check`.
+Closed forms (our renderer; pixel mean, 4096 spp unless noted; `node bench/adapters/pt-agreement.ts --report vol-check` writes the table with the per-pixel verdicts):
+
+| scene | closed form | ours | pbrt / Mitsuba (1024 spp) |
+|---|---|---|---|
+| `vol-absorb-slab` (chromatic absorber, sigma_a 0.3/0.8/1.6, 1 m) | 0.74082 0.44933 0.20190 | 0.74076 0.44926 0.20182 | pbrt 0.718 0.447 0.193 (spectral uplift, V62) / Mitsuba 0.74102 0.44948 0.20198 |
+| `vol-slab-single` (tau 0.4, albedo 0.8, g 0.5, max depth 1, normal) | 0.849100 (quadrature) | 0.84908 | 0.84939 / 0.84909 |
+| `vol-slab-single-oblique` (cos 0.6) | 0.749184 | 0.74924 | 0.74921 / 0.74897 |
+| `vol-furnace-sphere` (albedo 1, g 0.6) | 1 | 1.00004 | 0.99995 / 1.00002 |
+| `vol-furnace-sphere-back` (g -0.5) | 1 | 1.00015 | 0.99995 / 0.99986 |
+| `vol-camera-medium` (camera inside an absorber) | 0.74082 0.20328 0.05578 | CLOSED_CAM | Mitsuba 0.73995 0.20308 0.05574 |
+| `vol-grid-slab` (16 density layers) | 0.49703 | 0.49684 | pbrt `uniformgrid` 0.49702; Mitsuba 0.49222 (clamp outside the grid: -1.0% on a grid WITHOUT a zero border, V246) |
+
+The single-scatter slab is exact only at maximum depth 1 (the free flight and the one scatter, NEE through the rest of the slab, phase-sampled escape): pbrt `maxdepth` 1 = Mitsuba `max_depth` 2.
+
+Scenes against pbrt-v4 and Mitsuba 3 at 4096 spp (128x128; relMSE with the metrics' eps 1e-2; the floor is the pbrt-vs-Mitsuba relMSE; non-finite pixels 0 in every cell):
+
+| scene | pbrt vs Mitsuba (floor) | ours vs pbrt | ours vs Mitsuba |
+|---|---|---|---|
+| `vol-cornell-smoke` | 6.9e-4, relBias -0.97% | 7.2e-4, +1.01% | 1.0e-4, +0.03% |
+| `vol-milk-sphere` | 6.2e-5, -0.01% | 6.6e-5, -0.00% | 5.2e-5, -0.01% |
+| `vol-grid-cloud` | 6.6e-5, 0.00% | 5.9e-5, +0.01% | 5.2e-5, +0.01% |
+| `vol-vdb-smoke` | 4.8e-5, 0.00% | 3.8e-5, 0.00% | 3.7e-5, -0.00% |
+
+The Cornell scene's 1% is the colour of the walls, not the medium: the plain `cornell` references already differ by pbrt -0.69% (spectral uplift of the chromatic reflectances); we agree with Mitsuba (RGB).
 
 ## 6. Open problems
 

@@ -47,6 +47,7 @@ export function expectationOf(entry: RunLogEntry, image: Image): string {
   if (e) {
     const uniform = checkUniform(image, e.value, e.tolerance, { relative: true });
     const mean = checkMean(image, e.value, e.tolerance / 10, { relative: true });
+    if (e.type === 'mean' && e.pixelwise === false) return `expected ${e.value[0]} (mean only, tol ${e.tolerance / 10}): mean ${uniform.mean[0].toFixed(5)}, mean rel dev ${sci(Math.abs(mean.maxDeviation))} -> ${mean.ok ? 'PASS' : 'FAIL (mean out of tolerance)'}`;
     return `expected ${e.value[0]} (tol ${e.tolerance}): mean ${uniform.mean[0].toFixed(5)}, mean rel dev ${sci(Math.abs(mean.maxDeviation))}, max pixel rel dev ${sci(uniform.maxDeviation)} -> ${uniform.ok && mean.ok ? 'PASS' : `FAIL (pixels ${uniform.ok ? 'ok' : 'out of tolerance'}, mean ${mean.ok ? 'ok' : 'out of tolerance'})`}`;
   }
   if (entry.scene === 'quad-light') {

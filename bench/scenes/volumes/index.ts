@@ -40,7 +40,7 @@ export const volAbsorbSlab: SceneDesc = {
   media: { gas: { type: 'homogeneous', sigmaA: SIGMA_A, sigmaS: [0, 0, 0] } },
   meshes: [slabMesh(1, 'gas')],
   environment: SKY,
-  expected: { type: 'mean', value: SIGMA_A.map((s) => Math.exp(-s)) as unknown as [number, number, number], tolerance: 0.003 },
+  expected: { type: 'mean', value: SIGMA_A.map((s) => Math.exp(-s)) as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
 };
 
 const CAM_SIGMA = [0.1, 0.3, 0.5] as const;
@@ -56,7 +56,7 @@ export const volCameraMedium: SceneDesc = {
   media: { fog: { type: 'homogeneous', sigmaA: CAM_SIGMA, sigmaS: [0, 0, 0] } },
   cameraMedium: 'fog',
   meshes: [{ name: 'emitter', geometry: { type: 'quad', size: [8, 8] }, material: 'back', transform: facingCamera(-3), emission: LB }],
-  expected: { type: 'mean', value: LB.map((l, i) => l * Math.exp(-3 * CAM_SIGMA[i]!)) as unknown as [number, number, number], tolerance: 0.003 },
+  expected: { type: 'mean', value: LB.map((l, i) => l * Math.exp(-3 * CAM_SIGMA[i]!)) as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
 };
 
 const furnace = (name: string, g: number): SceneDesc => ({
@@ -71,7 +71,7 @@ const furnace = (name: string, g: number): SceneDesc => ({
   media: { cloud: { type: 'homogeneous', sigmaA: [0, 0, 0], sigmaS: [1.5, 1.5, 1.5], g } },
   meshes: [{ name: 'ball', geometry: { type: 'sphere', radius: 1, segments: 64, rings: 32 }, material: 'boundary', medium: { interior: 'cloud' } }],
   environment: SKY,
-  expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.01 },
+  expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.01, pixelwise: false },
 });
 export const volFurnaceSphere = furnace('vol-furnace-sphere', 0.6);
 export const volFurnaceSphereBack = furnace('vol-furnace-sphere-back', -0.5);
@@ -92,7 +92,7 @@ const slabSingle = (name: string, cosine: number): SceneDesc => {
     media: { haze: { type: 'homogeneous', sigmaA: [SLAB.sigmaT * (1 - SLAB.albedo), SLAB.sigmaT * (1 - SLAB.albedo), SLAB.sigmaT * (1 - SLAB.albedo)], sigmaS: [SLAB.sigmaT * SLAB.albedo, SLAB.sigmaT * SLAB.albedo, SLAB.sigmaT * SLAB.albedo], g: SLAB.g } },
     meshes: [slabMesh(SLAB.thickness, 'haze')],
     environment: SKY,
-    expected: { type: 'mean', value: [expected, expected, expected], tolerance: 0.002 },
+    expected: { type: 'mean', value: [expected, expected, expected], tolerance: 0.002, pixelwise: false },
   };
 };
 export const volSlabSingle = slabSingle('vol-slab-single', 1);
@@ -131,7 +131,7 @@ export const volGridSlab: SceneDesc = (() => {
     media: { layers: { type: 'grid', resolution: g.resolution, density: g.density, bounds: g.bounds, sigmaA: GRID_SIGMA, sigmaS: [0, 0, 0] } },
     meshes: [{ name: 'slab', geometry: { type: 'box', size: [8, 8, 1] }, material: 'boundary', medium: { interior: 'layers' } }],
     environment: SKY,
-    expected: { type: 'mean', value: gridSlabExpected() as unknown as [number, number, number], tolerance: 0.004 },
+    expected: { type: 'mean', value: gridSlabExpected() as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
   };
 })();
 

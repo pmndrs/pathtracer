@@ -70,7 +70,7 @@ describe('media export (P5)', () => {
     const scene = getScene('vol-vdb-smoke');
     const input = sceneDescToCopyInput(scene);
     expect(() => sceneVolumes(scene, input)).toThrow(/density file/);
-    const [nx, ny, nz] = (scene.media!.plume as { resolution: [number, number, number] }).resolution;
+    const [nx, ny, nz] = (scene.media!.plume as unknown as { resolution: readonly [number, number, number] }).resolution;
     const files = new Map([['generated/volumes/vdb-smoke.f32', new Float32Array(nx * ny * nz).fill(0.25)]]);
     const v = sceneVolumes(scene, input, files)!;
     expect(v.grid!.resolution).toEqual([nx, ny, nz]);
