@@ -133,7 +133,7 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
   const film = mats?.features.thinFilm ? [stripWgslComments(ptThinFilmWgsl())] : [];
   const fuzz = mats?.features.fuzz ? [stripWgslComments(ptFuzzWgsl({ layered: !!mats.features.layered }))] : [];
-  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler, integrator.blueNoise)];
+  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ...(integrator.mtlx && options.integrator?.materialx ? [options.integrator.materialx.wgsl] : []), ptSamplerWgsl(integrator.sampler, integrator.blueNoise)];
   return { integratorOptions, parts };
 }
 

@@ -24,3 +24,4 @@ export * from './wavefront/wavefront-wgsl.ts';
 export * from './wavefront/wavefront.ts';
 export * from './restir/restir-wgsl.ts';
 export * from './restir/restir.ts';
+export * from './materialx/index.ts';
