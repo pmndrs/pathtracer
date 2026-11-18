@@ -51,6 +51,15 @@ export interface AdapterSummary {
   description: string;
 }
 
+/** One entry of `GPUAdapterInfo.subgroupMatrixConfigs` (subgroup-matrix proposal): operand and result types and the tile shape. */
+export interface CapsSubgroupMatrixConfig {
+  componentType: string;
+  resultComponentType: string;
+  M: number;
+  N: number;
+  K: number;
+}
+
 export interface Caps {
   /** Label only (0-3). Derived with the exact rules of note 06 §4; see {@link deriveTier}. */
   tier: Tier;
@@ -64,6 +73,11 @@ export interface Caps {
   immediates: boolean;
   resourceTable: ResourceTableKind;
   subgroupMatrix: boolean;
+  /**
+   * The tile configurations the adapter offers for subgroup matrices (empty without the feature or when the browser does not report
+   * them). Not part of `capsHash`. M5 Pro / Chrome 157: f32→f32 and f16→f16 at 8×8×8; Dawn Vulkan on an RTX 3060: f16 at 16×16×16.
+   */
+  subgroupMatrixConfigs: CapsSubgroupMatrixConfig[];
   float32Filterable: boolean;
   textureFormatsTier1: boolean;
   compressed: { bc: boolean; bcSliced3d: boolean; astc: boolean; etc2: boolean };
@@ -146,6 +160,7 @@ export function buildCaps(
     ...partial,
     subgroupMinSize: num(info?.subgroupMinSize),
     subgroupMaxSize: num(info?.subgroupMaxSize),
+    subgroupMatrixConfigs: has('subgroupMatrix') ? readSubgroupMatrixConfigs(info?.subgroupMatrixConfigs) : [],
     adapter: {
       vendor: str('vendor'),
       architecture: str('architecture'),
@@ -183,6 +198,17 @@ export function deriveTier(
 }
 
 /** Detect capabilities of an adapter. `wgslLanguageFeatures` defaults to `navigator.gpu.wgslLanguageFeatures`. */
+function readSubgroupMatrixConfigs(raw: unknown): CapsSubgroupMatrixConfig[] {
+  if (!raw || typeof (raw as { length?: unknown }).length !== 'number') return [];
+  return Array.from(raw as ArrayLike<Record<string, unknown>>, (c) => ({
+    componentType: String(c.componentType),
+    resultComponentType: String(c.resultComponentType),
+    M: num(c.M),
+    N: num(c.N),
+    K: num(c.K),
+  }));
+}
+
 export function detectCaps(adapter: GPUAdapter, wgslLanguageFeatures?: ReadonlySet<string>): Caps {
   return buildCaps(
     {

@@ -105,6 +105,7 @@ describe('detectCaps', () => {
     expect(c.compressed).toEqual({ bc: true, bcSliced3d: true, astc: false, etc2: true });
     expect(c.float32Filterable && c.textureFormatsTier1 && c.accelerationStructure).toBe(true);
     expect([c.subgroupMinSize, c.subgroupMaxSize]).toEqual([4, 64]);
+    expect(c.subgroupMatrixConfigs).toEqual([]);
     expect(c.features).toEqual([...c.features].sort());
   });
 
@@ -172,5 +173,14 @@ describe('deriveTier', () => {
     const c = buildCaps({ features: new Set(T1), limits: { ...baseLimits, ...T1_LIMITS } }, lang);
     expect(deriveTier(c)).toBe(1);
     expect(deriveTier({ ...c, subgroups: true })).toBe(2);
+  });
+
+  it('reads subgroupMatrixConfigs from adapter info only when the feature is present, and keeps them out of the hash', () => {
+    const configs = [{ componentType: 'f16', resultComponentType: 'f32', M: 16, N: 16, K: 16 }];
+    const withFeature = buildCaps({ features: new Set(['chromium-experimental-subgroup-matrix']), limits: {}, info: { subgroupMatrixConfigs: configs } }, new Set());
+    expect(withFeature.subgroupMatrixConfigs).toEqual(configs);
+    const without = buildCaps({ features: new Set(), limits: {}, info: { subgroupMatrixConfigs: configs } }, new Set());
+    expect(without.subgroupMatrixConfigs).toEqual([]);
+    expect(capsHash({ ...withFeature, subgroupMatrixConfigs: [] })).toBe(capsHash(withFeature));
   });
 });

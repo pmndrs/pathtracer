@@ -25,28 +25,39 @@ Sources we may use: the paper and talks (D10: NVIDIA papers are fine), and **tin
 (NVIDIA RTX SDK licence, D10), including `research/sources/native/rtxgi`. instant-ngp is under a non-commercial NVIDIA
 licence: ideas only. VkNRC has no licence: we follow its design and write our own code (§1b, D29).
 
-How it works [M unless marked]:
+How it works. **Checked against the paper (arXiv 2106.12372v2, HTML full text) on 2026-11-18 (N0.1): every item below is [V]
+with its section**, except the few marked "not stated":
 
-- A small MLP maps a path vertex to outgoing radiance. Inputs: position, scattered direction, shading normal,
-  roughness, diffuse reflectance, specular reflectance (about 14 floats). The paper encodes position with a frequency
-  encoding and the rest with one-blob; later NVIDIA work (instant-ngp) and the NRC SDK use a multiresolution hash
-  grid. The output is radiance divided by reflectance, multiplied back at the query, so texture detail does not have
-  to be learned.
-- Network: about 64 neurons wide, about 5 hidden layers, ReLU, no bias; f16 activations, f32 master weights. "Fully
-  fused": one kernel runs all layers while activations stay on chip.
-- **Render paths** trace 1–3 bounces and stop when the path's footprint spread is large compared with the primary
-  footprint (the paper's area-spread heuristic, threshold about 0.01 of the primary). The last vertex queries the
-  cache.
-- **Training paths**: a sparse set of pixels (a few percent, one random pixel per screen tile) trace longer paths. Each
-  vertex becomes a training record whose target is the radiance gathered from there on. The tail of each training path
-  is the cache's own prediction ("self-training"), which carries light over many bounces at the cost of a short trace.
-- Training runs **every frame, online**: about 4 Adam steps of 16k records (about 65k records per frame). Loss: relative
-  L2 (squared error divided by the squared prediction, prediction treated as a constant). Inference uses an
-  exponential moving average of the weights.
-- Paper cost: about 2–3 ms per 1080p frame for training plus inference on an RTX 3090, with tensor cores.
+- A small MLP maps a path vertex to outgoing radiance (Sec. 3, Table 1). Inputs, 62 floats padded to 64 with ones: position, frequency
+  encoding with **12 sine terms per axis** (2^0..2^11; the cosines are omitted), 36; scattered direction and shading normal, one-blob of
+  their spherical coordinates with 4 bins, 8 each; roughness as one-blob of 1 − e^(−r), 4; diffuse and specular reflectance as is, 3 each
+  (Sec. 3.6). Sec. 4 (Fig. 9) swaps the Gaussian kernel for a quartic one and the sine for a **triangle wave**, saving 0.25 ms "without
+  visible loss": VkNRC's encoding is the paper's own fast variant. No hash grid anywhere in the paper; "all other encodings that we tried"
+  were worse or did not scale (Sec. 6).
+- **Reflectance factorisation** (Sec. 5): the network output is multiplied by the diffuse albedo plus the specular reflectance (so for a
+  Lambertian it learns irradiance). VkNRC and we do not (N-D4).
+- Network (Sec. 5, Sec. 4): 5 hidden layers of 64 neurons, ReLU, **no biases** (they gave no measurable benefit; the padding ones act as
+  one), output layer 64 → 3 RGB; output activation not stated. Half precision with tensor-core matmuls; one fused kernel, 128 records per
+  thread block, weights in registers, 64 × 128 activations in shared memory; backprop weight gradients through CUTLASS split-k GEMM.
+- **Render paths** stop when the path's area spread a (Sec. 3.4, eq. 3: the square of the sum of sqrt(d² / (pdf · |cos|)) along the path)
+  exceeds c · a0 with a0 = d1² / (4π cos θ1) and **c = 0.01**; the vertex there queries the cache. Typical path lengths are not stated.
+- **Training paths** (Sec. 3.1, 3.5): the viewport is tiled with one random offset per frame and one path per tile is extended into a
+  training suffix (the tile size adapts to the record budget; "typically under 3%" of the paths, mostly by one vertex). Each vertex becomes
+  a record whose target is the radiance gathered from there on; the suffix ends in the cache's own prediction (self-training, about 11%
+  overall overhead, Sec. 6). **Every 16th training suffix (u = 1/16) is unbiased**: ended by Russian roulette only (Sec. 3.2).
+- Training **every frame, online** (Sec. 3.3, 3.5): 65,536 records = 4 Adam steps of 16,384, each step a disjoint random subset (an LCG
+  shuffle). Adam was chosen over SGD, NovoGrad and Shampoo (Sec. 5); its **learning rate, betas and epsilon are not stated**. Loss: relative
+  L2, (L − L̂)² / (sg(L̂)² + ε), **ε = 0.01**, normalised by the squared luminance (Sec. 5). Inference uses an **EMA of the weights,
+  α = 0.99**, bias-corrected (Sec. 3.3, eq. 2); it does not feed back into training. "As few as 8 frames" to adapt (Fig. 4).
+- **Cost** (Sec. 6, Table 3; 1920 × 1080, i9 9900k + RTX 3090, CUDA inside a Falcor D3D12 path tracer): per frame, averaged over six
+  scenes, **query 1.59 ms and training 1.11 ms** (2.70 ms; the abstract says "about 2.6ms"), trace and shade 9.16 ms with NRC against
+  12.29 ms for PT + ReSTIR alone (paths are shorter). Training is 4-5× slower than inference per record (Sec. 4).
+- Limitations the paper names (Sec. 6-7): sharp detail missing from the inputs (contact shadows, caustics) is not captured; subtle
+  axis-aligned stripes from the frequency encoding; low-frequency scintillation; little benefit when transport is dominated by dielectrics;
+  the last vertex of a training path may reach regions the cache was never trained on (Sec. 3.2).
 
-Read the PDF before quoting any of these numbers (N0.1). The research notes flagged the same gap
-([07](../../research/notes/07-denoise-neural.md) "exact NRC cost numbers ... check PDF").
+The research notes flagged these as unchecked ([07](../../research/notes/07-denoise-neural.md) "exact NRC cost numbers ... check PDF");
+they are checked now. Where we differ: [nrc-diverges.md](nrc-diverges.md).
 
 ## 1b. Reference implementation: VkNRC (the one we port the design of)
 
