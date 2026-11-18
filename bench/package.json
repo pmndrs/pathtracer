@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@pmndrs/bvh": "link:../../bvh",
+    "@pmndrs/bvh": "^0.1.0",
     "@pmndrs/pathtracer": "workspace:*",
     "@pmndrs/raytracer": "workspace:*",
     "@pathtracer/mlp": "workspace:*",

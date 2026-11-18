@@ -57,7 +57,7 @@ import {
   type IntervalConvention,
   type Ray,
   type SceneCopyPacking,
-  type SceneFormat,
+  type ResolvedSceneFormat,
 } from '@pmndrs/raytracer';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
@@ -73,7 +73,7 @@ const f32 = Math.fround;
 const STORAGE_IO = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
 const BOUNDARY_RELATIVE = 1e-5;
 
-interface Format extends Required<SceneFormat> {
+interface Format extends ResolvedSceneFormat {
   name: string;
   merge: boolean;
 }
@@ -195,7 +195,7 @@ const f32Of = (u: number): number => new Float32Array(new Uint32Array([u]).buffe
 
 async function buildScene(scene: TraceTestScene, format: Format, builder: MeshBvhBuilder): Promise<TraceSceneData> {
   return buildTraceScene(scene.meshes, scene.instances, {
-    build: (geometry) => builder.build(geometry, { triangleLeaves: format.triangleLeaves, nodeFormat: format.nodeFormat }),
+    build: (geometry) => builder.build(geometry, { triangleLeaves: format.triangleLeaves, nodeFormat: format.nodeFormat === 'quantized' ? 'quantized' : 'f32' }),
     mergeStaticInstances: format.merge,
     triangleLeaves: format.triangleLeaves,
     positionLayout: format.positionLayout,

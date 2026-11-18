@@ -9,7 +9,7 @@
  */
 
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, searchForWorkspaceRoot, type ViteDevServer } from 'vite';
 import { UPLOAD_PATH, type UploadRecord } from './contract.ts';
@@ -17,14 +17,16 @@ import { bytesToFloats, countNonFinite, encodePfm, expectedFloats } from './pfm.
 
 export const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
 /**
- * The checkout `@pmndrs/bvh` is linked from (`link:` in bench/package.json), or null for an installed copy. Vite serves it
+ * The checkout `@pmndrs/bvh` is linked from (a `pnpm.overrides` / `link:` recipe for development, CLAUDE.md "Developing against local siblings"), or null for the npm install (the default since D33). Vite serves it
  * through `/@fs/`, which is only allowed inside `server.fs.allow`; without it the bvh build workers (loaded by URL
  * from bvh's `dist/`) fail to load. For an npm install the package sits in node_modules (already inside the workspace
  * root) and would also need `optimizeDeps.exclude: ['@pmndrs/bvh']` so the worker URL is not rewritten by pre-bundling.
  */
 function linkedBvhRoot(): string | null {
   try {
-    return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'bvh'));
+    const root = realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'bvh'));
+    // The npm install (pnpm store, `<repo>/node_modules/.pnpm/...`) is inside the workspace root already: only a real link needs the allowance.
+    return root.split(sep).includes('node_modules') ? null : root;
   } catch {
     return null;
   }
@@ -131,7 +133,7 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
     logLevel: 'warn',
     appType: 'mpa',
     // Pages have no dependencies that need pre-bundling; skipping the scan keeps startup fast and quiet.
-    optimizeDeps: { noDiscovery: true, include: [] },
+    optimizeDeps: { noDiscovery: true, include: [], exclude: ['@pmndrs/bvh'] },
     // Where the page finds the OIDN `.tza` weights of the linked Denoiser checkout (undefined when it is not linked).
     define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? fsUrl(`${linkedDenoiserRoot()}/tzas`) : null) },
     server: {

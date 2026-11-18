@@ -42,8 +42,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/mlp
       '@pmndrs/bvh':
-        specifier: link:../../bvh
-        version: link:../../bvh
+        specifier: ^0.1.0
+        version: 0.1.0(three@0.187.0)
       '@pmndrs/pathtracer':
         specifier: workspace:*
         version: link:../packages/pathtracer
@@ -87,8 +87,8 @@ importers:
   packages/raytracer:
     dependencies:
       '@pmndrs/bvh':
-        specifier: link:../../../bvh
-        version: link:../../../bvh
+        specifier: ^0.1.0
+        version: 0.1.0(three@0.187.0)
 
 packages:
 
@@ -325,6 +325,17 @@ packages:
 
   '@petamoriken/float16@3.9.3':
     resolution: {integrity: sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g==}
+
+  '@pmndrs/bvh@0.1.0':
+    resolution: {integrity: sha512-5pVuSDX4Ud7WMprV197XtGwlMZDwZCVI/SYzMEihg7CZiiUOqH8NcvqQN85aPNRXmTu7taNTLZDNRPxNQF+CCg==}
+    peerDependencies:
+      '@babylonjs/core': '>=9.35.0 <10.0.0'
+      three: '>=0.187.0 <0.188.0'
+    peerDependenciesMeta:
+      '@babylonjs/core':
+        optional: true
+      three:
+        optional: true
 
   '@rollup/rollup-android-arm-eabi@4.68.2':
     resolution: {integrity: sha512-ItKrNMkEL3hy85kLBXwB0+M6CWWVI8vr7RV+Eb7oDlQIMXLaiEhGfdaj5jAUadYn2v3nwzAhIRl/nLyjAqV9vQ==}
@@ -1285,6 +1296,10 @@ snapshots:
       three: 0.187.0
 
   '@petamoriken/float16@3.9.3': {}
+
+  '@pmndrs/bvh@0.1.0(three@0.187.0)':
+    optionalDependencies:
+      three: 0.187.0
 
   '@rollup/rollup-android-arm-eabi@4.68.2':
     optional: true

@@ -33,7 +33,7 @@ import type { RtShadeMode, RtShadeOptions } from '../shade/shade.ts';
 import { RAY_BYTES, HIT_BYTES, HIT_COMPACT_BYTES, DEFAULT_BATCH_WORKGROUP_SIZE, type BatchWorkgroupSize } from './constants.ts';
 import { rtSceneBindGroupEntries, withBindings, type RtIndirectCount } from './batch.ts';
 import type { IntervalConvention } from './interval.ts';
-import { rtModuleWgsl, rtWalkEntries, sceneFormatOf, type RtModuleOptions, type SceneFormat } from './modules.ts';
+import { rtModuleWgsl, rtWalkEntries, sceneFormatOf, type ResolvedSceneFormat, type RtModuleOptions, type SceneFormat } from './modules.ts';
 import { dispatchGrid } from './records.ts';
 import { rtCreateComputePipelineAsync } from './wgsl-source-map.ts';
 
@@ -415,7 +415,7 @@ const MAX_CACHED_SHAPES = 256;
  */
 export class RtIntervalTracer {
   readonly options: ResolvedIntervalOptions;
-  readonly format: Required<SceneFormat>;
+  readonly format: ResolvedSceneFormat;
   readonly label: string;
   readonly resultBytes: number;
   /** Kernel text length (the size cap is ~50 KB). */
@@ -434,7 +434,7 @@ export class RtIntervalTracer {
   private readonly shapes = new Map<string, IntervalShape>();
   private readonly owned: GPUBuffer[] = [];
 
-  private constructor(device: GPUDevice, options: ResolvedIntervalOptions, format: Required<SceneFormat>, label: string, bytes: number, parts: { pipeline: GPUComputePipeline; sceneLayout: GPUBindGroupLayout; ioLayout: GPUBindGroupLayout; copyLayout: GPUBindGroupLayout | null; argsPipeline: GPUComputePipeline | null; argsLayout: GPUBindGroupLayout | null }) {
+  private constructor(device: GPUDevice, options: ResolvedIntervalOptions, format: ResolvedSceneFormat, label: string, bytes: number, parts: { pipeline: GPUComputePipeline; sceneLayout: GPUBindGroupLayout; ioLayout: GPUBindGroupLayout; copyLayout: GPUBindGroupLayout | null; argsPipeline: GPUComputePipeline | null; argsLayout: GPUBindGroupLayout | null }) {
     this.device = device;
     this.options = options;
     this.format = format;

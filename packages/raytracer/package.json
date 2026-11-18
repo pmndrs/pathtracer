@@ -8,6 +8,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@pmndrs/bvh": "link:../../../bvh"
+    "@pmndrs/bvh": "^0.1.0"
   }
 }

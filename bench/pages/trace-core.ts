@@ -57,7 +57,7 @@ import {
   type Caps,
   type Hit,
   type Ray,
-  type SceneFormat,
+  type ResolvedSceneFormat,
   type SceneCopyBuffers,
   type SurfaceInstanceInput,
 } from '@pmndrs/raytracer';
@@ -82,7 +82,7 @@ import { NORMAL_COSINE, T_FLOOR, T_RELATIVE, compareClosest, makeEdgeIndex, tClo
 const CONE = { width: 0.01, spread: 0.002 };
 const ALL = 0xffffffff;
 
-interface Format extends Required<SceneFormat> {
+interface Format extends ResolvedSceneFormat {
   name: string;
   merge: boolean;
 }
@@ -493,7 +493,7 @@ function compareSet(tally: Tally, label: string, scene: TraceTestScene, set: Ray
 
 async function buildScene(scene: TraceTestScene, format: Format, builder: MeshBvhBuilder): Promise<TraceSceneData> {
   return buildTraceScene(scene.meshes, scene.instances, {
-    build: (geometry) => builder.build(geometry, { triangleLeaves: format.triangleLeaves, nodeFormat: format.nodeFormat }),
+    build: (geometry) => builder.build(geometry, { triangleLeaves: format.triangleLeaves, nodeFormat: format.nodeFormat === 'quantized' ? 'quantized' : 'f32' }),
     mergeStaticInstances: format.merge,
     triangleLeaves: format.triangleLeaves,
     positionLayout: format.positionLayout,

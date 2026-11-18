@@ -20,6 +20,7 @@ import {
   type BatchKernelOptions,
   type ModuleBindingEntry,
   type ResolvedBatchOptions,
+  type ResolvedSceneFormat,
   type SceneFormat,
 } from './modules.ts';
 import { BATCH_PARAMS_BYTES, dispatchGrid, packBatchParams, resultBytes } from './records.ts';
@@ -99,7 +100,7 @@ interface BatchShape {
  */
 export class RtBatchTracer {
   readonly options: ResolvedBatchOptions;
-  readonly format: Required<SceneFormat>;
+  readonly format: ResolvedSceneFormat;
   readonly label: string;
   /** Bytes per result. */
   readonly resultBytes: number;
@@ -115,7 +116,7 @@ export class RtBatchTracer {
   private constructor(
     device: GPUDevice,
     options: ResolvedBatchOptions,
-    format: Required<SceneFormat>,
+    format: ResolvedSceneFormat,
     label: string,
     pipeline: GPUComputePipeline,
     sceneLayout: GPUBindGroupLayout,

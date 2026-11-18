@@ -6,7 +6,7 @@
  */
 import { DEFAULT_NODE_FORMAT, TRACER_GPU_LAYOUT_VERSION, traceModuleEntries, traceModuleWgsl } from '@pmndrs/bvh';
 import { BVH_LAYOUT_VERSION } from '../contract/ray.ts';
-import type { AnyHitOrder, BindingSlot, ModuleBindingEntry } from '@pmndrs/bvh';
+import type { AnyHitOrder, BindingSlot, ModuleBindingEntry, NodeFormat } from '@pmndrs/bvh';
 import { buildWgsl } from '../caps/wgsl.ts';
 import type { Caps } from '../caps/detect.ts';
 import type { Defines } from '../caps/wgsl.ts';
@@ -21,24 +21,50 @@ import { rtShadeWgsl } from '../shade/shade-wgsl.ts';
 import type { RtShadeOptions } from '../shade/shade.ts';
 import { rtComposeSourceMaps, rtWgslIdentityMap, type RtWgslBuild } from './wgsl-source-map.ts';
 
-export type { AnyHitOrder, BindingSlot, ModuleBindingEntry };
+export type { AnyHitOrder, BindingSlot, ModuleBindingEntry, NodeFormat };
 
-/** The scene's formats, compiled into the walk. Read them off the buffers with `sceneFormatOf`. */
-export interface SceneFormat {
-  nodeFormat?: 'f32' | 'quantized';
-  triangleLeaves?: 'records' | 'indexed';
-  positionLayout?: 'vec4' | 'packed';
+type BvhWalkOptions = NonNullable<Parameters<typeof traceModuleWgsl>[0]>;
+/** bvh4 walk shape (`'nested'` default | `'single'`, lever L7) and wide plane decode (`'exact'` default | `'folded'`, lever L1); bvh does not export the names. */
+export type WideWalk = NonNullable<BvhWalkOptions['wideWalk']>;
+export type WideDecode = NonNullable<BvhWalkOptions['wideDecode']>;
+
+/** The experimental wide node formats of bvh (X1.i, D25): `bvh4` and `cwbvh8`. */
+export function rtIsWideNodeFormat(format: NodeFormat | undefined): boolean {
+  return format === 'bvh4' || format === 'cwbvh8';
 }
 
 /**
- * The formats of bvh's `TraceSceneBuffers` (`SceneTrees.traceBuffers`, `uploadTraceScene`). Absent fields mean bvh's
- * defaults: quantized nodes (`DEFAULT_NODE_FORMAT`), record leaves, vec4 positions.
+ * The scene's formats, compiled into the walk. Read them off the buffers with `sceneFormatOf`. `nodeFormat` is bvh's:
+ * `'quantized'` (default), `'f32'`, or the experimental wide `'bvh4'` / `'cwbvh8'` (X1.i; the scene must have been assembled with the same
+ * `nodeFormat`, see `buildTraceScene({ nodeFormat })`). `wideWalk` (bvh4: `'nested'` | `'single'`) and `wideDecode` (`'exact'` | `'folded'`)
+ * are compile options of the wide walks, not properties of the buffers: wide formats default to `wideDecode: 'folded'` (lever L1, D25).
  */
-export function sceneFormatOf(buffers: SceneFormat): Required<SceneFormat> {
+export interface SceneFormat {
+  nodeFormat?: NodeFormat;
+  triangleLeaves?: 'records' | 'indexed';
+  positionLayout?: 'vec4' | 'packed';
+  wideWalk?: WideWalk;
+  wideDecode?: WideDecode;
+}
+
+/** `sceneFormatOf`'s result: the three buffer formats are always set, the wide walk options only when given or defaulted. */
+export type ResolvedSceneFormat = Required<Pick<SceneFormat, 'nodeFormat' | 'triangleLeaves' | 'positionLayout'>> & Pick<SceneFormat, 'wideWalk' | 'wideDecode'>;
+
+/**
+ * The formats of bvh's `TraceSceneBuffers` (`SceneTrees.traceBuffers`, `uploadTraceScene`). Absent fields mean bvh's
+ * defaults: quantized nodes (`DEFAULT_NODE_FORMAT`), record leaves, vec4 positions. A wide node format gets `wideDecode: 'folded'`
+ * unless the caller names one.
+ */
+export function sceneFormatOf(buffers: SceneFormat): ResolvedSceneFormat {
+  const nodeFormat = buffers.nodeFormat ?? DEFAULT_NODE_FORMAT;
+  const wide = rtIsWideNodeFormat(nodeFormat);
+  const wideDecode = buffers.wideDecode ?? (wide ? 'folded' : undefined);
   return {
-    nodeFormat: buffers.nodeFormat ?? DEFAULT_NODE_FORMAT,
+    nodeFormat,
     triangleLeaves: buffers.triangleLeaves ?? 'records',
     positionLayout: buffers.positionLayout ?? 'vec4',
+    ...(wide && buffers.wideWalk ? { wideWalk: buffers.wideWalk } : {}),
+    ...(wideDecode ? { wideDecode } : {}),
   };
 }
 
@@ -129,6 +155,8 @@ function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string 
     triangleLeaves: format.triangleLeaves,
     positionLayout: format.positionLayout,
     nodeFormat: format.nodeFormat,
+    ...(format.wideWalk ? { wideWalk: format.wideWalk } : {}),
+    ...(format.wideDecode ? { wideDecode: format.wideDecode } : {}),
   });
   return rtBoundWalkLoops(walk);
 }

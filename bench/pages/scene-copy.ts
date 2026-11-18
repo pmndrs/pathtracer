@@ -61,7 +61,7 @@ type Field = readonly [name: string, type: FieldType];
 
 const U32_FIELDS = new Set(['alphaMode', 'baseColorTexture', 'roughnessMetalTexture', 'normalTexture', 'emissionTexture']);
 // The thin-film fields live in the material record but not in the WGSL `RtMaterial` (read through `ptMaterialFilm`; `lobe-oracle` checks them).
-const MATERIAL_FIELDS: Field[] = Object.entries(defaultMaterial()).filter(([name]) => !name.startsWith('thinFilm')).map(([name, value]) => [name, Array.isArray(value) ? 'vec3f' : typeof value === 'boolean' ? 'bool' : U32_FIELDS.has(name) ? 'u32' : 'f32'] as Field);
+const MATERIAL_FIELDS: Field[] = Object.entries(defaultMaterial()).filter(([name]) => !name.startsWith('thinFilm') && name !== 'dispersion').map(([name, value]) => [name, Array.isArray(value) ? 'vec3f' : typeof value === 'boolean' ? 'bool' : U32_FIELDS.has(name) ? 'u32' : 'f32'] as Field);
 const LIGHT_FIELDS: Field[] = [
   ['kind', 'u32'], ['position', 'vec3f'], ['edge1', 'vec3f'], ['edge2', 'vec3f'], ['normal', 'vec3f'], ['area', 'f32'], ['pmf', 'f32'], ['radiance', 'vec3f'], ['material', 'u32'], ['instance', 'u32'], ['triangle', 'u32'], ['twoSided', 'bool'],
 ];
