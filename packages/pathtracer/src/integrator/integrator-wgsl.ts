@@ -643,7 +643,14 @@ ${vbHit ? `    var primary = true;
 ${vbHit ? `        var hit: RtHit;
         if (primary) {
             primary = false;
-            hit = ptVbufferHit(px, ray);
+            hit = ptVbufferHit(px, ray);${o.restirShared ? `
+            if (hit.t >= 0.0) {
+                // The G-buffer pass traced this hit along ITS jittered ray: continue along the ray through the hit point (the two draw the same sampler pair, but nothing may depend on it).
+                let hp = rtSurface(hit, ray, RT_SURF_POSITION).position;
+                ray = RtRay(origin, 0.0, normalize(hp - origin), PT_FAR);
+                hit.t = length(hp - origin);
+                hit.frontFace = dot(hit.normal, ray.direction) < 0.0;
+            }` : ''}
         } else {
             hit = rtClosest(ray, RT_MASK_ALL);
 ${counters ? `            ptCountRay(pxIndex, 1u, 0u);

@@ -287,6 +287,21 @@ export class PtRestirPasses {
     return finalCur;
   }
 
+  /** `sharedHit`: the frame's primary hits as V-buffer texels (4 words per pixel), read back. Debug / check pages only, never in a timed region. */
+  async readHits(): Promise<Uint32Array> {
+    if (!this.hitBuffer) throw new Error('PtRestirPasses.readHits: the kernel was built without restir.sharedHit');
+    const size = this.width * this.height * 16;
+    const staging = this.device.createBuffer({ label: 'pt restir hit readback', size, usage: 0x1 | COPY_DST });
+    const encoder = this.device.createCommandEncoder({ label: 'pt restir hit readback' });
+    encoder.copyBufferToBuffer(this.hitBuffer, 0, staging, 0, size);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(1);
+    const words = new Uint32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    staging.destroy();
+    return words;
+  }
+
   destroy(): void {
     this.gbuf?.destroy();
     this.reservoirs?.destroy();

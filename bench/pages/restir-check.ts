@@ -455,6 +455,83 @@ async function checkUnify(name: string, frameCount: number, refFrames: number, m
   dispose(ctx);
 }
 
+/** `shareddiff`: the same frame with and without `sharedHit` (same seed, same random numbers per pixel): where do the images disagree? */
+async function checkSharedDiff(name: string, m: number, k: number): Promise<void> {
+  const ctx = await load(name);
+  const p = `shareddiff__${name}`;
+  const unb: PtRestirOptions = { candidates: m, temporal: true, spatial: k, bias: 'unbiased', initialVisibility: false };
+  for (const sampler of ['pcg', 'bluenoise-pairs1', 'bluenoise-kronecker', 'bluenoise'] as const) {
+    const extra: PtIntegratorOptions = sampler === 'bluenoise-pairs1' ? { sampler: 'bluenoise', blueNoisePairs: 1 } : sampler === 'bluenoise-kronecker' ? { sampler: 'bluenoise', blueNoiseShift: 'kronecker' } : { sampler };
+    const a = await makeKernel(ctx, { ...rs(unb), ...extra });
+    const b = await makeKernel(ctx, { ...rs({ ...unb, sharedHit: true }), ...extra });
+    for (const n of [1, 4]) {
+      const ia = await accumulate(ctx, a, n, 5);
+      const ib = await accumulate(ctx, b, n, 5);
+      let bad = 0;
+      let sa = 0;
+      let sb = 0;
+      const first: string[] = [];
+      for (let i = 0; i < ia.data.length; i += 4) {
+        const x = (ia.data[i] as number) + (ia.data[i + 1] as number) + (ia.data[i + 2] as number);
+        const y = (ib.data[i] as number) + (ib.data[i + 1] as number) + (ib.data[i + 2] as number);
+        sa += x;
+        sb += y;
+        if (Math.abs(x - y) > 1e-3 * Math.max(1e-2, Math.abs(x))) {
+          bad++;
+          if (first.length < 6) first.push(`(${(i / 4) % ia.width},${Math.floor(i / 4 / ia.width)}) ${x.toFixed(4)} vs ${y.toFixed(4)}`);
+        }
+      }
+      if (n === 1) {
+        const hits = await b.restir!.readHits();
+        let miss = 0;
+        const firstMiss: string[] = [];
+        for (let i = 0; i < hits.length; i += 4) if (hits[i] === 0) {
+          miss++;
+          if (firstMiss.length < 6) firstMiss.push(`(${(i / 4) % ia.width},${Math.floor(i / 4 / ia.width)})`);
+        }
+        log(`${p}__${sampler}_hit_buffer_miss_texels`, miss);
+        notes[`${p}__${sampler}_hit_buffer_first_miss`] = firstMiss;
+      }
+      if (n === 1) {
+        // where is the shared image black while the traced one is not: counts per 64 x 64 tile (row-major, 8 x 8 tiles of a 512 film)
+        const tiles: number[] = Array.from({ length: 64 }, () => 0);
+        for (let i = 0; i < ia.data.length; i += 4) {
+          const x = (ia.data[i] as number) + (ia.data[i + 1] as number) + (ia.data[i + 2] as number);
+          const y = (ib.data[i] as number) + (ib.data[i + 1] as number) + (ib.data[i + 2] as number);
+          if (y === 0 && x > 0) {
+            const px = (i / 4) % ia.width;
+            const py = Math.floor(i / 4 / ia.width);
+            tiles[Math.min(7, Math.floor((py * 8) / ia.height)) * 8 + Math.min(7, Math.floor((px * 8) / ia.width))]!++;
+          }
+        }
+        notes[`${p}__${sampler}_black_in_shared_tiles`] = tiles;
+        const hits = await b.restir!.readHits();
+        const samples: string[] = [];
+        for (let i = 0; i < ia.data.length && samples.length < 5; i += 4) {
+          const x = (ia.data[i] as number) + (ia.data[i + 1] as number) + (ia.data[i + 2] as number);
+          const y = (ib.data[i] as number) + (ib.data[i + 1] as number) + (ib.data[i + 2] as number);
+          if (y === 0 && x > 0 && ((i / 4) % 50 === 0)) samples.push(`px ${(i / 4) % ia.width},${Math.floor(i / 4 / ia.width)} traced ${x.toFixed(3)} texel ${hits[i]},${hits[i + 1]},${hits[i + 2]},${(hits[i + 3] as number).toString(16)}`);
+        }
+        notes[`${p}__${sampler}_black_samples`] = samples;
+      }
+      log(`${p}__${sampler}_f${n}_differing_pixels`, bad);
+      log(`${p}__${sampler}_f${n}_sum_ratio`, sb / sa);
+      notes[`${p}__${sampler}_f${n}_first`] = first;
+    }
+  }
+  // which part breaks: no reuse at all, bn + shared
+  for (const [tag, o] of [['noreuse', { candidates: 1, temporal: false, spatial: 0, initialVisibility: false }], ['nospatial', { temporal: true, spatial: 0, bias: 'unbiased' as const, initialVisibility: false }]] as [string, PtRestirOptions][]) {
+    const a = await makeKernel(ctx, { ...rs(o), sampler: 'bluenoise' });
+    const b = await makeKernel(ctx, { ...rs({ ...o, sharedHit: true }), sampler: 'bluenoise' });
+    const ia = await accumulate(ctx, a, 1, 5);
+    const ib = await accumulate(ctx, b, 1, 5);
+    let black = 0;
+    for (let i = 0; i < ia.data.length; i += 4) if ((ib.data[i] as number) + (ib.data[i + 1] as number) + (ib.data[i + 2] as number) === 0 && (ia.data[i] as number) > 0) black++;
+    log(`${p}__bluenoise_${tag}_black_in_shared`, black);
+  }
+  dispose(ctx);
+}
+
 /** `prevcam` (P4.2e): the previous camera has one source (the megakernel's). Tracked (`setCamera` only), `nextFrame` and an explicit `setPrevCamera` of the same path must agree to the bit. */
 async function checkPrevCam(name: string, m: number, k: number, radius: number): Promise<void> {
   const ctx = await load(name);
@@ -518,6 +595,7 @@ try {
     if (checks.includes('r6')) await checkR6(name, refFrames, seeds, m, k, radius);
     if (checks.includes('unify')) await checkUnify(name, frameCount, refFrames, m, k, radius);
     if (checks.includes('prevcam')) await checkPrevCam(name, m, k, radius);
+    if (checks.includes('shareddiff')) await checkSharedDiff(name, m, k);
     if (checks.includes('timing')) await checkTiming(name, numberArg(args, 'w', 1280), numberArg(args, 'h', 720), reps, numberArg(args, 'timingframes', 16), m, k, radius);
   }
   reportResult({ scene: 'restir-check', renderer: 'ours', config: { checks: checks.join(','), scenes: scenes.join(','), frames: frameCount, refFrames, seeds, m, k, radius }, valid: deviceErrors.length === 0, metrics, notes }, { adapter: adapterSummary, deviceErrors });
