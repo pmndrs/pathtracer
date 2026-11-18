@@ -13,7 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -175,6 +175,25 @@ export class PtMegakernelAdapter implements RendererAdapter {
   /** `primary: 'vbuffer'`: the bench rasteriser that writes the V-buffer before each sample (not part of the library). */
   private raster: VbufferRaster | null = null;
   private lastLoad: { caps: Caps; copy: SceneCopy; input: SceneCopyInput } | null = null;
+  private lastKernelOptions: PtMegakernelOptions | null = null;
+
+  /**
+   * Check pages: another megakernel on the same device and scene copy, built from this adapter's own kernel options (materials, textures, alpha mask, environment, mode) with
+   * `integrator` overrides merged over them (`restir: null` drops ReSTIR). Film, camera, limits and seed are set as in `load`; the caller destroys it.
+   */
+  async createKernel(override: { integrator?: PtIntegratorOptions; blueNoise?: string } = {}): Promise<PtMegakernel> {
+    const base = this.lastKernelOptions;
+    if (!base || !this.trace || !this.sceneBuffers || !this.gpuContext || !this.scene || !this.lastLoad) throw new Error('pt-megakernel: load() first');
+    const integrator = { ...base.integrator, ...override.integrator } as PtIntegratorOptions;
+    const blueNoise = integrator.sampler === 'bluenoise' && !base.blueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', override.blueNoise ?? 'gf-vec2-64') : base.blueNoise;
+    const kernel = await PtMegakernel.create(this.gpuContext.device, this.lastLoad.caps, { ...base, ...(blueNoise ? { blueNoise } : {}), integrator });
+    kernel.setScene(this.trace, this.sceneBuffers);
+    kernel.setFilm(this.scene.film.width, this.scene.film.height);
+    kernel.setCamera(this.scene.camera);
+    kernel.setLimits(this.limits);
+    kernel.setSeed(this.settings.seed ?? 0);
+    return kernel;
+  }
   /** What the last `load` built, for checks that drive the primary-hit path themselves (`vbuffer-check`): the device's caps, the CPU scene copy and its input, the V-buffer rasteriser and the GPU buffers. */
   get debug(): { caps: Caps; copy: SceneCopy; input: SceneCopyInput; raster: VbufferRaster | null; trace: TraceSceneBuffers; sceneBuffers: SceneCopyBuffers } {
     if (!this.lastLoad || !this.trace || !this.sceneBuffers) throw new Error('pt-megakernel: load() first');
@@ -355,6 +374,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _appends;
     void _sort;
     const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    this.lastKernelOptions = kernelOptions as unknown as PtMegakernelOptions;
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}), ...(this.settings.appends !== undefined ? { appends: this.settings.appends } : {}), ...(this.settings.sort !== undefined ? { sort: this.settings.sort } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);
     this.kernel.setFilm(scene.film.width, scene.film.height);

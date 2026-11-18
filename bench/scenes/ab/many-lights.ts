@@ -6,7 +6,7 @@ import { translation } from '../geometry.ts';
  * (alias-table power picks the strong ones but the weak ones near a shading point matter). Most lamps are occluded or cosine-poor for a given point, so plain NEE with a power
  * pick is noisy and RIS / reuse has something to win. No pbrt/Mitsuba reference (the lamp count makes them slow): judge against our own high-spp NEE render.
  */
-function manyLights(name: string, n: number): SceneDesc {
+export function manyLampMeshes(n: number): MeshDesc[] {
   const levels = [2, 8, 32, 128];
   const groups: Record<number, { x: number; z: number }[]> = {};
   const span = 7;
@@ -33,6 +33,11 @@ function manyLights(name: string, n: number): SceneDesc {
     }
     lampMeshes.push({ name: `lamps-${e}`, geometry: { type: 'triangles', positions, indices, normals }, material: 'lightBack', emission: [e, e, e] });
   }
+  return lampMeshes;
+}
+
+function manyLights(name: string, n: number): SceneDesc {
+  const lampMeshes = manyLampMeshes(n);
   return {
     version: 1,
     name,

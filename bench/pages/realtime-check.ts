@@ -18,10 +18,15 @@
  * `timing` (not in the default set; BEST EFFORT, the quiet pass owns the numbers): ms per 1 spp dispatch of plain Owen-Sobol, frame outputs, blue noise, and the whole realtime mode,
  *  interleaved ABBA over `rounds` rounds of `batch` dispatches in one command buffer, paired ratios to the plain kernel.
  *
- * Args: scenes=cornell,sponza-white  frames=16  step=1 (degrees)  write=1  check=frames,bluenoise  n=128 (bluenoise frames)  bias_tol=0.02  size=128 (Cornell side)
+ * `restir=unbiased|biased|shared` (P4.2e): the kernels under test (not the references) run ReSTIR DI at the first vertex, so the same checks apply to it: the planes recompose the
+ * radiance (the reservoir's first-vertex light lands in the demodulated plane of the primary BSDF), motion / reprojection through the shared previous camera, and the blue-noise
+ * A/B per frame after a blur (`bn_*_blur2_gain_vs_owen_sobol` = Owen-Sobol + ReSTIR over blue noise + ReSTIR). `unbiased` = unbiased combine, no initial visibility;
+ * `shared` = unbiased + `sharedHit`.
+ *
+ * Args: scenes=cornell,sponza-white  frames=16  step=1 (degrees)  write=1  check=frames,bluenoise  n=128 (bluenoise frames)  bias_tol=0.02  size=128 (Cornell side)  restir=unbiased
  */
 import { fetchBlueNoise, type BlueNoiseTexture } from '@pmndrs/raytracer';
-import { PT_DEMOD_EPS, ptCameraBasis, ptSampleBlueNoise, type PtFrame, type PtLookAtCamera, type PtMegakernel, type PtBlueNoiseShift } from '@pmndrs/pathtracer';
+import { PT_DEMOD_EPS, ptCameraBasis, ptSampleBlueNoise, type PtFrame, type PtLookAtCamera, type PtMegakernel, type PtBlueNoiseShift, type PtRestirOptions } from '@pmndrs/pathtracer';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, summarizeAdapter, uploadImage } from '../runner/page-client.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
@@ -78,8 +83,11 @@ function orbit(scene: SceneDesc, frames: number, stepDeg: number, pan = false): 
   return out;
 }
 
+/** `restir=` page arg: the ReSTIR settings of the kernels under test (null = plain NEE). */
+let restirUnderTest: PtRestirOptions | null = null;
+
 async function loadAdapter(scene: SceneDesc, settings: PtAdapterSettings): Promise<{ adapter: PtMegakernelAdapter; kernel: PtMegakernel; device: GPUDevice }> {
-  const adapter = new PtMegakernelAdapter({ nee: true, ...settings });
+  const adapter = new PtMegakernelAdapter({ nee: true, ...(restirUnderTest ? { restir: restirUnderTest } : {}), ...settings });
   await adapter.load(scene);
   return { adapter, kernel: adapter.renderer as PtMegakernel, device: adapter.gpuContext!.device };
 }
@@ -460,6 +468,7 @@ try {
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
   adapterSummary = summarizeAdapter(adapter);
   const only = args.check ? args.check.split(',') : ['frames', 'bluenoise'];
+  if (args.restir) restirUnderTest = args.restir === 'biased' ? {} : { bias: 'unbiased', initialVisibility: false, ...(args.restir === 'shared' ? { sharedHit: true } : {}) };
   if (only.includes('timing')) metrics.timing_best_effort = 1;
   const frames = numberArg(args, 'frames', 16);
   if (only.includes('frames')) await checkFrames((args.scenes ?? 'cornell,sponza-white').split(','), frames, numberArg(args, 'step', 1), numberArg(args, 'write', 1) !== 0, numberArg(args, 'size', 128));
@@ -467,7 +476,7 @@ try {
   if (only.includes('timing')) await checkTiming((args.scenes ?? 'cornell,sponza-white').split(','), numberArg(args, 'rounds', 3), numberArg(args, 'batch', 32));
   const total = Object.entries(metrics).filter(([k]) => k.endsWith('_mismatch')).reduce((sum, [, v]) => sum + v, 0);
   reportResult(
-    { scene: 'realtime-check', renderer: 'ours', config: { frames, checks: only.join(','), scenes: args.scenes ?? 'cornell,sponza-white' }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems } },
+    { scene: 'realtime-check', renderer: 'ours', config: { frames, checks: only.join(','), scenes: args.scenes ?? 'cornell,sponza-white', restir: args.restir ?? 'off' }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems } },
     { adapter: adapterSummary, deviceErrors },
   );
   if (total > 0) throw new Error(`realtime-check: ${total} mismatches. First:\n${problems.join('\n')}`);

@@ -8,12 +8,16 @@
  *  motion    camera orbit of `step` degrees per frame for 16 frames: per-frame relMSE against a reference per pose, and the 8x8 block bias (p99 of |block mean / reference block mean - 1|): ghosting shows as a bias
  *            spike next to NEE's own 1 spp block noise; moving vs static for the same frames.
  *  r6        decorrelated reuse: autocorrelation of the per-frame error (luminance) along x at lags 1..32, spatial neighbours `random` vs `fixed`, temporal pick `random` vs `nearest`.
- *  timing    ms per frame at the scene's film (`w` x `h` override): NEE, RIS, RIS + temporal, RIS + temporal + spatial, interleaved `reps` times; provisional.
+ *  timing    ms per frame at the scene's film (`w` x `h` override): NEE, RIS, RIS + temporal, RIS + temporal + spatial, unbiased, and `sharedHit` (P4.2c), interleaved `reps` times; provisional.
+ *  unify     (P4.2b/c/e) on textured, OpenPBR and alpha-MASK lamp scenes as well as the old ones: M = 1 equivalence with NEE (own noise floor and the PCG-NEE ratio), unbiased convergence
+ *            (relBias of `ris_ts_unb`, two seeds) of the plain passes, `sharedHit`, `sampler: 'bluenoise'` and both, and of the V-buffer primary (`primary: 'vbuffer'`, the adapter's raster).
+ *  prevcam   (P4.2e) one source of truth for the previous camera: the same camera path with `setCamera` only (tracked), `nextFrame`, and `setPrevCamera` must give bit-identical images;
+ *            a wrong previous camera must not.
  *
- * Args: scenes=cornell,quad-light,lights-mix-lamps,many-lights-64  check=equiv,converge,noise,motion,timing,r6  frames=1024  reffames=4096  seeds=8  step=0.5  reps=5  w=1280 h=720  m=8  k=2  radius=16
+ * Args: scenes=cornell,quad-light,lights-mix-lamps,many-lights-64  check=equiv,converge,noise,motion,timing,r6,unify,prevcam  frames=1024  reffames=4096  seeds=8  step=0.5  reps=5  w=1280 h=720  m=8  k=2  radius=16
  */
-import { sceneFormatOf, type Caps, type SceneCopy, type SceneCopyBuffers } from '@pmndrs/raytracer';
-import { PtMegakernel, type PtIntegratorOptions, type PtRestirOptions, type PtLookAtCamera } from '@pmndrs/pathtracer';
+import { type Caps, type SceneCopy, type SceneCopyBuffers } from '@pmndrs/raytracer';
+import { PtMegakernel, ptRestirGbufBytes, type PtIntegratorOptions, type PtRestirOptions, type PtLookAtCamera } from '@pmndrs/pathtracer';
 import type { TraceSceneBuffers } from '@pmndrs/bvh';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
@@ -45,19 +49,17 @@ interface Ctx {
 async function load(name: string, film?: { w: number; h: number }): Promise<Ctx> {
   let scene = getScene(name);
   if (film) scene = { ...scene, film: { ...scene.film, width: film.w, height: film.h } };
-  const adapter = new PtMegakernelAdapter({ passesPerSubmit: 8 });
+  // layering 'albedo': ReSTIR's target must be deterministic (the adapter's reference default is the stochastic walk); every kernel of the check, NEE included, uses it.
+  const adapter = new PtMegakernelAdapter({ passesPerSubmit: 8, layering: 'albedo' });
   await adapter.load(scene);
   const dbg = adapter.debug;
   deviceErrors = watchDevice(adapter.gpuContext!.device);
   return { adapter, device: adapter.gpuContext!.device, caps: dbg.caps, trace: dbg.trace, buffers: dbg.sceneBuffers, copy: dbg.copy, scene, kernels: [] };
 }
 
+/** A kernel with the adapter's own options for this scene (textures, OpenPBR, alpha mask, environment) and `integrator` merged over them. */
 async function makeKernel(ctx: Ctx, integrator: PtIntegratorOptions): Promise<PtMegakernel> {
-  const k = await PtMegakernel.create(ctx.device, ctx.caps, { format: sceneFormatOf(ctx.trace), layout: ctx.copy.layout, integrator });
-  k.setScene(ctx.trace, ctx.buffers);
-  k.setFilm(ctx.scene.film.width, ctx.scene.film.height);
-  k.setCamera(ctx.scene.camera);
-  k.setLimits({ maxDepth: ctx.scene.integrator.maxDepth, rrStartDepth: ctx.scene.integrator.rrStartDepth });
+  const k = await ctx.adapter.createKernel({ integrator });
   ctx.kernels.push(k);
   return k;
 }
@@ -370,6 +372,8 @@ async function checkTiming(name: string, w: number, h: number, reps: number, nFr
     { name: 'ris_t', integrator: rs({ candidates: m, temporal: true, spatial: 0, bias: 'biased', initialVisibility: true, spatialRadius: radius }) },
     { name: 'ris_ts', integrator: rs({ candidates: m, temporal: true, spatial: k, bias: 'biased', initialVisibility: true, spatialRadius: radius }) },
     { name: 'ris_ts_unb', integrator: rs({ candidates: m, temporal: true, spatial: k, bias: 'unbiased', initialVisibility: false, spatialRadius: radius }) },
+    { name: 'ris_ts_shared', integrator: rs({ candidates: m, temporal: true, spatial: k, bias: 'biased', initialVisibility: true, spatialRadius: radius, sharedHit: true }) },
+    { name: 'ris_ts_bn', integrator: { ...rs({ candidates: m, temporal: true, spatial: k, bias: 'biased', initialVisibility: true, spatialRadius: radius }), sampler: 'bluenoise' } },
   ];
   const kernels: PtMegakernel[] = [];
   for (const c of cfgs) kernels.push(await makeKernel(ctx, c.integrator));
@@ -390,6 +394,98 @@ async function checkTiming(name: string, w: number, h: number, reps: number, nFr
   cfgs.forEach((c, i) => log(`${p}__${c.name}_ratio_min_vs_nee`, Math.min(...(samples[i] as number[])) / neeMin));
   notes[`${p}__restir_kernel_bytes`] = kernels[1] ? (kernels[1].restir?.wgslBytes ?? 0) : 0;
   notes[`${p}__restir_buffers_bytes`] = kernels[1]?.restir?.stats.bytes ?? 0;
+  notes[`${p}__restir_gbuf_bytes`] = kernels[1]?.restir?.stats.gbufBytes ?? 0;
+  notes[`${p}__restir_shared_buffers_bytes`] = kernels[5]?.restir?.stats.bytes ?? 0;
+  // 1080p: the two G-buffer frames now and before P4.2c (2 x 32 B per pixel)
+  notes[`gbuf_bytes_1080p_now`] = ptRestirGbufBytes({}, 1920 * 1080);
+  notes[`gbuf_bytes_1080p_before`] = 2 * 1920 * 1080 * 32;
+  dispose(ctx);
+}
+
+/** `unify` (P4.2b/c/e): equivalence at M = 1 and unbiased convergence of every flavour of the passes on a scene (textures, OpenPBR, alpha MASK included). */
+async function checkUnify(name: string, frameCount: number, refFrames: number, m: number, k: number, radius: number): Promise<void> {
+  const ctx = await load(name);
+  const p = `unify__${name}`;
+  const nee = await makeKernel(ctx, NEE);
+  const ref = await accumulate(ctx, nee, refFrames, 100);
+  const base = cmp(await accumulate(ctx, nee, frameCount, 1), ref);
+  log(`${p}__nee_relmse`, base.relMse);
+  log(`${p}__nee_relbias`, base.relBias);
+  // M = 1, no reuse, no visibility: plain NEE without MIS. The PCG NEE is the like-for-like noise reference.
+  const neePcg = await makeKernel(ctx, { sampler: 'pcg' });
+  const pcg = cmp(await accumulate(ctx, neePcg, frameCount, 4), ref);
+  const ris1 = await makeKernel(ctx, rs({ candidates: 1, temporal: false, spatial: 0, initialVisibility: false }));
+  const e1 = cmp(await accumulate(ctx, ris1, frameCount, 2), ref);
+  const e2 = cmp(await accumulate(ctx, ris1, frameCount, 3), ref);
+  log(`${p}__ris1_relbias`, e1.relBias);
+  log(`${p}__ris1_relbias_seed2`, e2.relBias);
+  log(`${p}__ris1_relmse`, e1.relMse);
+  log(`${p}__ris1_ratio_vs_nee_pcg`, e1.relMse / pcg.relMse);
+  log(`${p}__nee_pcg_relbias`, pcg.relBias);
+  log(`${p}__nonfinite`, e1.nonFinite);
+  // unbiased M = 8 + temporal + k spatial; plain / shared hit / blue noise / both
+  const unb: PtRestirOptions = { candidates: m, temporal: true, spatial: k, spatialRadius: radius, bias: 'unbiased', initialVisibility: false };
+  const flavours: [string, PtIntegratorOptions][] = [
+    ['plain', rs(unb)],
+    ['shared', rs({ ...unb, sharedHit: true })],
+    ['bluenoise', { ...rs(unb), sampler: 'bluenoise' }],
+    ['bluenoise_shared', { ...rs({ ...unb, sharedHit: true }), sampler: 'bluenoise' }],
+  ];
+  for (const [tag, integrator] of flavours) {
+    const kernel = await makeKernel(ctx, integrator);
+    const a = cmp(await accumulate(ctx, kernel, frameCount, 1), ref);
+    const b = cmp(await accumulate(ctx, kernel, frameCount, 2), ref);
+    log(`${p}__${tag}_relbias`, a.relBias);
+    log(`${p}__${tag}_relbias_seed2`, b.relBias);
+    log(`${p}__${tag}_relmse`, a.relMse);
+    log(`${p}__${tag}_ratio_vs_nee`, a.relMse / base.relMse);
+    log(`${p}__${tag}_nonfinite`, a.nonFinite);
+    if (tag === 'plain') notes[`${p}__gbuf_bytes`] = kernel.restir?.stats.gbufBytes ?? 0;
+  }
+  // The V-buffer primary: the adapter's raster writes the texture, the passes resolve it. Its own adapter (the V-buffer is the engine's), progressive frames.
+  const vb = new PtMegakernelAdapter({ passesPerSubmit: 8, layering: 'albedo', primary: 'vbuffer', restir: unb });
+  await vb.load(getScene(name));
+  const vimg = (await vb.render({ spp: frameCount, seed: 1 })).image;
+  const v = cmp(vimg, ref);
+  log(`${p}__vbuffer_relbias`, v.relBias);
+  log(`${p}__vbuffer_relmse`, v.relMse);
+  log(`${p}__vbuffer_ratio_vs_nee`, v.relMse / base.relMse);
+  log(`${p}__vbuffer_nonfinite`, v.nonFinite);
+  vb.dispose();
+  dispose(ctx);
+}
+
+/** `prevcam` (P4.2e): the previous camera has one source (the megakernel's). Tracked (`setCamera` only), `nextFrame` and an explicit `setPrevCamera` of the same path must agree to the bit. */
+async function checkPrevCam(name: string, m: number, k: number, radius: number): Promise<void> {
+  const ctx = await load(name);
+  const p = `prevcam__${name}`;
+  const poses: PtLookAtCamera[] = [];
+  for (let t = 0; t < 8; t++) poses.push(orbit(ctx.scene.camera, 1.5 * t));
+  const kernel = await makeKernel(ctx, rs({ candidates: m, temporal: true, spatial: k, spatialRadius: radius, bias: 'unbiased', initialVisibility: false }));
+  const run = async (how: 'tracked' | 'next' | 'explicit' | 'wrong'): Promise<Float32Array> => {
+    await reset(ctx, kernel, 7);
+    kernel.setPrevCamera(null);
+    for (let t = 0; t < poses.length; t++) {
+      if (how === 'next' && t > 0) kernel.nextFrame(poses[t] as PtLookAtCamera);
+      else {
+        kernel.setCamera(poses[t] as PtLookAtCamera);
+        if (how === 'explicit') kernel.setPrevCamera(t > 0 ? (poses[t - 1] as PtLookAtCamera) : null);
+        if (how === 'wrong') kernel.setPrevCamera(poses[0] as PtLookAtCamera);
+      }
+      await frames(ctx, kernel, 1, 1);
+    }
+    kernel.setPrevCamera(null);
+    return (await image(kernel)).data;
+  };
+  const tracked = await run('tracked');
+  const diff = (a: Float32Array, b: Float32Array): number => {
+    let worst = 0;
+    for (let i = 0; i < a.length; i++) worst = Math.max(worst, Math.abs((a[i] as number) - (b[i] as number)));
+    return worst;
+  };
+  log(`${p}__next_maxdiff`, diff(tracked, await run('next')));
+  log(`${p}__explicit_maxdiff`, diff(tracked, await run('explicit')));
+  log(`${p}__wrong_maxdiff`, diff(tracked, await run('wrong')));
   dispose(ctx);
 }
 
@@ -420,6 +516,8 @@ try {
     if (checks.includes('noise')) await checkNoise(name, refFrames, seeds, m, k, radius);
     if (checks.includes('motion')) await checkMotion(name, Math.min(refFrames, 512), step, m, k, radius);
     if (checks.includes('r6')) await checkR6(name, refFrames, seeds, m, k, radius);
+    if (checks.includes('unify')) await checkUnify(name, frameCount, refFrames, m, k, radius);
+    if (checks.includes('prevcam')) await checkPrevCam(name, m, k, radius);
     if (checks.includes('timing')) await checkTiming(name, numberArg(args, 'w', 1280), numberArg(args, 'h', 720), reps, numberArg(args, 'timingframes', 16), m, k, radius);
   }
   reportResult({ scene: 'restir-check', renderer: 'ours', config: { checks: checks.join(','), scenes: scenes.join(','), frames: frameCount, refFrames, seeds, m, k, radius }, valid: deviceErrors.length === 0, metrics, notes }, { adapter: adapterSummary, deviceErrors });
