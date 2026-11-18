@@ -13,6 +13,7 @@ import type { Defines } from '../caps/wgsl.ts';
 import { DEFAULT_BATCH_WORKGROUP_SIZE, STORAGE_BUFFER_BUDGET, type BatchWorkgroupSize } from './constants.ts';
 import { surfaceVertexOffsets, type SurfaceLayout } from './surface-table.ts';
 import { RT_CORE_WGSL, rtBatchArgsWgsl, rtBatchWgsl, rtSurfaceWgsl } from './wgsl-source.ts';
+import { RT_INTERVAL_WGSL } from './interval.ts';
 import { DEFAULT_SCENE_PACKING, SCENE_HEADER_VEC4S, sceneCopyStorageBuffers, type SceneCopyPacking } from '../scene/constants.ts';
 import { rtPackSceneAccess, rtSceneWgsl } from '../scene/scene-wgsl.ts';
 import type { TextureLayout } from '../scene/texture.ts';
@@ -68,6 +69,12 @@ export interface RtModuleOptions extends SceneFormat {
   minify?: boolean;
   /** Instance masks against ray masks (bvh's `rayMasks`). Default true. */
   rayMasks?: boolean;
+  /**
+   * Add the interval queries (P5.rc1, `interval.ts`): `rtClosestInterval(origin, direction, t0, t1, mask)` over the half-open `(t0, t1]`,
+   * `rtClosestIntervalLo` over `[t0, t1)`, the `rtVisibleInterval` any-hit forms, the cascade arithmetic and `rtOctEqualAreaDecode`.
+   * Default false: the text is unchanged (kernel bytes identical).
+   */
+  intervals?: boolean;
   /** bvh's `bvhTrianglePasses`; default every triangle blocks, `null` to declare it yourself. */
   triangleFilter?: string | null;
   /** Any-hit child order (bvh's `anyHitOrder`). Default 'far'. */
@@ -298,6 +305,7 @@ function coreDefines(options: RtModuleOptions): Defines {
 
 function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): string {
   let source = `${bvhWalk(options)}\n${RT_CORE_WGSL}`;
+  if (options.intervals) source += RT_INTERVAL_WGSL;
   const layout = surfaceLayoutOf(options);
   if (options.scene) {
     const { slot } = options.scene;

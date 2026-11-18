@@ -76,6 +76,12 @@ Everything goes into the caller's encoder; uniforms and bind groups are cached p
 does no CPU writes and no readback. CPU helpers: `packRays`, `packRaysSoa`, `aosToSoa`, `packCones`, `readHits`,
 `readVisibility`, `dispatchGrid`.
 
+### Interval queries (P5.rc1, for gi's Split Radiance Cascades)
+
+`rtModuleWgsl(caps, { intervals: true })` adds `rtClosestInterval(origin, direction, t0, t1, mask) -> RtHit` over the half-open `(t0, t1]` (`rtClosestIntervalLo`: `[t0, t1)`), `rtVisibleInterval*`, `rtCascadeEnd / Start / Index` and
+`rtOctEqualAreaDecode`; `RtIntervalTracer` is the batched form (sources `rays` / `probes`, outputs `hit` / `distance` / `visible` / `shaded`, one kernel for many dispatches per frame). Semantics, the boundary
+rule, numbers and how gi calls it: [docs/design/split-rc-tracing.md](../../docs/design/split-rc-tracing.md). Not boundary exact: the any-hit forms (V290).
+
 ### Scene copy (P1.4, D4): materials, lights, surface data
 
 ```ts
