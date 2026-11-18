@@ -200,6 +200,11 @@ export class PtRestirPasses {
     this.frame = 0;
   }
 
+  /** A camera cut: the next frame has no temporal neighbour (the reservoirs stay; spatial reuse and fresh candidates continue). Replaces the old `setPreviousCamera(null)`. */
+  dropHistory(): void {
+    this.frame = 0;
+  }
+
   /** Region index of the final reservoirs of the frame encoded last (what the shade pass reads); the next `encodeFrame` flips it. */
   finalRegion(frame: number): number {
     return (frame & 1) === 0 ? PT_RESTIR_REGION.final0 : PT_RESTIR_REGION.final1;

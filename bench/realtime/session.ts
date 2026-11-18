@@ -103,7 +103,7 @@ export class RealtimePipelineSession {
     if (this.cut || !this.camera) {
       this.kernel.setCamera(camera);
       this.kernel.setPrevCamera(camera);
-      this.kernel.restir?.setPreviousCamera(null);
+      this.kernel.restir?.dropHistory();
       this.arm.resetHistory();
       this.cut = false;
       this.frames = 0;
