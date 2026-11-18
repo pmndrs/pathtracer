@@ -21,7 +21,6 @@ import {
   type ModuleBindingEntry,
   type ResolvedBatchOptions,
   type ResolvedSceneFormat,
-  type SceneFormat,
 } from './modules.ts';
 import { BATCH_PARAMS_BYTES, dispatchGrid, packBatchParams, resultBytes } from './records.ts';
 import { rtCreateComputePipelineAsync } from './wgsl-source-map.ts';
