@@ -171,3 +171,10 @@ Generated assets (`bench/assets/generated/`, env maps and noise made by our own 
 |---|---|---|---|
 | Node semantics (`packages/pathtracer/src/materialx/nodes.ts`): `place2d`, `tiledimage`, `normalmap`, `ramp*`, `split*`, `smoothstep`, `mix`, `remap`, `rotate2d`, `luminance` coefficients | MaterialX 1.38 standard library (`libraries/stdlib/genglsl`, `stdlib_ng.mtlx`), https://github.com/AcademySoftwareFoundation/MaterialX, read from the maintainer's checkout `~/Developer/MaterialX` | Apache-2.0 | Formulas re-implemented from the definitions (TypeScript and WGSL); no file copied. The `open_pbr_surface` / `standard_surface` / `gltf_pbr` input names come from the MaterialX libraries and the sample documents |
 | Sample documents used by `bench/materialx-coverage.ts` | `~/Developer/materialx-fidelity/third_party/materialx-samples` (MIT) and `~/Developer/MaterialX/resources/Materials/Examples` (Apache-2.0) | MIT / Apache-2.0 | Read at run time from the sibling checkouts for the coverage count; not copied into this repo. Our own test documents are inline in `bench/scenes/ab/materialx-scenes.ts` and use synthetic images (`bench/scenes/materialx-images.ts`) |
+
+## Split RC tracing support (P5.rc1)
+
+- `rtOctEqualAreaDecode` (`packages/raytracer/src/trace/interval.ts`, WGSL and TypeScript twin) is pbrt-v4's `EqualAreaSquareToSphere` (Apache-2.0, https://github.com/mmp/pbrt-v4) after Clarberg,
+  "Fast Equal-Area Mapping of the (Hemi)Sphere using SIMD", JGT 2008: the published construction, re-typed (no file copied); attribution here.
+- The interval convention, the cascade arithmetic (`t_n = t0 growth^n`) and the probe / direction layout follow Freeman, Sannikov, Pitt-Francis, "Split Radiance Cascades" (arXiv 2607.20384, CC BY-SA 4.0), sections
+  3.2 and 5: ideas and conventions only, no text or code; `research/papers/` holds the PDF locally (git-ignored). No code of Radiance Cascades implementations (three-rc, TypeGPU, ...) was read or used.

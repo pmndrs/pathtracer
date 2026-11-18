@@ -11,6 +11,8 @@ and the choices still open. API reference: [packages/raytracer/README.md](../../
 | L1 | `rtClosest(ray, mask) -> RtHit`, `rtClosestCone(ray, mask, cone)` | closest hit over `[tMin, tMax]`; `t = RT_MISS_T` (−1) on a miss. The cone is carried through only: `coneWidth = width + spread·t` (V23) |
 | — | `rtSurface(hit, ray, want)` | lazy decode: position, geometric normal + front face (free, from the hit), shading normal, UV, material id. Reads only what `want` asks for (V24) |
 
+Interval queries for gi's Split Radiance Cascades (half-open `(t0, t1]`, the batched `RtIntervalTracer`, probe direction bundles) are a separate layer on top: [split-rc-tracing.md](split-rc-tracing.md).
+
 Underneath is bvh's walk, unchanged: `traceModuleWgsl` with its compile-time formats (quantized/f32 nodes,
 record/indexed leaves, vec4/packed positions), `rayMasks`, `anyHitOrder` and the `bvhTrianglePasses` hook (the
 `triangleFilter` option). The generator checks bvh's `TRACER_GPU_LAYOUT_VERSION` against our contract (v2) before
