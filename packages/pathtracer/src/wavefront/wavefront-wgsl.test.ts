@@ -26,6 +26,11 @@ const variants: Record<string, Parameters<typeof ptWavefrontBuild>[1]> = {
   'subgroup-refill-tex': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, refill: true, layers: 2, appends: 'subgroup' },
   'sort-both': { format: {}, layout, sort: 'both' },
   'ordered-sort-sg': { format: {}, layout, refill: 'ordered', layers: 2, sort: 'both', appends: 'subgroup' },
+  // P4.1b / P4.2a: real-time frames, blue noise, ReSTIR DI on the plain scheduler
+  'frame-bluenoise': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } },
+  'frame-tex': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { frame: true } },
+  'restir': { format: {}, layout, integrator: { restir: { bias: 'unbiased' } } },
+  'restir-frame-pbr': { format: {}, layout, integrator: { frame: true, restir: {}, materials: { features: { mix: true, thin: true, layered: true, medium: true }, layered: { layering: 'albedo' } } } } as never,
   'pbr-fuzz': { format: {}, layout, integrator: { materials: { features: { ...feat, fuzz: true }, layered: { layering: 'albedo' } } } } as never,
 };
 
@@ -193,5 +198,24 @@ describe('wavefront WGSL (P3.1)', () => {
     expect(refill.shadeSecondary).toBeDefined();
     expect(refill.shade.code).toMatch(/\(ptwfState\[2u \* n \+ path\]\.w & 0x1fffffffu\) >= 2u\) \{\s*return;/);
     expect((refill.shadeSecondary as { code: string }).code).toMatch(/\(ptwfState\[2u \* n \+ path\]\.w & 0x1fffffffu\) < 2u\) \{\s*return;/);
+  });
+
+  it('ReSTIR DI on the wavefront (P4.2a): the shade kernel reads the final reservoir at vertex 0 and queues its shadow ray; refill and what it cannot do throw', () => {
+    const wf = ptWavefrontBuild(caps, { ...variants.restir!, prune: false, shortenNames: false, minify: false });
+    expect(wf.shade.code).toContain('@group(2) @binding(11) var<storage, read> ptRestirRes: array<vec4u>;');
+    expect(wf.shade.code).toContain('fn ptwfRestirLd(');
+    expect(wf.shade.code).toContain('ptRestirRes[bitcast<u32>(ptParams.up.w) + pxIndex]'); // the final region rides in an unused params lane (limits.w is the iteration)
+    expect(wf.shade.code).toContain('if (vertex == 0u) {\n            ld = ptwfRestirLd(');
+    expect(wf.shade.code).toContain('prevPdf = select(s.pdf, 0.0, vertex == 0u);'); // the BSDF ray after the first vertex gets no MIS weight, as in the megakernel
+    for (const k of ['camera', 'intersect', 'shadow', 'args'] as const) expect(wf[k].code).not.toContain('ptRestirRes');
+    // the megakernel's reservoir shade reads the same words the same way
+    const mk = ptMegakernelBuild(caps, { ...variants.restir!, prune: false, shortenNames: false, minify: false }).code;
+    expect(mk).toContain('let rw = bitcast<f32>(r.z);');
+    expect(wf.shade.code).toContain('let rw = bitcast<f32>(r.z);');
+    expect(ptWavefrontBuild(caps, variants.plain!).shade.code).not.toContain('ptRestirRes');
+    expect(() => ptWavefrontBuild(caps, { ...variants.restir!, refill: true })).toThrow(/plain scheduler/);
+    expect(() => ptWavefrontBuild(caps, { ...variants.restir!, integrator: { restir: { sharedHit: true } } })).toThrow(/sharedHit/);
+    expect(() => ptWavefrontBuild(caps, { ...variants['frame-tex']!, integrator: { restir: {}, alphaMask: true } })).toThrow(/alpha MASK/);
+    expect(() => ptWavefrontBuild(caps, { ...variants.plain!, integrator: { restir: {}, nee: false } })).toThrow(/nee/);
   });
 });

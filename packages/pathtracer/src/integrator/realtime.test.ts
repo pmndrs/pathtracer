@@ -6,7 +6,7 @@ import { PT_BLUENOISE_BINDING, ptBlueNoiseAlpha, ptBlueNoiseOffset, ptBlueNoiseS
 import { resolveIntegratorOptions } from './integrator-wgsl.ts';
 import { ptMegakernelWgsl, validateBlueNoise } from './megakernel.ts';
 import { PT_MODE_NOTES, PT_MODES, ptApplyMode, ptModeNotes, ptModePreset } from './modes.ts';
-import { PT_FRAME_BINDING, PT_FRAME_PARAMS_BINDING, PT_FRAME_PLANES, ptDecodeFrame, ptOutputsWgsl } from './outputs-wgsl.ts';
+import { PT_FRAME_BINDING, PT_FRAME_PARAMS_BINDING, PT_FRAME_PLANES, ptDecodeFrame, ptFrameBase, ptFrameTailBytes, ptOutputsWgsl } from './outputs-wgsl.ts';
 import { ptCameraBasis } from './camera.ts';
 
 const caps = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
@@ -108,13 +108,19 @@ describe('blue-noise sampler (P4.1)', () => {
     expect(Math.abs(s / (n * n) / (1 / 12))).toBeLessThan(0.1);
   });
 
-  it('the kernel: bluenoise binds the texture and sets the pixel; the wavefront refuses it', () => {
+  it('the kernel: bluenoise binds the texture and sets the pixel; the wavefront sets it in the camera and shade kernels (P4.1b)', () => {
     const code = mk({ sampler: 'bluenoise' }, false);
     expect(code).toContain('ptBnPixel = px;');
     expect(code).toContain('textureLoad(ptBlueNoise');
     expect(mk({})).not.toContain('ptBlueNoise');
-    expect(ptwfUnsupported({ sampler: 'bluenoise' })).toMatch(/bluenoise/);
-    expect(() => ptWavefrontBuild(caps, { format: {}, layout, integrator: { sampler: 'bluenoise' } } as never)).toThrow(/bluenoise/);
+    expect(ptwfUnsupported({ sampler: 'bluenoise' })).toBeNull();
+    const wf = ptWavefrontBuild(caps, { format: {}, layout, integrator: { sampler: 'bluenoise' }, prune: false, shortenNames: false, minify: false } as never);
+    expect(wf.camera.code).toContain('ptBnPixel = id.xy;');
+    expect(wf.shade.code).toContain('ptBnPixel = vec2u(path % dims.x, path / dims.x);');
+    expect(wf.camera.code).toContain(`@group(2) @binding(${PT_BLUENOISE_BINDING}) var ptBlueNoise`);
+    expect(wf.shade.code).toContain('textureLoad(ptBlueNoise');
+    for (const k of ['intersect', 'shadow', 'args'] as const) expect(wf[k].code).not.toContain('ptBlueNoise');
+    expect(ptWavefrontBuild(caps, { format: {}, layout, integrator: {} } as never).shade.code).not.toContain('ptBnPixel');
   });
 
   it('validateBlueNoise wants a vec2, power-of-two texture', () => {
@@ -151,10 +157,50 @@ describe('per-frame outputs (P4.1)', () => {
     expect(size({ frame: true, sampler: 'bluenoise' })).toBeGreaterThan(size({}));
   });
 
-  it('the wavefront refuses frame outputs; outputs text gates on the flag', () => {
-    expect(ptwfUnsupported({ frame: true })).toMatch(/frame/);
+  it('the wavefront runs frame outputs (planes in the accumulator tail, P4.1b); outputs text gates on the flag', () => {
+    expect(ptwfUnsupported({ frame: true })).toBeNull();
+    expect(ptwfUnsupported({ frame: true, aovs: true })).toMatch(/frame/); // both live in the accumulator tail
     expect(ptOutputsWgsl({ hooks: null, counters: false, aovs: false }, null)).toBe('');
     expect(ptOutputsWgsl({ hooks: null, counters: false, aovs: false, frame: true }, null)).toContain('fn ptFramePlanes');
+    // the megakernel's text has no tail helpers; the wavefront's writes through ptAccum at ptFrameBase and has the class add
+    const buffer = ptOutputsWgsl({ hooks: null, counters: false, aovs: false, frame: true }, null);
+    const tail = ptOutputsWgsl({ hooks: null, counters: false, aovs: false, frame: true }, null, 'tail');
+    expect(buffer).toContain('ptFrame[2u * n + pixel] = vec4f(normal, viewZ);');
+    expect(buffer).not.toContain('ptFrameBase');
+    expect(tail).toContain('ptAccum[b + 2u * n + pixel] = vec4f(normal, viewZ);');
+    expect(tail).toContain('fn ptFrameAdd(');
+    expect(tail).not.toContain('var<storage, read_write> ptFrame:');
+  });
+
+  it('the wavefront kernels write the frame planes where the radiance lands (P4.1b)', () => {
+    const wf = ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true }, prune: false, shortenNames: false, minify: false } as never);
+    // shade: planes 2-5 and the emission part of 0 / 1 at depth 0, the bounce distance at depth 1, everything else through the class add; the camera kernel overwrites the accumulator
+    expect(wf.shade.code).toContain('ptFramePlanes(path, n, fDirect, fDirect');
+    expect(wf.shade.code).toContain('ptFrameBounce(path, n, hit.t)');
+    expect(wf.shade.code).toContain('ptwfAddRadianceF(path, n, radiance, fDirect)');
+    expect(wf.shade.code).toContain(`@group(2) @binding(${PT_FRAME_PARAMS_BINDING}) var<uniform> ptFrameParams`);
+    expect(wf.camera.code).toContain('ptAccum[path] = vec4f(0.0, 0.0, 0.0, 1.0);');
+    expect(wf.shadow.code).toContain('ptFrameAdd(path, n, ptwfF3(r2));');
+    expect(wf.shadow.code).not.toContain('ptFrameParams');
+    // off: no frame text anywhere, and the accumulating camera kernel is the old one
+    const plain = ptWavefrontBuild(caps, { format: {}, layout, integrator: {}, prune: false, shortenNames: false, minify: false } as never);
+    for (const k of ['camera', 'shade', 'shadow'] as const) expect(plain[k].code).not.toMatch(/ptFrame(Planes|Add|Base|Bounce|Params)/);
+    expect(plain.camera.code).toContain('ptAccum[path] = ptAccum[path] + vec4f(0.0, 0.0, 0.0, 1.0);');
+    // the secondary shade kernel (R1) writes frames too (it runs depth >= 1: bounce distance and the class add)
+    const lod = ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true, materialLod: 'secondary' }, prune: false, shortenNames: false, minify: false } as never);
+    expect(lod.shadeSecondary?.code).toContain('ptFrameBounce(path, n, hit.t)');
+    // a frame is one sample per pixel: refill cannot restart a slot at its own time
+    expect(() => ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true }, refill: true } as never)).toThrow(/plain scheduler/);
+  });
+
+  it('the wavefront keeps the planes in the accumulator tail at a 256-byte aligned base (a storage binding offset)', () => {
+    for (const n of [1, 15, 16, 17, 96 * 96, 127 * 127, 960 * 540, 1280 * 720]) {
+      expect(ptFrameBase(n) % 16).toBe(0); // 16 vec4 = 256 B
+      expect(ptFrameBase(n)).toBeGreaterThanOrEqual(n);
+      expect(ptFrameBase(n) - n).toBeLessThan(16);
+      expect(ptFrameTailBytes(n)).toBe((ptFrameBase(n) + PT_FRAME_PLANES * n) * 16);
+    }
+    expect(ptOutputsWgsl({ hooks: null, counters: false, aovs: false, frame: true }, null, 'tail')).toContain('return (n + 15u) & ~15u;');
   });
 
   it('decode splits the planes in order', () => {
@@ -226,11 +272,11 @@ describe('mode presets (P4.1)', () => {
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { frame: false } }).integrator.frame).toBe(false);
   });
 
-  it('realtime uses the blue-noise sampler only when the texture is given, and not on the wavefront', () => {
+  it('realtime uses the blue-noise sampler only when the texture is given, on both schedulers (P4.1b)', () => {
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }).integrator.sampler).toBe('owen-sobol');
     expect(ptApplyMode({ mode: 'realtime' as const, blueNoise: {}, integrator: {} }).integrator.sampler).toBe('bluenoise');
-    expect(ptApplyMode({ mode: 'realtime' as const, blueNoise: {}, integrator: {} }, 'wavefront').integrator.sampler).toBe('owen-sobol');
-    expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }, 'wavefront').integrator.frame).toBeUndefined();
+    expect(ptApplyMode({ mode: 'realtime' as const, blueNoise: {}, integrator: {} }, 'wavefront').integrator.sampler).toBe('bluenoise');
+    expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }, 'wavefront').integrator.frame).toBe(true);
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { sampler: 'pcg' as const }, blueNoise: {} }).integrator.sampler).toBe('pcg');
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { restir: true } as object, blueNoise: {} }).integrator?.sampler).toBe('bluenoise'); // P4.2e: ReSTIR binds the texture too
   });

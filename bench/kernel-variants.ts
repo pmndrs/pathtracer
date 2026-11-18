@@ -105,6 +105,13 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     // P2.32b: the fitted internal-base correction in the shade kernel.
     'pbr-albedoInternal-corr-lut': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut' } } } },
     'pbr-albedoInternal-corr-texture': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } } } },
+    // P4.1b / P4.2a: the real-time options on the plain scheduler (frame planes in the accumulator tail, blue noise, ReSTIR DI at the first vertex).
+    'rt-frame': { format: {}, layout, integrator: { frame: true } },
+    'rt-frame-bluenoise': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } },
+    'rt-restir': { format: {}, layout, integrator: { restir: { bias: 'unbiased' } } },
+    'rt-realtime-restir': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { bias: 'unbiased' } } },
+    'rt-realtime-tex-restir': { format: {}, layout: texLayout, textures, integrator: { frame: true, sampler: 'bluenoise', restir: { bias: 'unbiased' } } },
+    'rt-realtime-pbr-albedo': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', materials: { features: feat, layered: { layering: 'albedo' } } } },
   };
   const hookDemo = { wgsl: 'fn ptOnVertex(v: PtPathVertex) -> u32 { return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= 3u); }\nfn ptTerminate(v: PtPathVertex) -> vec3f { return vec3f(0.5); }' };
   for (const [name, integrator] of Object.entries(outputVariantOptions(hookDemo))) base[`out-${name}`] = { format: {}, layout, integrator };

@@ -16,6 +16,13 @@ describe('wavefront auto policy (P3.9)', () => {
     expect(384 * 256 * small.layers).toBeLessThanOrEqual(1 << 21);
   });
 
+  it('frames (P4.1b): no refill ever; the plain wavefront only for a big scene on a big enough film', () => {
+    expect(ptwfAutoPolicy({ width: 960, height: 540, maxDepth: 2, subgroups: true, frame: true, triangles: 262_000 })).toMatchObject({ scheduler: 'wavefront', refill: false, layers: 1 });
+    expect(ptwfAutoPolicy({ width: 960, height: 540, maxDepth: 2, subgroups: true, frame: true, triangles: 40 }).scheduler).toBe('megakernel');
+    expect(ptwfAutoPolicy({ width: 128, height: 128, maxDepth: 2, subgroups: true, frame: true, triangles: 262_000 }).scheduler).toBe('megakernel');
+    expect(ptwfAutoPolicy({ width: 960, height: 540, maxDepth: 2, subgroups: true }).scheduler).toBe('megakernel'); // not a frame: unchanged
+  });
+
   it('layers: monotone in the film, 1..32', () => {
     let last = 33;
     for (const pixels of [1000, 10_000, 50_000, 98_304, 150_000, 262_144, 1_000_000]) {

@@ -22,6 +22,10 @@ export interface PtwfAutoInput {
   maxDepth: number;
   /** Device has the `subgroups` feature (`caps.subgroups`). */
   subgroups: boolean;
+  /** P4.1b: the caller renders real-time frames (`integrator.frame`, one sample per pixel per encode): refill cannot be used, the choice is megakernel vs the PLAIN wavefront. */
+  frame?: boolean;
+  /** Triangles in the scene (used by the `frame` rule only; unknown = treated as small). */
+  triangles?: number;
 }
 
 export interface PtwfAutoChoice {
@@ -50,10 +54,18 @@ export function ptwfAutoLayers(pixels: number): number {
   return layers;
 }
 
+/** `frame` rule (P4.1b, provisional, TASKS P4.1b): the plain wavefront beats the megakernel on a frame only when the scene is big (Sponza, 262k triangles: 0.87-0.91 at 640x360..1280x720, ReSTIR 0.90-0.95) and loses on small scenes (Cornell 1.05-1.12, many-lights 1.15). */
+export const PTWF_AUTO_FRAME_TRIANGLES = 100_000;
+export const PTWF_AUTO_FRAME_FILM = 1 << 17;
+
 export function ptwfAutoPolicy(input: PtwfAutoInput): PtwfAutoChoice {
   const pixels = input.width * input.height;
   if (!(pixels > 0) || !Number.isFinite(pixels)) throw new RangeError(`ptwfAutoPolicy: bad film ${input.width}x${input.height}`);
   const appends = input.subgroups ? ('subgroup' as const) : ('atomic' as const);
+  if (input.frame) {
+    if ((input.triangles ?? 0) >= PTWF_AUTO_FRAME_TRIANGLES && pixels >= PTWF_AUTO_FRAME_FILM) return { scheduler: 'wavefront', refill: false, layers: 1, appends, sort: 'none', reason: `frame, ${input.triangles} triangles, ${pixels} pixels: plain wavefront (no refill in a frame)` };
+    return { scheduler: 'megakernel', refill: false, layers: 1, appends: 'atomic', sort: 'none', reason: 'frame on a small scene or film: megakernel' };
+  }
   if (input.maxDepth <= PTWF_AUTO_SHORT_PATH) return { scheduler: 'megakernel', refill: false, layers: 1, appends: 'atomic', sort: 'none', reason: `maxDepth ${input.maxDepth} <= ${PTWF_AUTO_SHORT_PATH}: too little work per dispatch` };
   if (pixels >= PTWF_AUTO_BIG_FILM) return { scheduler: 'wavefront', refill: false, layers: 1, appends, sort: 'none', reason: `${pixels} pixels fill the GPU: plain wavefront` };
   if (pixels >= PTWF_AUTO_MID_FILM) return { scheduler: 'wavefront', refill: 'inline', layers: 1, appends, sort: 'none', reason: `${pixels} pixels: inline refill, one slot per pixel` };

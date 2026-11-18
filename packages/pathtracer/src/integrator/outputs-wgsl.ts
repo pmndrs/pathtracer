@@ -205,8 +205,59 @@ fn ptAovSpecular(m: RtMaterial) -> vec3f {
 `;
 }
 
-/** The per-frame outputs (P4.1): previous-camera uniform, the planes, the reprojection and the writer \`ptPath\` calls once at its end. Needs \`ptParams\`, \`ptAovAlbedo\` (\`ptAovWgsl\` with \`frame\`). */
-export function ptFrameWgsl(): string {
+/** First vec4 of the frame planes in the accumulation buffer of the WAVEFRONT (P4.1b): the beauty takes `n` vec4, the planes start at the next 256-byte boundary (a storage binding offset). TS twin of the WGSL `ptFrameBase`. */
+export function ptFrameBase(n: number): number {
+  return (n + 15) & ~15;
+}
+
+/** Bytes of the wavefront's accumulation buffer with the frame planes in its tail: the beauty, padding to 256 B, then `PT_FRAME_PLANES` planes. */
+export function ptFrameTailBytes(n: number): number {
+  return (ptFrameBase(n) + PT_FRAME_PLANES * n) * 16;
+}
+
+/** Where the planes live: `buffer` = their own storage binding (`ptFrame`, the megakernel); `tail` = the accumulation buffer's tail (`ptAccum`, the wavefront: no extra binding). */
+export type PtFramePlaneStore = 'buffer' | 'tail';
+
+const FRAME_BASE_WGSL = /* wgsl */ `
+// First vec4 of the planes in the accumulator: the beauty takes n vec4, the planes start on a 256-byte boundary.
+fn ptFrameBase(n: u32) -> u32 {
+    return (n + 15u) & ~15u;
+}
+`;
+
+/**
+ * Wavefront: add `l` (radiance gathered AFTER the primary vertex's own emission) to the plane of the path's primary class, divided by that class's demodulation factor. The class
+ * and the factors are the ones the depth-0 shade stored (planes 4 and 5: `a` of plane 4 = 1 when the primary lobe is specular-class). The shade kernel and the shadow kernel
+ * (next-event light lands there) both call it, so no per-path state is needed for the class.
+ */
+function frameClassAddWgsl(): string {
+  return /* wgsl */ `
+fn ptFrameAdd(pixel: u32, n: u32, l: vec3f) {
+    let b = ptFrameBase(n);
+    let aF = ptAccum[b + 4u * n + pixel];
+    let sF = ptAccum[b + 5u * n + pixel];
+    let useSpec = aF.w > 0.5;
+    let i = b + select(0u, n, useSpec) + pixel;
+    ptAccum[i] = ptAccum[i] + vec4f(l / select(aF.xyz, sF.xyz, useSpec), 0.0);
+}
+`;
+}
+
+/** Wavefront shadow kernel: just the class add (and what it needs). */
+export function ptFrameAddWgsl(): string {
+  return `${FRAME_BASE_WGSL}${frameClassAddWgsl()}`;
+}
+
+/**
+ * The per-frame outputs (P4.1): previous-camera uniform, the planes, the reprojection and the writer `ptPath` calls once at its end. Needs `ptParams`, `ptAovAlbedo` (`ptAovWgsl` with `frame`).
+ * `store: 'tail'` (the wavefront, P4.1b) puts the planes in the accumulation buffer's tail (`ptFrameBase`) and adds `ptFrameAdd` / `ptFrameBounce`: the shade kernel writes planes 2-5 and the
+ * emission part of planes 0 / 1 at depth 0 and the rest is added where the radiance lands. The default text (the megakernel's) is unchanged.
+ */
+export function ptFrameWgsl(store: PtFramePlaneStore = 'buffer'): string {
+  const tail = store === 'tail';
+  // the index expression of plane p at `pixel`
+  const at = (p: number): string => (tail ? (p === 0 ? 'b + pixel' : p === 1 ? 'b + n + pixel' : `b + ${p}u * n + pixel`) : p === 0 ? 'pixel' : p === 1 ? 'n + pixel' : `${p}u * n + pixel`);
+  const arr = tail ? 'ptAccum' : 'ptFrame';
   return /* wgsl */ `
 struct PtFrameParams {
     origin: vec4f,
@@ -215,8 +266,8 @@ struct PtFrameParams {
     forward: vec4f,
 }
 @group(2) @binding(${PT_FRAME_PARAMS_BINDING}) var<uniform> ptFrameParams: PtFrameParams;
-@group(2) @binding(${PT_FRAME_BINDING}) var<storage, read_write> ptFrame: array<vec4f>;
-const PT_DEMOD_EPS: f32 = ${PT_DEMOD_EPS};
+${tail ? '' : `@group(2) @binding(${PT_FRAME_BINDING}) var<storage, read_write> ptFrame: array<vec4f>;
+`}const PT_DEMOD_EPS: f32 = ${PT_DEMOD_EPS};
 
 // (ndc.x, ndc.y, viewZ) of world point p seen from a pinhole camera given as the kernel's basis (right and up are scaled by tan(fov/2) (x aspect)).
 fn ptProject(origin: vec3f, right: vec3f, up: vec3f, forward: vec3f, p: vec3f) -> vec3f {
@@ -240,22 +291,37 @@ fn ptFramePureNext(pure: bool, specularBounce: bool, kind: u32) -> bool {
 // The planes of one sample. \`radiance\` is the light the primary BSDF modulates (everything but \`emit\`): split by the primary class into the demodulated diffuse / specular planes,
 // so diffuse * albedoFactor + specular * specularFactor = radiance exactly. \`emit\` (P4.5a) is the primary-visible emission / sky that bypasses the demodulation: plane 6, added
 // back after the filter; the beauty is radiance + emit. \`direct\` (the legacy \`frameEmission: 'none'\`) is the emission seen by a specular-class primary, put in the diffuse plane.
-fn ptFramePlanes(pixel: u32, n: u32, radiance: vec3f, direct: vec3f, emit: vec3f, bounceT: f32, seen: bool, isSpec: bool, normal: vec3f, viewZ: f32, motion: vec3f, rough: f32, albedo: vec3f, spec: vec3f) {
-    let aF = select(vec3f(1.0), max(albedo, vec3f(PT_DEMOD_EPS)), seen);
+${tail ? `${FRAME_BASE_WGSL}
+` : ''}fn ptFramePlanes(pixel: u32, n: u32, radiance: vec3f, direct: vec3f, emit: vec3f, bounceT: f32, seen: bool, isSpec: bool, normal: vec3f, viewZ: f32, motion: vec3f, rough: f32, albedo: vec3f, spec: vec3f) {
+${tail ? `    let b = ptFrameBase(n);
+` : ''}    let aF = select(vec3f(1.0), max(albedo, vec3f(PT_DEMOD_EPS)), seen);
     let sF = select(vec3f(1.0), max(spec, vec3f(PT_DEMOD_EPS)), seen);
     let useSpec = seen && isSpec;
     let diffuse = select(radiance, direct, useSpec);
     let specular = select(vec3f(0.0), radiance - direct, useSpec);
     let hd = select(0.0, bounceT, seen);
-    ptFrame[pixel] = vec4f(diffuse / aF, select(hd, 0.0, useSpec));
-    ptFrame[n + pixel] = vec4f(specular / sF, select(0.0, hd, useSpec));
-    ptFrame[2u * n + pixel] = vec4f(normal, viewZ);
-    ptFrame[3u * n + pixel] = vec4f(motion.xy, rough, motion.z);
-    ptFrame[4u * n + pixel] = vec4f(aF, select(0.0, 1.0, useSpec));
-    ptFrame[5u * n + pixel] = vec4f(sF, select(0.0, 1.0, seen));
-    ptFrame[6u * n + pixel] = vec4f(emit, 0.0);
+    ${arr}[${at(0)}] = vec4f(diffuse / aF, select(hd, 0.0, useSpec));
+    ${arr}[${at(1)}] = vec4f(specular / sF, select(0.0, hd, useSpec));
+    ${arr}[${at(2)}] = vec4f(normal, viewZ);
+    ${arr}[${at(3)}] = vec4f(motion.xy, rough, motion.z);
+    ${arr}[${at(4)}] = vec4f(aF, select(0.0, 1.0, useSpec));
+    ${arr}[${at(5)}] = vec4f(sF, select(0.0, 1.0, seen));
+    ${arr}[${at(6)}] = vec4f(emit, 0.0);
 }
-`;
+${tail ? `${frameClassAddWgsl()}
+// P4.5a: emission (plane 6) gathered after the depth-0 write: a pure chain of mirror bounces reaching an emitter or the sky.
+fn ptFrameAddEmit(pixel: u32, n: u32, e: vec3f) {
+    let b = ptFrameBase(n);
+    ptAccum[b + 6u * n + pixel] = ptAccum[b + 6u * n + pixel] + vec4f(e, 0.0);
+}
+
+// Hit distance of the first bounce ray, into the alpha of the primary class's plane (the depth-1 shade; a miss leaves the 0 the depth-0 shade wrote).
+fn ptFrameBounce(pixel: u32, n: u32, t: f32) {
+    let b = ptFrameBase(n);
+    let useSpec = ptAccum[b + 4u * n + pixel].w > 0.5;
+    ptAccum[b + select(0u, n, useSpec) + pixel].w = t;
+}
+` : ''}`;
 }
 
 /** Debug counters (`ptCounters`, `PT_COUNTER_WORDS` u32 per pixel). `binding` is the scheduler's slot in group 2. */
@@ -280,8 +346,8 @@ fn ptCountEnd(pixel: u32, depth: u32, reason: u32) {
 }
 
 /** Everything the enabled outputs add after the shading modules, or '' (then nothing at all is appended). */
-export function ptOutputsWgsl(flags: PtOutputsFlags, countersBinding: number | null): string {
-  const parts = [ptAovWgsl({ aovs: flags.aovs, hooks: !!flags.hooks, frame: !!flags.frame }), flags.frame ? ptFrameWgsl() : '', ptHooksWgsl(flags.hooks), flags.counters && countersBinding !== null ? ptCountersWgsl(countersBinding) : ''].filter((p) => p !== '');
+export function ptOutputsWgsl(flags: PtOutputsFlags, countersBinding: number | null, frameStore: PtFramePlaneStore = 'buffer'): string {
+  const parts = [ptAovWgsl({ aovs: flags.aovs, hooks: !!flags.hooks, frame: !!flags.frame }), flags.frame ? ptFrameWgsl(frameStore) : '', ptHooksWgsl(flags.hooks), flags.counters && countersBinding !== null ? ptCountersWgsl(countersBinding) : ''].filter((p) => p !== '');
   return parts.join('\n');
 }
 

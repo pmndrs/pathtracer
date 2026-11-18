@@ -13,7 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -194,6 +194,23 @@ export class PtMegakernelAdapter implements RendererAdapter {
     kernel.setSeed(this.settings.seed ?? 0);
     return kernel;
   }
+  /**
+   * Check pages (P4.1b / P4.2a): a WAVEFRONT kernel on the same device and scene copy, from this adapter's kernel options (as `createKernel`, whatever scheduler the adapter itself runs), with
+   * `integrator` overrides merged over them. The plain scheduler (no refill) unless `wavefront` says otherwise. Film, camera, limits and seed are set as in `load`; the caller destroys it.
+   */
+  async createWavefrontKernel(override: { integrator?: PtIntegratorOptions; blueNoise?: string; wavefront?: Partial<PtWavefrontOptions> } = {}): Promise<PtWavefront> {
+    const base = this.lastKernelOptions;
+    if (!base || !this.trace || !this.sceneBuffers || !this.gpuContext || !this.scene || !this.lastLoad) throw new Error('pt-megakernel: load() first');
+    const integrator = { ...base.integrator, ...override.integrator } as PtIntegratorOptions;
+    const blueNoise = integrator.sampler === 'bluenoise' && !base.blueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', override.blueNoise ?? 'gf-vec2-64') : base.blueNoise;
+    const kernel = await PtWavefront.create(this.gpuContext.device, this.lastLoad.caps, { ...base, ...(blueNoise ? { blueNoise } : {}), integrator, ...(override.wavefront ?? {}) });
+    kernel.setScene(this.trace, this.sceneBuffers);
+    kernel.setFilm(this.scene.film.width, this.scene.film.height);
+    kernel.setCamera(this.scene.camera);
+    kernel.setLimits(this.limits);
+    kernel.setSeed(this.settings.seed ?? 0);
+    return kernel;
+  }
   /** What the last `load` built, for checks that drive the primary-hit path themselves (`vbuffer-check`): the device's caps, the CPU scene copy and its input, the V-buffer rasteriser and the GPU buffers. */
   get debug(): { caps: Caps; copy: SceneCopy; input: SceneCopyInput; raster: VbufferRaster | null; trace: TraceSceneBuffers; sceneBuffers: SceneCopyBuffers } {
     if (!this.lastLoad || !this.trace || !this.sceneBuffers) throw new Error('pt-megakernel: load() first');
@@ -364,7 +381,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const { denoise: _denoise, denoiseTzaUrl: _tza, refill: _refill, refillThreshold: _thr, layers: _layers, appends: _appends, sort: _sort, mode: _mode, blueNoise: _bnName, ...integratorSettings } = this.settings;
     void _mode;
     void _bnName;
-    const needsBlueNoise = integratorSettings.sampler === 'bluenoise' || (this.settings.mode === 'realtime' && this.settings.scheduler !== 'wavefront');
+    const needsBlueNoise = integratorSettings.sampler === 'bluenoise' || this.settings.mode === 'realtime'; // P4.1b: the wavefront runs blue noise too
     const blueNoise = needsBlueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', this.settings.blueNoise ?? 'gf-vec2-64') : undefined;
     void _denoise;
     void _tza;

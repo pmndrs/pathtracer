@@ -90,9 +90,11 @@ function orbit(scene: SceneDesc, frames: number, stepDeg: number, pan = false): 
 
 /** `restir=` page arg: the ReSTIR settings of the kernels under test (null = plain NEE). */
 let restirUnderTest: PtRestirOptions | null = null;
+/** `scheduler=wavefront` page arg (P4.1b / P4.2a): the kernels under test are `PtWavefront` (plain scheduler), the same checks apply (it has the same frame surface). */
+let schedulerUnderTest: 'megakernel' | 'wavefront' = 'megakernel';
 
 async function loadAdapter(scene: SceneDesc, settings: PtAdapterSettings): Promise<{ adapter: PtMegakernelAdapter; kernel: PtMegakernel; device: GPUDevice }> {
-  const adapter = new PtMegakernelAdapter({ nee: true, ...(restirUnderTest ? { restir: restirUnderTest } : {}), ...settings });
+  const adapter = new PtMegakernelAdapter({ nee: true, ...(restirUnderTest ? { restir: restirUnderTest } : {}), ...(schedulerUnderTest === 'wavefront' ? { scheduler: 'wavefront' as const } : {}), ...settings });
   await adapter.load(scene);
   return { adapter, kernel: adapter.renderer as PtMegakernel, device: adapter.gpuContext!.device };
 }
@@ -592,6 +594,7 @@ try {
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
   adapterSummary = summarizeAdapter(adapter);
   const only = args.check ? args.check.split(',') : ['frames', 'emission', 'bluenoise'];
+  if (args.scheduler === 'wavefront') schedulerUnderTest = 'wavefront';
   if (args.restir) restirUnderTest = args.restir === 'biased' ? {} : { bias: 'unbiased', initialVisibility: false, ...(args.restir === 'shared' ? { sharedHit: true } : {}) };
   if (only.includes('timing')) metrics.timing_best_effort = 1;
   const frames = numberArg(args, 'frames', 16);
@@ -601,7 +604,7 @@ try {
   if (only.includes('timing')) await checkTiming((args.scenes ?? 'cornell,sponza-white').split(','), numberArg(args, 'rounds', 3), numberArg(args, 'batch', 32));
   const total = Object.entries(metrics).filter(([k]) => k.endsWith('_mismatch')).reduce((sum, [, v]) => sum + v, 0);
   reportResult(
-    { scene: 'realtime-check', renderer: 'ours', config: { frames, checks: only.join(','), scenes: args.scenes ?? 'cornell,sponza-white', restir: args.restir ?? 'off' }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems } },
+    { scene: 'realtime-check', renderer: 'ours', config: { frames, checks: only.join(','), scenes: args.scenes ?? 'cornell,sponza-white', restir: args.restir ?? 'off', scheduler: schedulerUnderTest }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems } },
     { adapter: adapterSummary, deviceErrors },
   );
   if (total > 0) throw new Error(`realtime-check: ${total} mismatches. First:\n${problems.join('\n')}`);

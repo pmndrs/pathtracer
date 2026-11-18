@@ -25,7 +25,7 @@ entry (a measured number and its TASKS / DIVERGES row, or "pending A/B").
 
 `scenePacking` has to be the same for `uploadSceneCopy({ packing })` and the kernel, so `create` never changes it: use
 `ptModePreset(mode).scenePacking` for both. The limits (`PtLimits`) start from the mode's depth (`setLimits` overrides).
-The wavefront takes the mode too, but drops what only the megakernel has (`frame`, `bluenoise`).
+The wavefront takes the whole preset since P4.1b (`frame`, `bluenoise`; it used to drop them); `frame` needs its plain scheduler (no `refill` / `layers`: a frame is one sample per pixel), and `create` says so when you ask for both.
 
 ## 2. Blue-noise sampler (`sampler: 'bluenoise'`, V120, V121)
 
@@ -39,7 +39,8 @@ The wavefront takes the mode too, but drops what only the megakernel has (`frame
   `shift: 'owen'` (default, section 4) = the Owen-Sobol pair of the frame index with a seed shared by all pixels (a (0,m,2)-net per pair over 2^m frames);
   `shift: 'kronecker'` = frame times an irrational step (R2 for pair 0, `fract(sqrt(prime))` for the others: a shared step would
   move every pair along a diagonal and the time average would converge to the wrong 4D integral).
-* Megakernel only. `ptBnPixel` is a `var<private>` set at the start of `ptPath`, so `ptSample2D`'s signature is unchanged.
+* Both schedulers (P4.1b, V210). `ptBnPixel` is a `var<private>` set at the start of `ptPath` (megakernel) / of the camera kernel and of `ptwfShadePath` (wavefront), so `ptSample2D`'s signature is unchanged.
+  The wavefront binds the texture in its camera and shade kernels (group 2 binding 12; a sampled texture, not a storage buffer).
 * TS twin: `ptSampleBlueNoise`, `ptBlueNoiseShift`; `realtime-check` uses it for the exact jitter.
 
 ## 3. Per-frame outputs (`integrator.frame`, V122)
@@ -108,6 +109,27 @@ transforms, so a moving object needs last frame's `objectToWorld` or a per-insta
 (the virtual-motion variants of the Denoiser's `recurrent` filter need the reflected hit; the first bounce's `hitDistance` is there),
 and `primary: 'vbuffer'` with frame outputs is untested (the frame planes read the same `surf` and `hit`, so it should work).
 
+### 3b. The same frame on the wavefront (P4.1b, V211)
+
+`PtWavefront.create(device, caps, { mode: 'realtime', blueNoise, ... })` (plain scheduler) has the megakernel's frame surface: `setCamera` / `nextFrame` / `setPrevCamera` / `setFrameIndex`, `encode(encoder, 1)`,
+`readFrame()`, `frameBuffers`, `accumulator`. Same plane layout, same text for the planes' contents (`ptFramePlanes` in `integrator/outputs-wgsl.ts`; the wavefront instance is `ptFrameWgsl('tail')`).
+Where they differ:
+
+* **The planes live in the accumulation buffer's tail**, not their own binding (the AOV trick): beauty `n` vec4, then `ptFrameBase(n)` = the next 256-byte boundary, then the 6 planes plane-major. No kernel gains a storage binding
+  (the shade kernel stays at 8 of the 10 Apple buffers, 7 packed; the previous camera is a uniform with a dynamic offset in step with the params record, the blue-noise texture a sampled texture).
+  `frameBuffers` therefore returns the same buffer twice plus `planesOffset` (bytes); `PipelineFrameBuffers.planesOffset` (bench chain) binds the planes at that offset. A film's buffer is
+  `(ptFrameBase(n) + 6 n) x 16` bytes, which must fit `maxStorageBufferBindingSize` (960 x 540: 58 MB, 1280 x 720: 103 MB of 134 MB).
+* **Where the planes are written.** The depth-0 shade kernel writes planes 2-5 (normal + viewZ, motion + roughness, the two factors, the class flag) and the emission part of planes 0 / 1 (`ptFramePlanes`, the megakernel's
+  own function: the primary miss writes its sky through the same call). Everything gathered after that lands in the plane of the primary lobe's class **divided by that class's factor, at the moment it is added**
+  (`ptFrameAdd`: shade for emission / escape / `ptTerminate` at depth >= 1, the shadow kernel for next-event light; the class and factors are read back from planes 4 / 5). The depth-1 shade writes the first bounce ray's hit distance
+  into the alpha of the class plane (`ptFrameBounce`). The beauty is accumulated as before; the camera kernel overwrites it (`accumulate: false`).
+* **Equivalence.** A sum of quotients instead of the megakernel's quotient of a sum: per pixel <= 5e-7 relative to the megakernel's frame (checks below), geometry planes bit-identical. `diffuse x albedo factor + specular x specular factor = radiance` holds to 2e-7.
+* Not combinable: `frame` + `aovs` (both use the tail; the real-time preset has no AOVs), `frame` + `refill` / `layers` (throws). A first cutout hit on the BOUNCE ray of an alpha-MASK scene records its own hit distance in the megakernel and the
+  distance of the solid hit past the cutouts on the wavefront (its intersect kernel loops the cutouts).
+
+Checks: `node bench/runner/run.ts --page wf-frame-check --args cases=cornell,sponza-white,tex-checker,pbr [restir=unbiased]` (per-pixel agreement of every plane with the megakernel's, plane identity) and
+`--page realtime-check --args scheduler=wavefront` (the closed-form motion / reprojection / demodulation checks of section 3 on the wavefront). Numbers: TASKS P4.1b.
+
 ## 4. Open choices (build both, then decide)
 
 * Blue-noise shift: `owen` (default) vs `kronecker`. A/B on Cornell 96 x 96, maxDepth 2, 128 one-spp frames per sampler against a 2048 spp
@@ -128,8 +150,7 @@ and `primary: 'vbuffer'` with frame outputs is untested (the frame planes read t
 * Blue noise for deeper pairs: 6 pairs = vertex 0 only. More pairs (vertex 1) need a third texture read per pair; A/B `blueNoisePairs` 6 vs 10.
 * Frame planes as a storage buffer (here) vs `rgba16float` storage textures (half the bandwidth, no copy for the filter): needs
   `texture-formats-tier1` / `bgra8unorm-storage` style caps on some devices; P4.5 decides when it knows what the filter reads.
-* Megakernel only. The wavefront shade kernel is at 8 of the 10 Apple storage buffers; 1 more (frame planes) fits only with
-  `scenePacking: 'packed'`. A wavefront frame mode is P4.1b.
+* Megakernel vs wavefront for a frame: both exist since P4.1b (TASKS P4.1b has the paired ratios; the P3.9 auto policy's `frame` rule is provisional until the quiet pass).
 
 ## 5. The chain: kernel -> filter -> upscaler (P4.5, P4.6, P4.7)
 
@@ -169,7 +190,7 @@ costs 2.3x the boil (0.0082 against 0.0036): off by default, a quality-vs-steadi
 **P4.7, the preview pipeline,** is the same chain with `denoise: 'oidn'` (`moving: 'fast'` every frame, `stillSamples: Infinity`, `hold: false`) at a lower render size and maxDepth 4 (`RealtimePipelineSession { preview: true }`, page args `res=640x360 maxDepth=4 variants=svgf,oidn-fast`).
 It runs the real-time frame kernel (OIDN's albedo and normal guides come from the frame planes), not `mode: 'preview'` (whose AOV path serves `pt_denoise=oidn`, the converged-frame variant). Numbers: REALTIME-PIPELINE.md. OIDN small costs 4.6 ms at 640 x 360 and 11.8 ms at 960 x 540 on the M5 Pro (wall clock, awaited, provisional) against 1.2 ms for SVGF at 960 x 540; the preview frame (640 x 360 -> 1280 x 720, maxDepth 4) is 20.1 ms (13.3 trace + 0.6 pack + 5.0 OIDN + 0.4 upscale), SVGF in the same configuration 14.9 ms.
 
-**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants), wavefront frame mode (P4.1b), the wavefront with ReSTIR.
+**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants). (Both schedulers run the chain's kernel since P4.1b / P4.2a: `scheduler=wavefront` in `realtime-pipeline`.)
 Emitters seen directly by the primary ray are handled (P4.5a): plane 6 is summed over the frame's samples by `pipeAccumulate`, packed as an `rgba16float` texture (clamped at 65000: a visible sun disc, 7e5, saturates) and added by the composite AFTER the
 filter (`diffuse + specular + emission` where the primary ray hit, the raw beauty, which holds the sky, where it missed); the upscaler sees the full image. Only the sub-pixel emitter's silhouette aliasing remains (above).
 

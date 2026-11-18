@@ -14,7 +14,8 @@
  *  prevcam   (P4.2e) one source of truth for the previous camera: the same camera path with `setCamera` only (tracked), `nextFrame`, and `setPrevCamera` must give bit-identical images;
  *            a wrong previous camera must not.
  *
- * Args: scenes=cornell,quad-light,lights-mix-lamps,many-lights-64  check=equiv,converge,noise,motion,timing,r6,unify,prevcam  frames=1024  reffames=4096  seeds=8  step=0.5  reps=5  w=1280 h=720  m=8  k=2  radius=16
+ * `scheduler=wavefront` (P4.2a) runs every kernel of the check as the plain wavefront (`createWavefrontKernel`); `sharedHit` / `shareddiff` / `unify` rows that need it throw there.
+ * Args: scenes=cornell,quad-light,lights-mix-lamps,many-lights-64  scheduler=megakernel|wavefront  check=equiv,converge,noise,motion,timing,r6,unify,prevcam  frames=1024  reffames=4096  seeds=8  step=0.5  reps=5  w=1280 h=720  m=8  k=2  radius=16
  */
 import { type Caps, type SceneCopy, type SceneCopyBuffers } from '@pmndrs/raytracer';
 import { PtMegakernel, ptRestirGbufBytes, type PtIntegratorOptions, type PtRestirOptions, type PtLookAtCamera } from '@pmndrs/pathtracer';
@@ -28,6 +29,8 @@ import type { Image } from '../src/adapter.ts';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 
 let adapterSummary: AdapterSummary | null = null;
+/** `scheduler=wavefront` page arg: the kernels under test are `PtWavefront` (plain scheduler). */
+let wavefront = false;
 let deviceErrors: string[] = [];
 const metrics: Record<string, number> = {};
 const notes: Record<string, unknown> = {};
@@ -59,7 +62,8 @@ async function load(name: string, film?: { w: number; h: number }): Promise<Ctx>
 
 /** A kernel with the adapter's own options for this scene (textures, OpenPBR, alpha mask, environment) and `integrator` merged over them. */
 async function makeKernel(ctx: Ctx, integrator: PtIntegratorOptions): Promise<PtMegakernel> {
-  const k = await ctx.adapter.createKernel({ integrator });
+  // `scheduler=wavefront` (P4.2a): every kernel of the check is the plain wavefront (same surface for the calls below: setFilm / reset / setSeed / encode / readImage / restir)
+  const k = wavefront ? ((await ctx.adapter.createWavefrontKernel({ integrator })) as unknown as PtMegakernel) : await ctx.adapter.createKernel({ integrator });
   ctx.kernels.push(k);
   return k;
 }
@@ -577,6 +581,7 @@ try {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
   adapterSummary = summarizeAdapter(adapter);
+  wavefront = args.scheduler === 'wavefront';
   const checks = (args.check ?? 'equiv,converge').split(',');
   const scenes = (args.scenes ?? 'cornell,quad-light,lights-mix-lamps,many-lights-64').split(',');
   const frameCount = numberArg(args, 'frames', 1024);
@@ -598,7 +603,7 @@ try {
     if (checks.includes('shareddiff')) await checkSharedDiff(name, m, k);
     if (checks.includes('timing')) await checkTiming(name, numberArg(args, 'w', 1280), numberArg(args, 'h', 720), reps, numberArg(args, 'timingframes', 16), m, k, radius);
   }
-  reportResult({ scene: 'restir-check', renderer: 'ours', config: { checks: checks.join(','), scenes: scenes.join(','), frames: frameCount, refFrames, seeds, m, k, radius }, valid: deviceErrors.length === 0, metrics, notes }, { adapter: adapterSummary, deviceErrors });
+  reportResult({ scene: 'restir-check', renderer: 'ours', config: { checks: checks.join(','), scheduler: wavefront ? 'wavefront' : 'megakernel', scenes: scenes.join(','), frames: frameCount, refFrames, seeds, m, k, radius }, valid: deviceErrors.length === 0, metrics, notes }, { adapter: adapterSummary, deviceErrors });
 } catch (error) {
   reportError(error, { adapter: adapterSummary, deviceErrors });
 }

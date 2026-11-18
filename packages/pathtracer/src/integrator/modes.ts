@@ -51,8 +51,8 @@ export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'realtime.textureLod': 'as preview',
   'realtime.layered': 'as preview (D24 + P2.32b)',
   'realtime.scenePacking': 'as preview',
-  'realtime.sampler': 'bluenoise (P4.1, V120): only when the texture is passed (`blueNoise`); else owen-sobol. A/B in `realtime-check` (TASKS P4.1); megakernel only, the wavefront keeps owen-sobol',
-  'realtime.frame': 'per-frame outputs for the temporal filter (P4.1, V122); megakernel only; costs 7 planes of vec4 per pixel of write bandwidth (the 7th is the emission plane, P4.5a, V200); not timed yet (QUIET-PASS)',
+  'realtime.sampler': 'bluenoise (P4.1, V120): only when the texture is passed (`blueNoise`); else owen-sobol. A/B in `realtime-check` (TASKS P4.1); both schedulers since P4.1b (V210)',
+  'realtime.frame': 'per-frame outputs for the temporal filter (P4.1, V122); both schedulers since P4.1b (the wavefront: plain scheduler only, planes in the accumulator tail, V211); costs 7 planes of vec4 per pixel of write bandwidth (the 7th is the emission plane, P4.5a, V200); not timed yet (QUIET-PASS)',
   'realtime.limits': 'maxDepth 2, no Russian roulette (a depth cap is the real-time termination; R3 compares RR / throughput / cache termination after the denoiser): pending A/B',
 };
 
@@ -95,10 +95,11 @@ export interface PtModeOptions {
 }
 
 /**
- * The options with the mode's integrator settings filled in under the caller's own (`undefined` keys only). `scheduler: 'wavefront'` drops what only the megakernel has
- * (`bluenoise`, `frame`: the wavefront rejects them). A scene without OpenPBR layered materials is untouched by `layered`. Returns the same object when there is no mode.
+ * The options with the mode's integrator settings filled in under the caller's own (`undefined` keys only). Both schedulers take the same preset since P4.1b (the wavefront used to drop
+ * `bluenoise` and `frame`; `scheduler` is kept for callers and for a future scheduler-specific entry). A scene without OpenPBR layered materials is untouched by `layered`. Returns the
+ * same object when there is no mode.
  */
-export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'megakernel' | 'wavefront' = 'megakernel'): T & { integrator?: PtIntegratorOptions } {
+export function ptApplyMode<T extends PtModeOptions>(options: T, _scheduler: 'megakernel' | 'wavefront' = 'megakernel'): T & { integrator?: PtIntegratorOptions } {
   if (!options.mode) return options;
   const preset = ptModePreset(options.mode);
   const merged: Record<string, unknown> = { ...(options.integrator ?? {}) };
@@ -108,12 +109,12 @@ export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'meg
   // D31 max-speed opt-in: a caller who asks for a solid-shadow policy gets that policy's shadows, not the preset's `transmit` override.
   const solidPolicy = merged.alphaPolicy !== undefined && merged.alphaPolicy !== 'exact';
   for (const [key, value] of Object.entries(preset.integrator)) {
-    if (scheduler === 'wavefront' && key === 'frame') continue;
     if (solidPolicy && (key === 'alphaShadow' || key === 'alphaTransmit')) continue;
     set(key, value);
   }
   // P4.2e: the ReSTIR passes bind the blue-noise texture too, so `restir` no longer falls back to Owen-Sobol (megakernel only, as before).
-  if (options.mode === 'realtime') set('sampler', scheduler === 'megakernel' && options.blueNoise ? 'bluenoise' : 'owen-sobol');
+  // P4.1b: the wavefront runs the blue-noise sampler and the frame outputs too (plain scheduler: `integrator.frame` throws with refill), so the scheduler no longer changes the preset.
+  if (options.mode === 'realtime') set('sampler', options.blueNoise ? 'bluenoise' : 'owen-sobol');
   const materials = merged.materials as { features: { layered?: boolean }; layered?: Record<string, unknown> } | null | undefined;
   if (preset.layered && materials?.features.layered) {
     const layered: Record<string, unknown> = { ...(materials.layered ?? {}) };

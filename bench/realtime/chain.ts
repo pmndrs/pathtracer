@@ -369,6 +369,8 @@ export type DenoiserKind = 'svgf' | 'oidn' | 'none';
 export interface PipelineFrameBuffers {
   accum: GPUBuffer;
   planes: GPUBuffer;
+  /** Byte offset of plane 0 in `planes` (the wavefront keeps the planes in the accumulator's tail, P4.1b; the megakernel's own buffer starts at 0). Must be a valid storage binding offset (256-byte aligned). */
+  planesOffset?: number;
 }
 
 export class PipelineArm {
@@ -391,6 +393,7 @@ export class PipelineArm {
   private packGroup: GPUBindGroup | null = null;
   private accumGroup: GPUBindGroup | null = null;
   private accumKey: GPUBuffer | null = null;
+  private accumOffsetKey = '';
   private readonly stride8!: number;
   private readonly stride4!: number;
   private readonly base4!: number;
@@ -547,10 +550,14 @@ export class PipelineArm {
 
   /** After each path-tracing encode of the frame (`pt.frameBuffers`): adds the sample to the sums. */
   accumulate(encoder: GPUCommandEncoder, fb: PipelineFrameBuffers): void {
-    if (this.accumKey !== fb.planes) {
+    const key = `${fb.planesOffset ?? 0}`;
+    if (this.accumKey !== fb.planes || this.accumOffsetKey !== key) {
       this.accumKey = fb.planes;
-      this.accumGroup = this.device.createBindGroup({ layout: this.accumPipe.getBindGroupLayout(0), entries: [this.accumParams, fb.accum, fb.planes, this.sums].map((buffer, binding) => ({ binding, resource: { buffer } })) });
-      this.packGroup = this.device.createBindGroup({ layout: this.packPipe.getBindGroupLayout(0), entries: [this.packParams, this.sums, fb.planes, this.packBuf].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+      this.accumOffsetKey = key;
+      const planes: GPUBufferBinding = { buffer: fb.planes, offset: fb.planesOffset ?? 0 };
+      const whole = (buffer: GPUBuffer): GPUBufferBinding => ({ buffer });
+      this.accumGroup = this.device.createBindGroup({ layout: this.accumPipe.getBindGroupLayout(0), entries: [whole(this.accumParams), whole(fb.accum), planes, whole(this.sums)].map((resource, binding) => ({ binding, resource })) });
+      this.packGroup = this.device.createBindGroup({ layout: this.packPipe.getBindGroupLayout(0), entries: [whole(this.packParams), whole(this.sums), planes, whole(this.packBuf)].map((resource, binding) => ({ binding, resource })) });
     }
     const pass = encoder.beginComputePass({ label: 'pipe accumulate' });
     pass.setPipeline(this.accumPipe);

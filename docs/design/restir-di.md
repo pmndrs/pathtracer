@@ -68,12 +68,17 @@ one camera-ray trace per frame instead of two, at the price of 16 B / pixel and 
 `mixU` stored per pixel), evaluated with `ptEval` for layered (albedo) materials, `ptBsdfEval` otherwise; normal-mapped shading normals are stored. Alpha MASK: the G-buffer pass skips cutouts exactly like the shade
 (first solid hit), visibility uses `ptVisibleMasked`. `ptRestirUnsupported` says what is refused (stochastic layering, fuzz, thin film, anisotropy, `materialLodDepth` 0, hooks).
 
-**For the wavefront port (P4.2a).** The shade kernel side is now small and scheduler-neutral: one read-only reservoir binding (+ the hit buffer with `sharedHit`), `ptRestirLd` (evalFn + masked visibility). The passes
-need a G-buffer aligned with the sample the shade kernel shades: with `sharedHit` / V-buffer the wavefront's camera kernel can fill its path state from the hit record instead of tracing, which is the natural join;
-refill modes still need sample-aligned G-buffers (`primary: 'vbuffer'` already throws on refill). The wavefront shade kernel is at 8 of 10 Apple storage buffers (9 with the hit buffer): needs `scenePacking: 'packed'`.
+**On the wavefront (P4.2a, V212).** `PtWavefront.create(..., { integrator: { restir } })` (plain scheduler) runs the SAME `PtRestirPasses` (module, buffers, previous-camera rule, `restir.stats`, `dropHistory`) inside the sample's compute pass,
+before the camera kernel (`encodeFrame(pass, walkGroup, sceneGroup, ...)` with the wavefront's own walk / scene groups, which have the megakernel's layouts). The G-buffer pass traces its own jittered camera ray from the same sampler draw as
+the camera kernel (the same arrangement as the megakernel: `sharedHit` is the only join between the two), so path = pixel = G-buffer texel and no alignment work is needed; refill / layers are refused (`create` says why: a slot restarts at its own time,
+so its sample would not match the G-buffer's). The shade kernel gets ONE read-only binding (11, the reservoirs; 9 of 10 Apple storage buffers split, 8 packed) and `ptwfRestirLd`: the megakernel's `ptRestirLd` up to the visibility test
+(`evalFn`, the reservoir's light through `rtSampleLightLi`), whose shadow ray goes through the shadow queue like a NEE ray, so visibility (and the frame planes' class add) are the shadow kernel's. The first vertex's
+BSDF-sampled continuation gets `prevPdf = 0` exactly as in the megakernel, and the final reservoir region travels in the unused `up.w` lane of the params record (`limits.w` is the wavefront's iteration). Unsupported on the wavefront
+(`create` throws): `sharedHit` (join the primary hit into the camera kernel: follow-up), alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk whatever the shadow policy; the shadow kernel follows the policy), hooks, refill.
+Checked per pixel against the megakernel's frame (same reservoirs expected): `wf-frame-check restir=unbiased` (TASKS P4.2a).
 
 ## Not done (open)
 
-- Wavefront scheduler (`PtWavefront.create` throws with `integrator.restir`): see the note above. TASKS P4.2a.
+- The wavefront's `sharedHit` (one camera-ray trace per frame: the camera kernel would fill its path from the hit buffer) and alpha MASK / hooks with ReSTIR on the wavefront (TASKS P4.2a follow-ups).
 - Fuzz, thin film, anisotropy, stochastic layering with ReSTIR (V173); the layered + ReSTIR kernel is over the 50 KB class (shade 50.2 KB plain OpenPBR, 51.8 KB textured + mask).
 - Motion vectors for moving objects, dynamic lights (light indices change), history confidence into the reactive mask (R7).
