@@ -92,6 +92,9 @@ importers:
       '@pmndrs/bvh':
         specifier: ^0.1.0
         version: 0.1.0(three@0.187.0)
+      '@pmndrs/downsampler':
+        specifier: ^0.1.0
+        version: 0.1.0(three@0.187.0)
 
 packages:
 

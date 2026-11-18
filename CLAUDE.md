@@ -70,7 +70,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 
 ## Developing against local siblings
 
-`@pmndrs/bvh` (packages/raytracer, bench) and `@pmndrs/downsampler` (bench) are installed from npm. To work against a checkout, add an
+`@pmndrs/bvh` and `@pmndrs/downsampler` (packages/raytracer, bench) are installed from npm. To work against a checkout, add an
 override to `pnpm-workspace.yaml`, run `pnpm install --offline`, and do not commit it:
 
 ```
@@ -828,8 +828,10 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - bvh 0.1.0's closest-hit walk takes the right child first when two boxes tie unless the ray starts inside both (+24 bytes per walk kernel; 4-12 pixel values change on cornell / sponza-white): a before / after image `cmp` across the
   bvh bump is not byte-identical, and the kernel texts differ by that one line. `node bench/size-snapshot.ts` writes the `bvh4*` / `cwbvh8*` wide kernels too.
 - `bench/pages/*.html` is needed for every new page (a copy of scene-copy.html with the name changed), or the runner says "No such page".
-- GPU mips (X5): `TextureOptions.mips: 'gpu'` leaves only level 0 on the CPU (`sampleSceneTexture` throws above it; the scene hash covers level 0 only); `uploadSceneCopy` then needs `mipGenerator` (a
-  `Downsampler` from `@pmndrs/downsampler/webgpu`, `encode(encoder, texture)`), and adds RENDER_ATTACHMENT (+ STORAGE_BINDING for unorm) to the texture arrays. The Downsampler's own device wants
+- GPU mips (X5, D34): GPU mips are the DEFAULT: `TextureOptions.mips` is `'gpu'` unless set, so `buildSceneTextures` / `buildSceneCopy` keep level 0 only (`sampleSceneTexture` throws above it; the scene hash covers level 0 only) and `uploadSceneCopy`
+  creates (once per device, `rtMipGenerator(device)`) a `Downsampler` from `@pmndrs/downsampler/webgpu` (now a dependency of `packages/raytracer`) and adds RENDER_ATTACHMENT (+ STORAGE_BINDING for unorm) to the texture arrays. Anything that
+  samples the CPU twin above level 0 (oracle pages / tests) must build with `mips: 'cpu'` (texture-check builds a second, CPU copy as its twin); the adapter setting `pt_mips=cpu` is the old path. Images only differ where a real texture is read at level > 0
+  (`textureLod: 'cone'`): the default `textureLod` 0 never samples a mip, so most A/Bs of the two are bit-identical (tex-checker's 0/255 checker boxes are exact in both chains too): use MetalRoughSpheres to see a difference. The Downsampler's own device wants
   `requiredFeatures(adapter)` / `requiredLimits(adapter)` for six levels per dispatch; with the default limits it does fewer per dispatch, same result. sRGB chains take its render or buffer path (same bits).
 - `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
   `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.

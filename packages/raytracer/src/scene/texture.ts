@@ -48,12 +48,14 @@ export interface TextureOptions {
   /** Layers per array. Default 256 (the WebGPU default `maxTextureArrayLayers`). */
   maxLayers?: number;
   /**
-   * Build the mip chain. Default true (on the CPU: 2x2 box in linear light, about 50 ms per megapixel, so 24 textures of 2048x2048
-   * take ~5 s); false stores one level (every lookup is the base level); `'gpu'` plans the full chain but builds only level 0 here: the
-   * upload (`uploadSceneCopy({ mipGenerator })`) fills levels 1+ on the GPU (a `@pmndrs/downsampler` `Downsampler`, X5). The CPU
-   * twin then has level 0 only (`sampleSceneTexture` throws above it), and the codes can differ from the CPU chain by a rounding step.
+   * Mip chain. Default `'gpu'` (D34): this build keeps level 0 only and `uploadSceneCopy` fills levels 1+ on the GPU with a
+   * `@pmndrs/downsampler` `Downsampler` (one per device, cached; `uploadSceneCopy({ mipGenerator })` overrides it). The CPU twin
+   * (`sampleSceneTexture`) then has level 0 only (it throws above it), and levels 1+ differ from the CPU chain by at most 2 codes
+   * (V295). `'cpu'` (or `true`) builds every level here (2x2 box in linear light, about 50 ms per megapixel, so 24 textures of
+   * 2048x2048 take ~1 s): needed by a consumer that has no device (the CPU twin at level > 0, oracle tests) or that wants the
+   * exact old bytes. `false` stores one level (every lookup is the base level).
    */
-  mips?: boolean | 'gpu';
+  mips?: boolean | 'cpu' | 'gpu';
 }
 
 export interface TextureBucket {
@@ -85,7 +87,7 @@ export interface SceneTextures {
   slots: TextureSlot[];
   /** Bytes of texel data including mips (the GPU's, also when `gpuMips` leaves them out of `buckets[].mips`). */
   byteLength: number;
-  /** `TextureOptions.mips: 'gpu'`: `buckets[].mips` hold level 0 only and the upload needs a mip generator. */
+  /** `TextureOptions.mips: 'gpu'` (the default): `buckets[].mips` hold level 0 only and the upload builds levels 1+ on the GPU. */
   gpuMips?: boolean;
 }
 
@@ -299,8 +301,9 @@ export function buildSceneTextures(inputs: readonly TextureInput[], options: Tex
   const maxBuckets = options.maxBuckets ?? DEFAULT_MAX_TEXTURE_BUCKETS;
   const maxLayers = options.maxLayers ?? 256;
   const rounding = options.rounding ?? 'nearest';
-  const wantMips = options.mips ?? true;
-  const gpuMips = options.mips === 'gpu';
+  const mode = options.mips ?? 'gpu';
+  const wantMips = mode !== false;
+  const gpuMips = mode === 'gpu';
 
   inputs.forEach((t, i) => {
     if (!Number.isInteger(t.width) || !Number.isInteger(t.height) || t.width < 1 || t.height < 1) throw new RangeError(`texture ${i}${t.label ? ` (${t.label})` : ''}: bad size ${t.width}x${t.height}`);
@@ -387,7 +390,7 @@ export function sampleBucketLevel(bucket: TextureBucket, layer: number, level: n
   const w = Math.max(1, bucket.width >> level);
   const h = Math.max(1, bucket.height >> level);
   const data = bucket.mips[level];
-  if (!data) throw new RangeError(`texture level ${level}: this scene's mips are built on the GPU (TextureOptions.mips 'gpu'); the CPU twin has level 0 only`);
+  if (!data) throw new RangeError(`texture level ${level}: this scene's mips are built on the GPU (TextureOptions.mips 'gpu', the default); build with mips: 'cpu' for the CPU twin above level 0`);
   const x = u * w - 0.5;
   const y = v * h - 0.5;
   const x0 = Math.floor(x);

@@ -91,7 +91,8 @@ async function checkLookups(device: GPUDevice, count: number, tol: number): Prom
     materials: [{ baseColor: [0.8, 0.6, 0.4], specularRoughness: 0.7, metalness: 0.9, emissionColor: [1, 2, 3], baseColorTexture: 0, roughnessMetalTexture: 1, normalTexture: 2, emissionTexture: 3 }],
     textures,
   };
-  const copy = buildSceneCopy(input);
+  const copy = buildSceneCopy(input); // the library default: levels 1+ come from the GPU mip generator (D34)
+  const twin = buildSceneCopy({ ...input, options: { textures: { mips: 'cpu' } } }).textures!; // the CPU twin needs every level: it is the oracle
   const buffers = uploadSceneCopy(device, copy, { label: 'texture-check' });
   metrics.lookup_arrays = copy.textures!.buckets.length;
   metrics.lookup_texture_bytes = copy.textures!.byteLength;
@@ -184,9 +185,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   void sq;
   cases.forEach((c, i) => {
     const g = out.subarray(i * L_OUT, i * L_OUT + L_OUT);
-    const slot = copy.textures!.slots[c.slot]!;
+    const slot = twin.slots[c.slot]!;
     const lod = textureLod(slot.width, slot.height, c.fp);
-    const s = sampleSceneTexture(copy.textures!, c.slot, c.u, c.v, lod);
+    const s = sampleSceneTexture(twin, c.slot, c.u, c.v, lod);
     const lodErr = Math.abs((g[0] as number) - lod);
     stats.lod = Math.max(stats.lod, lodErr);
     if (lodErr > 1e-4) {
@@ -200,7 +201,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       note(`sample case ${i} slot ${c.slot} uv ${c.u},${c.v} lod ${lod}: gpu ${Array.from(g.subarray(1, 5))} cpu ${s}`);
     }
     // glTF semantics of rtApplyMaterialTextures, from the texture twin and the decoded material.
-    const t = (k: number) => sampleSceneTexture(copy.textures!, k, c.u, c.v, textureLod(copy.textures!.slots[k]!.width, copy.textures!.slots[k]!.height, c.fp));
+    const t = (k: number) => sampleSceneTexture(twin, k, c.u, c.v, textureLod(twin.slots[k]!.width, twin.slots[k]!.height, c.fp));
     const base = t(0);
     const mr = t(1);
     const em = t(3);

@@ -11,7 +11,6 @@
  * Timing: wall clock around the dispatches, `onSubmittedWorkDone` at the end of the timed region, readback excluded (snapshot
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
-import { Downsampler } from '@pmndrs/downsampler/webgpu';
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type NodeFormat, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
 import { sceneDensityFiles, sceneVolumes } from '../../scenes/volumes.ts';
@@ -88,7 +87,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`, `packed` since D32). Images are per-pixel identical; only the addressing differs. */
   scenePacking?: 'split' | 'packed';
   /** bvh scene options (X1.i, D25; page args `pt_bvh`, `pt_bvh_decode`, `pt_bvh_walk`): `nodeFormat` `quantized` (default) | `f32` | the experimental wide `bvh4` | `cwbvh8` (hits are the same, tie order aside); `decode` `exact` | `folded` (wide only, default folded); `walk` `nested` | `single` (bvh4 only). */
-  /** Texture mip levels (X5, page arg `pt_mips`): `cpu` (default: built in `buildSceneTextures`) or `gpu` (level 0 only on the CPU, levels 1+ by `@pmndrs/downsampler`; codes differ from the CPU chain by up to 2). */
+  /** Texture mip levels (X5, page arg `pt_mips`): `gpu` (default since D34: level 0 only on the CPU, levels 1+ by `@pmndrs/downsampler` in `uploadSceneCopy`; codes differ from the CPU chain by up to 2) or `cpu` (every level built in `buildSceneTextures`). */
   mips?: 'cpu' | 'gpu';
   bvh?: { nodeFormat?: NodeFormat; decode?: 'exact' | 'folded'; walk?: 'nested' | 'single' };
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
@@ -266,7 +265,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         ...(settings.bvh && Object.keys(settings.bvh).length ? { bvh: settings.bvh } : {}),
-        ...(settings.mips === 'gpu' ? { mips: 'gpu' } : {}),
+        ...(settings.mips === 'cpu' ? { mips: 'cpu' } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         ...(settings.mode ? { mode: settings.mode } : {}),
         ...(settings.sampler === 'bluenoise' || settings.mode === 'realtime' ? { blueNoise: settings.blueNoise ?? 'gf-vec2-64', ...(settings.blueNoiseShift ? { blueNoiseShift: settings.blueNoiseShift } : {}), ...(settings.blueNoisePairs ? { blueNoisePairs: settings.blueNoisePairs } : {}) } : {}),
@@ -381,8 +380,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
     );
     builder.dispose();
     this.trace = uploadTraceScene(device, data, scene.name);
-    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.mips === 'gpu' ? { textures: { ...input.options?.textures, mips: 'gpu' as const } } : {}), ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
-    this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}), ...(this.settings.mips === 'gpu' ? { mipGenerator: new Downsampler(device) } : {}) });
+    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.mips === 'cpu' ? { textures: { ...input.options?.textures, mips: 'cpu' as const } } : {}), ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
+    this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}) });
     this.lastLoad = { caps, copy, input };
     const loadMs = performance.now() - t0;
 

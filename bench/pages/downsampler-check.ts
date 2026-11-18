@@ -1,9 +1,9 @@
 /**
  * downsampler-check (X5): `@pmndrs/downsampler` against our own code.
  *
- *  A. Texture mips. The scene copy builds every mip level of its texture arrays on the CPU (`buildSceneTextures`, 2x2 box in linear
- *     light for colour, on the raw bytes for data). The same textures built with `mips: 'gpu'` (level 0 only) and uploaded with
- *     `uploadSceneCopy({ mipGenerator: new Downsampler(device) })` get levels 1+ from the library. Every level of every bucket is read
+ *  A. Texture mips. `mips: 'cpu'` builds every mip level of the texture arrays on the CPU (`buildSceneTextures`, 2x2 box in linear
+ *     light for colour, on the raw bytes for data). The same textures built with the default `mips: 'gpu'` (level 0 only, D34) and uploaded
+ *     (default `rtMipGenerator(device)`, or `mipGenerator: new Downsampler(device)`) get levels 1+ from the library. Every level of every bucket is read
  *     back and compared byte for byte with the CPU chain: levels, bytes that differ, the largest difference in codes (a rounding step is
  *     the documented difference; anything above 2 fails), per colour space. Both `averageAccess: 'sample'` (hardware bilinear, default)
  *     and `'load'` (exact weights).
@@ -15,7 +15,7 @@
  * Args: repeats=3  size=1920x1081 (part C)  big=1 (part B at 2048x2048 too; default 1)
  */
 import { Downsampler, ScalarReduction, requiredFeatures, requiredLimits } from '@pmndrs/downsampler/webgpu';
-import { buildSceneTextures, uploadSceneTextures, type SceneTextures, type TextureInput } from '@pmndrs/raytracer';
+import { buildSceneTextures, rtMipGenerator, uploadSceneTextures, type SceneTextures, type TextureInput } from '@pmndrs/raytracer';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import { autoExposureCpu } from '../realtime/chain-math.ts';
@@ -99,11 +99,11 @@ try {
       pattern(1024, 256, false, 12),
       pattern(640, 480, true, 13), // not a power of two: stored 512x512 or 1024x512 after the resample (the same for both builds)
     ];
-    const cpu = buildSceneTextures(inputs);
+    const cpu = buildSceneTextures(inputs, { mips: 'cpu' });
     const variants: Array<[string, ConstructorParameters<typeof Downsampler>[1]]> = [['sample', {}], ['load', { averageAccess: 'load' }]];
     for (const [name, options] of variants) {
       const downsampler = new Downsampler(device, options);
-      const gpuBuilt = buildSceneTextures(inputs, { mips: 'gpu' });
+      const gpuBuilt = buildSceneTextures(inputs); // the default is 'gpu' (D34)
       const uploaded = uploadSceneTextures(device, gpuBuilt, `mips ${name}`, downsampler, true);
       const uploadedFor = (_bucket: number) => ({ textures: uploaded.textures.slice(_bucket, _bucket + 1) });
       await device.queue.onSubmittedWorkDone();
@@ -166,6 +166,25 @@ try {
       if (stats['srgb_L0']!.differing || stats['linear_L0']!.differing) failures.push(`mips ${name}: level 0 changed`);
       for (const t of uploaded.textures) t.destroy();
     }
+    // The library default (D34): no generator passed, `rtMipGenerator(device)` fills the levels; same bytes as an explicit default Downsampler.
+    {
+      const explicit = uploadSceneTextures(device, buildSceneTextures(inputs), 'mips explicit', new Downsampler(device), true);
+      const byDefault = uploadSceneTextures(device, buildSceneTextures(inputs), 'mips default', undefined, true);
+      const again = uploadSceneTextures(device, buildSceneTextures(inputs), 'mips default again', undefined, true); // reuses the cached Downsampler
+      let differing = 0;
+      for (let b = 0; b < cpu.buckets.length; b++)
+        for (let level = 0; level < cpu.buckets[b]!.mipLevels; level++) {
+          const a = await readLevel(device, explicit.textures[b]!, level, cpu.buckets[b]!.layers);
+          for (const other of [byDefault, again]) {
+            const o = await readLevel(device, other.textures[b]!, level, cpu.buckets[b]!.layers);
+            for (let i = 0; i < a.length; i++) if (a[i] !== o[i]) differing++;
+          }
+        }
+      metrics.mips_default_vs_explicit_differing_bytes = differing;
+      if (differing) failures.push(`mips: the default generator differs from an explicit Downsampler in ${differing} bytes`);
+      if (rtMipGenerator(device) !== rtMipGenerator(device)) failures.push('mips: rtMipGenerator is not cached per device');
+      for (const u of [explicit, byDefault, again]) for (const t of u.textures) t.destroy();
+    }
     metrics.mips_buckets = cpu.buckets.length;
     notes.mipsBuckets = cpu.buckets.map((b) => `${b.width}x${b.height}x${b.layers} ${b.colorSpace} ${b.mipLevels} levels`);
   }
@@ -178,7 +197,7 @@ try {
       const inputs: TextureInput[] = [...Array.from({ length: 16 }, (_, i) => pattern(size, size, true, i + 1)), ...Array.from({ length: 8 }, (_, i) => pattern(size, size, false, i + 20))];
       const run = async (mode: 'cpu' | 'gpu'): Promise<{ build: number; upload: number }> => {
         const t0 = performance.now();
-        const built: SceneTextures = buildSceneTextures(inputs, mode === 'gpu' ? { mips: 'gpu' } : {});
+        const built: SceneTextures = buildSceneTextures(inputs, { mips: mode });
         const t1 = performance.now();
         const uploaded = uploadSceneTextures(device, built, `cost ${mode}`, mode === 'gpu' ? downsampler : undefined);
         await device.queue.onSubmittedWorkDone();

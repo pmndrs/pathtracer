@@ -89,7 +89,7 @@ describe('resampling and mips', () => {
 
   it('builds a full chain whose top is one texel holding the (linear-light) mean', () => {
     const t = make(8, 8, (x, y) => ((x + y) % 2 === 0 ? [255, 255, 255, 255] : [0, 0, 0, 255]), { colorSpace: 'srgb' });
-    const s = buildSceneTextures([t]);
+    const s = buildSceneTextures([t], { mips: 'cpu' });
     const bucket = s.buckets[0]!;
     expect(bucket.mipLevels).toBe(4);
     expect(bucket.mips.map((m) => m.length)).toEqual([8 * 8 * 4, 4 * 4 * 4, 2 * 2 * 4, 4]);
@@ -162,7 +162,7 @@ describe('bucket packing', () => {
 describe('texture lookup twin', () => {
   // 2x2: (0,0) red, (1,0) green, (0,1) blue, (1,1) white. Row 0 = top.
   const quad = make(2, 2, (x, y) => (y === 0 ? (x === 0 ? [255, 0, 0, 255] : [0, 255, 0, 255]) : x === 0 ? [0, 0, 255, 255] : [255, 255, 255, 255]));
-  const set = (wrap: 'repeat' | 'clamp' | 'mirror' = 'repeat', colorSpace: 'srgb' | 'linear' = 'linear') => buildSceneTextures([{ ...quad, wrap, colorSpace }], { mips: true });
+  const set = (wrap: 'repeat' | 'clamp' | 'mirror' = 'repeat', colorSpace: 'srgb' | 'linear' = 'linear') => buildSceneTextures([{ ...quad, wrap, colorSpace }], { mips: 'cpu' });
 
   it('hits texel centres exactly: uv (0, 0) is the top-left texel (glTF), v grows downward', () => {
     const s = set();
@@ -216,7 +216,7 @@ describe('texture lookup twin', () => {
 
   it('trilinear: lod blends levels and clamps to the chain', () => {
     const checker = make(8, 8, (x, y) => ((x + y) % 2 === 0 ? [255, 255, 255, 255] : [0, 0, 0, 255]));
-    const s = buildSceneTextures([checker]);
+    const s = buildSceneTextures([checker], { mips: 'cpu' });
     expect(sampleSceneTexture(s, 0, 0.5 / 8, 0.5 / 8)[0]).toBe(1); // level 0 texel centre
     expect(sampleSceneTexture(s, 0, 0.5 / 8, 0.5 / 8, 1)[0]).toBeCloseTo(0.5, 2); // level 1 is the mean of the 2x2 box
     expect(sampleSceneTexture(s, 0, 0.1, 0.1, 99)[0]).toBeCloseTo(sampleSceneTexture(s, 0, 0.1, 0.1, 3)[0], 9);
@@ -304,8 +304,8 @@ describe("TextureOptions.mips 'gpu' (X5)", () => {
   const input = (w: number, h: number, srgb: boolean) => ({ width: w, height: h, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), data: Uint8Array.from({ length: w * h * 4 }, (_, i) => (i * 37 + (i >> 5)) & 255) });
   it('keeps level 0 only, plans and counts the full chain, and the level-0 twin is unchanged', () => {
     for (const srgb of [true, false]) {
-      const cpu = buildSceneTextures([input(64, 32, srgb), input(64, 32, srgb)]);
-      const gpu = buildSceneTextures([input(64, 32, srgb), input(64, 32, srgb)], { mips: 'gpu' });
+      const cpu = buildSceneTextures([input(64, 32, srgb), input(64, 32, srgb)], { mips: 'cpu' });
+      const gpu = buildSceneTextures([input(64, 32, srgb), input(64, 32, srgb)]); // 'gpu' is the default (D34)
       expect(gpu.gpuMips).toBe(true);
       expect(cpu.gpuMips).toBeUndefined();
       expect(gpu.buckets[0]!.mips).toHaveLength(1);
@@ -316,6 +316,17 @@ describe("TextureOptions.mips 'gpu' (X5)", () => {
       expect(sampleSceneTexture(gpu, 1, 0.3, 0.6, 0)).toEqual(sampleSceneTexture(cpu, 1, 0.3, 0.6, 0));
       expect(() => sampleSceneTexture(gpu, 0, 0.3, 0.6, 2)).toThrow(/built on the GPU/);
     }
+  });
+  it("'cpu' and true build the full chain, false one level, and the default is 'gpu'", () => {
+    const one = [input(16, 16, false)];
+    expect(buildSceneTextures(one).gpuMips).toBe(true);
+    expect(buildSceneTextures(one, { mips: 'gpu' }).gpuMips).toBe(true);
+    expect(buildSceneTextures(one, { mips: 'cpu' }).buckets[0]!.mips).toHaveLength(5);
+    expect(buildSceneTextures(one, { mips: true }).buckets[0]!.mips).toHaveLength(5);
+    const none = buildSceneTextures(one, { mips: false });
+    expect(none.buckets[0]!.mips).toHaveLength(1);
+    expect(none.buckets[0]!.mipLevels).toBe(1);
+    expect(none.gpuMips).toBeUndefined();
   });
   it('copies a same-size byte texture without the per-element callback (and still masks a plain array to bytes)', () => {
     const bytes = Uint8Array.from([1, 2, 3, 4]);

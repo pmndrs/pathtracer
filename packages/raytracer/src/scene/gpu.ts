@@ -2,6 +2,7 @@
  * GPU upload of the scene copy: two storage buffers (table, data; `packing: 'split'`) or one (`'packed'`, see `SceneCopyPacking`) and the bind group helpers.
  * Nothing here runs in the frame loop: a scene change is a rebuild + upload, never a readback.
  */
+import { Downsampler } from '@pmndrs/downsampler/webgpu';
 import { DEFAULT_SCENE_PACKING, type SceneCopyPacking } from './constants.ts';
 import { packSceneCopy, packedSceneCopyBytes, type SceneCopy } from './scene-copy.ts';
 import type { SceneTextures, TextureLayout, TextureWrap } from './texture.ts';
@@ -50,8 +51,9 @@ export interface UploadSceneCopyOptions {
   /** `split` (two buffers) or `packed` (one: frees a storage binding in every kernel, needs the whole scene copy under one binding limit). Default `DEFAULT_SCENE_PACKING`. The kernels must be built with the same packing. */
   packing?: SceneCopyPacking;
   /**
-   * Fills mip levels 1+ of the texture arrays on the GPU (needed by a scene copy built with `textures: { mips: 'gpu' }`, optional
-   * otherwise: a CPU chain is then overwritten). `new Downsampler(device)` of `@pmndrs/downsampler` fits; this package does not import it.
+   * Fills mip levels 1+ of the texture arrays on the GPU. Default (a scene copy built with `textures: { mips: 'gpu' }`, the default):
+   * `rtMipGenerator(device)`, a `@pmndrs/downsampler` `Downsampler` created once per device. Pass your own (a `Downsampler` with
+   * options, or any `RtMipGenerator`) to override it; with a CPU chain (`mips: 'cpu'`) none is used unless given (levels 1+ are then overwritten).
    */
   mipGenerator?: RtMipGenerator;
 }
@@ -59,6 +61,25 @@ export interface UploadSceneCopyOptions {
 /** The part of `@pmndrs/downsampler`'s `Downsampler` the upload uses: record the mip chain of `texture` (level 0 written) into `encoder`. */
 export interface RtMipGenerator {
   encode(encoder: GPUCommandEncoder, texture: GPUTexture): unknown;
+  /** Drops per-texture state (a `Downsampler` has it): called once the mip work is submitted. */
+  release?(texture: GPUTexture): unknown;
+}
+
+const mipGenerators = new WeakMap<GPUDevice, Downsampler>();
+
+/**
+ * The library's default mip generator for `device`: a `@pmndrs/downsampler` `Downsampler`, created on first use and cached per device
+ * (pipelines compile once, repeated uploads reuse them). It holds no GPU resources of its own that outlive the textures it was asked to fill
+ * (per-texture state is released after each upload), so there is nothing to dispose: it is garbage collected with the device. The device
+ * works with its default limits (fewer levels per dispatch than with `Downsampler.requiredLimits`, same result).
+ */
+export function rtMipGenerator(device: GPUDevice): RtMipGenerator {
+  let generator = mipGenerators.get(device);
+  if (!generator) {
+    generator = new Downsampler(device);
+    mipGenerators.set(device, generator);
+  }
+  return generator;
 }
 
 /** The device's storage binding size cap for one buffer. */
@@ -145,12 +166,12 @@ export function writeSceneCopy(device: GPUDevice, buffers: SceneCopyBuffers, cop
 
 /**
  * Creates one texture array per bucket (`rgba8unorm-srgb` for colour, `rgba8unorm` for data, every mip level written from the CPU
- * chain) with a trilinear sampler whose address mode is the bucket's wrap. Fails clearly when a limit is exceeded.
+ * chain, or levels 1+ generated here by the default `rtMipGenerator` when the textures were built with `mips: 'gpu'`) with a trilinear sampler whose address mode is the bucket's wrap. Fails clearly when a limit is exceeded.
  */
 export function uploadSceneTextures(device: GPUDevice, textures: SceneTextures, label = 'rt scene', mipGenerator?: RtMipGenerator, copySrc = false): SceneTextureBuffers {
-  if (textures.gpuMips && !mipGenerator) throw new RangeError(`${label}: the textures were built with mips: 'gpu' (levels 1+ are not on the CPU); pass uploadSceneCopy(..., { mipGenerator: new Downsampler(device) })`);
+  const generator = mipGenerator ?? (textures.gpuMips ? rtMipGenerator(device) : undefined);
   const { limits } = device;
-  const encoder = mipGenerator ? device.createCommandEncoder({ label: `${label} mips` }) : null;
+  const encoder = generator ? device.createCommandEncoder({ label: `${label} mips` }) : null;
   const count = textures.buckets.length;
   if (count > limits.maxSampledTexturesPerShaderStage || count > limits.maxSamplersPerShaderStage) throw new RangeError(`${label}: ${count} texture arrays exceed the device's limits (${limits.maxSampledTexturesPerShaderStage} sampled textures, ${limits.maxSamplersPerShaderStage} samplers per stage)`);
   const gpuTextures: GPUTexture[] = [];
@@ -166,20 +187,23 @@ export function uploadSceneTextures(device: GPUDevice, textures: SceneTextures, 
       mipLevelCount: bucket.mipLevels,
       format: bucket.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
       // A mip generator writes levels 1+ with compute (storage texture, unorm only) or render passes (sRGB cannot be a storage texture).
-      usage: TEXTURE_BINDING | TEXTURE_COPY_DST | (copySrc ? 0x1 : 0) | (mipGenerator && bucket.mipLevels > 1 ? (bucket.colorSpace === 'srgb' ? TEXTURE_RENDER : TEXTURE_STORAGE | TEXTURE_RENDER) : 0),
+      usage: TEXTURE_BINDING | TEXTURE_COPY_DST | (copySrc ? 0x1 : 0) | (generator && bucket.mipLevels > 1 ? (bucket.colorSpace === 'srgb' ? TEXTURE_RENDER : TEXTURE_STORAGE | TEXTURE_RENDER) : 0),
     });
     bucket.mips.forEach((mip, level) => {
       const w = Math.max(1, bucket.width >> level);
       const h = Math.max(1, bucket.height >> level);
       device.queue.writeTexture({ texture, mipLevel: level }, mip as Uint8Array<ArrayBuffer>, { bytesPerRow: w * 4, rowsPerImage: h }, [w, h, bucket.layers]);
     });
-    if (encoder && bucket.mipLevels > 1) (mipGenerator as RtMipGenerator).encode(encoder, texture);
+    if (encoder && bucket.mipLevels > 1) (generator as RtMipGenerator).encode(encoder, texture);
     gpuTextures.push(texture);
     views.push(texture.createView({ dimension: '2d-array' }));
     const address = ADDRESS_MODE[bucket.wrap];
     samplers.push(device.createSampler({ label: `${label} sampler ${index}`, magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', addressModeU: address, addressModeV: address, lodMinClamp: 0, lodMaxClamp: Math.max(0, bucket.mipLevels - 1) }));
   });
-  if (encoder) device.queue.submit([encoder.finish()]);
+  if (encoder) {
+    device.queue.submit([encoder.finish()]);
+    if (generator?.release) for (const texture of gpuTextures) generator.release(texture);
+  }
   const layout: TextureLayout = { buckets: textures.buckets.map(({ width, height, colorSpace, wrap, layers, mipLevels }) => ({ width, height, colorSpace, wrap, layers, mipLevels })) };
   return { textures: gpuTextures, views, samplers, layout, byteLength: textures.byteLength };
 }

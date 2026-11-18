@@ -112,8 +112,21 @@ rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout, textures: co
 
 Adds `rtTexSample(slot, uv, lod)`, `rtTexLodOf(record, uvFootprint)`, `rtApplyMaterialTextures(m, uv, footprint)` (glTF semantics),
 `rtApplyNormalMap(n, tangent, texel)` and `RT_SURF_TEXFRAME` (`uvDensity`, `tangent`) to `rtSurface`. It works on every WebGPU device (size buckets
-of texture arrays, CPU mips, a trilinear sampler per array; at most 8 arrays by default); bindless is a later Tier 3 option behind the same slots.
-Textures are sRGB for colours and linear for data (checked against the material field). A textured emitter is not in the light table.
+of texture arrays, mips, a trilinear sampler per array; at most 8 arrays by default); bindless is a later Tier 3 option behind the same slots.
+Textures are sRGB for colours and linear for data (checked against the material field).
+
+**Mips (D34).** `buildSceneCopy` keeps level 0 only (`options.textures.mips: 'gpu'`, the default); `uploadSceneCopy` fills levels 1+ on the GPU with
+[`@pmndrs/downsampler`](https://github.com/pmndrs/downsampler) (a dependency of this package: ~630 KB on disk with typings, no required peer dependencies, three.js only for its optional `/three` adapter,
+which this package does not import). One `Downsampler` per device is created on first use and cached (`rtMipGenerator(device)`, a WeakMap, so repeated uploads do not recompile;
+it keeps no resources of its own beyond the pipelines, so there is nothing to dispose: it goes with the device). Levels 1+ differ from the CPU chain by at most 2 codes (closer to the exact box mean). Settings:
+
+| `textures.mips` | Build | Upload | The CPU twin (`sampleSceneTexture`) |
+|---|---|---|---|
+| `'gpu'` (default) | level 0 | `rtMipGenerator(device)`, or `uploadSceneCopy({ mipGenerator })` | level 0 only (throws above it) |
+| `'cpu'` (or `true`) | every level, ~50 ms per megapixel | the bytes as built | every level; use it for oracles, tests and any consumer that never uploads |
+| `false` | level 0, one-level texture | | level 0 |
+
+Scene fingerprints hash level 0 only, so they do not depend on the mode. A custom generator is anything with `encode(encoder, texture)` (`RtMipGenerator`). A textured emitter is not in the light table.
 CPU twins and the layout in `scene/texture.ts` (`buildSceneTextures`, `sampleSceneTexture`, `textureLod`, `coneUvFootprint`,
 `triangleTextureFrame`, `applyNormalMap`). Design and the open storage choice: [docs/design/scene-copy.md](../../docs/design/scene-copy.md).
 
