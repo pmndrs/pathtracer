@@ -7,8 +7,8 @@ import { manyLampMeshes } from './many-lights.ts';
  * a plane with a box and a ball, with the materials the ReSTIR passes must evaluate exactly as the shade pass does. No pbrt / Mitsuba reference (the lamp count makes them slow, and
  * the point is agreement of reservoir resampling with plain NEE): judge against our own high-spp NEE render of the same scene.
  *
- *  - `restir-tex-lamps`: legacy materials with textures: a checker floor, a ball with a checker base colour and a tangent-space bump normal map (shading normal != geometric),
- *    a box whose metallic-roughness texture alternates stripes of rough dielectric and smooth metal (the per-texel metalness picks a lobe).
+ *  - `restir-tex-lamps`: legacy materials with textures: a checker floor, a ball with a checker base colour, a tangent-space bump normal map (shading normal != geometric)
+ *    and a metallic-roughness texture of stripes alternating rough dielectric and smooth metal (the per-texel metalness picks a lobe), a plain metal box.
  *  - `restir-pbr-lamps`: OpenPBR mode, no textures: a dielectric-over-diffuse floor (layered lobe, `albedo` layering), a rough gold ball (conductor), a box at metalness 0.5
  *    (the stochastic mix: one lobe per pixel and frame, so the G-buffer carries the pick).
  *  - `restir-mask-lamps`: OpenPBR + textures + alpha MASK: a checker screen (half of it holes) floats 0.5 m over the ground, between the lamps and the floor: camera rays pass through
@@ -42,12 +42,12 @@ export const restirTexLamps: SceneDesc = lampScene(
     },
     materials: {
       floor: { type: 'diffuse', reflectance: [1, 1, 1], reflectanceTexture: 'floor' },
-      ball: { type: 'pbr', baseColor: [1, 1, 1], roughness: 0.7, metalness: 0, baseColorTexture: 'ball', normalTexture: 'bump' },
-      box: { type: 'pbr', baseColor: [0.9, 0.75, 0.5], roughness: 1, metalness: 1, metallicRoughnessTexture: 'stripes' },
+      ball: { type: 'pbr', baseColor: [1, 1, 1], roughness: 1, metalness: 1, baseColorTexture: 'ball', normalTexture: 'bump', metallicRoughnessTexture: 'stripes' },
+      box: { type: 'pbr', baseColor: [0.9, 0.75, 0.5], roughness: 0.45, metalness: 1 },
     },
     meshes: [
       { name: 'plane', geometry: { type: 'quad', size: [8, 8] }, material: 'floor', uv: { scale: [4, 4] } },
-      { name: 'box', geometry: { type: 'box', size: [0.8, 0.6, 0.8] }, material: 'box', transform: translation(-0.9, 0.3, 0.2), uv: {} },
+      { name: 'box', geometry: { type: 'box', size: [0.8, 0.6, 0.8] }, material: 'box', transform: translation(-0.9, 0.3, 0.2) },
       { name: 'ball', geometry: { type: 'sphere', radius: 0.45, segments: 48, rings: 24 }, material: 'ball', transform: translation(0.9, 0.45, -0.2), uv: { scale: [2, 1] } },
     ],
   },
@@ -88,4 +88,12 @@ export const restirMaskLamps: SceneDesc = lampScene(
   },
 );
 
-export const restirScenes: readonly SceneDesc[] = [restirTexLamps, restirPbrLamps, restirMaskLamps];
+/** `restir-pbr-lamps` with the box on the gold material (no stochastic mix): separates the mix pick from the layered floor in a bias hunt. */
+export const restirPbrLampsNoMix: SceneDesc = { ...restirPbrLamps, name: 'restir-pbr-lamps-nomix', purpose: 'restir-pbr-lamps without the metalness-0.5 box (it is gold): no stochastic material pick.', meshes: restirPbrLamps.meshes.map((m) => (m.material === 'mix' ? { ...m, material: 'gold' } : m)) };
+
+/** Bias hunt variants: everything gold (conductor lobe only) and everything Lambert (OpenPBR adapter, specularWeight 0). */
+const retarget = (name: string, materials: SceneDesc['materials'], purpose: string): SceneDesc => ({ ...restirPbrLamps, name, purpose, materials: { ...materials, lightBack: { type: 'black' } }, meshes: restirPbrLamps.meshes });
+export const restirPbrLampsGold: SceneDesc = retarget('restir-pbr-lamps-gold', { floor: { type: 'openpbr', baseColor: [1, 0.77, 0.34], baseMetalness: 1, specularRoughness: 0.35 }, gold: { type: 'openpbr', baseColor: [1, 0.77, 0.34], baseMetalness: 1, specularRoughness: 0.35 }, mix: { type: 'openpbr', baseColor: [1, 0.77, 0.34], baseMetalness: 1, specularRoughness: 0.35 } }, 'restir-pbr-lamps with every surface rough gold (conductor lobe only).');
+export const restirPbrLampsLambert: SceneDesc = retarget('restir-pbr-lamps-lambert', { floor: { type: 'openpbr', baseColor: [0.5, 0.45, 0.4], specularWeight: 0 }, gold: { type: 'openpbr', baseColor: [0.8, 0.6, 0.3], specularWeight: 0 }, mix: { type: 'openpbr', baseColor: [0.2, 0.5, 0.8], specularWeight: 0 } }, 'restir-pbr-lamps with every surface Lambertian through the OpenPBR adapter.');
+
+export const restirScenes: readonly SceneDesc[] = [restirTexLamps, restirPbrLamps, restirMaskLamps, restirPbrLampsNoMix, restirPbrLampsGold, restirPbrLampsLambert];

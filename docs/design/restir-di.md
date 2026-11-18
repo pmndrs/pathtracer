@@ -8,7 +8,7 @@ Checks: `node bench/runner/run.ts --page restir-check --args check=...` (bench/p
 ## Pipeline (megakernel; one `encode` pass = one frame = one sample of the progressive mean)
 
 ```
-ptRestirGbuf      camera ray (same jitter as the shade pass) -> position, view depth, shading normal, material      (2 vec4f / pixel / frame, 2 frames)
+ptRestirGbuf      camera ray (same jitter as the shade pass) -> position, view depth, shading normal, material      (20 B / pixel / frame, 2 frames, P4.2c)
 ptRestirInit      RIS, M candidates from the light sampler (alias pick + point), target = luminance of f |cos| Le / pdf   -> reservoir A
                   optional: one shadow ray for the chosen sample (initialVisibility), W = 0 if occluded
 ptRestirTemporal  reproject the primary hit through the previous camera, same normal / depth tests, merge the previous final reservoir -> B
@@ -19,7 +19,7 @@ ptMain (shade)    first vertex: read F, regenerate the light sample, ONE shadow 
 Every pass is one dispatch in the same compute pass as the shade dispatch (one `encode` call = 4 + 1 dispatches per frame; the host switches pipeline and
 bind groups between them). The passes are one WGSL module with four entry points (group 0 walk, group 1 scene copy, group 2: params ring, G-buffer, reservoirs),
 so they bind 3 + (1 or 2) + 2 storage buffers, inside the 10 of Apple GPUs; the shade kernel needs one more read-only storage binding (`PT_RESTIR_SHADE_BINDING` 11).
-Memory at 1280x720: G-buffer 2 x 14.7 MB, reservoirs 4 x 14.7 MB (a vec4u per pixel per region: light index, u as 2 x unorm16, bits(W), M).
+Memory at 1280x720: G-buffer 2 x 18.4 MB (was 2 x 29.5), reservoirs 4 x 14.7 MB (a vec4u per pixel per region: light index, u as 2 x unorm16, bits(W), M).
 
 ## The sample and the target
 
@@ -42,17 +42,38 @@ Pairwise MIS (O(n) target evaluations) is not built; with k = 2 neighbours the q
 
 ## Reuse (R6: decorrelated)
 
-- Temporal: the primary hit position is projected through the previous camera (the locally tracked basis of the last encoded frame: a static scene and a moving camera;
-  the real-time mode's motion vectors / previous view-projection replace it through `PtRestirPasses.setPreviousCamera`, DIVERGES V130). Reject on out-of-frame, previous
+- Temporal: the primary hit position is projected through the previous camera (the megakernel's: `setPrevCamera` / `nextFrame`, else the last encoded frame's; P4.2e, DIVERGES V170). Reject on out-of-frame, previous
   G-buffer miss, `dot(n, n_prev) < normalCos` (0.9) or `|depth - depth_prev| > depthRel * depth` (0.1). `temporalPick: 'random'` shifts the projected position by a
   uniform +-0.5 px before the floor (a stochastic bilinear pick: no fixed sub-pixel pattern); `'nearest'` is the baseline. The history confidence is capped: stored `M <= historyCap x candidates` (20).
 - Spatial: `k` (default 1, at most 8) neighbours at `neighbours: 'random'` offsets (uniform in a disc of `spatialRadius` = 16 px, a fresh pair per pixel and frame) or `'fixed'` (one golden-angle
   spiral for every pixel and frame: the structured baseline). Same rejection tests. One iteration; its output is next frame's history.
 
+## Unification with the real-time mode (P4.2b, P4.2c, P4.2e)
+
+**One previous camera.** `PtMegakernel` owns it (`setPrevCamera` / `nextFrame`, else the camera of the last encoded frame) and passes it to `PtRestirPasses.encodeFrame`; the frame planes' motion
+vectors and the reservoir reprojection are the same camera (V170). `restir-check prevcam`: tracked, `nextFrame` and `setPrevCamera` give bit-identical images, a wrong previous camera does not.
+
+**Blue noise.** The G-buffer pass draws its jitter pair through the same `ptSample2D` as the shade pass, so `sampler: 'bluenoise'` binds the texture to the passes (`PT_BLUENOISE_BINDING` 12 in their
+io group); the realtime preset no longer falls back to Owen-Sobol. Candidates / picks / offsets stay PCG (V135, V174). The frame planes need nothing: the reservoir's first-vertex light is part of the
+path radiance, which `ptFramePlanes` splits by the primary BSDF kind (`realtime-check restir=unbiased`: diffuse x albedo + specular x factor = radiance).
+
+**G-buffer, packed (V172).** 20 B / pixel / frame: position (f32 x 3), octahedral normal (2 x unorm16), material word; the view depth is derived. Textured scenes add uv + footprint (32 B), a stochastic
+material pick adds its random (+4 B). 1080p, two frames: 83.0 MB (was 132.7 MB). Layout: `ptRestirGbufLayout`; one `array<u32>` binding.
+
+**Primary hit.** `primary: 'vbuffer'`: the G-buffer pass resolves the engine's V-buffer (`ptVbufferHit`, binding 9 in the passes' io group), the shade already did: the passes trace no camera ray.
+Trace primaries: `restir.sharedHit` makes the G-buffer pass write the hit as a V-buffer texel (own 16 B / pixel buffer, passes binding 3, shade binding 15) and the shade kernel resolve it (`ptVbufferWgsl('restir')`):
+one camera-ray trace per frame instead of two, at the price of 16 B / pixel and unorm16 barycentrics (V171). Needs `layout.positions`. Default off until the quiet-pass A/B.
+
+**Materials (V173).** The target uses the very decode of the shade pass: `ptRsBsdf` = `rtApplyMaterialTextures(rtMaterial(m), uv, footprint)` (textured) then `ptBsdfFromMaterial(mat, mixU)` (OpenPBR mode,
+`mixU` stored per pixel), evaluated with `ptEval` for layered (albedo) materials, `ptBsdfEval` otherwise; normal-mapped shading normals are stored. Alpha MASK: the G-buffer pass skips cutouts exactly like the shade
+(first solid hit), visibility uses `ptVisibleMasked`. `ptRestirUnsupported` says what is refused (stochastic layering, fuzz, thin film, anisotropy, `materialLodDepth` 0, hooks).
+
+**For the wavefront port (P4.2a).** The shade kernel side is now small and scheduler-neutral: one read-only reservoir binding (+ the hit buffer with `sharedHit`), `ptRestirLd` (evalFn + masked visibility). The passes
+need a G-buffer aligned with the sample the shade kernel shades: with `sharedHit` / V-buffer the wavefront's camera kernel can fill its path state from the hit record instead of tracing, which is the natural join;
+refill modes still need sample-aligned G-buffers (`primary: 'vbuffer'` already throws on refill). The wavefront shade kernel is at 8 of 10 Apple storage buffers (9 with the hit buffer): needs `scenePacking: 'packed'`.
+
 ## Not done (open)
 
-- Wavefront scheduler (`PtWavefront.create` throws with `integrator.restir`): the passes sit between the primary hit and the shade of one frame; the wavefront's shade kernels would read the reservoir the same way
-  (it is one extra read-only binding at its 8 of 10), but its primary and refill scheduling need the G-buffer pass to be sample-aligned. TASKS P4.2a.
-- Textured scenes, OpenPBR mode, alpha MASK (the passes decode the legacy untextured material by index).
+- Wavefront scheduler (`PtWavefront.create` throws with `integrator.restir`): see the note above. TASKS P4.2a.
+- Fuzz, thin film, anisotropy, stochastic layering with ReSTIR (V173); the layered + ReSTIR kernel is over the 50 KB class (shade 50.2 KB plain OpenPBR, 51.8 KB textured + mask).
 - Motion vectors for moving objects, dynamic lights (light indices change), history confidence into the reactive mask (R7).
-- The primary hit is traced twice per frame (G-buffer pass and shade); with `primary: 'vbuffer'` support the G-buffer pass would read the V-buffer and the shade would too.
