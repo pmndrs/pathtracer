@@ -64,7 +64,7 @@ upscaler and the wavefront version are next.
 **Next**
 - P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
 - Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
-- Track N: merge `windows-nrc`, then the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
+- Track N (merged into main 2026-11-18): the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 

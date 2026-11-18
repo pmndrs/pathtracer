@@ -9,9 +9,8 @@ _Written on Windows at the end of M9 and M8. The reverse of [nrc-windows-handoff
 Every milestone of [nrc-plan.md](nrc-plan.md) is done (M0-M9). The maintainer accepted the write-up (M8) on 2026-11-18.
 What is left is Mac-side reruns, the quiet pass and optional follow-ups.
 
-Branch `windows-nrc` is 64 commits ahead of `main` and 0 behind (as of 2026-11-18), so it merges as a fast-forward.
-The Windows rule was "never push `main`; the Mac side merges": merging it is the first Mac step, on the maintainer's go.
-No file in the index has CRLF line endings.
+Branch `windows-nrc` was fast-forwarded into `main` on 2026-11-18 on the maintainer's go (typecheck clean, 1152 unit
+tests pass on Windows). No file in the index has CRLF line endings.
 
 ## Built on Windows, never run on Apple
 
@@ -26,7 +25,7 @@ No file in the index has CRLF line endings.
 
 ## Mac tasks, in order
 
-1. **Merge** `windows-nrc` into `main` (maintainer's go), `pnpm install`, `pnpm typecheck`, `pnpm test`.
+1. **Pull** `main` (already merged), `pnpm install`, `pnpm typecheck`, `pnpm test` on the Mac.
 2. **N11.4**: the M9 twin against the Mitsuba reference (the PFM is on the Mac):
    `node bench/runner/run.ts --page nrc-pipeline-study --timeout 3600000`. Confirms or corrects the 3060's numbers, which
    used our own 4096 spp render as the reference.
