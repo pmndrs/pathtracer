@@ -1,6 +1,6 @@
 # ReSTIR GI (P5)
 
-Real-time mode only, megakernel only, on top of ReSTIR DI (`docs/design/restir-di.md`): `integrator.restir.gi`, default off. Reference mode and every kernel without `gi`
+Real-time mode only, on the megakernel and (P5 wavefront GI, below) the plain wavefront, on top of ReSTIR DI (`docs/design/restir-di.md`): `integrator.restir.gi`, default off. Reference mode and every kernel without `gi`
 are byte-identical (`node bench/size-snapshot.ts`, `diff -r` before / after: no file of the old set changed). Code: `packages/pathtracer/src/restir/restir-gi-wgsl.ts` (options, the three
 passes, the shade-side read), the host in `restir.ts` (`PtRestirPasses`: GI buffer, pipelines, steps), the shade hook in `integrator/integrator-wgsl.ts`, the CPU oracle in
 `restir-gi-oracle.ts`. Checks: `restir-check check=gi` and `realtime-pipeline restir=gi,giu` (both below).
@@ -111,11 +111,31 @@ After the denoiser the picture is closer than the raw one: GI buys 35-40% of the
 **Time** (`realtime-pipeline scenarios=timing`, trace stage of one frame, sponza-white 960x540, M5 Pro, load 3.7, PROVISIONAL, 250 ms batches x 5, median; no GPU timestamps): plain NEE 15.0 ms, DI 21.0 ms, DI + GI biased 28.6 ms, DI + GI unbiased 30.6 ms (whole chain frame 20.0 / 29.5 / 37.3 / 38.4 ms).
 GI costs 7.6 ms (biased) / 9.6 ms (unbiased) over DI at this size: three more passes plus the shadow rays of every merged sample (the shade kernel gets cheaper: its path ends at the first vertex). A QUIET-PASS row exists (P5.5).
 
+## On the wavefront (P5 wavefront GI, V280)
+
+`PtWavefront.create(..., { integrator: { restir: { gi: {} } } })` (plain scheduler, as DI: refill / layers throw) runs the SAME `PtRestirPasses` (DI + GI passes modules, buffers, previous-camera rule, `giOverrides`) inside the sample's compute pass, before the camera
+kernel; nothing in the passes changed. Only the shade side is new, and it is the megakernel's text: `ptRestirGiShadeWgsl(evalFn, base)` (the final GI region index is a parameter: `ptParams.limits.w` in the megakernel, `bitcast<u32>(ptParams.up.w)` in the wavefront, where
+`limits.w` is the iteration; DI's final region rides in the same lane and is the same region number), bound read-only at group 2 binding 19 in the shade kernel only (DI's binding 11 + this one: 10 of 10 Apple storage buffers per stage with a split scene copy, 9 packed; `integrator.counters` or AOV buffers on top would not fit a split copy). At vertex 0 of a non-delta lobe the shade kernel queues DI's shadow ray (visibility through the shadow
+kernel, as DI), adds `beta * ptRestirGiLi(...)`, writes the GI distance into the frame plane's alpha (`ptFrameBounce(path, n, ptGiDist)`, the megakernel's `fBounce = ptGiDist`) and ends the path: no extension ray, so GI + DI is exactly the megakernel's depth-2 estimate (the plain wavefront's iteration loop then has only the shadow queue's work left after the first shade). Frame planes need nothing else (the GI term lands in `radiance`, which the class add splits by the primary BSDF kind). Not supported on the wavefront (as DI): `sharedHit`, alpha MASK, hooks, refill.
+The kernel text of every build without `gi` is byte-identical (`node bench/size-snapshot.ts`, `diff -r` ignoring `Only in`: no file changed).
+
+Sizes (minified, `node bench/size-snapshot.ts`; wavefront shade kernel / megakernel shade kernel): plain GI 32.4 / 43.1 KB, + env map 35.1 / 45.9, real-time preset (frame planes, blue noise) 38.7 / 50.1 (the real-time megakernel is 50.2 KB in the bench adapter: over the DXC class), real-time + OpenPBR albedo
+48.3 / 59.5 (the megakernel with OpenPBR + GI is 52.4 KB even without the frame planes). The wavefront's other four kernels are 1.1 - 12.6 KB. The GI PASSES module is the same on both schedulers (47.6 KB, 50.3 with an env map, 56.9 KB with OpenPBR): the wavefront split does not help there (open problem 5).
+
+Checks: `wf-frame-check restir=gi|giu` (cornell, sponza-white, lights-mix-lamps, pbr-full, many-lights, lamps; six frames, orbit / pan): every plane within 1.4e-7 relative of the megakernel's, i.e. the same reservoirs and the same pixels (the check turns `sharedHit` off on both: the megakernel's real-time preset adds it and its unorm16 barycentrics move viewZ by 7e-5);
+split and packed scene copies, atomic and subgroup appends, `emit` none / primary / mirror all the same. `restir-check check=gi scheduler=wavefront` reproduces the megakernel's table to the printed digits (static camera, 128 frames, 6 seeds, k = 1, 2048-frame depth-2 reference): Cornell gi_off -5.4e-5, gi_ts_unb -1.1e-4 +- 0.7e-4,
+gi_ts_bia -0.95%; Sponza-white gi_off -3.7e-4, gi_ts_unb -3.9e-4, gi_ts_bia -5.9%; env-sphere -5.8e-5, -1.9e-4, -1.6% (the same numbers as above: same seeds, same per-pixel images). The chain (`realtime-pipeline scheduler=wavefront restir=gi,giu`, sponza-white, 16 frames, SVGF and none, static and the moving path, references
+512 spp): every relMSE (raw / denoised / final, frame 1 / 4 / 16, two path poses) is within 0.2% of the megakernel arm's (ratio 0.9996 .. 1.0021).
+
+Time, wavefront vs megakernel (`realtime-pipeline scenarios=timing timingMin=500`, trace stage, sponza-white 960x540, M5 Pro, three paired rounds megakernel then wavefront, **load 17-35 from other jobs: PROVISIONAL**, no GPU timestamps; wf / mk per round):
+plain NEE 0.84 / 0.84 / 0.96, DI 0.98 / 0.93 / 1.09, DI + GI biased 1.05 / 1.00 / 1.14 (26.9 vs 25.7 ms in round 1), DI + GI unbiased 1.06 / 1.01 / 1.16. The wavefront wins only without ReSTIR; with GI it is level to 14% slower (the megakernel's real-time preset also has `sharedHit`, which the wavefront
+does not). The reason to run GI there is size (the shade kernel is 38.7 KB against the megakernel's 50.1 KB, 48.3 against 59.5 with OpenPBR), not speed; `ptwfAutoPolicy` is unchanged (V281), its `kernelBytes` rule already routes the over-50 KB megakernels. A QUIET-PASS row exists (P5.6).
+
 ## Open problems
 
 1. **One bounce only.** `Lo` is direct light at x2. A full ReSTIR GI sample continues the path from x2 (`Lo` from a longer path, the path length as part of the sample). That needs the megakernel's vertex loop inside the init pass (textures, cutouts, hooks) and re-evaluates the BSDF at x2 toward the new x1 only for Lambert x2 anyway.
 2. **Specular chains.** A diffuse x1 -> mirror / glass x2 -> light path is dropped (it is a depth-2 contribution of the plain path tracer; a 1-sample GI cannot reconnect through a delta lobe). Needs a "delta-chain" extension of the sample (Ouyang et al.'s rough-surface reconnection condition, or a second path sample for paths through specular vertices).
 3. **Glossy x2 has no reuse** (see shift validity). A footprint rule (reconnect only above a roughness, evaluate the BSDF at the new wo with the stored incoming direction) would give them reuse at a small bias.
-4. **Textures and alpha MASK are refused** (`ptRestirUnsupported` says so): x2 needs the texture footprint of the primary cone and the cutout loop. Wavefront: refused (megakernel only). `materialLod` with OpenPBR materials: refused.
+4. **Textures and alpha MASK are refused** (`ptRestirUnsupported` says so): x2 needs the texture footprint of the primary cone and the cutout loop. Wavefront: supported (no textures / MASK there either). `materialLod` with OpenPBR materials: refused.
 5. **Size.** The GI module is 47.7 KB (50.4 with an environment map, 56.1 with OpenPBR), the shade kernel 43 KB (50.2 KB in the real-time preset with `sharedHit`, blue noise and frame planes): at the DXC class, over it with OpenPBR.
 6. History correlation: a static camera accumulates correlated frames; the useful comparison is the per-frame image (below), not the accumulated mean.

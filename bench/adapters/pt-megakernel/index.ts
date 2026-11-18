@@ -287,7 +287,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         layerThickness: settings.layerThickness ?? 1e-6,
         ...(settings.restir ? { restir: JSON.stringify(resolveRestirOptions(settings.restir)) } : {}),
         ...(settings.spectral ? { spectral: JSON.stringify(settings.spectral) } : {}),
-        ...(settings.materialLod === 'secondary' ? { materialLod: 'secondary', materialLodDepth: settings.materialLodDepth ?? 1 } : {}),
+        ...(settings.materialLod === 'secondary' ? { materialLod: 'secondary', materialLodDepth: settings.materialLodDepth ?? 1 } : settings.materialLod === 'full' ? { materialLod: 'full' } : {}),
         transmissionTint: settings.transmissionTint ?? true,
         ...(settings.textureLod === 'cone' ? { textureConeScale: settings.textureConeScale ?? 'auto' } : {}),
       },

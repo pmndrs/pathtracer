@@ -16,7 +16,7 @@
  * megakernel and the wavefront interleaved (A B B A ...). Reports ms per frame (min / median / max over the rounds) and the paired wavefront / megakernel ratio per round (min..max).
  * `res=960x540` sets the film of both kernels after the load (a file scene cannot be resized by its description; the kernels can).
  *
- * Args: cases=cornell,...  frames=6  step=1 (degrees)  restir=off|unbiased|biased  emit=none|primary|mirror (frameEmission)  tol=1e-5  size=128 (Cornell side; file scenes keep their film)  scheduler=plain|  packing=packed|split
+ * Args: cases=cornell,...  frames=6  step=1 (degrees)  restir=off|unbiased|biased|gi|giu  emit=none|primary|mirror (frameEmission)  tol=1e-5  size=128 (Cornell side; file scenes keep their film)  scheduler=plain|  packing=packed|split
  */
 import type { PtLookAtCamera, PtMegakernel, PtRestirOptions, PtWavefront, PtWavefrontOptions, PtFrame } from '@pmndrs/pathtracer';
 import type { AdapterSummary } from '../runner/contract.ts';
@@ -52,9 +52,12 @@ const CASES: Record<string, Case> = {
   'sponza-white': { scene: 'sponza-white', pan: true },
   'tex-checker': { scene: 'tex-checker' },
   pbr: { scene: 'restir-pbr-lamps' },
+  // OpenPBR + ReSTIR GI: the realtime preset's reduced secondary material is refused with GI, so this case keeps the full material
+  'pbr-full': { scene: 'restir-pbr-lamps', settings: { materialLod: 'full' } },
   'restir-tex': { scene: 'restir-tex-lamps' },
   'many-lights': { scene: 'many-lights-64' },
   lamps: { scene: 'sponza-lamps', pan: true },
+  'lights-mix-lamps': { scene: 'lights-mix-lamps' },
   // alpha MASK with the exact shadow policy (alphaShadow 'policy' with alphaPolicy exact; the weighted policies hash their own per-ray random numbers: not per-pixel comparable)
   // the same without the realtime preset (full materials, level-0 textures, Owen-Sobol): separates a preset effect from a frame-plane effect
   'foliage-plain': { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { mode: undefined, frame: true, alphaShadow: 'policy' } },
@@ -199,7 +202,7 @@ async function timeCase(tag: string, device: GPUDevice, mk: PtMegakernel, wf: Pt
 }
 
 async function runCase(name: string, c: Case, o: Opts): Promise<void> {
-  const tag = `${name}${o.restir ? '_restir' : ''}`;
+  const tag = `${name}${o.restir ? (o.restir.gi ? '_restirgi' : '_restir') : ''}`;
   let scene = getScene(c.scene);
   if (c.size ?? (c.scene === 'cornell' ? o.size : 0)) {
     const s = c.size ?? o.size;
@@ -288,7 +291,10 @@ try {
   if (!gpu) throw new Error('requestAdapter() returned null: no usable GPU.');
   adapterSummary = summarizeAdapter(gpu);
   const names = (args.cases ?? 'cornell,sponza-white,tex-checker,pbr').split(',');
-  const restir: PtRestirOptions | null = args.restir === undefined || args.restir === 'off' ? null : args.restir === 'biased' ? {} : { bias: 'unbiased', initialVisibility: false };
+  // `gi` / `giu` (P5): ReSTIR GI on top of DI (biased defaults / both unbiased): the wavefront's shade reads the same GI reservoirs the megakernel's does
+  // `sharedHit: false` on both: the megakernel's realtime preset adds `sharedHit` (V-buffer barycentrics, unorm16: viewZ differs by 7e-5 from a traced hit), which the wavefront does not have (D32)
+  const restirBase: PtRestirOptions | null = args.restir === undefined || args.restir === 'off' ? null : args.restir === 'biased' ? {} : args.restir === 'gi' ? { gi: {} } : args.restir === 'giu' ? { bias: 'unbiased', initialVisibility: false, gi: { bias: 'unbiased' } } : { bias: 'unbiased', initialVisibility: false };
+  const restir: PtRestirOptions | null = restirBase && { ...restirBase, sharedHit: false };
   const wavefront: Partial<PtWavefrontOptions> = { ...(args.appends ? { appends: args.appends as 'atomic' | 'subgroup' | 'auto' } : {}), ...(args.sort ? { sort: args.sort as 'none' | 'material' | 'octant' | 'both' } : {}) };
   const opts: Opts = {
     frames: numberArg(args, 'frames', 6),
