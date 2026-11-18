@@ -135,6 +135,7 @@ export const minifyWgsl = rtMinifyWgsl;
 export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout' | 'integrator' | 'textures'>): { integratorOptions: PtIntegratorOptions; parts: string[] } {
   const integratorOptions: PtIntegratorOptions = { ...options.integrator, ...(options.textures ? { textures: true } : {}) };
   const integrator = resolveIntegratorOptions(integratorOptions);
+  if (integratorOptions.materialx && !integrator.textures) throw new Error('integrator.materialx needs a scene copy with textures (uv, position and tangent come with them); add a texture or a 1x1 placeholder');
   const mats = integrator.materials;
   if (integrator.sampler === 'bluenoise' && integrator.primary === 'vbuffer') throw new Error("ptMegakernelBuild: sampler 'bluenoise' with primary 'vbuffer' is allowed (the jitter pair is not consumed) only through the engine's own jitter; remove one");
   if (integrator.primary === 'vbuffer' && !options.layout.positions) throw new Error("ptMegakernelBuild: integrator.primary 'vbuffer' needs a surface layout with positions (the hit position comes from the barycentrics)");
@@ -144,7 +145,7 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
   const film = mats?.features.thinFilm ? [stripWgslComments(ptThinFilmWgsl())] : [];
   const fuzz = mats?.features.fuzz ? [stripWgslComments(ptFuzzWgsl({ layered: !!mats.features.layered }))] : [];
-  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ptSamplerWgsl(integrator.sampler, integrator.blueNoise)];
+  const parts = [rtLightSampleWgsl({ envMap: integrator.envMap, envImportance: integrator.envSampling !== 'uniform' }), rtOwenSobolWgsl(), stripWgslComments(ptBsdfWgsl(bsdfOptions)), ...layered, ptBsdfAdapterWgsl(mats ?? undefined), ...(integrator.lod !== 'off' && mats ? [ptBsdfReducedWgsl(mats)] : []), ...film, ...fuzz, ...(integrator.mtlx && options.integrator?.materialx ? [options.integrator.materialx.wgsl] : []), ptSamplerWgsl(integrator.sampler, integrator.blueNoise)];
   return { integratorOptions, parts };
 }
 

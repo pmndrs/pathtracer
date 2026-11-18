@@ -1,7 +1,8 @@
 // The megakernel variants (Tier 0 / env / OpenPBR / textured) shared by `size-snapshot.ts` (Node, fixed caps) and the `kernel-compile` page
 // (browser, the device's caps). Browser-safe: no node:fs.
 import type { Caps, SceneCopyPacking } from '@pmndrs/raytracer';
-import { ptMegakernelWgsl, ptRestirBuild, ptWavefrontBuild } from '@pmndrs/pathtracer';
+import { loadMtlxMaterial, mtlxProgramsWgsl, ptMegakernelWgsl, ptRestirBuild, ptWavefrontBuild } from '@pmndrs/pathtracer';
+import { DOC_PROC, DOC_UV } from './scenes/ab/materialx-scenes.ts';
 
 /** R2b cutout shadow modes (`integrator.alphaShadow`), shared by the megakernel and wavefront variant lists. */
 const ALPHA_SHADOW_VARIANTS = {
@@ -177,6 +178,27 @@ export function restirKernelVariants(caps: Caps, scenePacking?: SceneCopyPacking
     variants[`restir-shade-${name}`] = () => ptMegakernelWgsl(caps, o as never);
     variants[`restir-passes-${name}`] = () => ptRestirBuild(caps, o as never).code;
     if (name.startsWith('gi')) variants[`restir-gipasses-${name}`] = () => ptRestirBuild(caps, o as never, 'gi').code;
+  }
+  return variants;
+}
+
+/**
+ * MaterialX codegen (P5, `integrator.materialx`): the megakernel and the wavefront shade kernel of the two codegen scenes' graphs (`mtlx-proc`: position-driven, no image; `mtlx-uv`: three
+ * images and a normal map), OpenPBR mode with the layered albedo lobes. A kernel without `materialx` is byte-identical to before, so these are new files only.
+ */
+export function materialxKernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): KernelVariants {
+  const layout = { normals: true, uvs: true, positions: true };
+  const bucket = (srgb: boolean) => ({ width: 128, height: 128, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), wrap: 'repeat' as const, layers: 1, mipLevels: 8 });
+  const textures = { buckets: [bucket(false), bucket(true)] };
+  const base = scenePacking ? { format: {}, layout, textures, scenePacking } : { format: {}, layout, textures };
+  const pbr = { features: { mix: true, thin: true, layered: true, medium: false }, layered: { layering: 'albedo' as const, albedoBase: 'internal' as const } };
+  const program = (doc: string) => mtlxProgramsWgsl([{ material: 1, mtl: loadMtlxMaterial(doc) }], { textureSlot: (r) => (r.file.includes('checker') ? 1 : 0) });
+  const variants: KernelVariants = {};
+  for (const [name, doc] of Object.entries({ 'mtlx-proc': DOC_PROC, 'mtlx-uv': DOC_UV })) {
+    const p = program(doc);
+    const o = { ...base, integrator: { materials: pbr, materialx: { wgsl: p.wgsl, normal: p.normal } } };
+    variants[name] = () => ptMegakernelWgsl(caps, o as never);
+    variants[`wf-${name}-shade`] = () => ptWavefrontBuild(caps, o as never).shade.code;
   }
   return variants;
 }

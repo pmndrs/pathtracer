@@ -30,3 +30,4 @@ export * from './spectral/cie1931.ts';
 export * from './spectral/rgb2spec.ts';
 export * from './spectral/spectral-wgsl.ts';
 export * from './spectral/wavelengths.ts';
+export * from './materialx/index.ts';

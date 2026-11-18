@@ -164,3 +164,10 @@ Generated assets (`bench/assets/generated/`, env maps and noise made by our own 
 - Real VDB test asset (TASKS P5.v7): WebVDB's `fixtures/vdb-samples/smoke.vdb`, one of the OpenVDB sample models (`https://www.openvdb.org/download/`, **CC BY-SA 4.0**; mirrored at commit `2173458e3b6d646deee5401ec6493079b09c091c` of
   `github.com/mjurczyk/openvdb`, MIT for the repository, see WebVDB `fixtures/ATTRIBUTION.md`). It is NOT in this repository: `node bench/scenes/volumes/vdb-grid.ts` reads it from the WebVDB checkout and writes a downsampled derivative to the git-ignored
   `bench/assets/generated/volumes/vdb-smoke.f32` (ShareAlike applies to that derivative, which is never committed or published). Only that one model is used: the Stanford bunny volumes (research-only terms) are excluded, as WebVDB excludes them.
+
+## MaterialX (P5)
+
+| What | Source | Licence | Use |
+|---|---|---|---|
+| Node semantics (`packages/pathtracer/src/materialx/nodes.ts`): `place2d`, `tiledimage`, `normalmap`, `ramp*`, `split*`, `smoothstep`, `mix`, `remap`, `rotate2d`, `luminance` coefficients | MaterialX 1.38 standard library (`libraries/stdlib/genglsl`, `stdlib_ng.mtlx`), https://github.com/AcademySoftwareFoundation/MaterialX, read from the maintainer's checkout `~/Developer/MaterialX` | Apache-2.0 | Formulas re-implemented from the definitions (TypeScript and WGSL); no file copied. The `open_pbr_surface` / `standard_surface` / `gltf_pbr` input names come from the MaterialX libraries and the sample documents |
+| Sample documents used by `bench/materialx-coverage.ts` | `~/Developer/materialx-fidelity/third_party/materialx-samples` (MIT) and `~/Developer/MaterialX/resources/Materials/Examples` (Apache-2.0) | MIT / Apache-2.0 | Read at run time from the sibling checkouts for the coverage count; not copied into this repo. Our own test documents are inline in `bench/scenes/ab/materialx-scenes.ts` and use synthetic images (`bench/scenes/materialx-images.ts`) |

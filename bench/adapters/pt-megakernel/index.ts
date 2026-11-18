@@ -21,6 +21,7 @@ import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
 import type { MaterialDesc, MeshDesc, SceneDesc } from '../../scenes/schema.ts';
 import { sceneDescToCopyInput } from '../../scenes/to-scene-copy.ts';
+import { collectMaterialXPrograms } from '../../scenes/materialx.ts';
 import { alphaCoverageOf, classifyAlphaCards, INSTANCE_MASK_MIXED, type AlphaClassStats } from '../../scenes/alpha-classify.ts';
 import { uvTangents } from '../../scenes/tangents.ts';
 import { setImageTextureLoader } from '../../scenes/textures.ts';
@@ -380,11 +381,14 @@ export class PtMegakernelAdapter implements RendererAdapter {
 
     // OpenPBR mode only when the scene has an `openpbr` material (the legacy adapter keeps the other scenes' kernel and images unchanged).
     // A metallic-roughness texture decides metalness per texel (factor x B in [0, factor]): the kernel needs both lobes and the stochastic mix, whatever the factor says.
+    // MaterialX codegen (P5, approach b): the generated WGSL of the scene's `materialx` materials goes to the kernel as `integrator.materialx`.
+    const mtlx = collectMaterialXPrograms(scene, input.materialNames);
+    if (mtlx) this.approximations.push(...mtlx.programs.notes.map((n) => `materialx: ${n}`));
     let materials: PtMaterialOptions | null = null;
     if (Object.values(scene.materials).some((m) => m.type === 'openpbr')) {
       const modeLayered = this.settings.mode ? ptModePreset(this.settings.mode).layered : null;
       const layered: PtLayeredOptions = { layering: this.settings.layering ?? modeLayered?.layering ?? 'stochastic', maxDepth: this.settings.layerDepth ?? 64, nSamples: 1, ...((this.settings.albedoBase ?? modeLayered?.albedoBase) ? { albedoBase: (this.settings.albedoBase ?? modeLayered?.albedoBase) as 'openpbr' | 'internal' } : {}), ...(this.settings.albedoCorrection ? { albedoCorrection: this.settings.albedoCorrection } : {}), ...(this.settings.exitMis ? { exitMis: this.settings.exitMis } : {}) };
-      const features = ptMaterialFeatures(input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m)));
+      const features = ptMaterialFeatures([...input.materials.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m)), ...(mtlx?.featureProbes ?? []).map((p) => createMaterial(p))]);
       // The thin film (P2.27) lives in the albedo layering's Fresnel; the stochastic walk has no film (DIVERGES V82).
       if (features.thinFilm && layered.layering === 'stochastic') {
         layered.layering = 'albedo';
@@ -424,7 +428,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const volumes = sceneVolumes(scene, input, densityFiles);
     if (volumes && this.settings.scheduler === 'wavefront') throw new Error(`pt-megakernel: scene '${scene.name}' has participating media; they run on the megakernel only (P5)`);
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
     if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;

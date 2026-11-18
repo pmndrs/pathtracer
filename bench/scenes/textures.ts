@@ -21,6 +21,16 @@ export function setImageTextureLoader(loader: ImageTextureLoader | undefined): v
   imageLoader = loader;
 }
 
+/** What a lazy texture produces: RGBA8, row 0 = top. */
+export type LazyTextureProducer = () => { width: number; height: number; data: Uint8Array };
+const lazyTextures = new Map<string, LazyTextureProducer>();
+const lazyCache = new Map<string, { width: number; height: number; data: Uint8Array }>();
+/** Registers (or replaces) the producer of `generator: 'lazy'` textures named `key`; the result is computed once. */
+export function registerLazyTexture(key: string, produce: LazyTextureProducer): void {
+  lazyTextures.set(key, produce);
+  lazyCache.delete(key);
+}
+
 const byte = (v: number): number => Math.min(255, Math.max(0, Math.round(v * 255)));
 
 export function generateTexture(desc: TextureDesc): GeneratedTexture {
@@ -29,6 +39,17 @@ export function generateTexture(desc: TextureDesc): GeneratedTexture {
     if (!imageLoader) throw new Error(`texture from '${desc.path}' image ${desc.image}: import bench/scenes/gltf-images.ts (Node) to decode image textures`);
     const img = imageLoader(desc);
     if (img.width !== width || img.height !== height) throw new RangeError(`texture '${desc.path}' image ${desc.image}: decoded ${img.width}x${img.height}, scene says ${width}x${height}`);
+    return { width, height, data: img.data, colorSpace: desc.colorSpace, wrap: desc.wrap ?? 'repeat', ...(desc.filter ? { filter: desc.filter } : {}) };
+  }
+  if (desc.generator === 'lazy') {
+    const produce = lazyTextures.get(desc.key);
+    if (!produce) throw new Error(`lazy texture '${desc.key}' is not registered (import the module that defines the scene)`);
+    let img = lazyCache.get(desc.key);
+    if (!img) {
+      img = produce();
+      lazyCache.set(desc.key, img);
+    }
+    if (img.width !== width || img.height !== height) throw new RangeError(`lazy texture '${desc.key}': produced ${img.width}x${img.height}, scene says ${width}x${height}`);
     return { width, height, data: img.data, colorSpace: desc.colorSpace, wrap: desc.wrap ?? 'repeat', ...(desc.filter ? { filter: desc.filter } : {}) };
   }
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError(`texture: bad size ${width}x${height}`);

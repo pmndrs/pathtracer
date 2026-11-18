@@ -91,6 +91,8 @@ export type TextureDesc = (
    * has already applied `KHR_texture_transform` to the uvs; it never changes the texels.
    */
   | { generator: 'image'; path: string; image: number; sha256?: string }
+  /** Texels computed on first use by a function registered under `key` (`registerLazyTexture`; MaterialX bakes and images, P5): the description stays small and the work happens only for scenes that are rendered. */
+  | { generator: 'lazy'; key: string }
 ) & {
   width: number;
   height: number;
@@ -145,6 +147,11 @@ export interface OpenPbrParams {
   /** Default 0.5. */ alphaCutoff?: number;
   /** Default false. */ doubleSided?: boolean;
   /** Emit from both faces (default false: authored front face). */ emissionTwoSided?: boolean;
+  /**
+   * MaterialX (P5): key of a registered MaterialX material (`bench/scenes/materialx.ts`) whose graph the codegen path (`integrator.materialx`)
+   * evaluates at the hit; the fields above are the record's fallback values. Needs a mesh `uv` and, in the scene, the textures the graph reads.
+   */
+  materialx?: string;
   /** `textures` keys (as for `pbr`); the factors above multiply them. */
   baseColorTexture?: string;
   metallicRoughnessTexture?: string;

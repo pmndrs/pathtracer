@@ -172,6 +172,12 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    * `true` = `{ res: 64, dispersion: true }`; with dispersion a dielectric with `RtMaterial.dispersion > 0` follows a Cauchy law and keeps only the hero wavelength.
    */
   spectral?: boolean | PtSpectralOptions;
+  /**
+   * P5, MaterialX approach (b): per-material WGSL generated from MaterialX graphs (`materialx/wgsl.ts`, `mtlxProgramsWgsl`). `wgsl` is the generated text (`ptMtlxApply`, and
+   * `ptMtlxNormal` when `normal`); the kernel calls `ptMtlxApply` after the texture lookups of the hit and `ptMtlxNormal` for the shading normal. Needs `textures` (uv,
+   * position, tangent, texture lookups). Default null: no MaterialX code, the kernel text is unchanged. Alpha cut-outs and shadow rays do not see a generated opacity.
+   */
+  materialx?: { wgsl: string; normal?: boolean } | null;
   /** @internal Set by the wavefront builder on its secondary shade kernel: every vertex it shades is reduced (no run-time branch). */
   lodKernel?: 'secondary';
 }
@@ -248,6 +254,10 @@ export interface ResolvedIntegratorOptions {
   spectral: ResolvedSpectralOptions | null;
   /** ReSTIR GI on top of DI (`PtRestirOptions.gi`, P5): the shade ends the path at the first non-delta vertex and adds the final GI reservoir's contribution. */
   restirGi: boolean;
+  /** MaterialX codegen (`PtIntegratorOptions.materialx`) is compiled in. */
+  mtlx: boolean;
+  /** ... and some material has a generated normal map. */
+  mtlxNormal: boolean;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
@@ -271,7 +281,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const spectral = resolveSpectralOptions(o.spectral);
   if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
   if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -791,12 +801,16 @@ ${frame ? `        if (depth == 1u && fBounce == 0.0) {
 ` : ''}${volSurface}${lodS.decl}${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
         let coneW = rtConeAt(cone, hit.t);
         let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${lodS.texBias}, PT_TEX_CONE);
-        let mat = ${spec ? 'ptSpecMaterial(' : ''}rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp)${spec ? ', hit.material)' : ''};
+        let mat = ${spec ? 'ptSpecMaterial(' : ''}${o.mtlx ? 'ptMtlxApply(' : ''}rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp)${o.mtlx ? ', hit.material, surf.uv, surf.position, surf.shadingNormal, surf.tangent.xyz, fp)' : ''}${spec ? ', hit.material)' : ''};
         var shadingN = surf.shadingNormal;
         if (mat.normalTexture != RT_TEXTURE_NONE) {
             let nr = rtTexRecord(mat.normalTexture);
             shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, rtTexSampleRecord(nr, surf.uv, rtTexLodOf(nr, fp)).xyz);
-        }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
+        }${o.mtlxNormal ? `
+        let mxN = ptMtlxNormal(hit.material, surf.uv, surf.position, surf.shadingNormal, surf.tangent.xyz, fp);
+        if (mxN.w > 0.0) {
+            shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, mxN.xyz);
+        }` : ''}` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
         let mat = ${spec ? 'ptSpecMaterial(rtMaterial(hit.material), hit.material)' : 'rtMaterial(hit.material)'};`}
 ${medium ? `        beta = beta * exp(-sigma * hit.t);
 ` : ''}${mask ? `        if (${maskIndirect ? '' : 'depth == 0u && '}mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff) {

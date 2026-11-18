@@ -781,12 +781,16 @@ ${counters ? `        ptCountRay(path, 1u, 0u);
 ${lodS.decl}${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
     let coneW = rtConeAt(cone, hit.t);
     let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${lodS.texBias}, PT_TEX_CONE);
-    let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);
+    let mat = ${o.mtlx ? 'ptMtlxApply(' : ''}rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp)${o.mtlx ? ', hit.material, surf.uv, surf.position, surf.shadingNormal, surf.tangent.xyz, fp)' : ''};
     var shadingN = surf.shadingNormal;
     if (mat.normalTexture != RT_TEXTURE_NONE) {
         let nr = rtTexRecord(mat.normalTexture);
         shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, rtTexSampleRecord(nr, surf.uv, rtTexLodOf(nr, fp)).xyz);
-    }` : `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
+    }${o.mtlxNormal ? `
+    let mxN = ptMtlxNormal(hit.material, surf.uv, surf.position, surf.shadingNormal, surf.tangent.xyz, fp);
+    if (mxN.w > 0.0) {
+        shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, mxN.xyz);
+    }` : ''}` : `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
     let mat = rtMaterial(hit.material);`}
 ${medium ? `    beta = beta * exp(-sigma * hit.t);
 ` : ''}
