@@ -23,7 +23,8 @@
  */
 import { PT_ESCAPED_WGSL, PT_LOD_TEX_BIAS, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, ptShadowNeedsScene, ptShadowWeighted, ptShadowWeightWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptFrameAddWgsl, ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } from '../integrator/outputs-wgsl.ts';
-import { PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL } from '../restir/restir-wgsl.ts';
+import { PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL } from '../restir/restir-wgsl.ts';
+import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
@@ -36,7 +37,6 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
   if (o.restir && o.restirShared) return 'integrator.restir.sharedHit (the shared primary hit joins the wavefront camera kernel: TASKS P4.2a follow-up)';
   if (o.restir && o.hooks) return 'integrator.restir with hooks';
-  if (o.restirGi) return 'integrator.restir.gi (ReSTIR GI is megakernel only: the shade kernel would need the GI reservoir binding and the path-ending hook)';
   if (o.alphaMask && o.counters) return 'integrator.counters with alpha MASK (the cutout re-traces happen in the intersect kernel, which has no counter buffer)';
   return null;
 }
@@ -554,12 +554,14 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
         : `${indent}if (${pureCond}) {\n${indent}    fEmit += ${value};\n${indent}} else {\n${indent}    radiance += ${value};\n${indent}}\n`;
   const bn = o.sampler === 'bluenoise';
   const restir = o.restir;
+  const gi = o.restirGi;
   const addOut = emitMode ? 'ptwfAddRadianceE(path, n, radiance, fEmit, fEmitW)' : frameOut ? 'ptwfAddRadianceF(path, n, radiance, fDirect)' : 'ptwfAddRadiance(path, radiance)';
   const pixelOf = wf.refill ? 'pixel' : 'path';
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(['params', 'accum', 'state', 'hit', 'count', 'queue', 'shadow'])}
 ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> ptRestirRes: array<vec4u>;
+` : ''}${gi ? `@group(2) @binding(${PT_RESTIR_GI_SHADE_BINDING}) var<storage, read> ptRestirGiRes: array<vec4u>;
 ` : ''}${ptCommonHeadWgsl(o)}
 ${PT_MIS_WGSL}
 
@@ -673,7 +675,10 @@ fn ptwfRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams
     }
     return PtwfLd(true, li.radiance * f * (rw / li.pdf), ray);
 }
-` : ''}
+` : ''}${gi ? `
+${PT_RESTIR_OCT_WGSL}
+// ReSTIR GI (P5 wavefront): the megakernel's shade-side read (ptRestirGiLi), its region in up.w like the DI reservoirs'.
+${ptRestirGiShadeWgsl(evalFn, 'bitcast<u32>(ptParams.up.w)')}` : ''}
 ${wf.subgroup ? `// P3.3: the shade body only says whether the path queued a shadow ray / continues; the kernel appends once per subgroup in uniform control flow
 var<private> ptwfWantShadow: bool;
 var<private> ptwfWantNext: bool;
@@ -864,7 +869,14 @@ ${onRadiance ? `            ptwfShadowRay[3u * n + path] = vec4u(vertex, ptHookF
 `}${counters ? `            ptCountRay(path, 0u, 1u);
 ` : ''}        }
     }
-${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' })};
+${gi ? `    if (vertex == 0u && !ptBsdfIsDelta(bp)) {
+        // ReSTIR GI: the final reservoir stands for everything after this vertex (the megakernel's 2-bounce estimate); the DI term queued above is the direct light.
+        radiance += beta * ptRestirGiLi(surf.position, frame, wo, bp, ${pixelOf});
+${frameOut ? `        ptFrameBounce(path, n, ptGiDist);
+` : ''}        ${addOut};
+${end(7)}        return;
+    }
+` : ''}${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' })};
     if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
 ${addRadiance('beta * ptTerminate(hv)', 'vertex + 1u', '        ')}        ${addOut};
 ${counters ? `        ptCountEnd(path, depth, 4u);

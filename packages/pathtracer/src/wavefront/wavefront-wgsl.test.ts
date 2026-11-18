@@ -218,4 +218,18 @@ describe('wavefront WGSL (P3.1)', () => {
     expect(() => ptWavefrontBuild(caps, { ...variants['frame-tex']!, integrator: { restir: {}, alphaMask: true } })).toThrow(/alpha MASK/);
     expect(() => ptWavefrontBuild(caps, { ...variants.plain!, integrator: { restir: {}, nee: false } })).toThrow(/nee/);
   });
+
+  it('ReSTIR GI on the wavefront (P5): the shade kernel adds the final GI reservoir at the first non-delta vertex and ends the path; only shade binds it', () => {
+    const gi = { format: {}, layout, integrator: { restir: { gi: {} } } } as never;
+    const wf = ptWavefrontBuild(caps, { ...(gi as object), prune: false, shortenNames: false, minify: false } as never);
+    expect(wf.shade.code).toContain('@group(2) @binding(19) var<storage, read> ptRestirGiRes: array<vec4u>;');
+    expect(wf.shade.code).toContain('let i = (bitcast<u32>(ptParams.up.w) + pxIndex)');
+    expect(wf.shade.code).toMatch(/if \(vertex == 0u && !ptBsdfIsDelta\(bp\)\) \{[^}]*ptRestirGiLi\(surf\.position, frame, wo, bp, path\)/);
+    for (const k of ['camera', 'intersect', 'shadow', 'args'] as const) expect(wf[k].code).not.toContain('ptRestirGiRes');
+    expect(ptWavefrontBuild(caps, variants.restir!).shade.code).not.toContain('ptRestirGiRes');
+    const frame = ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { gi: {} } }, prune: false, shortenNames: false, minify: false } as never);
+    expect(frame.shade.code.replace(/\s+/g, '')).toContain('ptFrameBounce(path,n,ptGiDist)'.replace(/\s+/g, ''));
+    expect(() => ptWavefrontBuild(caps, { ...(gi as object), refill: true } as never)).toThrow(/plain scheduler/);
+    expect(() => ptWavefrontBuild(caps, { ...variants['frame-tex']!, integrator: { restir: { gi: {} } } })).toThrow(/texture/);
+  });
 });

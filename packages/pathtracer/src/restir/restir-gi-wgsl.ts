@@ -502,14 +502,15 @@ fn ptRestirGiSpatial(@builtin(global_invocation_id) id: vec3u) {
  * Shade side (the megakernel, `integrator.restir.gi`): the final GI reservoir of the pixel at the first (non-delta) vertex. Needs `ptRsOctDecode`.
  * `ptGiDist` is the distance to x2 (the frame planes' bounce hit distance).
  */
-export function ptRestirGiShadeWgsl(evalFn: string): string {
+/** `base`: the WGSL expression of the first final-reservoir index (the megakernel's `ptParams.limits.w`; the wavefront carries it in `up.w`, P5 wavefront GI). */
+export function ptRestirGiShadeWgsl(evalFn: string, base = 'ptParams.limits.w'): string {
   return /* wgsl */ `
 ${PT_RESTIR_GI_DECODE_WGSL}
 
 var<private> ptGiDist: f32 = 0.0;
 
 fn ptRestirGiLi(p: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> vec3f {
-    let i = (ptParams.limits.w + pxIndex) * ${PT_RESTIR_GI_VEC4}u;
+    let i = (${base} + pxIndex) * ${PT_RESTIR_GI_VEC4}u;
     let y = ptGiDecode(ptRestirGiRes[i], ptRestirGiRes[i + 1u]);
     if (!(y.w > 0.0)) {
         return vec3f(0.0);

@@ -128,6 +128,11 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     'rt-realtime-restir': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { bias: 'unbiased' } } },
     'rt-realtime-tex-restir': { format: {}, layout: texLayout, textures, integrator: { frame: true, sampler: 'bluenoise', restir: { bias: 'unbiased' } } },
     'rt-realtime-pbr-albedo': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', materials: { features: feat, layered: { layering: 'albedo' } } } },
+    // P5: ReSTIR GI on the wavefront (the shade kernel reads the final GI reservoir at the first non-delta vertex and ends the path).
+    'rt-restir-gi': { format: {}, layout, integrator: { restir: { gi: {} } } },
+    'rt-restir-gi-env': { format: {}, layout, integrator: { restir: { gi: {} }, envMap: true, envSampling: 'importance' } },
+    'rt-realtime-restir-gi': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { gi: {} } } },
+    'rt-realtime-restir-gi-pbr': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { gi: {} }, materials: { features: feat, layered: { layering: 'albedo' } } } },
   };
   const hookDemo = { wgsl: 'fn ptOnVertex(v: PtPathVertex) -> u32 { return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= 3u); }\nfn ptTerminate(v: PtPathVertex) -> vec3f { return vec3f(0.5); }' };
   for (const [name, integrator] of Object.entries(outputVariantOptions(hookDemo))) base[`out-${name}`] = { format: {}, layout, integrator };
