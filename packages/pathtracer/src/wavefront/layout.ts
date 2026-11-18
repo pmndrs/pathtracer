@@ -24,6 +24,7 @@
  *     2  beta.xyz, depth | specularBounce << 31    scattering events so far; the last bounce was a delta lobe
  *     3  prevP.xyz, coneSpread                     previous vertex (emission MIS); ray-cone spread (textures only, else 0)
  *     4  sigma.xyz, coneWidth                      interior medium attenuation + ray-cone width (only with medium or textures)
+ *                                                  with `integrator.volumes` (V270): volume RNG state, medium id | interface skips << 16, 0, coneWidth
  *
  * = 64 B (plain), 80 B (medium or textures), under the 96 B budget (spec section 5). Radiance is not state: each path adds its
  * emission straight into the accumulator (a pixel has one path, so no two threads write it in one dispatch) and its shadow
@@ -32,6 +33,7 @@
  * Hit record, written by `intersect`, read by `shade` (transient, 48 B/path, `array<vec4u>`):
  *     0  t, instance, triangle, material           1  bary.xy, frontFace, 0           2  normal.xyz, 0
  * Shadow ray record, written by `shade`, read by `shadow` (48 B/path): 0 origin.xyz, tMin; 1 direction.xyz, tMax; 2 contribution.xyz, 0.
+ * With media (V270) a 4th section: start medium, ratio-tracking stream seed, 0, 0. With spectral transport the contribution is already RGB (the conversion is linear).
  *
  * Queues (`ptwfQueue`, u32 path indices, three regions of N): Q0, Q1 (the extension queue ping-pongs by iteration parity) and the
  * shadow queue. Counters (`ptwfCount`, atomics): `[Q0, Q1, shadow0, shadow1]`. Iteration `d` reads `Q[d & 1]`, shade appends to
@@ -64,11 +66,13 @@ export interface PtwfStateOptions {
   medium: boolean;
   /** The path carries a ray cone (`textures`). */
   textures: boolean;
+  /** P5 media (V270): the path carries its volume random stream, medium id and interface skip count in section 4 (16 B, shared with the medium / cone slot); shadow rays get a 4th section. */
+  volumes?: boolean;
 }
 
 /** vec4s per path in the state buffer. */
 export function ptwfStateVec4s(o: PtwfStateOptions): number {
-  return o.medium || o.textures ? PTWF_STATE_VEC4_BASE + 1 : PTWF_STATE_VEC4_BASE;
+  return o.medium || o.textures || o.volumes ? PTWF_STATE_VEC4_BASE + 1 : PTWF_STATE_VEC4_BASE;
 }
 
 /** Bytes of path state per path (the spec's budget is 96). */
@@ -80,7 +84,7 @@ export function ptwfStateBytes(o: PtwfStateOptions): number {
 export function ptwfBufferBytes(paths: number, o: PtwfStateOptions): { state: number; hit: number; shadow: number; queue: number; counters: number; total: number } {
   const state = paths * ptwfStateBytes(o);
   const hit = paths * PTWF_HIT_VEC4 * 16;
-  const shadow = paths * PTWF_SHADOW_VEC4 * 16;
+  const shadow = paths * (o.volumes ? PTWF_SHADOW_VEC4 + 1 : PTWF_SHADOW_VEC4) * 16;
   const queue = paths * 3 * 4;
   const counters = PTWF_COUNTERS * 4;
   return { state, hit, shadow, queue, counters, total: state + hit + shadow + queue + counters };

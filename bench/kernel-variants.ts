@@ -100,6 +100,8 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
   const bucket = (srgb: boolean, wrap: 'repeat' | 'clamp' | 'mirror' = 'repeat') => ({ width: 256, height: 256, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), wrap, layers: 2, mipLevels: 9 });
   const textures = { buckets: [bucket(false), bucket(true), bucket(true, 'clamp')] };
   const feat = { mix: true, thin: true, layered: true, medium: true };
+  const volHomog = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
+  const volGrid = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3, grid: { resolution: [8, 8, 8], worldToIndex: [8, 0, 0, 3.5, 0, 8, 0, 3.5, 0, 0, 8, 3.5], densityMax: 1 } }], materials: volHomog.materials };
   const base: Record<string, object> = {
     plain: { format: {}, layout },
     env: { format: {}, layout, integrator: { envMap: true, envSampling: 'importance' } },
@@ -133,6 +135,17 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     'rt-restir-gi-env': { format: {}, layout, integrator: { restir: { gi: {} }, envMap: true, envSampling: 'importance' } },
     'rt-realtime-restir-gi': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { gi: {} } } },
     'rt-realtime-restir-gi-pbr': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', restir: { gi: {} }, materials: { features: feat, layered: { layering: 'albedo' } } } },
+    // P5 on the wavefront (V270): media (free flight + interface skips in intersect, the scatter vertex in shade, transmittance in shadow) and spectral transport (hero flag in the path state, table in shade).
+    'vol-homogeneous': { format: {}, layout, integrator: { volumes: volHomog } },
+    'vol-ratio': { format: {}, layout, integrator: { volumes: { ...volHomog, shadowTracking: 'ratio' } } },
+    'vol-grid': { format: {}, layout, integrator: { volumes: volGrid } },
+    'vol-grid-brick': { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } },
+    'vol-tex': { format: {}, layout: texLayout, textures, integrator: { volumes: volHomog } },
+    spectral: { format: {}, layout, integrator: { spectral: true } },
+    'spectral-nodisp': { format: {}, layout, integrator: { spectral: { dispersion: false } } },
+    'spectral-env': { format: {}, layout, integrator: { spectral: true, envMap: true, envSampling: 'importance' } },
+    'spectral-tex': { format: {}, layout: texLayout, textures, integrator: { spectral: true } },
+    'spectral-pbr-albedo': { format: {}, layout, integrator: { spectral: true, materials: { features: feat, layered: { layering: 'albedo' } } } },
   };
   const hookDemo = { wgsl: 'fn ptOnVertex(v: PtPathVertex) -> u32 { return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= 3u); }\nfn ptTerminate(v: PtPathVertex) -> vec3f { return vec3f(0.5); }' };
   for (const [name, integrator] of Object.entries(outputVariantOptions(hookDemo))) base[`out-${name}`] = { format: {}, layout, integrator };

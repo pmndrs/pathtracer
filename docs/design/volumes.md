@@ -1,9 +1,9 @@
 # Participating media (P5)
 
-Status: built and checked on the megakernel (homogeneous and dense-grid media, scattering, NEE through media; seven closed forms and four scenes against pbrt / Mitsuba); the wavefront refuses `integrator.volumes`. Settings with an A/B: `volumes.shadowTracking` (analytic | ratio, V241), `volumes.majorant` (global | brick, V243).
+Status: built and checked on the megakernel (homogeneous and dense-grid media, scattering, NEE through media; seven closed forms and four scenes against pbrt / Mitsuba) and ported to the wavefront scheduler, per pixel equal to the megakernel (section 7, V270). Settings with an A/B: `volumes.shadowTracking` (analytic | ratio, V241), `volumes.majorant` (global | brick, V243).
 Code: `packages/pathtracer/src/volume/` (`volume.ts` TS twins and closed forms, `volume-wgsl.ts` WGSL), hooks in `integrator/integrator-wgsl.ts`
 (`ptPath`, `ptSampleLd`), `integrator/megakernel.ts` (the 3D density texture), scene side `bench/scenes/volumes.ts`, `bench/scenes/volumes/index.ts`,
-exporters `bench/exporters/media.ts`. DIVERGES V240-V247.
+exporters `bench/exporters/media.ts`, wavefront stages in `wavefront/wavefront-wgsl.ts` (`ptwfIntersectVolWgsl`, `mediumVertex` in the shade kernel, `ptwfShadowVolWgsl`). DIVERGES V240-V247, V270-V271.
 
 ## 1. Scene model
 
@@ -48,8 +48,8 @@ WebVDB: the density arrives as a dense array. `bench/scenes/volumes/vdb-grid.ts`
 
 Every kernel without `integrator.volumes` is byte-identical (`node bench/size-snapshot.ts`, 224 variants compared before / after). The media code adds 3.0 KB (homogeneous, 43.7 KB)
 and 3.9 KB (grid, 44.7 KB) to the plain megakernel (40.8 KB); with the OpenPBR layered lobes (49-53 KB) a media scene would pass 50 KB (D26 applies: measure on the 3060 first).
-`volumes` cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, alpha MASK, hooks, counters, AOVs or the Beer-law absorber of P2.22; the wavefront throws
-(`ptwfUnsupported`): it would need a medium stage between intersect and shade (the path state has no room for the medium id and the PCG stream today).
+`volumes` cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, alpha MASK, hooks, counters, AOVs or the Beer-law absorber of P2.22 (the wavefront takes the same list, and refuses `materialLod: 'secondary'`).
+`ptVolumeWgsl(v, parts)` hands out the pieces (`seedOf`, `bind`, `tables`, `hg`, `density`, `flight`, `tr`, `nee`) so the wavefront kernels carry only their own; the default is all of them in the megakernel's order.
 
 ## 5. Checks (closed forms first)
 
@@ -84,6 +84,25 @@ Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match
 
 1. Brick / coarse-grid majorant (DDA) for sparse grids; today the null-collision count scales with `densityMax * path length`.
 2. NanoVDB traversal instead of a dense texture (memory: 48^3 = 0.4 MB is nothing, a 512^3 fog volume is 512 MB dense).
-3. Wavefront support (medium stage), ReSTIR / real-time modes with media.
+3. ReSTIR / real-time modes with media; `materialLod` with media on the wavefront.
 4. Spectral media: RGB sigma with the per-channel weights above is exact in RGB; pbrt's spectral uplift of a saturated sigma differs (V62), so references use grey sigma.
 5. Emissive media (`Le`), several grids per scene, nested media with a stack.
+
+## 7. Wavefront (V270, V271)
+
+Where the stages go. The megakernel's loop body is: trace, free flight in the current medium up to the hit, then the miss / interface / surface decision. The wavefront splits it by what each part needs:
+
+| kernel | media work | bindings it adds |
+|---|---|---|
+| camera / refill start | writes the path's volume stream (`ptVolSeedOf(pixelSeed, sample)`), the camera medium, 0 skips | none (the hash is 5 lines) |
+| intersect | the loop: `rtClosest`, `ptVolSample` (delta tracking, scales `beta`), interface surfaces passed (medium switched, origin moved, no depth), up to 256 skips. Exits as hit / miss / scatter (`hit.w` 2, event distance in `hit.t`) / dead (`hit.w` 3). Writes `beta`, medium, skips, stream and origin back to the path state | density grid (16), brick majorant (17); no scene copy |
+| shade | `hit.w` 2: a vertex without a BSDF: depth check, NEE at the event (`ptwfSampleLdMedium`), HG sample, roulette, next ray from the event. A surface hit reads `ptVolMat` for `medIn / medOut` (NEE start medium, medium after the bounce) | none (media tables are `var<private>`) |
+| shadow | `ptVolTr` of the stored ray from the stored start medium multiplies the stored contribution; interface surfaces pass, solid ones block | grid / majorant textures |
+
+Why the intersect kernel, not a medium kernel between intersect and shade: the free flight needs only the ray, the closest hit distance and the media tables; it is a loop around `rtClosest` exactly like the alpha-MASK cutout loop (P3.7), it adds no dispatch per iteration and no queue, and the surface code in shade stays in one piece. The cost: a path that scatters before its hit has already paid for the closest-hit query (the megakernel too).
+
+Path state: section 4 (the same 16 B as the Beer absorber / ray cone use; they cannot coexist with media: the cone width keeps its lane) holds `(stream state, medium | skips << 16, 0, cone width)`. 80 B per path, as the textured kernel. Shadow-ray records get a 4th vec4 `(start medium, ratio-tracking seed, 0, 0)`: 64 B per path.
+
+Random numbers. The volume stream is a PCG32 sequence per path, seeded from (pixel seed, sample index). The megakernel draws free-flight numbers, then (for a ratio-tracked shadow ray) shadow-tracking numbers, then free flight again, all from one stream; a scheduler that traces the shadow ray later cannot draw them in that order. Since V270 an ESTIMATED shadow (grid medium, or `shadowTracking: 'ratio'`) runs on its own stream: `ptVolFork()` hashes the path stream into the shadow ray's seed (stored in its record) and moves the path stream on by one step, in both schedulers. The analytic homogeneous shadow draws nothing and the megakernel's numbers for those scenes are unchanged (bit-identical images, `bench/results/reports/` check in TASKS P5.v9). The grid scenes' megakernel images changed as noise realisations only.
+
+Per-pixel agreement with the megakernel is the test of the port (it checks the RNG protocol, the state round trip and every branch): numbers in TASKS P5.v9. Refill (inline, batch, ordered), layers, subgroup appends and the sorts work: a slot is started by the one `ptwfStartPath`. Kernel sizes (wavefront, minified, KB): homogeneous camera 3.7 / intersect 16.6 / shade 34.0 / shadow 14.5; grid 17.4 / 34.2 / 16.2; grid + brick 19.9 / 34.2 / 18.7; with textures shade 37.6: all under the 50 KB DXC class (the megakernel with media is 43.7-47.9 KB).

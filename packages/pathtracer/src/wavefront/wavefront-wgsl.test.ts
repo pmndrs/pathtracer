@@ -1,6 +1,7 @@
 import { buildCaps } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
 import { ptMegakernelBuild } from '../integrator/megakernel.ts';
+import type { PtVolumeOptions } from '../volume/volume.ts';
 import { PTWF_EXTRA_KERNELS, PTWF_KERNELS, ptWavefrontBuild, ptWavefrontKernelBytes } from './wavefront.ts';
 import { ptwfUnsupported } from './wavefront-wgsl.ts';
 
@@ -9,6 +10,8 @@ const layout = { normals: true, uvs: false, positions: true };
 const texLayout = { normals: true, uvs: true, positions: true };
 const bucket = { width: 256, height: 256, colorSpace: 'srgb' as const, wrap: 'repeat' as const, layers: 2, mipLevels: 9 };
 const feat = { mix: true, thin: true, layered: true, medium: true };
+const volHomog = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] } as PtVolumeOptions;
+const volGrid = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3, grid: { resolution: [8, 8, 8], worldToIndex: [8, 0, 0, 3.5, 0, 8, 0, 3.5, 0, 0, 8, 3.5], densityMax: 1 } }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] } as PtVolumeOptions;
 
 const variants: Record<string, Parameters<typeof ptWavefrontBuild>[1]> = {
   plain: { format: {}, layout },
@@ -32,6 +35,14 @@ const variants: Record<string, Parameters<typeof ptWavefrontBuild>[1]> = {
   'restir': { format: {}, layout, integrator: { restir: { bias: 'unbiased' } } },
   'restir-frame-pbr': { format: {}, layout, integrator: { frame: true, restir: {}, materials: { features: { mix: true, thin: true, layered: true, medium: true }, layered: { layering: 'albedo' } } } } as never,
   'pbr-fuzz': { format: {}, layout, integrator: { materials: { features: { ...feat, fuzz: true }, layered: { layering: 'albedo' } } } } as never,
+  // P5 follow-up (V270): media and spectral transport on the wavefront
+  'vol-homogeneous': { format: {}, layout, integrator: { volumes: volHomog } },
+  'vol-ratio': { format: {}, layout, integrator: { volumes: { ...volHomog, shadowTracking: 'ratio' } } },
+  'vol-grid-brick': { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } },
+  'vol-tex-refill': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { volumes: volHomog }, refill: 'ordered', layers: 2, appends: 'subgroup' },
+  spectral: { format: {}, layout, integrator: { spectral: true } },
+  'spectral-tex-env-refill': { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { spectral: true, envMap: true, envSampling: 'importance' }, refill: 'batch' },
+  'spectral-pbr-albedo': { format: {}, layout, integrator: { spectral: true, materials: { features: feat, layered: { layering: 'albedo' } } } } as never,
 };
 
 describe('wavefront WGSL (P3.1)', () => {
@@ -231,5 +242,87 @@ describe('wavefront WGSL (P3.1)', () => {
     expect(frame.shade.code.replace(/\s+/g, '')).toContain('ptFrameBounce(path,n,ptGiDist)'.replace(/\s+/g, ''));
     expect(() => ptWavefrontBuild(caps, { ...(gi as object), refill: true } as never)).toThrow(/plain scheduler/);
     expect(() => ptWavefrontBuild(caps, { ...variants['frame-tex']!, integrator: { restir: { gi: {} } } })).toThrow(/texture/);
+  });
+});
+
+describe('wavefront media and spectral transport (P5 follow-up, V270)', () => {
+  const raw = { prune: false, shortenNames: false, minify: false };
+  const defaults = ptWavefrontBuild(caps, { ...variants.plain!, ...raw });
+
+  it('are supported; without them every kernel is the default text', () => {
+    expect(ptwfUnsupported({ volumes: volHomog })).toBeNull();
+    expect(ptwfUnsupported({ spectral: true })).toBeNull();
+    for (const k of PTWF_KERNELS) {
+      expect(defaults[k].code).not.toContain('ptVol');
+      expect(defaults[k].code).not.toContain('ptSpec');
+      expect(defaults[k].code).not.toContain('hero');
+    }
+  });
+
+  it('media: free flight and the interface skips are in the intersect kernel, the scatter vertex in shade, the transmittance in shadow', () => {
+    const b = ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, ...raw });
+    expect(b.intersect.code).toContain('ptVolSample(med,');
+    expect(b.intersect.code).toContain('skips > 256u');
+    expect(b.intersect.code).not.toContain('@group(1)');
+    expect(b.intersect.code).not.toContain('ptHgSample');
+    expect(b.shade.code).toContain('ptwfSampleLdMedium');
+    expect(b.shade.code).toContain('ptHgSample');
+    expect(b.shade.code).not.toContain('ptVolSample');
+    expect(b.shadow.code).toContain('ptVolTr(');
+    expect(b.shadow.code).not.toContain('ptVolSample');
+    expect(b.shadow.code).not.toContain('@group(1)');
+    expect(b.camera.code).toContain('ptVolSeedOf');
+    expect(b.camera.code).not.toContain('ptVolMedia');
+    // path state: the stream, the medium and the skips go into section 4; the shadow-ray record has a 4th section
+    expect(b.shade.code).toContain('p.med | (p.skips << 16u)');
+    expect(b.shade.code).toContain('ptwfShadowRay[3u * n + path] = vec4u(ld.med, 0u, 0u, 0u);');
+  });
+
+  it("ratio tracking: the shade kernel forks the shadow ray's own stream, the shadow kernel runs on it; the analytic shadow draws nothing", () => {
+    const ratio = ptWavefrontBuild(caps, { ...variants['vol-ratio']!, ...raw });
+    expect(ratio.shade.code).toContain('ptVolFork()');
+    expect(ratio.shadow.code).toContain('ptVolState = info.y;');
+    expect(ratio.shadow.code).toContain('ptVolTrCore(');
+    expect(ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, ...raw }).shade.code).not.toContain('ptVolFork');
+    // the megakernel makes the same fork, so the two schedulers draw the same numbers (and only the estimated shadows pay for it)
+    expect(ptMegakernelBuild(caps, { ...variants['vol-ratio']!, ...raw }).code).toContain('ptVolFork()');
+    expect(ptMegakernelBuild(caps, { ...variants['vol-homogeneous']!, ...raw }).code).not.toContain('ptVolFork');
+  });
+
+  it('a grid medium binds its 3D textures in the intersect and shadow kernels only', () => {
+    const b = ptWavefrontBuild(caps, { ...variants['vol-grid-brick']!, ...raw });
+    for (const k of ['intersect', 'shadow'] as const) {
+      expect(b[k].code).toContain('@group(2) @binding(16) var ptVolGrid');
+      expect(b[k].code).toContain('@group(2) @binding(17) var ptVolMaj');
+    }
+    for (const k of ['camera', 'shade', 'args'] as const) expect(b[k].code).not.toContain('texture_3d');
+  });
+
+  it('spectral: the shade kernel recomputes the wavelengths and keeps one hero bit; the shadow kernel is RGB', () => {
+    const b = ptWavefrontBuild(caps, { ...variants.spectral!, ...raw });
+    expect(b.shade.code).toContain('ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);');
+    expect(b.shade.code).toContain('ptSpecHero = st.hero;');
+    expect(b.shade.code).toContain('select(0u, 0x40000000u, p.hero)');
+    expect(b.shade.code).toContain('@group(2) @binding(18) var ptSpecTex');
+    expect(b.shade.code).toContain('ptSpecToRgb(beta * ld.contrib)');
+    for (const k of ['camera', 'intersect', 'shadow', 'args'] as const) expect(b[k].code).not.toContain('ptSpec');
+    expect(b.shade.code).toContain('beta * vec3f(3.0, 0.0, 0.0)');
+    expect(ptWavefrontBuild(caps, { ...variants.spectral!, integrator: { spectral: { dispersion: false } }, ...raw }).shade.code).not.toContain('beta * vec3f(3.0, 0.0, 0.0)');
+  });
+
+  it('refill starts a slot with its stream, its camera medium and a clear hero bit', () => {
+    const vol = ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, refill: true, ...raw });
+    expect(vol.shade.code).toContain('p.volState = ptVolSeedOf(pixelSeed, sampleIndex);');
+    expect(vol.camera.code).toContain('p.volState = ptVolSeedOf(pixelSeed, sampleIndex);');
+    const cam = ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, integrator: { volumes: { ...(volHomog as object), cameraMedium: 1 } as never }, ...raw });
+    expect(cam.camera.code).toContain('p.med = 1u;');
+    expect(ptWavefrontBuild(caps, { ...variants.spectral!, refill: 'batch', ...raw }).camera.code).toContain('p.hero = false;');
+  });
+
+  it('refuses what it does not port: the reduced shade kernel (materialLod) and the combinations the megakernel refuses', () => {
+    expect(() => ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, integrator: { volumes: volHomog, materials: { features: { ...feat, medium: false }, layered: { layering: 'albedo' } }, materialLod: 'secondary' } as never })).toThrow(/materialLod.*volumes/);
+    expect(() => ptWavefrontBuild(caps, { ...variants.spectral!, integrator: { spectral: true, materials: { features: feat, layered: { layering: 'albedo' } }, materialLod: 'secondary' } as never })).toThrow(/materialLod.*spectral/);
+    expect(() => ptWavefrontBuild(caps, { ...variants.spectral!, integrator: { spectral: true, volumes: volHomog } })).toThrow(/spectral.*volumes/);
+    expect(() => ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, integrator: { volumes: volHomog, alphaMask: true }, textures: { buckets: [bucket] }, layout: texLayout })).toThrow(/cannot be combined/);
   });
 });
