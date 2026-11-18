@@ -57,6 +57,38 @@ k = 1 and 4, no per-frame reference so no reference floor (the albedo control, a
 5. **Cut / lag.** After a cut the SVGF final needs 32 frames to come within 10% of its frame-64 relMSE (the filter's history is 64 frames); frame 1 is already usable (final relMSE 0.17,
    denoised 0.12).
 
+6. **Emitters seen by the primary ray (P4.5a, V200-V202; the emission plane).** Before, an emitter's radiance was demodulated by its albedo floor (1e-3) and reached SVGF as emission / 1e-3 (f16 clamp
+   65000 in the pack: 1238-1264 clamped pixels on `sponza-lamps-visible`), which the filter spread over the neighbourhood. Now plane 6 (`emission`) carries the light the primary BSDF does not modulate
+   (emitter at the primary hit, the sky behind a miss, perfect-mirror chains) and the composite adds it AFTER the filter, before the upscaler. Same code, `frameEmission` none (the old behaviour; reproduces the
+   pre-change run to the last digit) against `mirror` (default; `primary` is identical on these scenes, which have no mirror), static camera, 960 x 540 -> 1080p (Cornell 512 -> 1024), 64 frames, SVGF, own depth-2
+   references at 1024 spp; `emit` = reference luminance > 8 dilated by one pixel (lamps: 0.65% of the pixels and about 64% of the image's energy, solved from the three biases; Cornell's light: 0.64% of the pixels, about 61%), `rest` = everything else:
+
+   | scene, frame 64 | metric | none (before) | emission plane (after) |
+   |---|---|---|---|
+   | sponza-lamps-visible | denoised relMSE (emit / rest) | 228 (1730 / 214) | **0.14 (2.7 / 0.12)** |
+   | | final relMSE (emit / rest) | 0.43 (30.8 / 0.23) | **0.062 (2.1 / 0.049)** (sponza-white: 0.056) |
+   | | denoised / final bias | -24.3% / -37.6% | -0.8% / -25.6% (rest -4.8%, emit -37.1%: see below) |
+   | | final FLIP | 0.128 | 0.126 |
+   | | f16 clamp hits (diffuse + specular + raw) | 1264 | 0 |
+   | | flicker (mean abs change / ref luma), denoised: emit / rest | 7.77 / 0.26 | 0.43 / 0.115 |
+   | | flicker final: emit / rest; mean abs change on emit pixels | 0.068 / 0.0097; 0.34 | 0.043 / 0.0071; 0.53 |
+   | cornell, light in view | denoised relMSE (emit / rest) | 1.0e4 (3.0e4 / 9.9e3) | **0.0022 (0.17 / 0.0011)** |
+   | | final relMSE (emit / rest) | 857 (449 / 859) | **0.0013 (0.12 / 0.00055)** |
+   | | denoised / final bias | +1676% / +182% | +0.05% / -8.1% (rest -1.2%, emit -12.4%) |
+   | | final FLIP | 0.085 | 0.043 |
+   | | flicker final: emit / rest | 0.21 / 0.082 | 0.0092 / 0.00085 |
+   | sponza-white (no emitter in view), static + 64-frame orbit | every metric | raw 4.52, denoised 0.0652, final 0.0563, FLIP 0.1029, flicker 1.407 / 0.1041 / 0.00453, boil 0.0036 (k = 1), 0.0056 (k = 4), pose errors 0.118 / 0.055 / 0.0249 | identical to the last printed digit (and to the numbers in finding 1 and 3: the chain did not move) |
+
+   What it does not fix: (a) the lamps are 1.5 px across at 960 x 540, so their silhouette is a binary 1-spp coverage sample and the emission plane, unfiltered, shows it: the absolute frame-to-frame change on emitter pixels
+   is 0.34 -> 0.53 (the lamps are now at full brightness instead of smeared) and the emitter-region relMSE (2.7 denoised, 2.1 final) is edge coverage, as the raw sample's 3.7 (TASKS P4.5c: temporal accumulation of the plane).
+   (b) The upscaler loses 37% of the lamps' energy (final bias on emit pixels -37.1% against +0.3% at the denoised stage; Cornell's light -12.4% against +0.1%; the rest of the image -4.8% / -1.2%): small very bright
+   features are clipped by its neighbourhood clamp, the same family as the noisy-HDR darkening of finding 2 (TASKS P4.6a). The whole-image relBias of a lamp scene is mostly the lamps' energy.
+   Plane identity `diffuse x albedo + specular x specularFactor + emission = radiance`: exact (<= 1.1e-7; 0 on sponza-white). Closed forms (`realtime-check check=emission`: a lamp is its radiance with an empty
+   diffuse plane, the sky is the emission of a missed ray, a mirror's lamp reflection is emission in `mirror` and specular-class radiance in `primary`, a mirror's lit floor never emission) pass in all three modes.
+   Cost (sponza-white, provisional, load 4-5, 3 interleaved pairs, ms): trace 15.15-15.21 `mirror` against 15.19-15.22 `none` (no measurable cost), accumulate + pack 1.56 against 1.56 (the old chain's 1.35 was another session: the
+   extra emission section is about +0.2 ms of traffic by bandwidth), whole frame (median of rounds) 18.9-19.2 against 19.0-21.3 (the first `none` run read 21.3 under a burst; its min was 20.3). Kernel text: `rt-frame` 44.0 KB before, 44.4 `none`, 44.5 `primary`, 45.2 `mirror`.
+   Run: `node bench/runner/run.ts --page realtime-pipeline --timeout 3600000 --load-wait 0 --args scenes=sponza-lamps-visible,cornell scenarios=static variants=svgf emitThreshold=8 refSpp=1024 checkpoints=1,4,16,64 [ad=frameEmission:none]`.
+
 ## Tables
 
 Frames 1 / 4 / 16 / 64 after a cut at the scene camera; `path` rows: boil and per-pose error of the orbit.

@@ -26,10 +26,18 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   blueNoiseShift?: PtBlueNoiseShift;
   /**
    * Per-frame guide outputs for a temporal denoiser / upscaler (P4.1, real-time mode; megakernel only; docs/design/realtime.md): the kernel writes ONE sample per pixel per
-   * dispatch (no accumulation: `accumulate` defaults to false with it) plus 6 planes in `ptFrame`: diffuse and specular radiance demodulated, world normal + viewZ, motion
-   * + roughness, the demodulation factors. Default false: no frame code at all (the kernel text is unchanged).
+   * dispatch (no accumulation: `accumulate` defaults to false with it) plus 7 planes in `ptFrame`: diffuse and specular radiance demodulated, world normal + viewZ, motion
+   * + roughness, the demodulation factors, the emission that bypasses them (`frameEmission`). Default false: no frame code at all (the kernel text is unchanged).
    */
   frame?: boolean;
+  /**
+   * With `frame` (P4.5a, docs/design/realtime.md section 3): which light bypasses the demodulated planes into plane 6 (`emission`, added back AFTER the filter): radiance the primary
+   * BSDF does not modulate, noise-free at the primary hit, which dividing by the albedo factor (floored at 1e-3 for an emitter) turns into a huge value the filter would spread.
+   *  - `'none'`: off, plane 6 is zero and emission is demodulated like everything else (the P4.1 behaviour; the A/B baseline).
+   *  - `'primary'`: emission of an emitter hit by the primary ray, and the environment / sun seen by a primary ray that missed.
+   *  - `'mirror'` (default): also what a chain of perfect-mirror bounces (smooth conductors) from the primary hit reaches (an emitter or the sky seen in a mirror, throughput included).
+   */
+  frameEmission?: 'none' | 'primary' | 'mirror';
   /** `false`: the accumulator is overwritten with this dispatch's sample instead of summed (a frame, not a progressive pass). Default true, or false with `frame`. */
   accumulate?: boolean;
   /** Next-event estimation + MIS. Default true. False = BSDF sampling only (debug; delta suns contribute nothing). */
@@ -184,6 +192,8 @@ export interface ResolvedIntegratorOptions {
   sampler: PtSamplerKind;
   blueNoise: PtBlueNoiseOptions;
   frame: boolean;
+  /** `frame`'s plane 6: `'none'` without `frame` (see `PtIntegratorOptions.frameEmission`). */
+  frameEmission: 'none' | 'primary' | 'mirror';
   accumulate: boolean;
   nee: boolean;
   envSampling: 'uniform' | 'importance' | 'none';
@@ -229,7 +239,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
   const alphaTransmit = o.alphaTransmit ?? 0.5;
   if (alphaShadow === 'transmit' && !(alphaTransmit >= 0 && alphaTransmit <= 1)) throw new RangeError(`integrator.alphaTransmit must be in [0, 1], got ${alphaTransmit}`);
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace') };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace') };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -503,6 +513,16 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const aovs = o.aovs;
   const restir = o.restir;
   const frame = o.frame;
+  // P4.5a: light the primary BSDF does not modulate (an emitter or the sky seen directly, or through perfect mirrors) goes to `fEmit` instead of `radiance`; the beauty is their sum.
+  const emit = o.frameEmission !== 'none';
+  const emitMirror = o.frameEmission === 'mirror';
+  const pureCond = emitMirror ? 'fPure' : 'depth == 0u';
+  const addPure = (value: string, index: string, indent: string): string =>
+    !emit
+      ? addRadiance(value, index, indent)
+      : onRadiance
+        ? `${indent}{\n${indent}    let ptAdded = ${value};\n${indent}    if (${pureCond}) {\n${indent}        fEmit += ptAdded;\n${indent}    } else {\n${indent}        radiance += ptAdded;\n${indent}    }\n${indent}    ptOnRadiance(pxIndex, sampleIndex, ${index}, ptHookFlags, ptAdded);\n${indent}}\n`
+        : `${indent}if (${pureCond}) {\n${indent}    fEmit += ${value};\n${indent}} else {\n${indent}    radiance += ${value};\n${indent}}\n`;
   const bn = o.sampler === 'bluenoise';
   const vb = o.primary === 'vbuffer';
   // The hit comes from a V-buffer texel: the engine's texture (`vb`) or the one the ReSTIR G-buffer pass wrote (`restir.sharedHit`).
@@ -616,8 +636,10 @@ ${bn ? `    ptBnPixel = px;
 ${counters || aovs || hooks || restir || frame ? `    let pxIndex = px.y * dims.x + px.x;
 ` : ''}${counters ? `    var termReason = 0u;
 ` : ''}${aovs ? `    var aovDone = false;
-` : ''}${frame ? `    var fDirect = vec3f(0.0);
-    var fBounce = 0.0;
+` : ''}${frame ? `${emit ? `    var fEmit = vec3f(0.0);
+${emitMirror ? `    var fPure = true;
+` : ''}` : `    var fDirect = vec3f(0.0);
+`}    var fBounce = 0.0;
     var fSeen = false;
     var fIsSpec = false;
     var fNormal = vec3f(0.0);
@@ -658,7 +680,7 @@ ${counters ? `            ptCountRay(pxIndex, 1u, 0u);
 ` : `        let hit = rtClosest(ray, RT_MASK_ALL);
 ${counters ? `        ptCountRay(pxIndex, 1u, 0u);
 ` : ''}`}        if (hit.t < 0.0) {
-${addRadiance('beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf)', 'depth', '            ')}            break;
+${addPure('beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf)', 'depth', '            ')}            break;
         }
 ${frame ? `        if (depth == 1u && fBounce == 0.0) {
             fBounce = hit.t;
@@ -697,7 +719,7 @@ ${hooks ? `        var hookEmitted = vec3f(0.0);
                     w = ptMis(prevPdf, light.pmf * rtTriangleSolidAnglePdf(light.area, dist, cosLight));
                 }
             }
-${addRadiance('beta * mat.emissionColor * w', 'depth', '            ')}${frame ? `            if (depth == 0u) {
+${addPure('beta * mat.emissionColor * w', 'depth', '            ')}${frame && !emit ? `            if (depth == 0u) {
                 fDirect = beta * mat.emissionColor * w;
             }
 ` : ''}${hooks ? `            hookEmitted = beta * mat.emissionColor * w;
@@ -754,7 +776,8 @@ ${term(5)}            break;
         }
         beta = beta * s.f * (abs(s.wi.z) / s.pdf);
         specularBounce = (s.flags & PT_FLAG_DELTA) != 0u;
-${tex ? `        cone = RtCone(coneW, cone.spread + select(PT_CONE_DIFFUSE_SPREAD, 0.0, specularBounce));
+${emitMirror ? `        fPure = ptFramePureNext(fPure, specularBounce, bp.kind);
+` : ''}${tex ? `        cone = RtCone(coneW, cone.spread + select(PT_CONE_DIFFUSE_SPREAD, 0.0, specularBounce));
 ` : ''}        if ((s.flags & PT_FLAG_TRANSMISSION) != 0u) {
             etaScale = etaScale * s.etap * s.etap;
 ${medium ? `            sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.0);
@@ -781,8 +804,8 @@ ${counters ? `                    termReason = 3u;
         }
     }
 ${counters ? `    ptCountEnd(pxIndex, depth, termReason);
-` : ''}${frame ? `    ptFramePlanes(pxIndex, dims.x * dims.y, radiance, fDirect, fBounce, fSeen, fIsSpec, fNormal, fViewZ, fMotion, fRough, fAlbedo, fSpec);
-` : ''}    return PtRadiance(radiance, 0.0);
+` : ''}${frame ? `    ptFramePlanes(pxIndex, dims.x * dims.y, radiance, ${emit ? 'vec3f(0.0), fEmit' : 'fDirect, vec3f(0.0)'}, fBounce, fSeen, fIsSpec, fNormal, fViewZ, fMotion, fRough, fAlbedo, fSpec);
+` : ''}    return PtRadiance(${emit ? 'radiance + fEmit' : 'radiance'}, 0.0);
 }
 
 @compute @workgroup_size(${PT_WORKGROUP[0]}, ${PT_WORKGROUP[1]})

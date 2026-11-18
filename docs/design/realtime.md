@@ -51,8 +51,8 @@ only jitter owner (spec: one jitter owner per pipeline); with `primary: 'vbuffer
 jitter-free because it is the projection of a world point through two unjittered cameras.
 
 Buffers (`kernel.frameBuffers`, or `readFrame()` for a CPU copy): `accum` = beauty (vec4f per pixel: total radiance of the
-sample, a = 1), `planes` = 6 planes of `width * height` vec4f, plane-major (plane p at byte `p * w * h * 16`), row 0 = top.
-One buffer must fit `maxStorageBufferBindingSize` (half-res 1080p = 960 x 540 x 96 B = 50 MB).
+sample, a = 1), `planes` = 7 planes (`PT_FRAME_PLANES`) of `width * height` vec4f, plane-major (plane p at byte `p * w * h * 16`), row 0 = top.
+One buffer must fit `maxStorageBufferBindingSize` (half-res 1080p = 960 x 540 x 112 B = 58 MB).
 
 | plane | rgb | a |
 |---|---|---|
@@ -63,12 +63,31 @@ One buffer must fit `maxStorageBufferBindingSize` (half-res 1080p = 960 x 540 x 
 | 3 motion | x, y = NDC delta current - previous (+y up, jitter-free); z = perceptual roughness | motionZ = viewZ(previous) - viewZ(current) |
 | 4 albedo factor | the diffuse demodulation factor (albedo of the primary hit, floored at `PT_DEMOD_EPS` = 1e-3; 1 on a miss) | 1 when the primary lobe is specular-class |
 | 5 specular factor | the specular demodulation factor (approximate pre-integrated specular term: F0 = mix(0.04, base, metalness), 1 for glass; floored; 1 on a miss) | 1 when the primary ray hit a surface |
+| 6 emission (P4.5a, V200) | radiance that is NOT demodulated: emission of an emitter hit by the primary ray, the environment / sun behind a primary miss and (`frameEmission: 'mirror'`) the emission / environment reached through a chain of perfect-mirror bounces, throughput included. Noise-free at its source. Added back AFTER the filter | 0 (reserved) |
 
 Class split: the primary hit's BSDF kind decides. A conductor or dielectric lobe is specular-class, Lambert and layered
-(coated) are diffuse-class. Everything after the primary vertex (all its bounces, NEE) goes to that class. Emission seen at the
-primary hit and the sky behind a primary miss are diffuse-class (they are demodulated by the albedo factor, which recomposes
-them exactly). So `diffuse * albedoFactor + specular * specularFactor = radiance` per pixel (checked to 1.1e-7 relative);
+(coated) are diffuse-class. Everything after the primary vertex (all its bounces, NEE) goes to that class, EXCEPT the emission plane
+(below). So `diffuse * albedoFactor + specular * specularFactor + emission = radiance` per pixel (checked to 1.1e-7 relative);
 the stored factor is the floored one, so the identity is exact whatever the albedo.
+
+**The emission plane (P4.5a, V200-V203).** Before it, emission seen at the primary hit and the sky behind a primary miss were diffuse-class: demodulated by the
+albedo factor, which for an emitter is its (black) base colour floored at 1e-3, so a lamp of radiance 480 became 4.8e5 in the diffuse plane, hit the f16 clamp of the pack
+(65000) and was spread by the filter (sponza-lamps with the lamps in view: denoised relMSE 228, Cornell with its light in view: 1e4). The light the primary BSDF does not
+modulate is now accumulated in `fEmit` and written to plane 6 instead (`frameEmission`, an integrator option, default `'mirror'` with `frame`):
+
+| `frameEmission` | plane 6 holds | the other planes |
+|---|---|---|
+| `'none'` | 0 (the P4.1 behaviour, the A/B baseline) | emission demodulated by the albedo factor; a specular-class primary puts its own emission in the diffuse plane |
+| `'primary'` | emitter at depth 0 (`beta` = 1: its radiance), environment / sun on a depth-0 miss | diffuse = (radiance - emission) / albedo factor for a diffuse-class primary; specular = (radiance - emission) / specular factor for a specular-class one; the other is 0 |
+| `'mirror'` (default) | the above, plus every emission / environment hit while ALL bounces so far were perfect-mirror (smooth CONDUCTOR, `PT_FLAG_DELTA`) samples: `ptFramePureNext(pure, specularBounce, bp.kind)` | as `'primary'`; the mirror's own reflection of a lit surface stays in the specular plane |
+
+Glass is deliberately NOT a pure chain: a smooth dielectric picks reflect or refract at random per sample, so what is seen through it is noisy and must reach the filter
+(its specular factor is 1, so nothing is divided). A rough conductor's emission goes to the specular plane too (it is MIS-sampled and noisy). The beauty (`accum`) is the
+total (`radiance + emission`). Per-pixel plane write, the same in every scheduler: `ptFramePlanes(pixel, n, radiance, direct, emit, ...)` in `outputs-wgsl.ts` (`radiance` = everything
+but `emit`; the legacy `none` passes `direct` = primary emission and `emit` = 0). **A scheduler that writes the planes (the wavefront's shade kernel) needs: one extra vec3
+per path (`emit`, summed where the path adds emission / escape radiance while the path is pure) and, for `'mirror'`, one `pure` bit (set at the camera kernel, cleared
+by `ptFramePureNext` after each BSDF sample; the wavefront's depth word keeps depth in bits 0-28 with specular / `aovDone` / live in 31 / 30 / 29, so the bit must come from the top depth bit (a 2^28 path limit is no limit) or from a spare lane of the state vec4s); pure sites add to `emit` instead of `radiance`
+and the final write is `ptFramePlanes(..., radiance, vec3f(0.0), emit, ...)` with the beauty `radiance + emit`.** The accumulating `ptAccum` of a frame kernel is `radiance + emit`.
 
 What the Denoiser's `denoiser-realtime` wants (`DiffuseSpecularInputs`, `FrameGuides`, `FrameCamera`; read-only, its CAPTURE-FORMAT):
 the caller demodulates; diffuse input = radiance / albedo (`guides.albedo` = plane 4 rgb), specular input = radiance /
@@ -79,6 +98,10 @@ plane 3 rg (NDC delta current - previous), `guides.motionZ` = plane 3 a, `guides
 `depth` guide is required: derive device depth from viewZ with the projection (or pass the engine's raster depth).
 Textures: the planes are buffers; a `copyBufferToTexture` (rgba32float rows are 256-aligned for `width >= 16`) or a small compute pass
 makes the `rg16float` / `rgba16float` / `r32float` textures it wants (P4.5).
+
+The edge case the plane does NOT solve: a sub-pixel emitter (Sponza's lamps are 1.5 px across at 960 x 540) is a binary 1-spp coverage sample at its silhouette (the per-pixel jitter makes a
+pixel on the lamp's edge 480 or 0 from frame to frame). The emission plane is not filtered, so that aliasing reaches the upscaler as it is (raw-sample level on the lamp's pixels, no worse); the
+upscaler's temporal accumulation is its only filter. Temporal accumulation of the emission plane in the chain (reprojected, neighbourhood-clamped) is the fix if it matters (TASKS P4.5c).
 
 Not in the frame outputs, by design: instance motion (static scenes first; the scene copy keeps only the current instance
 transforms, so a moving object needs last frame's `objectToWorld` or a per-instance delta: P4.5), motion of a mirror's reflection
@@ -146,9 +169,9 @@ costs 2.3x the boil (0.0082 against 0.0036): off by default, a quality-vs-steadi
 **P4.7, the preview pipeline,** is the same chain with `denoise: 'oidn'` (`moving: 'fast'` every frame, `stillSamples: Infinity`, `hold: false`) at a lower render size and maxDepth 4 (`RealtimePipelineSession { preview: true }`, page args `res=640x360 maxDepth=4 variants=svgf,oidn-fast`).
 It runs the real-time frame kernel (OIDN's albedo and normal guides come from the frame planes), not `mode: 'preview'` (whose AOV path serves `pt_denoise=oidn`, the converged-frame variant). Numbers: REALTIME-PIPELINE.md. OIDN small costs 4.6 ms at 640 x 360 and 11.8 ms at 960 x 540 on the M5 Pro (wall clock, awaited, provisional) against 1.2 ms for SVGF at 960 x 540; the preview frame (640 x 360 -> 1280 x 720, maxDepth 4) is 20.1 ms (13.3 trace + 0.6 pack + 5.0 OIDN + 0.4 upscale), SVGF in the same configuration 14.9 ms.
 
-**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants), wavefront frame mode (P4.1b), the wavefront with ReSTIR. An emitter seen directly
-by the primary ray is demodulated by the albedo floor (1e-3: emission / 1e-3 reaches SVGF and the f16 clamp of `pipePack` at 65000) and breaks the diffuse plane: keep emitters out of the primary view (`sponza-lamps` hangs its lamps below eye level) or add the
-emission after the filter (a plane for it is the fix; TASKS P4.5a).
+**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants), wavefront frame mode (P4.1b), the wavefront with ReSTIR.
+Emitters seen directly by the primary ray are handled (P4.5a): plane 6 is summed over the frame's samples by `pipeAccumulate`, packed as an `rgba16float` texture (clamped at 65000: a visible sun disc, 7e5, saturates) and added by the composite AFTER the
+filter (`diffuse + specular + emission` where the primary ray hit, the raw beauty, which holds the sky, where it missed); the upscaler sees the full image. Only the sub-pixel emitter's silhouette aliasing remains (above).
 
 ### Results (M5 Pro, provisional timing; own depth-2 references at 1920 x 1080)
 

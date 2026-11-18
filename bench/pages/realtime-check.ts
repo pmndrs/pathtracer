@@ -10,6 +10,10 @@
  *    the normals agree: fraction of pixels (`reproj_ok_frac`).
  *  - demodulation: diffuse x albedo factor + specular x specular factor equals the radiance (the planes are one exact split), albedo factors are materials of the scene.
  *  - guides: normals unit, viewZ negative on hits and 0 on misses, motion zero on the first frame.
+ * `emission` (P4.5a): the emission plane against closed forms on a small scene (a lamp seen directly, a sky strip, a perfect mirror that reflects the lamp or the floor), for each of
+ *  `frameEmission` none / primary / mirror: the planes recompose the radiance exactly (diffuse x albedo + specular x specular factor + emission), a directly seen lamp's emission is its radiance
+ *  and its diffuse plane is empty (none: emission / albedo floor), the sky is the emission of a missed ray, a mirror's lamp reflection is emission (mirror) or specular-class radiance (primary),
+ *  a mirror's floor reflection is never emission.
  * `bluenoise`: Cornell, N 1 spp frames per sampler (owen-sobol, pcg, bluenoise kronecker, bluenoise owen shift) against a progressive 2048 spp reference of the same depth:
  *  - unbiased: relBias of the N-frame mean image (each |.| <= `bias_tol`, default 2%).
  *  - the error spectrum, as a proxy: relMSE of a single frame against the reference raw, and after a Gaussian blur of both (sigma 2 and 4 px); the ratio blur / raw is
@@ -23,7 +27,7 @@
  * A/B per frame after a blur (`bn_*_blur2_gain_vs_owen_sobol` = Owen-Sobol + ReSTIR over blue noise + ReSTIR). `unbiased` = unbiased combine, no initial visibility;
  * `shared` = unbiased + `sharedHit`.
  *
- * Args: scenes=cornell,sponza-white  frames=16  step=1 (degrees)  write=1  check=frames,bluenoise  n=128 (bluenoise frames)  bias_tol=0.02  size=128 (Cornell side)  restir=unbiased
+ * Args: scenes=cornell,sponza-white  frames=16  step=1 (degrees)  write=1  check=frames,emission,bluenoise  n=128 (bluenoise frames)  bias_tol=0.02  size=128 (Cornell side)  restir=unbiased
  */
 import { fetchBlueNoise, type BlueNoiseTexture } from '@pmndrs/raytracer';
 import { PT_DEMOD_EPS, ptCameraBasis, ptSampleBlueNoise, type PtFrame, type PtLookAtCamera, type PtMegakernel, type PtBlueNoiseShift, type PtRestirOptions } from '@pmndrs/pathtracer';
@@ -31,6 +35,7 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, summarizeAdapter, uploadImage } from '../runner/page-client.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { getScene } from '../scenes/index.ts';
+import { compose, rotationX, translation } from '../scenes/geometry.ts';
 import { PtMegakernelAdapter, type PtAdapterSettings } from '../adapters/pt-megakernel/index.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -176,7 +181,7 @@ function checkPath(label: string, scene: SceneDesc, cameras: PtLookAtCamera[], f
         if (hit !== vz < 0) viewZBad++;
         // demodulation: the two planes recompose the radiance
         for (let k = 0; k < 3; k++) {
-          const rec = (fr.diffuse[i + k] as number) * (fr.albedo[i + k] as number) + (fr.specular[i + k] as number) * (fr.specularFactor[i + k] as number);
+          const rec = (fr.diffuse[i + k] as number) * (fr.albedo[i + k] as number) + (fr.specular[i + k] as number) * (fr.specularFactor[i + k] as number) + (fr.emission[i + k] as number);
           const want = fr.radiance[i + k] as number;
           demodWorst = Math.max(demodWorst, Math.abs(rec - want) / Math.max(Math.abs(want), 1e-3));
         }
@@ -303,6 +308,125 @@ async function checkFrames(sceneNames: string[], frameCount: number, stepDeg: nu
       if (write && shift === 'kronecker') await writeFrames(`rt_${name.replace(/-/g, '_')}`, scene, frames);
       adapter.dispose();
     }
+  }
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------- emission plane (P4.5a)
+
+const LAMP = 20;
+const SKY: V3 = [0.1, 0.2, 0.3];
+
+/** A lamp (radiance 20, facing down) over a floor, a perfect mirror wall behind it that reflects the lamp into the camera, a strip of sky above the wall. */
+function emissionScene(size: number): SceneDesc {
+  return {
+    version: 1,
+    name: 'emission-check',
+    purpose: 'P4.5a closed forms: emitter seen directly, sky behind a primary miss, emitter and floor seen in a perfect mirror.',
+    tier: 0,
+    camera: { type: 'perspective', position: [0, 1, 4], target: [0, 1, -2], up: [0, 1, 0], yFovDeg: 40 },
+    film: { width: size, height: size, filter: 'box' },
+    integrator: { maxDepth: 2 },
+    materials: {
+      floor: { type: 'diffuse', reflectance: [0.5, 0.5, 0.5] },
+      lampBack: { type: 'black' },
+      mirror: { type: 'conductor', eta: [0.2, 0.924, 1.102], k: [3.912, 2.452, 2.142], roughness: 0 },
+    },
+    meshes: [
+      { name: 'floor', geometry: { type: 'quad', size: [12, 12] }, material: 'floor' },
+      { name: 'mirror', geometry: { type: 'quad', size: [4, 3] }, material: 'mirror', transform: compose(translation(0, 1.5, -2), rotationX(Math.PI / 2)) },
+      { name: 'lamp', geometry: { type: 'quad', size: [2, 2] }, material: 'lampBack', transform: compose(translation(0, 2, 0), rotationX(Math.PI)), emission: [LAMP, LAMP, LAMP] },
+    ],
+    lights: [],
+    environment: { type: 'uniform', radiance: SKY },
+  };
+}
+
+async function checkEmission(size: number): Promise<void> {
+  const scene = emissionScene(size);
+  const cameras = [scene.camera as PtLookAtCamera, scene.camera as PtLookAtCamera];
+  for (const mode of ['none', 'primary', 'mirror'] as const) {
+    const label = `emission_${mode}`;
+    const { adapter, kernel, device } = await loadAdapter(scene, { mode: 'realtime', maxDepth: 2, rrStartDepth: 0, frameEmission: mode });
+    const frames = await renderPath(kernel, device, cameras);
+    const fr = frames[1] as PtFrame;
+    const n = size * size;
+    let identityWorst = 0;
+    const count = { lamp: 0, sky: 0, mirrorLamp: 0, mirrorSky: 0, mirrorFloor: 0, other: 0 };
+    let lampOff = 0;
+    let lampDiffuse = 0;
+    let skyOff = 0;
+    let skyDiffuse = 0;
+    let mirrorLampOff = 0;
+    let mirrorFloorOff = 0;
+    let zeroPlane = 0;
+    for (let p = 0; p < n; p++) {
+      const i = p * 4;
+      const vz = fr.normalViewZ[i + 3] as number;
+      const em = [0, 1, 2].map((k) => fr.emission[i + k] as number) as V3;
+      const rad = [0, 1, 2].map((k) => fr.radiance[i + k] as number) as V3;
+      const dif = [0, 1, 2].map((k) => (fr.diffuse[i + k] as number) * (fr.albedo[i + k] as number)) as V3;
+      const spc = [0, 1, 2].map((k) => (fr.specular[i + k] as number) * (fr.specularFactor[i + k] as number)) as V3;
+      for (let k = 0; k < 3; k++) identityWorst = Math.max(identityWorst, Math.abs(dif[k]! + spc[k]! + em[k]! - rad[k]!) / Math.max(Math.abs(rad[k]!), 1e-3));
+      if (mode === 'none') zeroPlane += em.reduce((a, b) => a + Math.abs(b), 0);
+      const near = (a: V3, b: V3, tol = 1e-5) => [0, 1, 2].every((k) => Math.abs(a[k]! - b[k]!) <= tol * Math.max(1, Math.abs(b[k]!)));
+      const onMirror = vz < 0 && Math.abs(vz + 6) < 0.01 && (fr.normalViewZ[i + 2] as number) > 0.99; // the mirror wall: viewZ -6, normal +z
+      const lampDirect = vz < 0 && near(rad, [LAMP, LAMP, LAMP]) && Math.abs(vz) < 5.5; // the lamp is nearer than the mirror (z = 0: viewZ -4)
+      if (vz === 0) {
+        // a primary miss: the sky
+        count.sky++;
+        if (mode === 'none') {
+          if (!near(dif, SKY, 1e-4)) skyOff++;
+        } else {
+          if (!near(em, SKY, 1e-5)) skyOff++;
+          skyDiffuse += dif.reduce((a, b) => a + Math.abs(b), 0) + spc.reduce((a, b) => a + Math.abs(b), 0);
+        }
+      } else if (lampDirect) {
+        count.lamp++;
+        if (mode === 'none') {
+          if (!near(dif, [LAMP, LAMP, LAMP], 1e-4)) lampOff++;
+          lampDiffuse = Math.max(lampDiffuse, (fr.diffuse[i] as number));
+        } else {
+          if (!near(em, [LAMP, LAMP, LAMP], 1e-6)) lampOff++;
+          lampDiffuse += dif.reduce((a, b) => a + Math.abs(b), 0) + spc.reduce((a, b) => a + Math.abs(b), 0);
+        }
+      } else if (onMirror) {
+        // the camera ray hit the mirror; what it reflects is in the radiance: the lamp (radiance = Fresnel x 20, no other term) or the lit floor (diffuse, NEE-less lamp: only the sky and nothing else here)
+        const reflectsLamp = rad[0] > 8; // a lamp reflection is 20 x F (F >= 0.7 for this metal: > 14); the lit floor it can show is below 1.5
+        if (reflectsLamp) {
+          count.mirrorLamp++;
+          if (mode === 'mirror') {
+            if (!near(em, rad, 1e-6) || dif.some((v) => v !== 0) || spc.some((v) => v !== 0)) mirrorLampOff++;
+          } else if (mode === 'primary') {
+            if (em.some((v) => v !== 0) || !near(spc, rad, 1e-5)) mirrorLampOff++;
+          }
+        } else if (mode === 'mirror' && em.some((v) => v > 0)) {
+          // the sky in the mirror: the whole radiance is emission (Fresnel x sky, below the sky itself), nothing in the filtered planes
+          count.mirrorSky++;
+          if (!near(em, rad, 1e-6) || dif.some((v) => v !== 0) || spc.some((v) => v !== 0) || em.some((v, k) => v > SKY[k]! * (1 + 1e-5))) mirrorFloorOff++;
+        } else {
+          // the lit floor in the mirror: filtered (specular class), never emission
+          count.mirrorFloor++;
+          if (mode !== 'none' && em.some((v) => v !== 0)) mirrorFloorOff++;
+        }
+      } else count.other++;
+    }
+    metrics[`${label}_identity_max_rel`] = identityWorst;
+    metrics[`${label}_identity_mismatch`] = identityWorst > 1e-5 ? 1 : 0;
+    metrics[`${label}_pixels_lamp`] = count.lamp;
+    metrics[`${label}_pixels_sky`] = count.sky;
+    metrics[`${label}_pixels_mirror_lamp`] = count.mirrorLamp;
+    metrics[`${label}_pixels_mirror_sky`] = count.mirrorSky;
+    metrics[`${label}_pixels_mirror_floor`] = count.mirrorFloor;
+    metrics[`${label}_lamp_off`] = lampOff;
+    metrics[`${label}_sky_off`] = skyOff;
+    metrics[`${label}_mirror_lamp_off`] = mirrorLampOff;
+    metrics[`${label}_mirror_floor_emission_off`] = mirrorFloorOff;
+    metrics[`${label}_lamp_other_planes_sum`] = lampDiffuse;
+    metrics[`${label}_sky_other_planes_sum`] = skyDiffuse;
+    metrics[`${label}_emission_mismatch`] = identityWorst > 1e-5 || lampOff + skyOff + mirrorLampOff + mirrorFloorOff > 0 || count.lamp === 0 || count.sky === 0 || count.mirrorLamp === 0 || count.mirrorFloor === 0 || (mode === 'mirror' && count.mirrorSky === 0) || (mode !== 'none' && lampDiffuse + skyDiffuse > 0) || (mode === 'none' && zeroPlane !== 0) ? 1 : 0;
+    if (metrics[`${label}_emission_mismatch`]) note(`${label}: identity ${identityWorst}, counts ${JSON.stringify(count)}, off: lamp ${lampOff} sky ${skyOff} mirrorLamp ${mirrorLampOff} mirrorFloor ${mirrorFloorOff}, other planes on emitters ${lampDiffuse + skyDiffuse}, none-mode plane sum ${zeroPlane}`);
+    adapter.dispose();
   }
 }
 
@@ -467,11 +591,12 @@ try {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
   adapterSummary = summarizeAdapter(adapter);
-  const only = args.check ? args.check.split(',') : ['frames', 'bluenoise'];
+  const only = args.check ? args.check.split(',') : ['frames', 'emission', 'bluenoise'];
   if (args.restir) restirUnderTest = args.restir === 'biased' ? {} : { bias: 'unbiased', initialVisibility: false, ...(args.restir === 'shared' ? { sharedHit: true } : {}) };
   if (only.includes('timing')) metrics.timing_best_effort = 1;
   const frames = numberArg(args, 'frames', 16);
   if (only.includes('frames')) await checkFrames((args.scenes ?? 'cornell,sponza-white').split(','), frames, numberArg(args, 'step', 1), numberArg(args, 'write', 1) !== 0, numberArg(args, 'size', 128));
+  if (only.includes('emission')) await checkEmission(numberArg(args, 'emission_size', 128));
   if (only.includes('bluenoise')) await checkBlueNoise(numberArg(args, 'n', 128), numberArg(args, 'bn_size', 96), numberArg(args, 'bias_tol', 0.02), numberArg(args, 'blur_frames', 16));
   if (only.includes('timing')) await checkTiming((args.scenes ?? 'cornell,sponza-white').split(','), numberArg(args, 'rounds', 3), numberArg(args, 'batch', 32));
   const total = Object.entries(metrics).filter(([k]) => k.endsWith('_mismatch')).reduce((sum, [, v]) => sum + v, 0);

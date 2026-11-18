@@ -170,7 +170,31 @@ describe('per-frame outputs (P4.1)', () => {
     expect(f.motionRoughness[0]).toBe(3 * n);
     expect(f.albedo[0]).toBe(4 * n);
     expect(f.specularFactor[0]).toBe(5 * n);
+    expect(f.emission[0]).toBe(6 * n);
+    expect(PT_FRAME_PLANES).toBe(7);
     expect(f.radiance).toBe(radiance);
+  });
+
+  it('frameEmission (P4.5a): off without frame, mirror by default with it; the kernel text carries the emission plane exactly as asked', () => {
+    expect(resolveIntegratorOptions({}).frameEmission).toBe('none');
+    expect(resolveIntegratorOptions({ frameEmission: 'mirror' }).frameEmission).toBe('none'); // no frame, no plane
+    expect(resolveIntegratorOptions({ frame: true }).frameEmission).toBe('mirror');
+    expect(resolveIntegratorOptions({ frame: true, frameEmission: 'none' }).frameEmission).toBe('none');
+    expect(mk({ frameEmission: 'primary' })).toBe(mk()); // not a frame kernel: the text is the plain one
+    const mirror = mk({ frame: true }, false);
+    expect(mirror).toContain('var fEmit = vec3f(0.0);');
+    expect(mirror).toContain('var fPure = true;');
+    expect(mirror).toContain('fPure = ptFramePureNext(fPure, specularBounce, bp.kind);');
+    expect(mirror).toContain('PtRadiance(radiance + fEmit, 0.0)');
+    expect(mirror).not.toContain('fDirect');
+    const primary = mk({ frame: true, frameEmission: 'primary' }, false);
+    expect(primary).toContain('var fEmit = vec3f(0.0);');
+    expect(primary).not.toContain('fPure');
+    expect(primary).toContain('if (depth == 0u) {\n                fEmit +=');
+    const none = mk({ frame: true, frameEmission: 'none' }, false);
+    expect(none).not.toContain('fEmit');
+    expect(none).toContain('fDirect');
+    expect(none).toContain('PtRadiance(radiance, 0.0)');
   });
 
   it('the WGSL projection is the closed form of the camera basis (right, up scaled by tan(fov/2)): NDC +y up, viewZ negative in front', () => {

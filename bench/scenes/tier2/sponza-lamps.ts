@@ -13,12 +13,11 @@ const NX = 16;
 const NZ = 4;
 export const SPONZA_LAMPS = NX * NZ;
 
-function lampMeshes(): MeshDesc[] {
+function lampMeshes(y: number): MeshDesc[] {
   const groups: { x: number; z: number }[][] = LEVELS.map(() => []);
   for (let i = 0; i < NX; i++)
     for (let j = 0; j < NZ; j++) groups[(i * 7 + j * 13 + ((i * j) % 5)) % LEVELS.length]!.push({ x: -9 + ((i + 0.5) * 18) / NX, z: -2.7 + ((j + 0.5) * 5.4) / NZ });
   const h = 0.07;
-  const y = 1.0;
   return groups.map((lamps, level) => {
     const positions: number[] = [];
     const indices: number[] = [];
@@ -39,7 +38,19 @@ export const sponzaLamps: SceneDesc = {
   name: 'sponza-lamps',
   purpose: `sponza-white lit by ${SPONZA_LAMPS} small ceiling lamps in four power levels (no sun, weak sky): many-light direct lighting on 262k triangles, ReSTIR DI vs NEE through the real-time chain (P4.5 / P4.6). No native reference.`,
   materials: { ...sponzaWhite.materials, lightBack: { type: 'black' } },
-  meshes: [...sponzaWhite.meshes, ...lampMeshes()],
+  meshes: [...sponzaWhite.meshes, ...lampMeshes(1.0)],
   lights: [],
   environment: { type: 'uniform', radiance: [0.1, 0.11, 0.14] },
+};
+
+/**
+ * sponza-lamps-visible (P4.5a): the same lamps at y = 2.8 m, above the eye (1.7 m) and inside the camera's frustum (it looks up 5 degrees, 60 degree field of view): every lamp
+ * is an emitter seen directly by the primary ray (480 / 240 / 120 / 60 radiance against a surround of 0.1-1), the case that broke the demodulated planes (emission divided by
+ * the albedo floor). The lighting differs from sponza-lamps (the lamps are 1.8 m higher), so compare chains on this scene, not against sponza-lamps numbers.
+ */
+export const sponzaLampsVisible: SceneDesc = {
+  ...sponzaLamps,
+  name: 'sponza-lamps-visible',
+  purpose: `sponza-lamps with the ${SPONZA_LAMPS} lamps at y = 2.8 m, in the primary view: directly visible emitters through the real-time chain (P4.5a). No native reference.`,
+  meshes: [...sponzaWhite.meshes, ...lampMeshes(2.8)],
 };

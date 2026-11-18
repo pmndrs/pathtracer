@@ -73,8 +73,8 @@ export const PT_AOV_VEC4 = 2;
 /** Group 2 bindings of the per-frame outputs (`integrator.frame`): the previous camera (uniform, dynamic offset, one slot per pass like `ptParams`) and the planes. */
 export const PT_FRAME_PARAMS_BINDING = 13;
 export const PT_FRAME_BINDING = 14;
-/** Planes of `ptFrame` (each `width * height` vec4f, plane-major): see `PtFrame`. The beauty (total radiance) is the accumulator itself. */
-export const PT_FRAME_PLANES = 6;
+/** Planes of `ptFrame` (each `width * height` vec4f, plane-major): see `PtFrame`; plane 6 is the emission plane (P4.5a). The beauty (total radiance) is the accumulator itself. */
+export const PT_FRAME_PLANES = 7;
 /** Bytes of one `PtFrameParams` record (the previous camera: origin, right, up, forward as vec4f). */
 export const PT_FRAME_PARAMS_BYTES = 64;
 /** Demodulation factors are floored here (per channel) so the division is finite; the stored factor is the floored one, so demodulated x factor reproduces the radiance exactly. */
@@ -232,7 +232,15 @@ fn ptFrameMotion(p: vec3f) -> vec3f {
     return vec3f(c.xy - q.xy, q.z - c.z);
 }
 
-fn ptFramePlanes(pixel: u32, n: u32, radiance: vec3f, direct: vec3f, bounceT: f32, seen: bool, isSpec: bool, normal: vec3f, viewZ: f32, motion: vec3f, rough: f32, albedo: vec3f, spec: vec3f) {
+// Is a path that has only bounced off perfect mirrors so far still "pure" after this sample? (P4.5a, \`frameEmission: 'mirror'\`). A pure path's emission / sky is not modulated by anything but mirror Fresnel (its throughput), so it is noise-free and goes to the emission plane.
+fn ptFramePureNext(pure: bool, specularBounce: bool, kind: u32) -> bool {
+    return pure && specularBounce && kind == PT_BSDF_CONDUCTOR;
+}
+
+// The planes of one sample. \`radiance\` is the light the primary BSDF modulates (everything but \`emit\`): split by the primary class into the demodulated diffuse / specular planes,
+// so diffuse * albedoFactor + specular * specularFactor = radiance exactly. \`emit\` (P4.5a) is the primary-visible emission / sky that bypasses the demodulation: plane 6, added
+// back after the filter; the beauty is radiance + emit. \`direct\` (the legacy \`frameEmission: 'none'\`) is the emission seen by a specular-class primary, put in the diffuse plane.
+fn ptFramePlanes(pixel: u32, n: u32, radiance: vec3f, direct: vec3f, emit: vec3f, bounceT: f32, seen: bool, isSpec: bool, normal: vec3f, viewZ: f32, motion: vec3f, rough: f32, albedo: vec3f, spec: vec3f) {
     let aF = select(vec3f(1.0), max(albedo, vec3f(PT_DEMOD_EPS)), seen);
     let sF = select(vec3f(1.0), max(spec, vec3f(PT_DEMOD_EPS)), seen);
     let useSpec = seen && isSpec;
@@ -245,6 +253,7 @@ fn ptFramePlanes(pixel: u32, n: u32, radiance: vec3f, direct: vec3f, bounceT: f3
     ptFrame[3u * n + pixel] = vec4f(motion.xy, rough, motion.z);
     ptFrame[4u * n + pixel] = vec4f(aF, select(0.0, 1.0, useSpec));
     ptFrame[5u * n + pixel] = vec4f(sF, select(0.0, 1.0, seen));
+    ptFrame[6u * n + pixel] = vec4f(emit, 0.0);
 }
 `;
 }
@@ -373,11 +382,17 @@ export interface PtFrame {
   albedo: Float32Array;
   /** rgb: the specular demodulation factor (approximate pre-integrated specular term, floored; 1 on a miss); a: 1 when the primary ray hit a surface. */
   specularFactor: Float32Array;
+  /**
+   * P4.5a: rgb: radiance that bypasses the demodulation (`frameEmission`): emission of an emitter hit by the primary ray, the environment / sun behind a primary miss, and (default `'mirror'`)
+   * what perfect-mirror bounces from the primary hit reach, throughput included. Noise-free; the chain adds it back AFTER the filter. Zero with `frameEmission: 'none'`. a: reserved, 0.
+   * `diffuse * albedo + specular * specularFactor + emission = radiance` per pixel.
+   */
+  emission: Float32Array;
 }
 
 /** Splits the `ptFrame` planes (and the accumulator) into a `PtFrame`. `planes` = `PT_FRAME_PLANES * width * height * 4` floats, `radiance` = `width * height * 4`. */
 export function ptDecodeFrame(radiance: Float32Array, planes: Float32Array, width: number, height: number): PtFrame {
   const n = width * height * 4;
   const plane = (i: number): Float32Array => planes.slice(i * n, (i + 1) * n);
-  return { width, height, radiance, diffuse: plane(0), specular: plane(1), normalViewZ: plane(2), motionRoughness: plane(3), albedo: plane(4), specularFactor: plane(5) };
+  return { width, height, radiance, diffuse: plane(0), specular: plane(1), normalViewZ: plane(2), motionRoughness: plane(3), albedo: plane(4), specularFactor: plane(5), emission: plane(6) };
 }

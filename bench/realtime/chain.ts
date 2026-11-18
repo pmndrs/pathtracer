@@ -87,8 +87,8 @@ class UpscalerHost {
 
 // ---------------------------------------------------------------- WGSL
 
-/** Per-pixel sums over the N samples of a frame (5 vec4 per pixel): beauty, diffuse-class radiance, specular-class radiance, albedo factor, specular factor. */
-const SUM_VEC4 = 5;
+/** Per-pixel sums over the N samples of a frame (6 vec4 per pixel): beauty, diffuse-class radiance, specular-class radiance, albedo factor, specular factor, emission (P4.5a). */
+const SUM_VEC4 = 6;
 
 const ACCUM_WGSL = /* wgsl */ `
 struct P { n: u32, _a: u32, _b: u32, _c: u32 }
@@ -109,13 +109,14 @@ fn pipeAccumulate(@builtin(global_invocation_id) gid: vec3u) {
   sums[2u * n + i] += vec4f(planes[n + i].xyz * sF.xyz, 0.0); // specular-class radiance
   sums[3u * n + i] += vec4f(aF.xyz, aF.w);
   sums[4u * n + i] += vec4f(sF.xyz, sF.w);
+  sums[5u * n + i] += vec4f(planes[6u * n + i].xyz, 0.0);      // emission: primary-visible emitters / sky, never demodulated
 }
 `;
 
 /**
  * Pack: sums / N and the last sample's guides -> one buffer of texture rows (copied to the textures after). Sections, each `rows` rows of a
- * 256-byte aligned stride: 0..6 rgba16float (raw beauty, diffuse demod, specular demod, albedo factor, specular factor, normal, motion), then
- * 7..11 r32float (viewZ, motionZ, roughness, diffuse hit distance, specular hit distance).
+ * 256-byte aligned stride: 0..7 rgba16float (raw beauty, diffuse demod, specular demod, albedo factor, specular factor, normal, motion, emission), then
+ * 8..12 r32float (viewZ, motionZ, roughness, diffuse hit distance, specular hit distance).
  */
 const PACK_WGSL = /* wgsl */ `
 struct P { w: u32, h: u32, spp: f32, stride8: u32, stride4: u32, base4: u32, _a: u32, _b: u32 }
@@ -156,6 +157,7 @@ fn pipePack(@builtin(global_invocation_id) gid: vec3u) {
   put16(4u, x, y, vec4f(sF * inv, sums[4u * n + i].w * inv));   // w: share of samples whose primary ray hit
   put16(5u, x, y, vec4f(nz.xyz, 0.0));
   put16(6u, x, y, vec4f(mo.xy, 0.0, 0.0));
+  put16(7u, x, y, clampHalf(vec4f(sums[5u * n + i].xyz * inv, 1.0)));   // emission: mean over the samples, added back after the filter
   put32(0u, x, y, nz.w);
   put32(1u, x, y, mo.w);
   put32(2u, x, y, mo.z);
@@ -181,13 +183,17 @@ struct P { near: f32, far: f32, _a: f32, _b: f32 }
 }
 `;
 
-/** Denoised diffuse + specular (remodulated), and the raw sky where the primary ray missed (the denoiser outputs 0 there). */
+/**
+ * Denoised diffuse + specular (remodulated) + the emission plane (primary-visible emitters, the sky behind a primary miss, mirror-seen emitters: noise-free, never filtered, P4.5a);
+ * the raw beauty where the primary ray missed (the denoiser outputs 0 there; it holds the sky already).
+ */
 const COMPOSITE_WGSL = /* wgsl */ `
 @group(0) @binding(0) var diffuse: texture_2d<f32>;
 @group(0) @binding(1) var specular: texture_2d<f32>;
 @group(0) @binding(2) var raw: texture_2d<f32>;
 @group(0) @binding(3) var specF: texture_2d<f32>;
 @group(0) @binding(4) var outColor: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var emission: texture_2d<f32>;
 @compute @workgroup_size(8, 8)
 fn pipeComposite(@builtin(global_invocation_id) gid: vec3u) {
   let size = textureDimensions(outColor);
@@ -196,7 +202,7 @@ fn pipeComposite(@builtin(global_invocation_id) gid: vec3u) {
   let seen = textureLoad(specF, q, 0).w > 0.5;
   // Pack wrote the mean of "seen" flags into specF.w: a pixel whose samples all missed keeps its raw (sky) value.
   var c = textureLoad(raw, q, 0).xyz;
-  if (seen) { c = textureLoad(diffuse, q, 0).xyz + textureLoad(specular, q, 0).xyz; }
+  if (seen) { c = textureLoad(diffuse, q, 0).xyz + textureLoad(specular, q, 0).xyz + textureLoad(emission, q, 0).xyz; }
   textureStore(outColor, q, vec4f(max(c, vec3f(0.0)), 1.0));
 }
 `;
@@ -388,8 +394,8 @@ export class PipelineArm {
   private readonly stride8!: number;
   private readonly stride4!: number;
   private readonly base4!: number;
-  /** Render-res input textures (rgba16float sections 0..6, r32float 7..11). */
-  readonly tex!: Record<'raw' | 'diffuse' | 'specular' | 'albedo' | 'specF' | 'normal' | 'motion' | 'viewZ' | 'motionZ' | 'roughness' | 'hitD' | 'hitS', GPUTexture>;
+  /** Render-res input textures (rgba16float sections 0..7, r32float 8..12). */
+  readonly tex!: Record<'raw' | 'diffuse' | 'specular' | 'albedo' | 'specF' | 'normal' | 'motion' | 'emission' | 'viewZ' | 'motionZ' | 'roughness' | 'hitD' | 'hitS', GPUTexture>;
   readonly depth!: GPUTexture;
   /** Denoised + composited colour (render res): the upscaler's input. */
   readonly color!: GPUTexture;
@@ -433,7 +439,7 @@ export class PipelineArm {
     const sums = device.createBuffer({ label: `${label} sums`, size: n * SUM_VEC4 * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     const stride8 = align(w * 8, 256) / 8;
     const stride4 = align(w * 4, 256) / 4;
-    const base4 = 7 * h * stride8 * 2;
+    const base4 = 8 * h * stride8 * 2;
     const packWords = base4 + 5 * h * stride4;
     const packBuf = device.createBuffer({ label: `${label} pack`, size: packWords * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const packParams = device.createBuffer({ label: `${label} pack params`, size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -448,6 +454,7 @@ export class PipelineArm {
       specF: mk('specF', 'rgba16float'),
       normal: mk('normal', 'rgba16float'),
       motion: mk('motion', 'rgba16float'),
+      emission: mk('emission', 'rgba16float'),
       viewZ: mk('viewZ', 'r32float'),
       motionZ: mk('motionZ', 'r32float'),
       roughness: mk('roughness', 'r32float'),
@@ -567,7 +574,7 @@ export class PipelineArm {
     pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
     pass.end();
     const t = this.tex;
-    const half = [t.raw, t.diffuse, t.specular, t.albedo, t.specF, t.normal, t.motion];
+    const half = [t.raw, t.diffuse, t.specular, t.albedo, t.specF, t.normal, t.motion, t.emission];
     half.forEach((texture, k) => encoder.copyBufferToTexture({ buffer: this.packBuf, offset: k * h * this.stride8 * 8, bytesPerRow: this.stride8 * 8, rowsPerImage: h }, { texture }, { width: w, height: h }));
     [t.viewZ, t.motionZ, t.roughness, t.hitD, t.hitS].forEach((texture, k) => encoder.copyBufferToTexture({ buffer: this.packBuf, offset: (this.base4 + k * h * this.stride4) * 4, bytesPerRow: this.stride4 * 4, rowsPerImage: h }, { texture }, { width: w, height: h }));
     const dp = encoder.beginRenderPass({ label: 'pipe depth', colorAttachments: [], depthStencilAttachment: { view: this.depth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
@@ -607,7 +614,7 @@ export class PipelineArm {
         { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near: PIPE_NEAR, far: PIPE_FAR, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };
       const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
-      const group = this.device.createBindGroup({ layout: this.compositePipe.getBindGroupLayout(0), entries: [dOut.diffuse.createView(), dOut.specular.createView(), t.raw.createView(), t.specF.createView(), this.color.createView()].map((resource, binding) => ({ binding, resource })) });
+      const group = this.device.createBindGroup({ layout: this.compositePipe.getBindGroupLayout(0), entries: [dOut.diffuse.createView(), dOut.specular.createView(), t.raw.createView(), t.specF.createView(), this.color.createView(), t.emission.createView()].map((resource, binding) => ({ binding, resource })) });
       const pass = encoder.beginComputePass({ label: 'pipe composite' });
       pass.setPipeline(this.compositePipe);
       pass.setBindGroup(0, group);

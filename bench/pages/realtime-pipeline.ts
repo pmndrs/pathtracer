@@ -18,11 +18,11 @@
  * Args: scenes=sponza-white,sponza-lamps  restir=off,on  scenarios=static,control,path,timing  variants=svgf,none (static)  pathVariants=svgf,svgf-reactive,oidn-fast,none
  *       res=960x540 (display 2x; a scene whose film is not 16:9 uses its film as the render size)  frames=64  checkpoints=1,2,4,8,16,32,64  stableFrom=32
  *       pathFrames=64  pathRefs=3  pathRefSpp=512  refSpp=2048  refFile=<url> (static reference of the FIRST scene)  flip=1  upload=1  maxDepth=2
- *       candidates=8 spatial=1 bias=biased|unbiased vis=0|1 (ReSTIR initialVisibility)  reactiveCap=8  timingMin=250  timingVariant=svgf|oidn-fast|none (the chain's denoiser in the timing scenario)
+ *       emitThreshold=0 (>0: luminance of the reference above which a pixel is an emitter: per-region relMSE / flicker, `_emit` / `_rest`)  ad=frameEmission:none,k:v (extra adapter settings of the kernel)  candidates=8 spatial=1 bias=biased|unbiased vis=0|1 (ReSTIR initialVisibility)  reactiveCap=8  timingMin=250  timingVariant=svgf|oidn-fast|none (the chain's denoiser in the timing scenario)
  */
 import type { PtLookAtCamera, PtMegakernel, PtRestirOptions } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
-import { compareImages } from '../metrics/metrics.ts';
+import { compareImages, relMseMap } from '../metrics/metrics.ts';
 import { flipLdr } from '../metrics/flip.ts';
 import { readPFM } from '../metrics/pfm.ts';
 import type { Image } from '../src/adapter.ts';
@@ -85,6 +85,41 @@ async function ownReference(scene: SceneDesc, w: number, h: number, spp: number,
 }
 
 const lum = (d: Float32Array, i: number, c: number) => 0.2126 * (d[i * c] as number) + 0.7152 * (d[i * c + 1] as number) + 0.0722 * (d[i * c + 2] as number);
+
+/** Emitter mask of a reference: luminance above `threshold`, dilated by one pixel (the silhouette). 1 = emitter pixel. */
+function emitterMask(ref: Img, threshold: number): Uint8Array {
+  const { width: w, height: h } = ref;
+  const hot = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) hot[i] = lum(ref.data, i, ref.channels) > threshold ? 1 : 0;
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      if (!hot[y * w + x]) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (x + dx >= 0 && y + dy >= 0 && x + dx < w && y + dy < h) out[(y + dy) * w + x + dx] = 1;
+    }
+  return out;
+}
+
+/** Mean of `values` over the mask pixels (`inside` true) or the others; NaN when empty. */
+function maskedMean(values: ArrayLike<number>, mask: Uint8Array, inside: boolean): number {
+  let s = 0;
+  let n = 0;
+  for (let i = 0; i < mask.length; i++) if ((mask[i] === 1) === inside) {
+    s += values[i] as number;
+    n++;
+  }
+  return n ? s / n : NaN;
+}
+
+/** Pixels of an rgba16float texture readback with a channel at the f16 clamp of `pipePack` (65000 rounds to >= 64992), over the three signal textures. */
+async function clampHits(device: GPUDevice, textures: GPUTexture[]): Promise<number> {
+  let hits = 0;
+  for (const t of textures) {
+    const img = await readTextureRgba16f(device, t);
+    for (let i = 0; i < img.width * img.height; i++) if ((img.data[i * 4] as number) >= 64000 || (img.data[i * 4 + 1] as number) >= 64000 || (img.data[i * 4 + 2] as number) >= 64000) hits++;
+  }
+  return hits;
+}
 
 /** Orbit + dolly around the camera target: yaw +-5 degrees about the target, 12% dolly in, smoothstep ends. */
 function pathCamera(base: PtLookAtCamera, s: number): PtLookAtCamera {
@@ -160,6 +195,8 @@ try {
   const doUpload = numberArg(args, 'upload', 1) === 1;
   const controlFrames = numberArg(args, 'controlFrames', 32);
   const reactiveCap = numberArg(args, 'reactiveCap', 8);
+  const emitThreshold = numberArg(args, 'emitThreshold', 0);
+  const adapterExtra = Object.fromEntries((args.ad ?? '').split(',').filter(Boolean).map((kv) => { const [k, v] = kv.split(':'); return [k, v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v]; }));
   const needReactive = [...staticVariants, ...pathVariants, args.timingVariant ?? ''].includes('svgf-reactive');
   const restirOptions = (): PtRestirOptions => ({ candidates: numberArg(args, 'candidates', 8), spatial: numberArg(args, 'spatial', 1), bias: (args.bias ?? 'biased') as 'biased' | 'unbiased', ...(args.vis !== undefined ? { initialVisibility: args.vis === '1' } : {}) });
   const rows: string[] = [];
@@ -178,6 +215,7 @@ try {
     let staticRef: Img | null = null;
     let refRender: Img | null = null;
     let refDisplay: Img | null = null;
+    let masks: Record<PipelineStage, Uint8Array> | null = null;
     const needStatic = scenarios.some((s) => ['static', 'control'].includes(s));
     if (needStatic) {
       if (args.refFile && sceneName === sceneNames[0]) {
@@ -196,6 +234,10 @@ try {
       let mean = 0;
       for (let i = 0; i < refDisplay.width * refDisplay.height; i++) mean += lum(refDisplay.data, i, refDisplay.channels);
       metrics[`${sceneName}_reference_mean_luma`] = mean / (refDisplay.width * refDisplay.height);
+      if (emitThreshold > 0) {
+        masks = { final: emitterMask(refDisplay, emitThreshold), denoised: emitterMask(refRender, emitThreshold), raw: emitterMask(refRender, emitThreshold) };
+        metrics[`${sceneName}_emitter_pixel_frac`] = (masks.final as Uint8Array).reduce((a, b) => a + b, 0) / (refDisplay.width * refDisplay.height);
+      }
     }
     const refFor = (stage: PipelineStage) => (stage === 'final' ? (refDisplay as Img) : (refRender as Img));
 
@@ -214,7 +256,7 @@ try {
 
     for (const restirMode of restirModes) {
       const tag = `${sceneName}_${restirMode === 'off' ? 'nee' : 'restir'}`;
-      const session = await RealtimePipelineSession.create({ scene, width, height, displayWidth, displayHeight, maxDepth, ...(restirMode === 'on' ? { restir: restirOptions() } : {}), ...(needReactive ? { reactive: { cap: reactiveCap } } : {}) });
+      const session = await RealtimePipelineSession.create({ scene, width, height, displayWidth, displayHeight, maxDepth, adapter: adapterExtra, ...(restirMode === 'on' ? { restir: restirOptions() } : {}), ...(needReactive ? { reactive: { cap: reactiveCap } } : {}) });
       const device = session.device;
       deviceErrors = watchDevice(device);
       adapterSummary = session.adapter.gpuContext!.summary;
@@ -235,8 +277,24 @@ try {
           metrics[`${prefix}_${stage}_relmse`] = m.relMse;
           metrics[`${prefix}_${stage}_relbias`] = m.relBias;
           if (doFlip && stage !== 'raw') metrics[`${prefix}_${stage}_flip`] = flipLdr(img as unknown as Image, r as unknown as Image).mean;
+          if (masks) {
+            const map = relMseMap(img as unknown as Image, r as unknown as Image);
+            metrics[`${prefix}_${stage}_relmse_emit`] = maskedMean(map, masks[stage], true);
+            metrics[`${prefix}_${stage}_relmse_rest`] = maskedMean(map, masks[stage], false);
+            // energy in the emitter region and outside it: sum(test) / sum(reference) - 1 (the emitters dominate the total of a scene with lamps: a global relBias is mostly theirs)
+            for (const inside of [true, false]) {
+              let st = 0;
+              let sr = 0;
+              for (let i = 0; i < masks[stage].length; i++) if ((masks[stage][i] === 1) === inside) for (let c = 0; c < 3; c++) {
+                st += img.data[i * img.channels + c] as number;
+                sr += r.data[i * r.channels + c] as number;
+              }
+              metrics[`${prefix}_${stage}_relbias_${inside ? 'emit' : 'rest'}`] = st / sr - 1;
+            }
+          }
           if (upload && doUpload) await uploadImage(`${prefix}-${stage}`, img);
         }
+        metrics[`${prefix}_clamp_hits`] = await clampHits(device, [session.arm.tex.diffuse, session.arm.tex.specular, session.arm.tex.raw]);
       };
 
       // ---- static
@@ -260,6 +318,13 @@ try {
               for (let i = 0; i < map.length; i++) s += (map[i] as number) / (lum(r.data, i, r.channels) + 0.01);
               if (r.width !== fw || r.height !== fh) throw new Error('flicker: size mismatch');
               metrics[`${tag}_static_${variant}_${stage}_flicker`] = s / map.length;
+              if (masks) {
+                const rel = new Float32Array(map.length);
+                for (let i = 0; i < map.length; i++) rel[i] = (map[i] as number) / (lum(r.data, i, r.channels) + 0.01);
+                metrics[`${tag}_static_${variant}_${stage}_flicker_emit`] = maskedMean(rel, masks[stage], true);
+                metrics[`${tag}_static_${variant}_${stage}_flicker_rest`] = maskedMean(rel, masks[stage], false);
+                metrics[`${tag}_static_${variant}_${stage}_absflicker_emit`] = maskedMean(map, masks[stage], true);
+              }
             }
           }
           // lag: first checkpoint within 10% of the last checkpoint's final relMSE
@@ -271,7 +336,7 @@ try {
             rows.push(`| ${tag} | ${variant} | ${f} | ${(metrics[`${k}_raw_relmse`] as number).toExponential(2)} | ${(metrics[`${k}_denoised_relmse`] as number).toExponential(2)} | ${(metrics[`${k}_final_relmse`] as number).toExponential(2)} | ${(100 * (metrics[`${k}_raw_relbias`] as number)).toFixed(1)}% / ${(100 * (metrics[`${k}_denoised_relbias`] as number)).toFixed(1)}% / ${(100 * (metrics[`${k}_final_relbias`] as number)).toFixed(1)}% | ${doFlip ? (metrics[`${k}_final_flip`] as number).toFixed(4) : '-'} |`);
           }
         }
-        // The plane identity of the real-time kernel (diffuse x albedo + specular x specFactor = beauty).
+        // The plane identity of the real-time kernel (diffuse x albedo + specular x specFactor + emission = beauty).
         const fr = await session.kernel.readFrame();
         let worst = 0;
         const n = fr.width * fr.height;
@@ -279,7 +344,7 @@ try {
           for (let c = 0; c < 3; c++) {
             const j = i * 4 + c;
             const b = fr.radiance[j] as number;
-            worst = Math.max(worst, Math.abs((fr.diffuse[j] as number) * (fr.albedo[j] as number) + (fr.specular[j] as number) * (fr.specularFactor[j] as number) - b) / (Math.abs(b) + 1e-3));
+            worst = Math.max(worst, Math.abs((fr.diffuse[j] as number) * (fr.albedo[j] as number) + (fr.specular[j] as number) * (fr.specularFactor[j] as number) + (fr.emission[j] as number) - b) / (Math.abs(b) + 1e-3));
           }
         metrics[`${tag}_plane_identity_max_rel`] = worst;
       }

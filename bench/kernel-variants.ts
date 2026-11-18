@@ -63,6 +63,9 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   variants['rt-frame'] = () => mk(caps, { format: {}, layout, integrator: { frame: true } } as never);
   variants['rt-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { sampler: 'bluenoise' } } as never);
   variants['rt-bluenoise-kronecker'] = () => mk(caps, { format: {}, layout, integrator: { sampler: 'bluenoise', blueNoiseShift: 'kronecker' } } as never);
+  // P4.5a: the emission plane's three settings (`rt-frame` is the default 'mirror'; 'none' is the pre-P4.5a text apart from the extra plane write).
+  variants['rt-frame-emission-primary'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, frameEmission: 'primary' } } as never);
+  variants['rt-frame-emission-none'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, frameEmission: 'none' } } as never);
   variants['rt-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } } as never);
   variants['rt-pbr-albedo-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } } } } as never);
   return variants;

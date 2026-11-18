@@ -52,7 +52,7 @@ export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'realtime.layered': 'as preview (D24 + P2.32b)',
   'realtime.scenePacking': 'as preview',
   'realtime.sampler': 'bluenoise (P4.1, V120): only when the texture is passed (`blueNoise`); else owen-sobol. A/B in `realtime-check` (TASKS P4.1); megakernel only, the wavefront keeps owen-sobol',
-  'realtime.frame': 'per-frame outputs for the temporal filter (P4.1, V122); megakernel only; costs 6 planes of vec4 per pixel of write bandwidth: not timed yet (QUIET-PASS)',
+  'realtime.frame': 'per-frame outputs for the temporal filter (P4.1, V122); megakernel only; costs 7 planes of vec4 per pixel of write bandwidth (the 7th is the emission plane, P4.5a, V200); not timed yet (QUIET-PASS)',
   'realtime.limits': 'maxDepth 2, no Russian roulette (a depth cap is the real-time termination; R3 compares RR / throughput / cache termination after the denoiser): pending A/B',
 };
 
