@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-11-15._
+_Last updated 2026-11-18._
 
 **Phase:** P0 passed its gate on the Mac (the RTX 3060 half waits on Windows). P1 (trace core) met its gate: reflections runs
 on it (P1.5, merged here; the reflections branch waits for reflections' own review). P2 (reference path tracer) passed the
@@ -9,9 +9,11 @@ layering default (D24 fix built, P2.32b, default pending the quiet pass). P3 (sp
 beside the megakernel (per pixel equal; refill, samples in flight, early-out), alpha MASK in both, visibility-buffer
 primaries, ray-class material LOD, scene-copy packing, cache hooks / counters / AOVs. Every new path is a setting; defaults
 wait for a quiet rerun (the 2026-11-15 pass ran loaded after a reboot, ratios held) and the 3060 (W10 compile time, P3 gate).
-P4 (real time) has its first piece: mode presets, a blue-noise sampler and per-frame denoiser inputs (demodulated diffuse / specular,
-normal, viewZ, camera motion, roughness) on the megakernel, checked against closed forms (`docs/design/realtime.md`); the temporal filter,
-upscaler and the wavefront version are next.
+P4 (real time) is built end to end on both schedulers (megakernel and wavefront agree per pixel): mode presets (D31 cutouts),
+blue-noise sampler, per-frame denoiser planes incl. an emission plane, ReSTIR DI (unbiased within the seed spread after the
+P4.2b key fix), and the bench chain kernel -> SVGF -> upscaler (P4.5/P4.6) plus an OIDN preview chain (P4.7). M5 numbers
+(provisional): ~19 ms per frame at 960x540 -> 1080p, 2 bounces; the 30 fps 3060L gate is borderline by estimate and needs
+the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is merged.
 
 **Working now**
 - **Bench runner.** Any bench page runs headless in Chrome on the Mac's GPU. Results go to CSV files, images to PFM.

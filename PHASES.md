@@ -64,7 +64,7 @@ R10 from research note 12).
 **Exit gate:** faster time-to-equal-quality than every web competitor on every Tier 2 scene (M5, 3060L); ≥150 Mrays/s
 incoherent on 3060L.
 
-## ⬜ P4 — Real time
+## 🟨 P4 — Real time
 
 Blue-noise sampler, demodulated AOVs, SVGF-class filter → upscaler, ReSTIR DI, cache hooks with gi's hash cache,
 preview mode; gi moves onto the core. Real-time termination policy, light grid, history confidence and gate scenes
