@@ -54,17 +54,17 @@ upscaler and the wavefront version are next.
 
 - **Wavefront (P3.1, slice 1).** A second scheduler, `PtWavefront`, runs the same estimator as the megakernel over SoA path state with GPU-written indirect dispatch (camera / intersect / shade / shadow / args kernels, each under 50 KB even for the layered + fuzz + film combination that pushes the megakernel past it). It matches the megakernel per pixel on Tier 0, Sponza and 14 feature scenes (alpha MASK not yet). Provisional M5 timing: 1.6x faster on Cornell, 1.28x on Sponza, 1.4-1.7x slower on small films (quiet pass pending).
 
-- **Research track N: neural radiance cache on WebGPU (started 2026-11-14).** A small trainable network in WGSL
-  (`packages/mlp`) matches its CPU reference on the M5 Pro in f32 and f16, and the subgroup-matrix (tensor-tile) version
-  compiles natively in Chrome 157 and matches too. First timings (not a quiet pass): subgroup-matrix inference is 7.5-11x
-  faster than our plain f16 kernel (8.5 ms per million queries, about 17 ms at 1080p); training is now the larger cost.
-  The cache now runs on our path tracer and passes its closed-form check; the demo page is `pnpm --filter @pathtracer/bench
-  nrc:live`. Plan and progress: `docs/design/nrc-plan.md`.
+- **Research track N: neural radiance cache on WebGPU (2026-11-14 to 11-18, milestones M0-M9 done).** NRC runs in the
+  browser: on the M5 Pro in real time, on the RTX 3060 in Chrome affordable but not cheap (no subgroup matrices on D3D12;
+  on Dawn/Vulkan they reach the tensor cores, 4.4x). A warm cache has 3-4x lower error than plain path tracing per frame and
+  keeps a lead through a denoiser + upscaler chain. A plain hash grid matches the network on a diffuse scene for less; the
+  network wins on a glossy one once converged. Summary: `bench/results/NRC.md` (accepted by the maintainer). Mac reruns
+  and the quiet pass remain: `docs/design/nrc-mac-handoff.md`. Plan and progress: `docs/design/nrc-plan.md`.
 
 **Next**
 - P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
 - Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
-- Track N: faster portable kernels and subgroup-matrix training, then the NRC demo on the path tracer (`docs/design/nrc-plan.md`).
+- Track N: merge `windows-nrc`, then the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 
