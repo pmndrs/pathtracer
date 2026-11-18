@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ptIntegratorWgsl, resolveIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { balanced, declaredIdentifiers, RESERVED } from '../../../raytracer/src/wgsl-names.testutil.ts';
-import { oracleInit, oracleMerge, oracleRng, type OracleDomain } from './restir-oracle.ts';
-import { PT_RESTIR_MAX_SPATIAL, PT_RESTIR_PARAMS_BYTES, ptRestirWgsl, resolveRestirOptions } from './restir-wgsl.ts';
+import { oracleInit, oracleMerge, oracleRng, ptRsOctDecode, ptRsOctEncode, type OracleDomain } from './restir-oracle.ts';
+import { PT_RESTIR_MAX_SPATIAL, PT_RESTIR_PARAMS_BYTES, ptRestirGbufBytes, ptRestirGbufLayout, ptRestirWgsl, resolveRestirOptions } from './restir-wgsl.ts';
+import { ptRestirUnsupported } from './restir.ts';
 
 // Discrete world: 12 light samples, three pixels whose targets differ and partly vanish (occlusion, backfacing), the exact answer for pixel 0 is sum f0.
 const N = 12;
@@ -91,5 +92,57 @@ describe('ReSTIR DI WGSL', () => {
     const on = ptIntegratorWgsl({ restir: {} });
     expect(on).toMatch(/fn ptRestirLd/);
     expect(on).toMatch(/select\(s\.pdf, 0\.0, vertex == 0u\)/);
+  });
+});
+
+describe('ReSTIR DI G-buffer (P4.2c)', () => {
+  it('the octahedral normal codec round-trips a unit vector to 1e-4 (poles, axes, the lower hemisphere)', () => {
+    const rand = oracleRng(5);
+    const probes: [number, number, number][] = [[0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]];
+    for (let i = 0; i < 20000; i++) {
+      const z = 2 * rand() - 1;
+      const a = 2 * Math.PI * rand();
+      const r = Math.sqrt(1 - z * z);
+      probes.push([r * Math.cos(a), r * Math.sin(a), z]);
+    }
+    let worst = 0;
+    for (const n of probes) {
+      const d = ptRsOctDecode(ptRsOctEncode(n));
+      worst = Math.max(worst, Math.hypot(d[0] - n[0], d[1] - n[1], d[2] - n[2]));
+    }
+    expect(worst).toBeLessThan(1e-4);
+  });
+  it('a record is 20 bytes for an untextured scene (was 32), 32 with textures, +4 with a stochastic material pick', () => {
+    expect(ptRestirGbufLayout({}).words * 4).toBe(20);
+    expect(ptRestirGbufLayout({ textures: true }).words * 4).toBe(32);
+    const mats = { features: { mix: true, thin: false, layered: false, medium: false } };
+    expect(ptRestirGbufLayout({ materials: mats }).words * 4).toBe(24);
+    expect(ptRestirGbufLayout({ textures: true, materials: mats }).words * 4).toBe(36);
+    expect(ptRestirGbufBytes({}, 1920 * 1080)).toBe(2 * 1920 * 1080 * 20);
+  });
+  it('the passes module is balanced and names no reserved word in every supported flavour', () => {
+    const flavours = [{ sampler: 'bluenoise' as const }, { primary: 'vbuffer' as const }, { textures: true }, { textures: true, alphaMask: true }];
+    for (const f of flavours) {
+      const text = ptRestirWgsl({ ...f, restir: {} });
+      expect(balanced(text)).toBe(true);
+      expect([...declaredIdentifiers(text)].filter((n) => RESERVED.has(n))).toEqual([]);
+    }
+    const shared = ptRestirWgsl({ restir: { sharedHit: true } });
+    expect(balanced(shared)).toBe(true);
+    expect([...declaredIdentifiers(shared)].filter((n) => RESERVED.has(n))).toEqual([]);
+  });
+  it('supports textures, OpenPBR deterministic lobes, V-buffer and blue noise; refuses what the target cannot reproduce', () => {
+    expect(ptRestirUnsupported({ integrator: { restir: {}, sampler: 'bluenoise', primary: 'vbuffer' } })).toBeNull();
+    const base = { mix: true, thin: true, layered: true, medium: true };
+    expect(ptRestirUnsupported({ integrator: { restir: {}, materials: { features: base, layered: { layering: 'albedo' } } } })).toBeNull();
+    expect(ptRestirUnsupported({ integrator: { restir: {}, materials: { features: base, layered: { layering: 'stochastic' } } } })).toMatch(/stochastic/);
+    expect(ptRestirUnsupported({ integrator: { restir: {}, materials: { features: { ...base, fuzz: true } } } })).toMatch(/fuzz/);
+    expect(ptRestirUnsupported({ integrator: { restir: {}, materials: { features: { ...base, aniso: true } } } })).toMatch(/anisotropic/);
+    expect(ptRestirUnsupported({ integrator: { restir: { sharedHit: true } }, layout: { normals: true, uvs: false, positions: false } })).toMatch(/positions/);
+  });
+  it('the shade kernel reads the shared hit only with sharedHit and trace primaries', () => {
+    expect(ptIntegratorWgsl({ restir: {} })).not.toMatch(/ptRestirHit/);
+    expect(ptIntegratorWgsl({ restir: { sharedHit: true } })).toMatch(/ptRestirHit/);
+    expect(resolveIntegratorOptions({ restir: { sharedHit: true }, primary: 'vbuffer' }).restirShared).toBe(false);
   });
 });

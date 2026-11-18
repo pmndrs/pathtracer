@@ -83,3 +83,32 @@ export function oracleRng(seed: number): () => number {
     return s / 4294967296;
   };
 }
+
+/** TS twin of the WGSL octahedral codec (`PT_RESTIR_OCT_WGSL`): a unit vector in one u32 (2 x unorm16). */
+export function ptRsOctEncode(n: readonly [number, number, number]): number {
+  const l1 = Math.max(Math.abs(n[0]) + Math.abs(n[1]) + Math.abs(n[2]), 1e-20);
+  let ex = n[0] / l1;
+  let ey = n[1] / l1;
+  if (n[2] / l1 < 0) {
+    const tx = (1 - Math.abs(ey)) * (ex >= 0 ? 1 : -1);
+    const ty = (1 - Math.abs(ex)) * (ey >= 0 ? 1 : -1);
+    ex = tx;
+    ey = ty;
+  }
+  const q = (v: number): number => Math.min(65535, Math.max(0, Math.round((v * 0.5 + 0.5) * 65535)));
+  return (q(ex) | (q(ey) << 16)) >>> 0;
+}
+
+export function ptRsOctDecode(w: number): [number, number, number] {
+  let x = (w & 0xffff) * (2 / 65535) - 1;
+  let y = (w >>> 16) * (2 / 65535) - 1;
+  const z = 1 - Math.abs(x) - Math.abs(y);
+  if (z < 0) {
+    const tx = (1 - Math.abs(y)) * (x >= 0 ? 1 : -1);
+    const ty = (1 - Math.abs(x)) * (y >= 0 ? 1 : -1);
+    x = tx;
+    y = ty;
+  }
+  const len = Math.hypot(x, y, z);
+  return [x / len, y / len, z / len];
+}

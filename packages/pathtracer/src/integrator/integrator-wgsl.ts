@@ -15,7 +15,7 @@ import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dimensions.ts';
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
-import { PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
+import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
   /** `'owen-sobol'` (reference), `'pcg'` (debug) or `'bluenoise'` (P4.1, real-time frames: needs `PtMegakernelOptions.blueNoise`, megakernel only; `dimensions.ts`). */
@@ -211,6 +211,8 @@ export interface ResolvedIntegratorOptions {
   lodDepth: number;
   /** ReSTIR DI at the first vertex (`PtIntegratorOptions.restir`). */
   restir: boolean;
+  /** ReSTIR with `sharedHit` and trace-mode primaries: the shade kernel resolves its primary hit from the V-buffer texel the G-buffer pass wrote (P4.2c). */
+  restirShared: boolean;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
@@ -227,7 +229,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
   const alphaTransmit = o.alphaTransmit ?? 0.5;
   if (alphaShadow === 'transmit' && !(alphaTransmit >= 0 && alphaTransmit <= 1)) throw new RangeError(`integrator.alphaTransmit must be in [0, 1], got ${alphaTransmit}`);
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace') };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -503,6 +505,8 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const frame = o.frame;
   const bn = o.sampler === 'bluenoise';
   const vb = o.primary === 'vbuffer';
+  // The hit comes from a V-buffer texel: the engine's texture (`vb`) or the one the ReSTIR G-buffer pass wrote (`restir.sharedHit`).
+  const vbHit = vb || o.restirShared;
   const black = fuzz ? '(bp.kind == PT_BSDF_BLACK && !ptFuzzActive(1.0))' : 'bp.kind == PT_BSDF_BLACK';
   const term = (reason: number): string => (counters ? `            termReason = ${reason}u;\n` : '');
   return /* wgsl */ `
@@ -511,10 +515,11 @@ ${PT_PARAMS_WGSL}
 @group(2) @binding(0) var<uniform> ptParams: PtParams;
 @group(2) @binding(1) var<storage, read_write> ptAccum: array<vec4f>;
 ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> ptRestirRes: array<vec4u>;
+` : ''}${o.restirShared ? `@group(2) @binding(${PT_RESTIR_HIT_BINDING}) var<storage, read> ptRestirHit: array<vec4u>;
 ` : ''}
 ${ptCommonHeadWgsl(o)}
 
-${maskShadow || shadowWeightedScene ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}
+${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
@@ -529,7 +534,7 @@ fn ptRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
         return vec3f(0.0);
     }
     let wiLocal = ptToLocal(frame, li.wi);
-    let f = ptBsdfEval(bp, wo, wiLocal).f * abs(wiLocal.z);
+    let f = ${evalFn}(bp, wo, wiLocal).f * abs(wiLocal.z);
     if (!(ptMax3(f) > 0.0)) {
         return vec3f(0.0);
     }
@@ -542,7 +547,7 @@ fn ptRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);
     }
 ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
-` : ''}    if (!rtVisible(ray, RT_MASK_ALL)) {
+` : ''}    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
         return vec3f(0.0);
     }
     return li.radiance * f * (rw / li.pdf);
@@ -633,9 +638,9 @@ ${mask ? `    var skips = 0u;
 ${medium ? `    var sigma = vec3f(0.0);
 ` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
-${vb ? `    var primary = true;
+${vbHit ? `    var primary = true;
 ` : ''}    loop {
-${vb ? `        var hit: RtHit;
+${vbHit ? `        var hit: RtHit;
         if (primary) {
             primary = false;
             hit = ptVbufferHit(px, ray);

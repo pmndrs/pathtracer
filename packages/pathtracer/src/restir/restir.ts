@@ -2,15 +2,22 @@
  * Host side of ReSTIR DI (P4): the four pre-passes (G-buffer, initial candidates, temporal, spatial) that `PtMegakernel` runs before each
  * shade dispatch when `integrator.restir` is set. One `encodeFrame` = one frame = one sample of the progressive accumulation.
  *
- * Previous-frame reprojection uses the camera of the last encoded frame (analytic: a static scene, a moving camera). The real-time mode
- * (P4.1) will bring motion vectors and a previous view-projection of its own; `PtRestirPasses.setPreviousCamera` is the hook to replace
- * this locally tracked state with that one (DIVERGES V130).
+ * Previous-frame reprojection (P4.2e) uses the previous camera the MEGAKERNEL owns: the one `setPrevCamera` / `nextFrame` set (the real-time mode's, the one the frame
+ * planes' motion vectors project through), else the camera of the last encoded frame (a static scene, a moving camera). There is no copy of it in here
+ * (DIVERGES V130 -> V170): `encodeFrame` takes it as an argument.
+ *
+ * Inputs the passes share with the shade kernel (P4.2c, P4.2e): the V-buffer texture (`primary: 'vbuffer'`: the G-buffer pass resolves it instead of tracing the camera
+ * ray), the blue-noise texture (`sampler: 'bluenoise'`: the G-buffer pass draws the same jitter pair as the shade pass) and the layered-albedo correction texture.
+ * `setInputs` hands the views over; the megakernel does it before every encode.
  */
 import { DEFAULT_SCENE_PACKING, rtCreateComputePipelineAsync, rtModuleWgsl, rtPackSceneAccess, rtTransformWgsl, type Caps, type RtWgslBuild } from '@pmndrs/raytracer';
 import { ptCameraBasis, type PtCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
+import { PT_BLUENOISE_BINDING } from '../integrator/dimensions.ts';
 import { PT_WORKGROUP, resolveIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptRaytracerModuleOptions, ptShadingModulesWgsl, type PtMegakernelOptions } from '../integrator/megakernel.ts';
-import { PT_RESTIR_BINDING, PT_RESTIR_ENTRIES, PT_RESTIR_FLAG, PT_RESTIR_GBUF_VEC4, PT_RESTIR_PARAMS_BYTES, PT_RESTIR_REGION, PT_RESTIR_REGIONS, ptRestirWgsl, resolveRestirOptions, type ResolvedRestirOptions } from './restir-wgsl.ts';
+import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
+import { PT_LAYER_CORR_BINDING, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
+import { PT_RESTIR_BINDING, PT_RESTIR_ENTRIES, PT_RESTIR_FLAG, PT_RESTIR_PARAMS_BYTES, PT_RESTIR_REGION, PT_RESTIR_REGIONS, ptRestirGbufBytes, ptRestirWgsl, resolveRestirOptions, type ResolvedRestirOptions } from './restir-wgsl.ts';
 
 const STORAGE = 0x80;
 const COPY_DST = 0x8;
@@ -23,15 +30,24 @@ export const PT_RESTIR_PARAM_SLOTS = 1024;
 
 type BuildOptions = Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator' | 'textures' | 'scenePacking' | 'minify' | 'prune' | 'shortenNames'>;
 
-/** Why this kernel cannot run ReSTIR DI (null = it can). */
-export function ptRestirUnsupported(options: Pick<PtMegakernelOptions, 'integrator' | 'textures'>): string | null {
+/**
+ * Why this kernel cannot run ReSTIR DI (null = it can). Supported since P4.2b: textured scenes (material lookups at the stored footprint, normal maps, alpha MASK primaries),
+ * OpenPBR mode with the deterministic lobes (legacy and OpenPBR `thin`, `mix`, `layered` with `layering: 'albedo'`), `primary: 'vbuffer'` and `sampler: 'bluenoise'`.
+ */
+export function ptRestirUnsupported(options: Pick<PtMegakernelOptions, 'integrator' | 'textures'> & Partial<Pick<PtMegakernelOptions, 'layout'>>): string | null {
   const o = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
   if (!o.restir) return 'integrator.restir is not set';
   if (!o.nee) return 'ReSTIR DI replaces next-event estimation at the first vertex: integrator.nee must be on';
-  if (o.textures) return 'textured scenes are not supported yet (the passes decode the material without uvs)';
-  if (o.materials) return 'OpenPBR mode (integrator.materials) is not supported yet: the target function uses the legacy material adapter';
-  if (o.primary === 'vbuffer') return "primary 'vbuffer' is not supported yet (the G-buffer pass traces its own camera ray)";
   if (o.hooks) return 'path hooks are not supported with ReSTIR yet';
+  const m = o.materials;
+  if (m) {
+    if (m.features.aniso) return 'anisotropic materials are not supported with ReSTIR yet (the target would need the tangent frame of the first vertex)';
+    if (m.features.fuzz) return 'fuzz materials are not supported with ReSTIR yet (the target would need the fuzz lobe state)';
+    if (m.features.thinFilm) return 'thin-film materials are not supported with ReSTIR yet';
+    if (m.features.layered && (m.layered?.layering ?? 'albedo') === 'stochastic') return "stochastic layering is not supported with ReSTIR (its f is a random walk: the target must be deterministic); use layering: 'albedo'";
+    if (o.lod !== 'off' && o.lodDepth === 0) return 'materialLodDepth 0 reduces the first vertex: not supported with ReSTIR';
+  }
+  if (o.restirShared && options.layout && !options.layout.positions) return 'restir.sharedHit resolves the primary hit from barycentrics: the scene copy needs surface positions (layout.positions)';
   return null;
 }
 
@@ -40,16 +56,41 @@ export function ptRestirBuild(caps: Caps, options: BuildOptions): RtWgslBuild {
   const why = ptRestirUnsupported(options);
   if (why) throw new Error(`ptRestirBuild: ${why}`);
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
+  const resolved = resolveIntegratorOptions(integratorOptions);
   const raytracer = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
-  const ours = [...parts, ptRestirWgsl(integratorOptions)].join('\n');
+  const ours = [...parts, ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : []), ptRestirWgsl(integratorOptions)].join('\n');
   const packed = (options.scenePacking ?? DEFAULT_SCENE_PACKING) === 'packed';
   const { code, map } = rtTransformWgsl(`${raytracer}\n${packed ? rtPackSceneAccess(ours) : ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: [...PT_RESTIR_ENTRIES] });
   return { code, map };
 }
 
 export interface PtRestirStats {
-  /** Bytes of G-buffer + reservoirs at the current film size. */
+  /** Bytes of G-buffer + reservoirs (+ the shared hit buffer) at the current film size. */
   bytes: number;
+  /** Of which the two G-buffer frames. */
+  gbufBytes: number;
+}
+
+/** What the megakernel hands the passes for one frame. */
+export interface PtRestirFrame {
+  /** Current camera. */
+  camera: PtLookAtCamera;
+  /** Previous camera, null = no history for this frame. */
+  prev: PtLookAtCamera | null;
+  seed: number;
+  /** Frame (sample) index, the sampler's. */
+  frame: number;
+  /** `PtLimits.textureConeScale` (textured scenes). */
+  coneScale: number;
+  /** `primary: 'vbuffer'`: the frame's sub-pixel offset in pixels, 0 = centre. */
+  jitter: readonly [number, number];
+}
+
+/** Textures the passes bind next to their own buffers. */
+export interface PtRestirInputs {
+  blueNoise?: GPUTextureView | null;
+  vbuffer?: GPUTextureView | null;
+  layerCorrection?: GPUTextureView | null;
 }
 
 export class PtRestirPasses {
@@ -60,25 +101,37 @@ export class PtRestirPasses {
   private readonly ioLayout: GPUBindGroupLayout;
   private readonly paramsBuffer: GPUBuffer;
   private readonly slotBytes: number;
+  private readonly integrator: NonNullable<PtMegakernelOptions['integrator']>;
+  private readonly shared: boolean;
+  private readonly wantBlue: boolean;
+  private readonly wantVbuffer: boolean;
+  private readonly wantCorr: boolean;
   private slot = 0;
   private ioGroup: GPUBindGroup | null = null;
+  private inputs: PtRestirInputs = {};
   private gbuf: GPUBuffer | null = null;
   /** The reservoirs (4 regions, `PT_RESTIR_REGION`). The shade pass binds the whole buffer and picks its region through `ptParams.limits.w`. */
   reservoirs: GPUBuffer | null = null;
+  /** `sharedHit`: one V-buffer texel (`rgba32uint` words, `vbuffer.ts`) per pixel, the primary hit of the frame the G-buffer pass traced; the shade pass resolves it. */
+  hitBuffer: GPUBuffer | null = null;
   private width = 0;
   private height = 0;
-  private prev: PtCameraBasis | null = null;
   /** Frames encoded since `reset` (parity picks the ping-pong halves). */
   frame = 0;
   /** Per-pass switches the check pages flip without rebuilding (all runtime). */
   overrides: Partial<Pick<ResolvedRestirOptions, 'temporal' | 'spatial' | 'candidates'>> = {};
 
-  private constructor(device: GPUDevice, settings: ResolvedRestirOptions, pipelines: PtRestirPasses['pipelines'], ioLayout: GPUBindGroupLayout, wgslBytes: number) {
+  private constructor(device: GPUDevice, settings: ResolvedRestirOptions, pipelines: PtRestirPasses['pipelines'], ioLayout: GPUBindGroupLayout, wgslBytes: number, integrator: NonNullable<PtMegakernelOptions['integrator']>, flags: { shared: boolean; blue: boolean; vbuffer: boolean; corr: boolean }) {
     this.device = device;
     this.settings = settings;
     this.pipelines = pipelines;
     this.ioLayout = ioLayout;
     this.wgslBytes = wgslBytes;
+    this.integrator = integrator;
+    this.shared = flags.shared;
+    this.wantBlue = flags.blue;
+    this.wantVbuffer = flags.vbuffer;
+    this.wantCorr = flags.corr;
     this.slotBytes = Math.max(PT_RESTIR_PARAMS_BYTES, device.limits.minUniformBufferOffsetAlignment);
     this.paramsBuffer = device.createBuffer({ label: 'pt restir params', size: this.slotBytes * PT_RESTIR_PARAM_SLOTS, usage: UNIFORM | COPY_DST });
   }
@@ -86,19 +139,36 @@ export class PtRestirPasses {
   static async create(device: GPUDevice, caps: Caps, options: BuildOptions & { label?: string }, walkLayout: GPUBindGroupLayout, sceneLayout: GPUBindGroupLayout): Promise<PtRestirPasses> {
     const label = `${options.label ?? 'pt'} restir`;
     const { code, map } = ptRestirBuild(caps, options);
+    const resolved = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
+    const flags = {
+      shared: resolved.restirShared,
+      blue: resolved.sampler === 'bluenoise',
+      vbuffer: resolved.primary === 'vbuffer',
+      corr: !!resolved.materials?.features.layered && ptLayerCorrNeedsTexture(resolved.materials.layered),
+    };
     const ioLayout = device.createBindGroupLayout({
       label: `${label} io`,
       entries: [
         { binding: PT_RESTIR_BINDING.params, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_RESTIR_PARAMS_BYTES } },
         { binding: PT_RESTIR_BINDING.gbuf, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: PT_RESTIR_BINDING.reservoirs, visibility: COMPUTE, buffer: { type: 'storage' } },
+        ...(flags.shared ? [{ binding: PT_RESTIR_BINDING.hit, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
+        ...(flags.vbuffer ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
+        ...(flags.corr ? [ptLayerCorrLayoutEntry()] : []),
+        ...(flags.blue ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
       ],
     });
     const layout = device.createPipelineLayout({ bindGroupLayouts: [walkLayout, sceneLayout, ioLayout] });
     const make = (entryPoint: (typeof PT_RESTIR_ENTRIES)[number]) => rtCreateComputePipelineAsync(device, { label: `${label} ${entryPoint}`, layout, code, map, entryPoint });
     const [gbuf, init, temporal, spatial] = await Promise.all(PT_RESTIR_ENTRIES.map(make));
     const pipelines = { ptRestirGbuf: gbuf!, ptRestirInit: init!, ptRestirTemporal: temporal!, ptRestirSpatial: spatial! };
-    return new PtRestirPasses(device, resolveRestirOptions(options.integrator?.restir ?? {}), pipelines, ioLayout, code.length);
+    return new PtRestirPasses(device, resolveRestirOptions(options.integrator?.restir ?? {}), pipelines, ioLayout, code.length, { ...options.integrator, ...(options.textures ? { textures: true } : {}) }, flags);
+  }
+
+  /** The textures the passes read next to the shade kernel (call before `encodeFrame` whenever they change; the megakernel does). */
+  setInputs(inputs: PtRestirInputs): void {
+    if (inputs.blueNoise !== this.inputs.blueNoise || inputs.vbuffer !== this.inputs.vbuffer || inputs.layerCorrection !== this.inputs.layerCorrection) this.ioGroup = null;
+    this.inputs = inputs;
   }
 
   /** (Re)allocates the G-buffer and reservoirs for a film. */
@@ -108,29 +178,26 @@ export class PtRestirPasses {
     this.height = height;
     this.gbuf?.destroy();
     this.reservoirs?.destroy();
+    this.hitBuffer?.destroy();
+    this.hitBuffer = null;
     const npx = width * height;
-    this.gbuf = this.device.createBuffer({ label: 'pt restir gbuf', size: 2 * npx * PT_RESTIR_GBUF_VEC4 * 16, usage: STORAGE | COPY_DST });
+    this.gbuf = this.device.createBuffer({ label: 'pt restir gbuf', size: ptRestirGbufBytes(this.integrator, npx), usage: STORAGE | COPY_DST });
     this.reservoirs = this.device.createBuffer({ label: 'pt restir reservoirs', size: PT_RESTIR_REGIONS * npx * 16, usage: STORAGE | COPY_SRC | COPY_DST });
+    if (this.shared) this.hitBuffer = this.device.createBuffer({ label: 'pt restir hit', size: npx * 16, usage: STORAGE | COPY_SRC | COPY_DST });
     this.ioGroup = null;
     this.frame = 0;
-    this.prev = null;
   }
 
   get stats(): PtRestirStats {
     const npx = this.width * this.height;
-    return { bytes: 2 * npx * PT_RESTIR_GBUF_VEC4 * 16 + PT_RESTIR_REGIONS * npx * 16 };
+    const gbufBytes = ptRestirGbufBytes(this.integrator, npx);
+    return { bytes: gbufBytes + PT_RESTIR_REGIONS * npx * 16 + (this.shared ? npx * 16 : 0), gbufBytes };
   }
 
   /** Forget the history (the next frame has no temporal neighbour) and empty the reservoirs. */
   reset(encoder: GPUCommandEncoder): void {
     if (this.reservoirs) encoder.clearBuffer(this.reservoirs);
     this.frame = 0;
-    this.prev = null;
-  }
-
-  /** Replaces the locally tracked previous camera (P4.1 hook: the real-time mode's previous view-projection). `null`: no history for the next frame. */
-  setPreviousCamera(basis: PtCameraBasis | null): void {
-    this.prev = basis;
   }
 
   /** Region index of the final reservoirs of the frame encoded last (what the shade pass reads); the next `encodeFrame` flips it. */
@@ -138,7 +205,7 @@ export class PtRestirPasses {
     return (frame & 1) === 0 ? PT_RESTIR_REGION.final0 : PT_RESTIR_REGION.final1;
   }
 
-  private record(passParams: { frame: number; seed: number; camera: PtCameraBasis; prev: PtCameraBasis | null; history: boolean; gbufCur: number; gbufPrev: number; regIn: number; regOut: number; regPrev: number }): ArrayBuffer {
+  private record(passParams: { frame: number; seed: number; camera: PtCameraBasis; prev: PtCameraBasis | null; history: boolean; gbufCur: number; gbufPrev: number; regIn: number; regOut: number; regPrev: number; coneScale: number; jitter: readonly [number, number] }): ArrayBuffer {
     const s = this.settings;
     const o = this.overrides;
     const cand = Math.max(1, o.candidates ?? s.candidates);
@@ -151,9 +218,11 @@ export class PtRestirPasses {
     f.set([s.spatialRadius, s.normalCos, s.depthRel, s.historyCap * cand], 8);
     u.set([passParams.gbufCur, passParams.gbufPrev, passParams.regIn, passParams.regOut], 12);
     u.set([passParams.regPrev, 0, 0, 0], 16);
+    new Float32Array(buffer, 68, 1).set([passParams.coneScale]); // reg2.y: textureConeScale (bit pattern read with bitcast)
     const c = passParams.camera;
     const p = passParams.prev ?? c;
-    f.set([...c.origin, 0, ...c.forward, 0, ...c.right, 0, ...c.up, 0, ...p.origin, 0, ...p.forward, 0, ...p.right, 0, ...p.up, 0], 20);
+    // The w lanes of curOrigin / curRight carry the V-buffer frame's sub-pixel position (0.5 + offset), as in the megakernel's params.
+    f.set([...c.origin, 0.5 + passParams.jitter[0], ...c.forward, 0, ...c.right, 0.5 + passParams.jitter[1], ...c.up, 0, ...p.origin, 0, ...p.forward, 0, ...p.right, 0, ...p.up, 0], 20);
     return buffer;
   }
 
@@ -161,8 +230,11 @@ export class PtRestirPasses {
    * Records one frame's passes into `pass` (a compute pass; the caller sets its own pipeline and bind groups again afterwards). Returns the
    * region of the final reservoirs for the shade pass. `walk` / `scene` are the megakernel's bind groups.
    */
-  encodeFrame(pass: GPUComputePassEncoder, walk: GPUBindGroup, scene: GPUBindGroup, camera: PtLookAtCamera, seed: number, frame: number): number {
+  encodeFrame(pass: GPUComputePassEncoder, walk: GPUBindGroup, scene: GPUBindGroup, frameInfo: PtRestirFrame): number {
     if (!this.gbuf || !this.reservoirs) throw new Error('PtRestirPasses: setFilm() first');
+    if (this.wantBlue && !this.inputs.blueNoise) throw new Error('PtRestirPasses: sampler bluenoise needs the blue-noise texture view (setInputs)');
+    if (this.wantVbuffer && !this.inputs.vbuffer) throw new Error("PtRestirPasses: primary 'vbuffer' needs the V-buffer view (setInputs)");
+    if (this.wantCorr && !this.inputs.layerCorrection) throw new Error('PtRestirPasses: the layered correction texture view is missing (setInputs)');
     this.ioGroup ??= this.device.createBindGroup({
       label: 'pt restir io',
       layout: this.ioLayout,
@@ -170,17 +242,22 @@ export class PtRestirPasses {
         { binding: PT_RESTIR_BINDING.params, resource: { buffer: this.paramsBuffer, offset: 0, size: PT_RESTIR_PARAMS_BYTES } },
         { binding: PT_RESTIR_BINDING.gbuf, resource: { buffer: this.gbuf } },
         { binding: PT_RESTIR_BINDING.reservoirs, resource: { buffer: this.reservoirs } },
+        ...(this.hitBuffer ? [{ binding: PT_RESTIR_BINDING.hit, resource: { buffer: this.hitBuffer } }] : []),
+        ...(this.wantVbuffer && this.inputs.vbuffer ? [{ binding: PT_VBUFFER_BINDING, resource: this.inputs.vbuffer }] : []),
+        ...(this.wantCorr && this.inputs.layerCorrection ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.inputs.layerCorrection }] : []),
+        ...(this.wantBlue && this.inputs.blueNoise ? [{ binding: PT_BLUENOISE_BINDING, resource: this.inputs.blueNoise }] : []),
       ],
     });
     const s = this.settings;
     const temporal = this.overrides.temporal ?? s.temporal;
     const spatial = this.overrides.spatial ?? s.spatial;
-    const basis = ptCameraBasis(camera, this.width, this.height);
+    const basis = ptCameraBasis(frameInfo.camera, this.width, this.height);
+    const prevBasis = frameInfo.prev ? ptCameraBasis(frameInfo.prev, this.width, this.height) : null;
     const parity = this.frame & 1;
-    const history = temporal && this.prev !== null && this.frame > 0;
+    const history = temporal && prevBasis !== null && this.frame > 0;
     const finalCur = parity === 0 ? PT_RESTIR_REGION.final0 : PT_RESTIR_REGION.final1;
     const finalPrev = parity === 0 ? PT_RESTIR_REGION.final1 : PT_RESTIR_REGION.final0;
-    const common = { frame, seed, camera: basis, prev: this.prev, history, gbufCur: parity, gbufPrev: parity ^ 1, regPrev: finalPrev };
+    const common = { frame: frameInfo.frame, seed: frameInfo.seed, camera: basis, prev: prevBasis, history, gbufCur: parity, gbufPrev: parity ^ 1, regPrev: finalPrev, coneScale: frameInfo.coneScale, jitter: frameInfo.jitter };
     // Wiring: init -> A; temporal A (+ previous final) -> B or final; spatial (A or B) -> final.
     const afterInit: number = temporal || spatial > 0 ? PT_RESTIR_REGION.init : finalCur;
     const afterTemporal: number = spatial > 0 ? PT_RESTIR_REGION.temporal : finalCur;
@@ -206,7 +283,6 @@ export class PtRestirPasses {
       pass.setBindGroup(2, this.ioGroup, [offset]);
       pass.dispatchWorkgroups(gx, gy);
     }
-    this.prev = basis;
     this.frame++;
     return finalCur;
   }
@@ -214,9 +290,11 @@ export class PtRestirPasses {
   destroy(): void {
     this.gbuf?.destroy();
     this.reservoirs?.destroy();
+    this.hitBuffer?.destroy();
     this.paramsBuffer.destroy();
     this.gbuf = null;
     this.reservoirs = null;
+    this.hitBuffer = null;
   }
 }
 

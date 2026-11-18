@@ -112,8 +112,8 @@ export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'meg
     if (solidPolicy && (key === 'alphaShadow' || key === 'alphaTransmit')) continue;
     set(key, value);
   }
-  // ReSTIR's passes compile the sampler text into kernels that do not bind the blue-noise texture (P4.2e): `restir` keeps Owen-Sobol until they do.
-  if (options.mode === 'realtime') set('sampler', scheduler === 'megakernel' && options.blueNoise && !merged.restir ? 'bluenoise' : 'owen-sobol');
+  // P4.2e: the ReSTIR passes bind the blue-noise texture too, so `restir` no longer falls back to Owen-Sobol (megakernel only, as before).
+  if (options.mode === 'realtime') set('sampler', scheduler === 'megakernel' && options.blueNoise ? 'bluenoise' : 'owen-sobol');
   const materials = merged.materials as { features: { layered?: boolean }; layered?: Record<string, unknown> } | null | undefined;
   if (preset.layered && materials?.features.layered) {
     const layered: Record<string, unknown> = { ...(materials.layered ?? {}) };

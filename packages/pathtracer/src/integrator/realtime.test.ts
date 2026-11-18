@@ -208,7 +208,7 @@ describe('mode presets (P4.1)', () => {
     expect(ptApplyMode({ mode: 'realtime' as const, blueNoise: {}, integrator: {} }, 'wavefront').integrator.sampler).toBe('owen-sobol');
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }, 'wavefront').integrator.frame).toBeUndefined();
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { sampler: 'pcg' as const }, blueNoise: {} }).integrator.sampler).toBe('pcg');
-    expect(ptApplyMode({ mode: 'realtime' as const, integrator: { restir: true } as object, blueNoise: {} }).integrator?.sampler).toBe('owen-sobol');
+    expect(ptApplyMode({ mode: 'realtime' as const, integrator: { restir: true } as object, blueNoise: {} }).integrator?.sampler).toBe('bluenoise'); // P4.2e: ReSTIR binds the texture too
   });
 
   it('preview: D31 cutouts (exact + transmit), reduced secondary materials, AOVs for OIDN, no frame outputs', () => {

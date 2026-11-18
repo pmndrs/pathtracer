@@ -122,9 +122,29 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
 export function restirKernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): KernelVariants {
   const layout = { normals: true, uvs: false, positions: true };
   const base = scenePacking ? { format: {}, layout, scenePacking } : { format: {}, layout };
-  return {
+  const variants: KernelVariants = {
     'restir-shade': () => ptMegakernelWgsl(caps, { ...base, integrator: { restir: {} } }),
     'restir-passes': () => ptRestirBuild(caps, { ...base, integrator: { restir: {} } }).code,
     'restir-passes-env': () => ptRestirBuild(caps, { ...base, integrator: { restir: {}, envMap: true, envSampling: 'importance' } }).code,
   };
+  // P4.2: the blue-noise sampler, V-buffer primaries, the shared primary hit, textures (+ alpha MASK), OpenPBR mode (layered albedo + mix + thin): shade kernel and passes module of each.
+  const bucket = (srgb: boolean) => ({ width: 256, height: 256, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), wrap: 'repeat' as const, layers: 2, mipLevels: 9 });
+  const tex = { ...base, layout: { normals: true, uvs: true, positions: true }, textures: { buckets: [bucket(false), bucket(true)] } };
+  const pbr = { features: { mix: true, thin: true, layered: true, medium: false }, layered: { layering: 'albedo' as const, albedoBase: 'internal' as const } };
+  const sets: Record<string, Record<string, unknown>> = {
+    bluenoise: { ...base, integrator: { restir: {}, sampler: 'bluenoise' } },
+    vbuffer: { ...base, integrator: { restir: {}, primary: 'vbuffer' } },
+    shared: { ...base, integrator: { restir: { sharedHit: true } } },
+    tex: { ...tex, integrator: { restir: {} } },
+    'tex-mask': { ...tex, integrator: { restir: {}, alphaMask: true } },
+    'tex-mask-shared': { ...tex, integrator: { restir: { sharedHit: true }, alphaMask: true } },
+    pbr: { ...base, integrator: { restir: {}, materials: pbr } },
+    'tex-pbr-mask': { ...tex, integrator: { restir: {}, alphaMask: true, materials: pbr } },
+    realtime: { ...tex, integrator: { restir: { sharedHit: true }, sampler: 'bluenoise', frame: true, alphaMask: true, materials: pbr } },
+  };
+  for (const [name, o] of Object.entries(sets)) {
+    variants[`restir-shade-${name}`] = () => ptMegakernelWgsl(caps, o as never);
+    variants[`restir-passes-${name}`] = () => ptRestirBuild(caps, o as never).code;
+  }
+  return variants;
 }

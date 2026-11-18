@@ -140,15 +140,18 @@ export function ptVbufferResolve(copy: Pick<SceneCopy, 'table' | 'data' | 'layou
  * the scene copy), with `t` = distance from the ray origin to the barycentric position, `frontFace = dot(normal, ray.direction) < 0`, `normal` the authored front
  * side (bvh's rule: the object-space cross product through the inverse transpose of the instance matrix). Needs `rtModuleWgsl` with the scene copy (the surface
  * table) and `positions` in the layout. Append it before the kernel that calls it.
+ *
+ * `source: 'restir'` (P4.2c, `restir.sharedHit`): the texel is read from `ptRestirHit` (a storage buffer at `PT_RESTIR_HIT_BINDING`, declared by the integrator, written by the ReSTIR G-buffer pass
+ * in the same format) instead of a texture. The texture variant's text is unchanged.
  */
-export function ptVbufferWgsl(): string {
+export function ptVbufferWgsl(source: 'texture' | 'restir' = 'texture'): string {
   return /* wgsl */ `
-@group(2) @binding(${PT_VBUFFER_BINDING}) var ptVbuffer: texture_2d<u32>;
-const PT_VBUFFER_UNORM16: f32 = ${String(UNORM16)};
+${source === 'texture' ? `@group(2) @binding(${PT_VBUFFER_BINDING}) var ptVbuffer: texture_2d<u32>;
+` : ''}const PT_VBUFFER_UNORM16: f32 = ${String(UNORM16)};
 
 fn ptVbufferHit(px: vec2u, ray: RtRay) -> RtHit {
     let miss = RtHit(RT_MISS_T, 0u, 0u, false, vec2f(0.0), RT_NO_MATERIAL, vec3f(0.0), 0.0);
-    let word = textureLoad(ptVbuffer, vec2i(px), 0);
+    let word = ${source === 'texture' ? 'textureLoad(ptVbuffer, vec2i(px), 0)' : `ptRestirHit[px.y * ptParams.dims.x + px.x]`};
     if (word.x == 0u) {
         return miss;
     }

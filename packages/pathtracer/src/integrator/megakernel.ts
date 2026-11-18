@@ -33,8 +33,8 @@ import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
-import { PtRestirPasses } from '../restir/restir.ts';
-import { PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
+import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
+import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, PT_FRAME_BINDING, PT_FRAME_PARAMS_BINDING, PT_FRAME_PARAMS_BYTES, PT_FRAME_PLANES, ptDecodeAovs, ptDecodeFrame, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters, type PtFrame } from './outputs-wgsl.ts';
 
@@ -127,6 +127,7 @@ export function ptShadingModulesWgsl(options: Pick<PtMegakernelOptions, 'layout'
   const mats = integrator.materials;
   if (integrator.sampler === 'bluenoise' && integrator.primary === 'vbuffer') throw new Error("ptMegakernelBuild: sampler 'bluenoise' with primary 'vbuffer' is allowed (the jitter pair is not consumed) only through the engine's own jitter; remove one");
   if (integrator.primary === 'vbuffer' && !options.layout.positions) throw new Error("ptMegakernelBuild: integrator.primary 'vbuffer' needs a surface layout with positions (the hit position comes from the barycentrics)");
+  if (integrator.restirShared && !options.layout.positions) throw new Error('ptMegakernelBuild: integrator.restir.sharedHit needs a surface layout with positions (the hit position comes from the barycentrics)');
   if (mats?.features.aniso && !options.layout.tangents) throw new Error('ptMegakernelBuild: anisotropic materials (features.aniso) need a surface layout with tangents');
   const bsdfOptions = { ...(options.integrator ?? {}), ...(mats?.features.thin ? { thin: true } : {}), ...(mats?.features.aniso ? { aniso: true } : {}), ...(mats?.features.thinFilm ? { thinFilm: true } : {}) };
   const layered = mats?.features.layered ? [stripWgslComments(ptLayeredWgsl({ ...mats.layered, vndf: bsdfOptions.vndf, transport: bsdfOptions.transport, ...(mats.features.coatedMetal ? { conductorBase: true } : {}), ...(mats.features.thinFilm ? { thinFilm: true } : {}) })), ptLayeredDispatchWgsl(!!mats.features.coatedMetal)] : [];
@@ -167,7 +168,7 @@ export function ptMegakernelBuild(caps: Caps, options: Pick<PtMegakernelOptions,
   const resolved = resolveIntegratorOptions(integratorOptions);
   // Optional outputs (hooks, counters, AOVs; `outputs-wgsl.ts`) are appended only when asked, so a kernel without them keeps its text.
   const outputs = ptOutputsWgsl(resolved, PT_MEGAKERNEL_COUNTERS_BINDING);
-  const ours = [...parts, ...(outputs ? [outputs] : []), ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : []), ptIntegratorWgsl(integratorOptions)].join('\n');
+  const ours = [...parts, ...(outputs ? [outputs] : []), ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : resolved.restirShared ? [ptVbufferWgsl('restir')] : []), ptIntegratorWgsl(integratorOptions)].join('\n');
   const packed = (options.scenePacking ?? DEFAULT_SCENE_PACKING) === 'packed';
   // `raytracer` already went through the caps preprocessor (its `enable` lines are first); ours has no `#if`.
   const { code, map } = rtTransformWgsl(`${raytracer}\n${packed ? rtPackSceneAccess(ours) : ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: ['ptMain'] });
@@ -216,6 +217,10 @@ export class PtMegakernel {
   private frameParamsBuffer: GPUBuffer | null = null;
   private frameBuffer: GPUBuffer | null = null;
   private prevCamera: PtLookAtCamera | null = null;
+  /** The camera of the last encoded frame (ReSTIR's previous camera when none was set explicitly). `reset` forgets it. */
+  private lastEncodedCamera: PtLookAtCamera | null = null;
+  private blueTextureView: GPUTextureView | null = null;
+  private corrTextureView: GPUTextureView | null = null;
   private jitter: [number, number] = [0, 0];
   /** ReSTIR DI passes (`integrator.restir`, P4): run before every sample dispatch. */
   restir: PtRestirPasses | null = null;
@@ -258,9 +263,13 @@ export class PtMegakernel {
     const label = options.label ?? 'pt megakernel';
     const bn = options.integrator?.sampler === 'bluenoise';
     if (bn) validateBlueNoise(options.blueNoise);
-    if (bn && options.integrator?.restir) throw new Error("PtMegakernel: integrator.sampler 'bluenoise' with integrator.restir is not supported yet (the ReSTIR passes compile the sampler text but do not bind the blue-noise texture: TASKS P4.2e)");
+    if (options.integrator?.restir) {
+      const why = ptRestirUnsupported(options);
+      if (why) throw new Error(`PtMegakernel: ${why}`);
+    }
     const { code, map } = ptMegakernelBuild(caps, options);
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
+    const sharedHit = resolveIntegratorOptions(options.integrator ?? {}).restirShared;
     const layouts = [
       device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) }),
       device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) }),
@@ -274,6 +283,7 @@ export class PtMegakernel {
           ...(options.integrator?.primary === 'vbuffer' ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
           ...(corrTexture ? [ptLayerCorrLayoutEntry()] : []),
           ...(options.integrator?.restir ? [{ binding: PT_RESTIR_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
+          ...(sharedHit ? [{ binding: PT_RESTIR_HIT_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
@@ -293,6 +303,17 @@ export class PtMegakernel {
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     return kernel;
+  }
+
+  /** Cached views of the blue-noise and layer-correction textures (the ReSTIR passes' bind group is keyed on view identity). */
+  private blueView(): GPUTextureView | null {
+    if (!this.blueTexture) return null;
+    return (this.blueTextureView ??= this.blueTexture.createView());
+  }
+
+  private corrView(): GPUTextureView | null {
+    if (!this.corrTexture) return null;
+    return (this.corrTextureView ??= this.corrTexture.createView());
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
@@ -402,6 +423,7 @@ export class PtMegakernel {
     if (this.accum) encoder.clearBuffer(this.accum);
     if (this.counterBuffer) encoder.clearBuffer(this.counterBuffer);
     this.restir?.reset(encoder);
+    this.lastEncodedCamera = null;
     if (this.frameBuffer) encoder.clearBuffer(this.frameBuffer);
     this.samples = 0;
   }
@@ -446,9 +468,10 @@ export class PtMegakernel {
         ...(this.fuzzTable ? [{ binding: 2, resource: { buffer: this.fuzzTable } }] : []),
         ...(this.counterBuffer ? [{ binding: PT_MEGAKERNEL_COUNTERS_BINDING, resource: { buffer: this.counterBuffer } }] : []),
         ...(this.vbufferView ? [{ binding: PT_VBUFFER_BINDING, resource: this.vbufferView }] : []),
-        ...(this.corrTexture ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.corrTexture.createView() }] : []),
+        ...(this.corrTexture ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.corrView() as GPUTextureView }] : []),
         ...(this.restir?.reservoirs ? [{ binding: PT_RESTIR_SHADE_BINDING, resource: { buffer: this.restir.reservoirs } }] : []),
-        ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueTexture.createView() }] : []),
+        ...(this.restir?.hitBuffer ? [{ binding: PT_RESTIR_HIT_BINDING, resource: { buffer: this.restir.hitBuffer } }] : []),
+        ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
         ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),
       ],
     });
@@ -467,7 +490,9 @@ export class PtMegakernel {
       let finalRegion = 0;
       if (this.restir) {
         if (!this.camera) throw new Error('PtMegakernel: setCamera() first');
-        finalRegion = this.restir.encodeFrame(pass, this.walkGroup, this.sceneGroup, this.camera, this.seed, this.samples);
+        // One source of truth for the previous camera (P4.2e): the one `setPrevCamera` / `nextFrame` gave, else the camera of the last encoded frame.
+        this.restir.setInputs({ blueNoise: this.blueView(), vbuffer: this.vbufferView, layerCorrection: this.corrTexture ? this.corrView() : null });
+        finalRegion = this.restir.encodeFrame(pass, this.walkGroup, this.sceneGroup, { camera: this.camera, prev: this.prevCamera ?? this.lastEncodedCamera, seed: this.seed, frame: this.samples, coneScale: this.limits.textureConeScale ?? 1, jitter: this.jitter });
         // The ReSTIR passes switched pipeline and groups: set the shade pass's again.
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.walkGroup);
@@ -481,6 +506,7 @@ export class PtMegakernel {
       pass.setBindGroup(2, this.ioGroup, frame ? [offset, offset] : [offset]);
       pass.dispatchWorkgroups(gx, gy);
       this.samples++;
+      this.lastEncodedCamera = this.camera;
     }
     pass.end();
   }
