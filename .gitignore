@@ -23,3 +23,6 @@ packages/raytracer/assets/bluenoise/*.f32
 
 # Raw bvh quiet-pass JSON (the rows live in bvh's trace.csv on its branch; the summary is committed here)
 bench/results/quiet-pass/*/bvh/*.json
+
+# agents' private scratch files
+scratchpad/
