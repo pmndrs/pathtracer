@@ -38,6 +38,10 @@ only through the solid-angle density that `rtSampleLightLi` returns, so the very
 | `biased` | Bitterli et al. Alg. 5: `w_i = phat_dst(y_i) W_i M_i`, `W = wsum / (phat_dst(y) sum M)` | one target evaluation per merged reservoir | biased where a neighbour's sample has no support at the destination (a light behind this pixel's horizon, occluded...), darker there |
 | `unbiased` | balance-heuristic ("Talbot") MIS over all contributing domains (Lin et al. 2022, GRIS): `m_i(y) = M_i phat_i(y) / sum_j M_j phat_j(y)`, each `phat_j` on the surface of its own pixel, `W = wsum / phat_dst(y)` | (n^2 target evaluations for n domains, no extra shadow rays: the target is unshadowed) | unbiased given `initialVisibility: false`; with it, the occluded samples' zeroed `W` changes the target (biased, but a lot less noisy in shadow) |
 
+**Random streams (P4.2b bias hunt).** Every random number a pixel draws in one frame has its own key in the PCG chain (`PT_RESTIR_KEY`: candidates 0..127, sub-pixel shift 128, temporal select 132, spatial offsets 144, spatial select 160). The temporal and spatial merges once
+shared a key base, so the spatial merge's "replace the kept sample" decision was correlated with the temporal merge's for the same pixel and frame: the kept sample was no longer chosen with probability proportional to its weight. The error is invisible
+while the weights of the domains are alike and a darkening of up to -15% on a face when they differ a lot (a stochastic material pick that changes every frame, `restir-pbr-lamps-mixonly`: -0.23% of the image before, +0.05% +- 0.02% after).
+
 Pairwise MIS (O(n) target evaluations) is not built; with k = 2 neighbours the quadratic cost is 9 evaluations.
 
 ## Reuse (R6: decorrelated)

@@ -96,4 +96,13 @@ const retarget = (name: string, materials: SceneDesc['materials'], purpose: stri
 export const restirPbrLampsGold: SceneDesc = retarget('restir-pbr-lamps-gold', { floor: { type: 'openpbr', baseColor: [1, 0.77, 0.34], baseMetalness: 1, specularRoughness: 0.35 }, gold: { type: 'openpbr', baseColor: [1, 0.77, 0.34], baseMetalness: 1, specularRoughness: 0.35 }, mix: { type: 'openpbr', baseColor: [1, 0.77, 0.34], baseMetalness: 1, specularRoughness: 0.35 } }, 'restir-pbr-lamps with every surface rough gold (conductor lobe only).');
 export const restirPbrLampsLambert: SceneDesc = retarget('restir-pbr-lamps-lambert', { floor: { type: 'openpbr', baseColor: [0.5, 0.45, 0.4], specularWeight: 0 }, gold: { type: 'openpbr', baseColor: [0.8, 0.6, 0.3], specularWeight: 0 }, mix: { type: 'openpbr', baseColor: [0.2, 0.5, 0.8], specularWeight: 0 } }, 'restir-pbr-lamps with every surface Lambertian through the OpenPBR adapter.');
 
-export const restirScenes: readonly SceneDesc[] = [restirTexLamps, restirPbrLamps, restirMaskLamps, restirPbrLampsNoMix, restirPbrLampsGold, restirPbrLampsLambert];
+/** Bias hunt (P4.2b): one material kind at a time on the otherwise Lambertian scene (`lam` = Lambert via OpenPBR, specularWeight 0). */
+const lam = (c: [number, number, number]) => ({ type: 'openpbr' as const, baseColor: c, specularWeight: 0 });
+const layeredFloor = restirPbrLamps.materials.floor as SceneDesc['materials'][string];
+const mixMat = restirPbrLamps.materials.mix as SceneDesc['materials'][string];
+const goldMat = restirPbrLamps.materials.gold as SceneDesc['materials'][string];
+export const restirPbrLampsFloor: SceneDesc = retarget('restir-pbr-lamps-floor', { floor: layeredFloor, gold: lam([0.8, 0.6, 0.3]), mix: lam([0.2, 0.5, 0.8]) }, 'restir-pbr-lamps with only the floor layered (dielectric over diffuse), the rest Lambert.');
+export const restirPbrLampsMixOnly: SceneDesc = retarget('restir-pbr-lamps-mixonly', { floor: lam([0.5, 0.45, 0.4]), gold: lam([0.8, 0.6, 0.3]), mix: mixMat }, 'restir-pbr-lamps with only the box at metalness 0.5 (stochastic mix), the rest Lambert.');
+export const restirPbrLampsGoldOnly: SceneDesc = retarget('restir-pbr-lamps-goldonly', { floor: lam([0.5, 0.45, 0.4]), gold: goldMat, mix: lam([0.2, 0.5, 0.8]) }, 'restir-pbr-lamps with only the ball gold, the rest Lambert.');
+
+export const restirScenes: readonly SceneDesc[] = [restirTexLamps, restirPbrLamps, restirMaskLamps, restirPbrLampsNoMix, restirPbrLampsGold, restirPbrLampsLambert, restirPbrLampsFloor, restirPbrLampsMixOnly, restirPbrLampsGoldOnly];

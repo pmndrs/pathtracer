@@ -75,6 +75,12 @@ export interface ResolvedRestirOptions {
 }
 
 export const PT_RESTIR_MAX_CANDIDATES = 64;
+/**
+ * Streams of the passes' PCG hash chain (`ptRsRand2(seed, frame, key)`): every random number a pixel draws in one frame has its OWN key. Candidates use `2c`, `2c + 1` (c < 64: keys 0..127).
+ * The temporal and the spatial merge once shared the key base 40 (and the sub-pixel shift key 7 collided with candidate 3's u), so the selection of the spatial merge was correlated with the
+ * temporal merge's: with samples of very different weights (a stochastic material pick that changes every frame) the selection probabilities were not proportional to the weights, a darkening bias.
+ */
+export const PT_RESTIR_KEY = { shift: 128, temporalSelect: 132, spatialOffset: 144, spatialSelect: 160 } as const;
 export const PT_RESTIR_MAX_SPATIAL = 8;
 
 export function resolveRestirOptions(o: PtRestirOptions = {}): ResolvedRestirOptions {
@@ -216,6 +222,10 @@ const PT_RS_FLAG_RAND_NB: u32 = ${PT_RESTIR_FLAG.randomNeighbours}u;
 const PT_RS_FLAG_RAND_TEMP: u32 = ${PT_RESTIR_FLAG.randomTemporal}u;
 const PT_RS_DOMAINS: u32 = ${PT_RESTIR_MAX_SPATIAL + 1}u;
 const PT_RS_LUMA: vec3f = vec3f(${f32(0.2126)}, ${f32(0.7152)}, ${f32(0.0722)});
+const PT_RS_KEY_SHIFT: u32 = ${PT_RESTIR_KEY.shift}u;
+const PT_RS_KEY_TEMPORAL: u32 = ${PT_RESTIR_KEY.temporalSelect}u;
+const PT_RS_KEY_OFFSET: u32 = ${PT_RESTIR_KEY.spatialOffset}u;
+const PT_RS_KEY_SPATIAL: u32 = ${PT_RESTIR_KEY.spatialSelect}u;
 const PT_RS_WORDS: u32 = ${gl.words}u;
 const PT_RS_MISS: u32 = ${PT_RESTIR_GBUF_MISS}u;
 ${shared ? `@group(2) @binding(${PT_RESTIR_BINDING.hit}) var<storage, read_write> ptRsHit: array<vec4u>;
@@ -332,7 +342,7 @@ ${maskShadow ? PT_VISIBLE_MASKED_WGSL : ''}fn ptRsVisible(g: PtRsGeom, light: u3
     return ${visible}(ray, RT_MASK_ALL);
 }
 
-fn ptRsMerge(n: u32, gs: ptr<function, array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL + 1}>>, bps: ptr<function, array<PtBsdfParams, ${PT_RESTIR_MAX_SPATIAL + 1}>>, rs: ptr<function, array<PtRsRes, ${PT_RESTIR_MAX_SPATIAL + 1}>>, unbiased: bool, seed: u32, frame: u32, cap: f32) -> PtRsRes {
+fn ptRsMerge(n: u32, gs: ptr<function, array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL + 1}>>, bps: ptr<function, array<PtBsdfParams, ${PT_RESTIR_MAX_SPATIAL + 1}>>, rs: ptr<function, array<PtRsRes, ${PT_RESTIR_MAX_SPATIAL + 1}>>, unbiased: bool, seed: u32, frame: u32, cap: f32, key: u32) -> PtRsRes {
     var out = ptRsEmpty();
     var wsum = 0.0;
     var mtot = 0.0;
@@ -368,7 +378,7 @@ fn ptRsMerge(n: u32, gs: ptr<function, array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL +
             w = select(0.0, (r.m * own / den) * ph * r.w, den > 0.0);
         }
         wsum += w;
-        if (ptRsRand2(seed, frame, 40u + i).x * wsum < w) {
+        if (ptRsRand2(seed, frame, key + i).x * wsum < w) {
             out.light = r.light;
             out.u = r.u;
             selPh = ph;
@@ -536,7 +546,7 @@ fn ptRestirTemporal(@builtin(global_invocation_id) id: vec3u) {
             let ny = dot(d, P.prevUp.xyz) / dot(P.prevUp.xyz, P.prevUp.xyz) / a;
             var pf = vec2f((nx * 0.5 + 0.5) * f32(P.dims.x), (0.5 - ny * 0.5) * f32(P.dims.y));
             if ((P.cfg.z & PT_RS_FLAG_RAND_TEMP) != 0u) {
-                pf += ptRsRand2(seed, P.dims.z, 7u) - vec2f(0.5);
+                pf += ptRsRand2(seed, P.dims.z, PT_RS_KEY_SHIFT) - vec2f(0.5);
             }
             let q = vec2i(floor(pf));
             if (all(q >= vec2i(0)) && all(q < vec2i(P.dims.xy))) {
@@ -555,7 +565,7 @@ fn ptRestirTemporal(@builtin(global_invocation_id) id: vec3u) {
             }
         }
     }
-    ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap));
+    ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap, PT_RS_KEY_TEMPORAL));
 }
 
 @compute @workgroup_size(${8}, ${8})
@@ -582,7 +592,7 @@ fn ptRestirSpatial(@builtin(global_invocation_id) id: vec3u) {
     for (var j = 0u; j < k; j++) {
         var off: vec2f;
         if ((P.cfg.z & PT_RS_FLAG_RAND_NB) != 0u) {
-            let o = ptRsRand2(seed, P.dims.z, 16u + j);
+            let o = ptRsRand2(seed, P.dims.z, PT_RS_KEY_OFFSET + j);
             let r = P.thr.x * sqrt(o.x);
             let ang = 6.283185307179586 * o.y;
             off = vec2f(cos(ang), sin(ang)) * r;
@@ -610,7 +620,7 @@ fn ptRestirSpatial(@builtin(global_invocation_id) id: vec3u) {
         rs[n] = rq;
         n += 1u;
     }
-    ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap));
+    ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap, PT_RS_KEY_SPATIAL));
 }
 `;
 }

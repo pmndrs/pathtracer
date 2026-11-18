@@ -146,6 +146,7 @@ function modes(m: number, k: number, radius: number): Mode[] {
   return [
     { name: 'ris', integrator: rs({ ...base, temporal: false, spatial: 0, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_t_unb', integrator: rs({ ...base, temporal: true, spatial: 0, bias: 'unbiased', initialVisibility: false }) },
+    { name: 'ris_s_unb', integrator: rs({ ...base, temporal: false, spatial: k, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_ts_unb', integrator: rs({ ...base, temporal: true, spatial: k, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_ts_bia', integrator: rs({ ...base, temporal: true, spatial: k, bias: 'biased', initialVisibility: false }) },
     { name: 'ris_ts_bia_vis', integrator: rs({ ...base, temporal: true, spatial: k, bias: 'biased', initialVisibility: true }) },
@@ -172,6 +173,55 @@ async function checkConverge(name: string, frameCount: number, refFrames: number
     log(`${p}__${mode.name}_relbias_seed2`, cb.relBias);
     log(`${p}__${mode.name}_ratio_vs_nee`, ca.relMse / base.relMse);
     log(`${p}__${mode.name}_nonfinite`, ca.nonFinite);
+  }
+  dispose(ctx);
+}
+
+/**
+ * `biasscan` (P4.2b bias hunt): relBias of the unbiased modes over `seeds` independent runs against one long NEE reference, as mean +- standard error. One accumulated static-camera run
+ * correlates its frames through the reuse, so a single seed reads relBias noise of ~1e-3 on a small film: only the mean over many seeds says anything about bias.
+ */
+async function checkBiasScan(name: string, frameCount: number, refFrames: number, seeds: number, m: number, k: number, radius: number): Promise<void> {
+  const ctx = await load(name);
+  const nee = await makeKernel(ctx, NEE);
+  const ref = await accumulate(ctx, nee, refFrames, 100);
+  const p = `biasscan__${name}`;
+  const stats = (v: number[]): { mean: number; se: number } => {
+    const mean = v.reduce((a, b) => a + b, 0) / v.length;
+    const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) * (b - mean), 0) / Math.max(1, v.length - 1));
+    return { mean, se: sd / Math.sqrt(v.length) };
+  };
+  const neeBias: number[] = [];
+  for (let s = 0; s < seeds; s++) neeBias.push(cmp(await accumulate(ctx, nee, frameCount, 1000 + s), ref).relBias);
+  const nb = stats(neeBias);
+  log(`${p}__nee_relbias_mean`, nb.mean);
+  log(`${p}__nee_relbias_se`, nb.se);
+  for (const mode of modes(m, k, radius).filter((x) => x.name.endsWith('unb') || x.name === 'ris')) {
+    const kernel = await makeKernel(ctx, mode.integrator);
+    const v: number[] = [];
+    const blk = new Float64Array(32 * 32);
+    const blkRef = new Float64Array(32 * 32);
+    for (let s = 0; s < seeds; s++) {
+      const img = await accumulate(ctx, kernel, frameCount, 2000 + s);
+      v.push(cmp(img, ref).relBias);
+      for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+        const b = Math.min(31, Math.floor((y * 32) / img.height)) * 32 + Math.min(31, Math.floor((x * 32) / img.width));
+        const i = (y * img.width + x) * 4;
+        for (let c = 0; c < 3; c++) { blk[b] = (blk[b] as number) + (img.data[i + c] as number) / seeds; blkRef[b] = (blkRef[b] as number) + (ref.data[i + c] as number) / seeds; }
+      }
+    }
+    if (mode.name === 'ris_ts_unb') {
+      // blocks (8x8 px of a 256 film) whose seed-averaged mean differs from the reference: "y,x:relBias" for |relBias| > 1% and a mean above 0.02
+      const out: string[] = [];
+      for (let b = 0; b < 1024; b++) {
+        const r = (blkRef[b] as number) / 64 / 3;
+        if (r > 0.02 && Math.abs((blk[b] as number) / (blkRef[b] as number) - 1) > 0.004) out.push(`${Math.floor(b / 32)},${b % 32}:${(((blk[b] as number) / (blkRef[b] as number) - 1) * 100).toFixed(1)}`);
+      }
+      notes[`${p}__blocks`] = out.join(' ');
+    }
+    const st = stats(v);
+    log(`${p}__${mode.name}_relbias_mean`, st.mean);
+    log(`${p}__${mode.name}_relbias_se`, st.se);
   }
   dispose(ctx);
 }
@@ -595,6 +645,7 @@ try {
   for (const name of scenes) {
     if (checks.includes('equiv')) await checkEquiv(name, frameCount);
     if (checks.includes('converge')) await checkConverge(name, frameCount, refFrames, m, k, radius);
+    if (checks.includes('biasscan')) await checkBiasScan(name, frameCount, refFrames, seeds, m, k, radius);
     if (checks.includes('noise')) await checkNoise(name, refFrames, seeds, m, k, radius);
     if (checks.includes('motion')) await checkMotion(name, Math.min(refFrames, 512), step, m, k, radius);
     if (checks.includes('r6')) await checkR6(name, refFrames, seeds, m, k, radius);
