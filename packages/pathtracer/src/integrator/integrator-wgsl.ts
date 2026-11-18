@@ -77,7 +77,7 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   /**
    * Shadow-ray handling of alpha MASK cutouts (R2b; only with `alphaMask`). `'policy'` (default): as `alphaPolicy` says (exact closest-hit loop, or solid any-hit),
    * the kernel text is unchanged. The others replace the shadow side of the policy (the indirect side still follows `alphaPolicy`) and are about recovering
-   * the light the solid walk loses at (almost) its cost; see DIVERGES V144-V149 and TASKS R2b for the A/B.
+   * the light the solid walk loses at (almost) its cost; see DIVERGES V144-V148 and TASKS R2b for the A/B.
    *  - `'roulette'`: UNBIASED. The solid any-hit walk runs first; when it says blocked, with probability `alphaRoulette` (q) the exact closest-hit loop runs and a
    *    visible result counts 1/q. Solid blockers are a superset of the exact ones, so the estimator is exact in the mean; the cost is noise.
    *  - `'coverage'`: BIASED, one closest-hit walk, no texture fetch, no loop: the first hit's material transmits `1 - alphaCoverage[material]` (a solid material
