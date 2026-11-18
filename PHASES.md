@@ -79,5 +79,5 @@ Already done early: our own blue-noise textures (P0.17, D16).
 
 ## ⬜ P5 — Breadth
 
-Bindless Tier 3, ReSTIR GI, spectral, volumes (WebVDB), MaterialX → WGSL, tracing support for gi's Split RC,
+Bindless Tier 3, ReSTIR GI, spectral, volumes (WebVDB), MaterialX → WGSL (built both ways 2026-11-18, docs/design/materialx.md, TASKS P5.m1-m7), tracing support for gi's Split RC,
 coop-matrix denoiser. Each item gated on its own bench row.

@@ -1,4 +1,6 @@
+import { buildCaps } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
+import { mtlxProgramsWgsl, ptMegakernelWgsl, ptWavefrontBuild } from '../index.ts';
 import { addressIndex, bakeMtlxMaterial, constantContext, evalMtlxParams, imageSampler, loadMtlxMaterial, MtlxUnsupportedError, mtlxConstantParams, parseMaterialX, parseXml, sampleImage, type MtlxImage, type MtlxTsContext } from './index.ts';
 
 const wrap = (body: string, version = '1.39'): string => `<?xml version="1.0"?><materialx version="${version}" colorspace="lin_rec709">${body}</materialx>`;
@@ -193,5 +195,29 @@ describe('bake (approach a)', () => {
     const input = doc.nodes.get('i')!.inputs.file!;
     expect(input.colorspace).toBe('srgb_texture');
     expect(input.fileprefix).toBe('img/');
+  });
+});
+
+describe('kernel hook', () => {
+  const caps = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
+  const m = loadMtlxMaterial(wrap(`<texcoord name="uv" type="vector2"/><position name="p" type="vector3"/>
+    <normalmap name="nm" type="vector3"><input name="in" type="vector3" value="0.6, 0.5, 1"/></normalmap>
+    <ramplr name="r" type="float"><input name="texcoord" type="vector2" nodename="uv"/></ramplr>
+    <standard_surface name="S" type="surfaceshader"><input name="specular_roughness" type="float" nodename="r"/><input name="normal" type="vector3" nodename="nm"/></standard_surface>`, '1.38'), { material: 'S' });
+  const programs = mtlxProgramsWgsl([{ material: 2, mtl: m }], { textureSlot: () => 0 });
+  const bucket = { width: 4, height: 4, colorSpace: 'linear' as const, wrap: 'repeat' as const, layers: 1, mipLevels: 3 };
+  const base = { format: {}, layout: { normals: true, uvs: true, positions: true }, textures: { buckets: [bucket] }, shortenNames: false, minify: false } as never;
+  it('puts ptMtlxApply and ptMtlxNormal into both schedulers, only when asked', () => {
+    const on = { ...(base as object), integrator: { materialx: { wgsl: programs.wgsl, normal: programs.normal } } } as never;
+    const off = { ...(base as object), integrator: {} } as never;
+    for (const text of [ptMegakernelWgsl(caps, on), ptWavefrontBuild(caps, on).shade.code]) {
+      expect(text).toContain('ptMtlxApply(rtApplyMaterialTextures(');
+      expect(text).toContain('ptMtlxNormal(hit.material');
+      expect(text).toContain('fn ptMtlxEval2(');
+    }
+    for (const text of [ptMegakernelWgsl(caps, off), ptWavefrontBuild(caps, off).shade.code]) expect(text).not.toContain('ptMtlx');
+  });
+  it('needs a texture layout', () => {
+    expect(() => ptMegakernelWgsl(caps, { format: {}, layout: { normals: true, uvs: true, positions: true }, integrator: { materialx: { wgsl: programs.wgsl } } } as never)).toThrow(/textures/);
   });
 });

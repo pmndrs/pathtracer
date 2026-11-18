@@ -40,7 +40,7 @@ Lengths: MaterialX / OpenPBR lengths are centimetres, ours metres: `transmission
 | What varies | base colour (weight folded in), opacity (alpha), roughness, metalness, emission colour, tangent-space normal; anything else varying is replaced by its mean | every `RtMaterial` field (colour, weights, roughness, IOR, coat, sheen, transmission, opacity, emission); not thin film, diffuse roughness, subsurface |
 | Drivers | uv only (position / normal inputs are baked at the origin / default and listed) | uv, position, normal, tangent |
 | Fidelity | limited by the texture: 8 bit, `resolution`^2 over the uv square [0, 1]^2 | exact per hit (f32); image nodes are bilinear + mips like any scene texture |
-| Cost | none at render time; bake time 1024^2 about 1 s; memory 4 B per texel per baked texture | kernel +1.3 KB (position-driven graph) to +2.5 KB (three images, place2d, normal map) in the OpenPBR layered kernel; wavefront shade 41.6 KB -> 42.9 / 44.1 KB (megakernel 52.7 KB -> 53.9 / 55.2 KB: already over the 50 KB class with textures + layered albedo, integrator.md choice 11) |
+| Cost | none at render time; bake time 1024^2 about 1 s; memory 4 B per texel per baked texture | kernel +1.3 KB (position-driven graph) to +2.5 KB (three images, place2d, normal map) in the OpenPBR layered kernel; wavefront shade 41.6 KB -> 42.9 / 44.2 KB (megakernel 52.7 KB -> 53.9 / 55.2 KB: already over the 50 KB class with textures + layered albedo, integrator.md choice 11) |
 
 The wavefront takes (b) too: `ptShadingModulesWgsl` puts the generated text in the shared parts, so both schedulers see the same
 functions (`wf-mtlx-*-shade` in `bench/size-snapshot.ts`).
@@ -77,7 +77,7 @@ unifiednoise`), `hsvtorgb rgbtohsv colorcorrect contrast saturate`, the matrix a
 
 ## 6. Checks
 
-1. Unit tests (`packages/pathtracer/src/materialx/materialx.test.ts`, 19 tests): XML, scoping, interface defaults, multi-output nodes, closed forms of
+1. Unit tests (`packages/pathtracer/src/materialx/materialx.test.ts`, 21 tests): XML, scoping, interface defaults, multi-output nodes, closed forms of
    `mix`, `clamp`, `remap`, `place2d` (SRT with pivot and rotation), `normalmap`, `tiledimage` texel-exact, sRGB vs linear images, address modes,
    bilinear, the bake against the graph at texel centres, folded base weight, opacity in alpha, baked normal map.
 2. `bench/scenes/materialx.test.ts`: constant `open_pbr_surface` and `standard_surface` materials give the same scene-copy records as their native
@@ -90,6 +90,34 @@ MaterialX's own GLSL renders are not a path tracer (IBL + one directional light)
 maintainer's `materialx-fidelity` renders (materialxview, MaterialXJS, three.js) are the right reference for appearance of the real sample materials;
 comparing them needs our renderer under the same IBL and shader ball and is an open follow-up (P5.m7).
 
-## 7. Results
+## 7. Results (2026-11-18, M5 Pro, Chrome; correctness only: the Mac was shared, load average 30-50, no timing is claimed)
 
-See TASKS.md P5.m4..m6 and the report `bench/results/reports/mtlx-p5` (git-ignored, re-run with the command in TASKS).
+**Check 1, generated WGSL against the TS twin** (`--page materialx-check`, 2000 random points per scene: uv in [0, 1]^2, position in [-1, 1]^3, random
+unit normal and tangent; base colour, metalness, roughness, normal texel): 0 mismatches. Position-driven graph (`mtlx-proc-codegen`: sin, remap,
+smoothstep, mix): max abs error 7.6e-6. Image graph (`mtlx-uv-codegen`: place2d rotation, sRGB checker, rings, ramp, smoothstep, bump normal map):
+max abs error 1.6e-3 (hardware bilinear with 8-bit weights against f64 bilinear; the tolerance is 1.5e-2).
+
+**Check 2, constants** (`mtlx-const-open-pbr` vs `-ref`, `mtlx-const-std` vs `-ref`, 256 spp, `pt_layering=albedo`): the images are bit-identical (mean
+difference 0, relMSE 0, 0 pixels differ). `bench/scenes/materialx.test.ts` also has the scene-copy material records `toEqual`.
+
+**Check 3, bake against codegen** (`mtlx-uv-*`, same graph, same sampler seed per pixel, so the difference is the material; A = codegen; `bench/adapters/mtlx-compare.ts`):
+
+| B | mean rel diff (r, g, b) | relMSE(B, A) | rms rel pixel | pixels > 1e-2 | > 5e-2 |
+|---|---|---|---|---|---|
+| bake 1024^2 | 1.1e-5, 3.2e-4, 1.6e-4 | 2.8e-5 | 8.8e-3 | 2.7% | 0.18% |
+| bake 256^2 | -4.6e-4, 1.6e-4, 8.2e-5 | 1.0e-4 | 1.7e-2 | 8.7% | 1.7% |
+
+The bake is unbiased in the mean (differences of 1e-4 to 5e-4) and costs 8-bit quantisation plus bilinear smoothing of the 128^2 source patterns at
+the texel scale: 4x more texels cut the error 3.7x in relMSE. The coat, specular colour and similar inputs have no texture slot, so a graph that varies
+those is only right in (b) (here nothing does). `mtlx-proc-codegen` has no bake at all (it reads the position).
+
+**Both schedulers** (`pt-wavefront` against `pt-megakernel`, 256 spp, `node bench/adapters/pt-wavefront-agreement.ts --a mtlx-p5 --b mtlx-p5-wf`): the codegen
+scenes and the bake agree per pixel, max relative difference 2.6e-6 (uv bake and codegen) and 3.7e-6 (position-driven), relMSE 1.1e-13, no pixel over 1e-3
+(the wavefront port's bound is 7e-5): the generated functions are the same code in both shade kernels.
+
+Tracing cost: the matrix rows show `ms_per_spp` 0.95-0.99 for every scene on a loaded machine; nothing here is a timing result. Whether (a) or (b) is
+faster per frame at scene scale (texture fetches of baked maps against ALU of the graph plus its image fetches, kernel size and register pressure) is a
+quiet-pass A/B (P5.m7).
+
+**Reading the numbers for a default.** Codegen is exact and needs a kernel recompile when a material changes; the bake costs nothing in the kernel and
+is bounded by resolution. No default is set (D11): `buildMaterialX({ mode })` takes either; a scene with a position-driven graph needs `codegen`.
