@@ -15,7 +15,7 @@
  *           denoised stage, k = 1 and 4; per-pose error against our own references (`pathRefs` poses, `pathRefSpp` spp) of the final stage.
  *  timing   provisional per-stage wall times (batched submissions, `session.timeStages`) at the render / display size.
  *
- * Args: scheduler=megakernel|wavefront (the kernel of the chain; P4.1b / P4.2a)  scenes=sponza-white,sponza-lamps  restir=off,on  scenarios=static,control,path,timing  variants=svgf,none (static)  pathVariants=svgf,svgf-reactive,oidn-fast,none
+ * Args: scheduler=megakernel|wavefront (the kernel of the chain; P4.1b / P4.2a)  scenes=sponza-white,sponza-lamps  restir=off,on,gi,giu (P5: DI + GI, GI unbiased)  scenarios=static,control,path,timing  variants=svgf,none (static)  pathVariants=svgf,svgf-reactive,oidn-fast,none
  *       res=960x540 (display 2x; a scene whose film is not 16:9 uses its film as the render size)  frames=64  checkpoints=1,2,4,8,16,32,64  stableFrom=32
  *       pathFrames=64  pathRefs=3  pathRefSpp=512  refSpp=2048  refFile=<url> (static reference of the FIRST scene)  flip=1  upload=1  maxDepth=2
  *       emitThreshold=0 (>0: luminance of the reference above which a pixel is an emitter: per-region relMSE / flicker, `_emit` / `_rest`)  ad=frameEmission:none,k:v (extra adapter settings of the kernel)  candidates=8 spatial=1 bias=biased|unbiased vis=0|1 (ReSTIR initialVisibility)  reactiveCap=8  timingMin=250  timingVariant=svgf|oidn-fast|none (the chain's denoiser in the timing scenario)
@@ -198,7 +198,12 @@ try {
   const emitThreshold = numberArg(args, 'emitThreshold', 0);
   const adapterExtra = Object.fromEntries((args.ad ?? '').split(',').filter(Boolean).map((kv) => { const [k, v] = kv.split(':'); return [k, v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v]; }));
   const needReactive = [...staticVariants, ...pathVariants, args.timingVariant ?? ''].includes('svgf-reactive');
-  const restirOptions = (): PtRestirOptions => ({ candidates: numberArg(args, 'candidates', 8), spatial: numberArg(args, 'spatial', 2), bias: (args.bias ?? 'unbiased') as 'biased' | 'unbiased', ...(args.vis !== undefined ? { initialVisibility: args.vis === '1' } : {}) });
+  // restir=on: DI; gi: DI + GI (both `bias`); giu: DI + GI, both unbiased (DI without initial visibility); gi_spatial / gi_temporal / gi_radius tune the GI passes (P5).
+  const restirOptions = (mode = 'on'): PtRestirOptions => {
+    const unbiased = mode === 'giu';
+    const bias = unbiased ? 'unbiased' : ((args.bias ?? 'unbiased') as 'biased' | 'unbiased');
+    return { candidates: numberArg(args, 'candidates', 8), spatial: numberArg(args, 'spatial', 2), bias, ...(unbiased ? { initialVisibility: false } : args.vis !== undefined ? { initialVisibility: args.vis === '1' } : {}), ...(mode === 'gi' || unbiased ? { gi: { bias: unbiased ? 'unbiased' : (args.gi_bias ?? 'biased') as 'biased' | 'unbiased', spatial: numberArg(args, 'gi_spatial', 1), temporal: numberArg(args, 'gi_temporal', 1) === 1, spatialRadius: numberArg(args, 'gi_radius', 16) } } : {}) };
+  };
   const rows: string[] = [];
   const pathRows: string[] = [];
   let firstConfig = true;
@@ -255,8 +260,8 @@ try {
     }
 
     for (const restirMode of restirModes) {
-      const tag = `${sceneName}_${restirMode === 'off' ? 'nee' : 'restir'}`;
-      const session = await RealtimePipelineSession.create({ scene, width, height, displayWidth, displayHeight, maxDepth, adapter: { ...adapterExtra, ...(args.scheduler === 'wavefront' ? { scheduler: 'wavefront' } : {}) }, ...(restirMode === 'on' ? { restir: restirOptions() } : {}), ...(needReactive ? { reactive: { cap: reactiveCap } } : {}) });
+      const tag = `${sceneName}_${restirMode === 'off' ? 'nee' : restirMode === 'on' ? 'restir' : restirMode}`;
+      const session = await RealtimePipelineSession.create({ scene, width, height, displayWidth, displayHeight, maxDepth, adapter: { ...adapterExtra, ...(args.scheduler === 'wavefront' ? { scheduler: 'wavefront' } : {}) }, ...(restirMode !== 'off' ? { restir: restirOptions(restirMode) } : {}), ...(needReactive ? { reactive: { cap: reactiveCap } } : {}) });
       const device = session.device;
       deviceErrors = watchDevice(device);
       adapterSummary = session.adapter.gpuContext!.summary;

@@ -166,10 +166,17 @@ export function restirKernelVariants(caps: Caps, scenePacking?: SceneCopyPacking
     pbr: { ...base, integrator: { restir: {}, materials: pbr } },
     'tex-pbr-mask': { ...tex, integrator: { restir: {}, alphaMask: true, materials: pbr } },
     realtime: { ...tex, integrator: { restir: { sharedHit: true }, sampler: 'bluenoise', frame: true, alphaMask: true, materials: pbr } },
+    // P5: ReSTIR GI on top of DI (no textures / alpha MASK: refused).
+    gi: { ...base, integrator: { restir: { gi: {} } } },
+    'gi-unbiased': { ...base, integrator: { restir: { bias: 'unbiased', initialVisibility: false, gi: { bias: 'unbiased' } } } },
+    'gi-env': { ...base, integrator: { restir: { gi: {} }, envMap: true, envSampling: 'importance' } },
+    'gi-pbr': { ...base, integrator: { restir: { gi: {} }, materials: pbr } },
+    'gi-realtime': { ...base, integrator: { restir: { sharedHit: true, gi: {} }, sampler: 'bluenoise', frame: true } },
   };
   for (const [name, o] of Object.entries(sets)) {
     variants[`restir-shade-${name}`] = () => ptMegakernelWgsl(caps, o as never);
     variants[`restir-passes-${name}`] = () => ptRestirBuild(caps, o as never).code;
+    if (name.startsWith('gi')) variants[`restir-gipasses-${name}`] = () => ptRestirBuild(caps, o as never, 'gi').code;
   }
   return variants;
 }

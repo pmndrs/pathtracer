@@ -38,6 +38,7 @@ import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
+import { PT_RESTIR_GI_SHADE_BINDING } from '../restir/restir-gi-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, PT_FRAME_BINDING, PT_FRAME_PARAMS_BINDING, PT_FRAME_PARAMS_BYTES, PT_FRAME_PLANES, ptDecodeAovs, ptDecodeFrame, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters, type PtFrame } from './outputs-wgsl.ts';
 
@@ -322,6 +323,7 @@ export class PtMegakernel {
           ...(options.integrator?.primary === 'vbuffer' ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
           ...(corrTexture ? [ptLayerCorrLayoutEntry()] : []),
           ...(options.integrator?.restir ? [{ binding: PT_RESTIR_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
+          ...(options.integrator?.restir?.gi ? [{ binding: PT_RESTIR_GI_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(sharedHit ? [{ binding: PT_RESTIR_HIT_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(volumeGrid && options.integrator?.volumes?.majorant === 'brick' ? [{ binding: PT_VOLUME_MAJORANT_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
@@ -518,6 +520,7 @@ export class PtMegakernel {
         ...(this.vbufferView ? [{ binding: PT_VBUFFER_BINDING, resource: this.vbufferView }] : []),
         ...(this.corrTexture ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.corrView() as GPUTextureView }] : []),
         ...(this.restir?.reservoirs ? [{ binding: PT_RESTIR_SHADE_BINDING, resource: { buffer: this.restir.reservoirs } }] : []),
+        ...(this.restir?.giReservoirs ? [{ binding: PT_RESTIR_GI_SHADE_BINDING, resource: { buffer: this.restir.giReservoirs } }] : []),
         ...(this.restir?.hitBuffer ? [{ binding: PT_RESTIR_HIT_BINDING, resource: { buffer: this.restir.hitBuffer } }] : []),
         ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
         ...(this.volumeTexture ? [{ binding: PT_VOLUME_BINDING, resource: this.volumeTexture.createView({ dimension: '3d' }) }] : []),

@@ -17,6 +17,7 @@ import { PT_WORKGROUP, resolveIntegratorOptions } from '../integrator/integrator
 import { ptRaytracerModuleOptions, ptShadingModulesWgsl, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
 import { PT_LAYER_CORR_BINDING, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
+import { PT_RESTIR_GI_BINDING, PT_RESTIR_GI_ENTRIES, PT_RESTIR_GI_VEC4, ptRestirGiUnsupported, type ResolvedRestirGiOptions } from './restir-gi-wgsl.ts';
 import { PT_RESTIR_BINDING, PT_RESTIR_ENTRIES, PT_RESTIR_FLAG, PT_RESTIR_PARAMS_BYTES, PT_RESTIR_REGION, PT_RESTIR_REGIONS, ptRestirGbufBytes, ptRestirWgsl, resolveRestirOptions, type ResolvedRestirOptions } from './restir-wgsl.ts';
 
 const STORAGE = 0x80;
@@ -47,20 +48,27 @@ export function ptRestirUnsupported(options: Pick<PtMegakernelOptions, 'integrat
     if (m.features.layered && (m.layered?.layering ?? 'albedo') === 'stochastic') return "stochastic layering is not supported with ReSTIR (its f is a random walk: the target must be deterministic); use layering: 'albedo'";
     if (o.lod !== 'off' && o.lodDepth === 0) return 'materialLodDepth 0 reduces the first vertex: not supported with ReSTIR';
   }
+  if (o.restirGi) {
+    const gi = ptRestirGiUnsupported(o);
+    if (gi) return gi;
+  }
   if (o.restirShared && options.layout && !options.layout.positions) return 'restir.sharedHit resolves the primary hit from barycentrics: the scene copy needs surface positions (layout.positions)';
   return null;
 }
 
-/** The module of the four passes (what `PtRestirPasses.create` compiles). */
-export function ptRestirBuild(caps: Caps, options: BuildOptions): RtWgslBuild {
+/**
+ * The module of the four DI passes (what `PtRestirPasses.create` compiles); with `part: 'gi'` the module of the three GI passes (P5): the same text with the DI entry points
+ * left out, so pruning keeps only what the GI passes reach and each module stays under the ~50 KB class (one module with all seven entries was 53 KB).
+ */
+export function ptRestirBuild(caps: Caps, options: BuildOptions, part: 'di' | 'gi' = 'di'): RtWgslBuild {
   const why = ptRestirUnsupported(options);
   if (why) throw new Error(`ptRestirBuild: ${why}`);
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const resolved = resolveIntegratorOptions(integratorOptions);
   const raytracer = rtModuleWgsl(caps, ptRaytracerModuleOptions(options));
-  const ours = [...parts, ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : []), ptRestirWgsl(integratorOptions)].join('\n');
+  const ours = [...parts, ...(resolved.primary === 'vbuffer' ? [ptVbufferWgsl()] : []), ptRestirWgsl(integratorOptions, part)].join('\n');
   const packed = (options.scenePacking ?? DEFAULT_SCENE_PACKING) === 'packed';
-  const { code, map } = rtTransformWgsl(`${raytracer}\n${packed ? rtPackSceneAccess(ours) : ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: [...PT_RESTIR_ENTRIES] });
+  const { code, map } = rtTransformWgsl(`${raytracer}\n${packed ? rtPackSceneAccess(ours) : ours}`, { prune: options.prune, shorten: options.shortenNames, minify: options.minify, keep: part === 'gi' ? [...PT_RESTIR_GI_ENTRIES] : [...PT_RESTIR_ENTRIES] });
   return { code, map };
 }
 
@@ -96,8 +104,12 @@ export interface PtRestirInputs {
 export class PtRestirPasses {
   readonly settings: ResolvedRestirOptions;
   readonly wgslBytes: number;
+  /** Bytes of the GI module (0 without `restir.gi`). */
+  readonly giWgslBytes: number;
   private readonly device: GPUDevice;
-  private readonly pipelines: Record<(typeof PT_RESTIR_ENTRIES)[number], GPUComputePipeline>;
+  private readonly pipelines: Record<string, GPUComputePipeline>;
+  /** GI settings (null: DI only). */
+  readonly gi: ResolvedRestirGiOptions | null;
   private readonly ioLayout: GPUBindGroupLayout;
   private readonly paramsBuffer: GPUBuffer;
   private readonly slotBytes: number;
@@ -112,6 +124,8 @@ export class PtRestirPasses {
   private gbuf: GPUBuffer | null = null;
   /** The reservoirs (4 regions, `PT_RESTIR_REGION`). The shade pass binds the whole buffer and picks its region through `ptParams.limits.w`. */
   reservoirs: GPUBuffer | null = null;
+  /** ReSTIR GI reservoirs (4 regions, `PT_RESTIR_GI_VEC4` vec4u per pixel each); null without `restir.gi`. The shade pass binds the whole buffer. */
+  giReservoirs: GPUBuffer | null = null;
   /** `sharedHit`: one V-buffer texel (`rgba32uint` words, `vbuffer.ts`) per pixel, the primary hit of the frame the G-buffer pass traced; the shade pass resolves it. */
   hitBuffer: GPUBuffer | null = null;
   private width = 0;
@@ -120,13 +134,17 @@ export class PtRestirPasses {
   frame = 0;
   /** Per-pass switches the check pages flip without rebuilding (all runtime). */
   overrides: Partial<Pick<ResolvedRestirOptions, 'temporal' | 'spatial' | 'candidates'>> = {};
+  /** The same for the GI passes (`giSpatial` 0 = off). */
+  giOverrides: { temporal?: boolean; spatial?: number } = {};
 
-  private constructor(device: GPUDevice, settings: ResolvedRestirOptions, pipelines: PtRestirPasses['pipelines'], ioLayout: GPUBindGroupLayout, wgslBytes: number, integrator: NonNullable<PtMegakernelOptions['integrator']>, flags: { shared: boolean; blue: boolean; vbuffer: boolean; corr: boolean }) {
+  private constructor(device: GPUDevice, settings: ResolvedRestirOptions, pipelines: PtRestirPasses['pipelines'], gi: ResolvedRestirGiOptions | null, ioLayout: GPUBindGroupLayout, wgslBytes: number, giWgslBytes: number, integrator: NonNullable<PtMegakernelOptions['integrator']>, flags: { shared: boolean; blue: boolean; vbuffer: boolean; corr: boolean }) {
     this.device = device;
     this.settings = settings;
     this.pipelines = pipelines;
+    this.gi = gi;
     this.ioLayout = ioLayout;
     this.wgslBytes = wgslBytes;
+    this.giWgslBytes = giWgslBytes;
     this.integrator = integrator;
     this.shared = flags.shared;
     this.wantBlue = flags.blue;
@@ -152,6 +170,7 @@ export class PtRestirPasses {
         { binding: PT_RESTIR_BINDING.params, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_RESTIR_PARAMS_BYTES } },
         { binding: PT_RESTIR_BINDING.gbuf, visibility: COMPUTE, buffer: { type: 'storage' } },
         { binding: PT_RESTIR_BINDING.reservoirs, visibility: COMPUTE, buffer: { type: 'storage' } },
+        ...(resolved.restirGi ? [{ binding: PT_RESTIR_GI_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ...(flags.shared ? [{ binding: PT_RESTIR_BINDING.hit, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ...(flags.vbuffer ? [{ binding: PT_VBUFFER_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '2d' as const } }] : []),
         ...(flags.corr ? [ptLayerCorrLayoutEntry()] : []),
@@ -159,10 +178,14 @@ export class PtRestirPasses {
       ],
     });
     const layout = device.createPipelineLayout({ bindGroupLayouts: [walkLayout, sceneLayout, ioLayout] });
-    const make = (entryPoint: (typeof PT_RESTIR_ENTRIES)[number]) => rtCreateComputePipelineAsync(device, { label: `${label} ${entryPoint}`, layout, code, map, entryPoint });
-    const [gbuf, init, temporal, spatial] = await Promise.all(PT_RESTIR_ENTRIES.map(make));
-    const pipelines = { ptRestirGbuf: gbuf!, ptRestirInit: init!, ptRestirTemporal: temporal!, ptRestirSpatial: spatial! };
-    return new PtRestirPasses(device, resolveRestirOptions(options.integrator?.restir ?? {}), pipelines, ioLayout, code.length, { ...options.integrator, ...(options.textures ? { textures: true } : {}) }, flags);
+    const giBuild = resolved.restirGi ? ptRestirBuild(caps, options, 'gi') : null;
+    const make = (entryPoint: string, build: RtWgslBuild) => rtCreateComputePipelineAsync(device, { label: `${label} ${entryPoint}`, layout, code: build.code, map: build.map, entryPoint });
+    const entries: { entry: string; build: RtWgslBuild }[] = [...PT_RESTIR_ENTRIES.map((entry) => ({ entry, build: { code, map } })), ...(giBuild ? PT_RESTIR_GI_ENTRIES.map((entry) => ({ entry, build: giBuild })) : [])];
+    const made = await Promise.all(entries.map((e) => make(e.entry, e.build)));
+    const pipelines: Record<string, GPUComputePipeline> = {};
+    entries.forEach((e, i) => (pipelines[e.entry] = made[i] as GPUComputePipeline));
+    const settings = resolveRestirOptions(options.integrator?.restir ?? {});
+    return new PtRestirPasses(device, settings, pipelines, settings.gi ?? null, ioLayout, code.length, giBuild?.code.length ?? 0, { ...options.integrator, ...(options.textures ? { textures: true } : {}) }, flags);
   }
 
   /** The textures the passes read next to the shade kernel (call before `encodeFrame` whenever they change; the megakernel does). */
@@ -178,11 +201,14 @@ export class PtRestirPasses {
     this.height = height;
     this.gbuf?.destroy();
     this.reservoirs?.destroy();
+    this.giReservoirs?.destroy();
+    this.giReservoirs = null;
     this.hitBuffer?.destroy();
     this.hitBuffer = null;
     const npx = width * height;
     this.gbuf = this.device.createBuffer({ label: 'pt restir gbuf', size: ptRestirGbufBytes(this.integrator, npx), usage: STORAGE | COPY_DST });
     this.reservoirs = this.device.createBuffer({ label: 'pt restir reservoirs', size: PT_RESTIR_REGIONS * npx * 16, usage: STORAGE | COPY_SRC | COPY_DST });
+    if (this.gi) this.giReservoirs = this.device.createBuffer({ label: 'pt restir gi reservoirs', size: PT_RESTIR_REGIONS * npx * PT_RESTIR_GI_VEC4 * 16, usage: STORAGE | COPY_SRC | COPY_DST });
     if (this.shared) this.hitBuffer = this.device.createBuffer({ label: 'pt restir hit', size: npx * 16, usage: STORAGE | COPY_SRC | COPY_DST });
     this.ioGroup = null;
     this.frame = 0;
@@ -191,12 +217,13 @@ export class PtRestirPasses {
   get stats(): PtRestirStats {
     const npx = this.width * this.height;
     const gbufBytes = ptRestirGbufBytes(this.integrator, npx);
-    return { bytes: gbufBytes + PT_RESTIR_REGIONS * npx * 16 + (this.shared ? npx * 16 : 0), gbufBytes };
+    return { bytes: gbufBytes + PT_RESTIR_REGIONS * npx * 16 + (this.gi ? PT_RESTIR_REGIONS * npx * PT_RESTIR_GI_VEC4 * 16 : 0) + (this.shared ? npx * 16 : 0), gbufBytes };
   }
 
   /** Forget the history (the next frame has no temporal neighbour) and empty the reservoirs. */
   reset(encoder: GPUCommandEncoder): void {
     if (this.reservoirs) encoder.clearBuffer(this.reservoirs);
+    if (this.giReservoirs) encoder.clearBuffer(this.giReservoirs);
     this.frame = 0;
   }
 
@@ -210,13 +237,32 @@ export class PtRestirPasses {
     return (frame & 1) === 0 ? PT_RESTIR_REGION.final0 : PT_RESTIR_REGION.final1;
   }
 
-  private record(passParams: { frame: number; seed: number; camera: PtCameraBasis; prev: PtCameraBasis | null; history: boolean; gbufCur: number; gbufPrev: number; regIn: number; regOut: number; regPrev: number; coneScale: number; jitter: readonly [number, number] }): ArrayBuffer {
+  private record(passParams: { frame: number; seed: number; camera: PtCameraBasis; prev: PtCameraBasis | null; history: boolean; gbufCur: number; gbufPrev: number; regIn: number; regOut: number; regPrev: number; coneScale: number; jitter: readonly [number, number]; gi?: { spatial: number } }): ArrayBuffer {
     const s = this.settings;
     const o = this.overrides;
     const cand = Math.max(1, o.candidates ?? s.candidates);
     const buffer = new ArrayBuffer(PT_RESTIR_PARAMS_BYTES);
     const u = new Uint32Array(buffer);
     const f = new Float32Array(buffer);
+    const g = this.gi;
+    if (passParams.gi && g) {
+      // GI step: the GI settings in the same record layout (cfg.x = 1 candidate, cfg.w = minDistance bits).
+      const gflags = (passParams.history ? PT_RESTIR_FLAG.history : 0) | (g.bias === 'unbiased' ? PT_RESTIR_FLAG.unbiased : 0) | (g.neighbours === 'random' ? PT_RESTIR_FLAG.randomNeighbours : 0) | (g.temporalPick === 'random' ? PT_RESTIR_FLAG.randomTemporal : 0);
+      const gb = new ArrayBuffer(PT_RESTIR_PARAMS_BYTES);
+      const gu = new Uint32Array(gb);
+      const gf = new Float32Array(gb);
+      gu.set([this.width, this.height, passParams.frame >>> 0, passParams.seed >>> 0], 0);
+      gu.set([1, passParams.gi.spatial, gflags, 0], 4);
+      gf.set([g.minDistance], 7);
+      gf.set([g.spatialRadius, g.normalCos, g.depthRel, g.historyCap], 8);
+      gu.set([passParams.gbufCur, passParams.gbufPrev, passParams.regIn, passParams.regOut], 12);
+      gu.set([passParams.regPrev, 0, 0, 0], 16);
+      new Float32Array(gb, 68, 1).set([passParams.coneScale]);
+      const c = passParams.camera;
+      const p = passParams.prev ?? c;
+      gf.set([...c.origin, 0.5 + passParams.jitter[0], ...c.forward, 0, ...c.right, 0.5 + passParams.jitter[1], ...c.up, 0, ...p.origin, 0, ...p.forward, 0, ...p.right, 0, ...p.up, 0], 20);
+      return gb;
+    }
     const flags = (passParams.history ? PT_RESTIR_FLAG.history : 0) | (s.bias === 'unbiased' ? PT_RESTIR_FLAG.unbiased : 0) | (s.initialVisibility ? PT_RESTIR_FLAG.initialVisibility : 0) | (s.neighbours === 'random' ? PT_RESTIR_FLAG.randomNeighbours : 0) | (s.temporalPick === 'random' ? PT_RESTIR_FLAG.randomTemporal : 0);
     u.set([this.width, this.height, passParams.frame >>> 0, passParams.seed >>> 0], 0);
     u.set([cand, o.spatial ?? s.spatial, flags, 0], 4);
@@ -247,6 +293,7 @@ export class PtRestirPasses {
         { binding: PT_RESTIR_BINDING.params, resource: { buffer: this.paramsBuffer, offset: 0, size: PT_RESTIR_PARAMS_BYTES } },
         { binding: PT_RESTIR_BINDING.gbuf, resource: { buffer: this.gbuf } },
         { binding: PT_RESTIR_BINDING.reservoirs, resource: { buffer: this.reservoirs } },
+        ...(this.giReservoirs ? [{ binding: PT_RESTIR_GI_BINDING, resource: { buffer: this.giReservoirs } }] : []),
         ...(this.hitBuffer ? [{ binding: PT_RESTIR_BINDING.hit, resource: { buffer: this.hitBuffer } }] : []),
         ...(this.wantVbuffer && this.inputs.vbuffer ? [{ binding: PT_VBUFFER_BINDING, resource: this.inputs.vbuffer }] : []),
         ...(this.wantCorr && this.inputs.layerCorrection ? [{ binding: PT_LAYER_CORR_BINDING, resource: this.inputs.layerCorrection }] : []),
@@ -259,14 +306,15 @@ export class PtRestirPasses {
     const basis = ptCameraBasis(frameInfo.camera, this.width, this.height);
     const prevBasis = frameInfo.prev ? ptCameraBasis(frameInfo.prev, this.width, this.height) : null;
     const parity = this.frame & 1;
-    const history = temporal && prevBasis !== null && this.frame > 0;
+    const prevOk = prevBasis !== null && this.frame > 0;
+    const history = temporal && prevOk;
     const finalCur = parity === 0 ? PT_RESTIR_REGION.final0 : PT_RESTIR_REGION.final1;
     const finalPrev = parity === 0 ? PT_RESTIR_REGION.final1 : PT_RESTIR_REGION.final0;
     const common = { frame: frameInfo.frame, seed: frameInfo.seed, camera: basis, prev: prevBasis, history, gbufCur: parity, gbufPrev: parity ^ 1, regPrev: finalPrev, coneScale: frameInfo.coneScale, jitter: frameInfo.jitter };
     // Wiring: init -> A; temporal A (+ previous final) -> B or final; spatial (A or B) -> final.
     const afterInit: number = temporal || spatial > 0 ? PT_RESTIR_REGION.init : finalCur;
     const afterTemporal: number = spatial > 0 ? PT_RESTIR_REGION.temporal : finalCur;
-    const steps: { entry: (typeof PT_RESTIR_ENTRIES)[number]; regIn: number; regOut: number }[] = [
+    const steps: { entry: string; regIn: number; regOut: number; gi?: { spatial: number } }[] = [
       { entry: 'ptRestirGbuf', regIn: 0, regOut: 0 },
       { entry: 'ptRestirInit', regIn: 0, regOut: afterInit },
     ];
@@ -276,13 +324,28 @@ export class PtRestirPasses {
       cur = afterTemporal;
     }
     if (spatial > 0) steps.push({ entry: 'ptRestirSpatial', regIn: cur, regOut: finalCur });
+    if (this.gi) {
+      // GI: the same wiring with its own settings, after the DI steps (they share the G-buffer pass above); its regions live in `giReservoirs`.
+      const gTemporal = this.giOverrides.temporal ?? this.gi.temporal;
+      const gSpatial = this.giOverrides.spatial ?? this.gi.spatial;
+      const gInit: number = gTemporal || gSpatial > 0 ? PT_RESTIR_REGION.init : finalCur;
+      const gAfterT: number = gSpatial > 0 ? PT_RESTIR_REGION.temporal : finalCur;
+      const gi = { spatial: gSpatial };
+      steps.push({ entry: 'ptRestirGiInit', regIn: 0, regOut: gInit, gi });
+      let gc = gInit;
+      if (gTemporal) {
+        steps.push({ entry: 'ptRestirGiTemporal', regIn: gc, regOut: gAfterT, gi });
+        gc = gAfterT;
+      }
+      if (gSpatial > 0) steps.push({ entry: 'ptRestirGiSpatial', regIn: gc, regOut: finalCur, gi });
+    }
     const gx = Math.ceil(this.width / PT_WORKGROUP[0]);
     const gy = Math.ceil(this.height / PT_WORKGROUP[1]);
     for (const step of steps) {
       const offset = (this.slot % PT_RESTIR_PARAM_SLOTS) * this.slotBytes;
       this.slot++;
-      this.device.queue.writeBuffer(this.paramsBuffer, offset, this.record({ ...common, regIn: step.regIn, regOut: step.regOut }));
-      pass.setPipeline(this.pipelines[step.entry]);
+      this.device.queue.writeBuffer(this.paramsBuffer, offset, this.record({ ...common, regIn: step.regIn, regOut: step.regOut, ...(step.gi ? { gi: step.gi, history: prevOk && (this.giOverrides.temporal ?? this.gi?.temporal ?? false) } : {}) }));
+      pass.setPipeline(this.pipelines[step.entry] as GPUComputePipeline);
       pass.setBindGroup(0, walk);
       pass.setBindGroup(1, scene);
       pass.setBindGroup(2, this.ioGroup, [offset]);
@@ -310,10 +373,12 @@ export class PtRestirPasses {
   destroy(): void {
     this.gbuf?.destroy();
     this.reservoirs?.destroy();
+    this.giReservoirs?.destroy();
     this.hitBuffer?.destroy();
     this.paramsBuffer.destroy();
     this.gbuf = null;
     this.reservoirs = null;
+    this.giReservoirs = null;
     this.hitBuffer = null;
   }
 }

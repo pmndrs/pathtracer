@@ -620,6 +620,180 @@ async function checkPrevCam(name: string, m: number, k: number, radius: number):
   dispose(ctx);
 }
 
+/**
+ * `gi` (P5): ReSTIR GI against the plain 2-bounce path tracer (NEE + MIS, `maxDepth` 2: direct light at x1 and x2, which is what DI + GI estimate; `gi_off` = no GI reuse).
+ * DI runs without reuse (`unbiased`, no initial visibility) so the numbers are the GI's. relBias over `seeds` independent runs against one long reference as mean +- standard error
+ * (CLAUDE.md trap: a single seed correlates its frames), relMSE of one run, the deeper plain path tracer (scene maxDepth) as the "how much do bounces beyond 2 matter" row, and the plain 2-bounce's own noise.
+ */
+function giModes(k: number, radius: number): Mode[] {
+  const di = { candidates: 4, temporal: false, spatial: 0, bias: 'unbiased' as const, initialVisibility: false };
+  const gi = (o: object, bias: 'biased' | 'unbiased') => rs({ ...di, gi: { spatialRadius: radius, bias, ...o } });
+  return [
+    { name: 'gi_off', integrator: gi({ temporal: false, spatial: 0 }, 'unbiased') },
+    { name: 'gi_t_unb', integrator: gi({ temporal: true, spatial: 0 }, 'unbiased') },
+    { name: 'gi_s_unb', integrator: gi({ temporal: false, spatial: k }, 'unbiased') },
+    { name: 'gi_ts_unb', integrator: gi({ temporal: true, spatial: k }, 'unbiased') },
+    { name: 'gi_t_bia', integrator: gi({ temporal: true, spatial: 0 }, 'biased') },
+    { name: 'gi_ts_bia', integrator: gi({ temporal: true, spatial: k }, 'biased') },
+  ];
+}
+
+let args0: Record<string, string> = {};
+async function checkGi(name: string, frameCount: number, refFrames: number, seeds: number, k: number, radius: number, only: string[] | null): Promise<void> {
+  const ctx = await load(name);
+  const nee2 = await makeKernel(ctx, NEE);
+  nee2.setLimits({ maxDepth: 2 });
+  const nee2Pcg = await makeKernel(ctx, { sampler: 'pcg' });
+  nee2Pcg.setLimits({ maxDepth: 2 });
+  const neeDeep = await makeKernel(ctx, NEE);
+  const ref = await accumulate(ctx, nee2, refFrames, 100);
+  const p = `gi__${name}`;
+  const stats = (v: number[]): { mean: number; se: number } => {
+    const mean = v.reduce((a, b) => a + b, 0) / v.length;
+    const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) * (b - mean), 0) / Math.max(1, v.length - 1));
+    return { mean, se: sd / Math.sqrt(v.length) };
+  };
+  const run = async (key: string, kernel: PtMegakernel, perSeed: boolean) => {
+    const v: number[] = [];
+    let mse = 0;
+    let nf = 0;
+    for (let s = 0; s < (perSeed ? seeds : 1); s++) {
+      const c = cmp(await accumulate(ctx, kernel, frameCount, 2000 + s), ref);
+      v.push(c.relBias);
+      mse += c.relMse / (perSeed ? seeds : 1);
+      nf += c.nonFinite;
+    }
+    const st = stats(v);
+    log(`${p}__${key}_relbias_mean`, st.mean);
+    log(`${p}__${key}_relbias_se`, st.se);
+    log(`${p}__${key}_relmse`, mse);
+    log(`${p}__${key}_nonfinite`, nf);
+    return mse;
+  };
+  const neeMse = await run('nee2', nee2, true);
+  const pcgMse = await run('nee2_pcg', nee2Pcg, true);
+  await run('nee_deep', neeDeep, false);
+  for (const mode of giModes(k, radius)) {
+    if (only && !only.includes(mode.name)) continue;
+    const kernel = await makeKernel(ctx, mode.integrator);
+    kernel.setLimits({ maxDepth: 2 });
+    const mse = await run(mode.name, kernel, true);
+    if (args0.diag === '1') {
+      // where does a bias live: sum(test) / sum(ref) - 1 per octave of the reference's luminance, and per image quarter
+      const img = await accumulate(ctx, kernel, frameCount, 3000);
+      const bins = new Map<number, { t: number; r: number; n: number }>();
+      for (let i = 0; i < img.data.length; i += 4) {
+        const rl = ((ref.data[i] as number) + (ref.data[i + 1] as number) + (ref.data[i + 2] as number)) / 3;
+        const tl = ((img.data[i] as number) + (img.data[i + 1] as number) + (img.data[i + 2] as number)) / 3;
+        const b = rl > 0 ? Math.floor(Math.log2(rl)) : -99;
+        const e = bins.get(b) ?? { t: 0, r: 0, n: 0 };
+        e.t += tl; e.r += rl; e.n++;
+        bins.set(b, e);
+      }
+      notes[`${p}__${mode.name}_bias_by_octave`] = [...bins.entries()].sort((x, y) => x[0] - y[0]).map(([b, e]) => `${b}:${(e.t / e.r - 1).toFixed(4)}(n${e.n},w${(e.r / [...bins.values()].reduce((a2, v) => a2 + v.r, 0)).toFixed(3)})`).join(' ');
+    }
+    log(`${p}__${mode.name}_ratio_vs_nee2`, mse / neeMse);
+    log(`${p}__${mode.name}_ratio_vs_nee2_pcg`, mse / pcgMse);
+  }
+  dispose(ctx);
+}
+
+/**
+ * `giframes` (P5): the per-frame picture. Static camera: relMSE of frame 1 / 4 / 8 (one sample per frame, the real-time chain's input) against the plain depth-2 reference, averaged over `seeds`,
+ * for the plain path tracer (Owen-Sobol and PCG: the mean of 1 / 4 / 8 frames, the equal-time lookup), ReSTIR DI alone and DI + GI, biased and unbiased. Moving camera (orbit `step` degrees per
+ * frame): per-frame relMSE against a reference per pose and the 8 x 8 block bias (ghosting) after a 3 frame warm-up. Every kernel is `maxDepth` 2: DI alone continues the path at x2, DI + GI replaces that by the GI sample.
+ */
+function giFrameModes(m: number, k: number, radius: number): Mode[] {
+  const di = (bias: 'biased' | 'unbiased') => ({ candidates: m, spatialRadius: radius, temporal: true, spatial: k, bias, initialVisibility: bias === 'biased' });
+  const gi = (bias: 'biased' | 'unbiased') => ({ spatialRadius: radius, spatial: k, temporal: true, bias });
+  return [
+    { name: 'di_unb', integrator: rs(di('unbiased')) },
+    { name: 'di_bia', integrator: rs(di('biased')) },
+    { name: 'digi_unb', integrator: rs({ ...di('unbiased'), gi: gi('unbiased') }) },
+    { name: 'digi_bia', integrator: rs({ ...di('biased'), gi: gi('biased') }) },
+    // DI biased with initial visibility (the cheap DI) + GI unbiased: isolates the GI part where DI's unbiased mode is the noisy one (Sponza sun)
+    { name: 'dibia_giunb', integrator: rs({ ...di('biased'), gi: gi('unbiased') }) },
+  ];
+}
+
+async function checkGiFrames(name: string, refFrames: number, step: number, seeds: number, m: number, k: number, radius: number): Promise<void> {
+  const ctx = await load(name);
+  const nee2 = await makeKernel(ctx, NEE);
+  nee2.setLimits({ maxDepth: 2 });
+  const neePcg = await makeKernel(ctx, { sampler: 'pcg' });
+  neePcg.setLimits({ maxDepth: 2 });
+  const N = 12;
+  const poses: PtLookAtCamera[] = [];
+  for (let t = 0; t < N; t++) poses.push(orbit(ctx.scene.camera, step * t));
+  const refs: Image[] = [];
+  for (const pose of poses) {
+    nee2.setCamera(pose);
+    refs.push(await accumulate(ctx, nee2, refFrames, 100));
+  }
+  const p = `giframes__${name}`;
+  const ref0 = refs[0] as Image;
+  for (const [tag, kernel] of [['nee2', nee2], ['nee2_pcg', neePcg]] as const) {
+    kernel.setCamera(poses[0] as PtLookAtCamera);
+    for (const n of [1, 4, 8]) {
+      let sum = 0;
+      for (let sd = 0; sd < seeds; sd++) sum += cmp(await accumulate(ctx, kernel, n, 200 + sd), ref0).relMse / seeds;
+      log(`${p}__${tag}_static_f${n}_relmse`, sum);
+    }
+    let mse = 0;
+    let bp = 0;
+    for (let t = 0; t < N; t++) {
+      kernel.setCamera(poses[t] as PtLookAtCamera);
+      const f = await accumulate(ctx, kernel, 1, 400 + t);
+      mse += cmp(f, refs[t] as Image).relMse / N;
+      bp += blockBias(f, refs[t] as Image).p99 / N;
+    }
+    log(`${p}__${tag}_moving_f1_relmse`, mse);
+    log(`${p}__${tag}_moving_blockp99`, bp);
+  }
+  for (const mode of giFrameModes(m, k, radius)) {
+    if (args0.modes && !args0.modes.split(',').includes(mode.name)) continue;
+    const kernel = await makeKernel(ctx, mode.integrator);
+    kernel.setLimits({ maxDepth: 2 });
+    kernel.setCamera(poses[0] as PtLookAtCamera);
+    const acc: Record<number, number> = { 1: 0, 4: 0, 8: 0 };
+    for (let sd = 0; sd < seeds; sd++) {
+      await frameImages(ctx, kernel, 8, 300 + sd, (t, frame) => {
+        if (t in acc) acc[t] = (acc[t] as number) + cmp(frame, ref0).relMse / seeds;
+      });
+    }
+    for (const n of [1, 4, 8]) log(`${p}__${mode.name}_static_f${n}_relmse`, acc[n] as number);
+    for (const moving of [true, false]) {
+      let mse = 0;
+      let bp = 0;
+      let bm = 0;
+      let cnt = 0;
+      await reset(ctx, kernel, 500);
+      let prev: Float32Array | null = null;
+      for (let t = 1; t <= N; t++) {
+        kernel.setCamera((moving ? poses[t - 1] : poses[0]) as PtLookAtCamera);
+        await frames(ctx, kernel, 1, 1);
+        const cur = await image(kernel);
+        const f = new Float32Array(cur.data.length);
+        for (let i = 0; i < f.length; i++) f[i] = (cur.data[i] as number) * t - (prev ? (prev[i] as number) * (t - 1) : 0);
+        prev = cur.data;
+        if (t < 4) continue;
+        const frame = { width: cur.width, height: cur.height, channels: 4 as const, data: f };
+        const ref = refs[moving ? t - 1 : 0] as Image;
+        mse += cmp(frame, ref).relMse;
+        const bb = blockBias(frame, ref);
+        bp += bb.p99;
+        bm += bb.mean;
+        cnt++;
+      }
+      const tag = `${mode.name}_${moving ? 'moving' : 'staticcam'}`;
+      log(`${p}__${tag}_relmse`, mse / cnt);
+      log(`${p}__${tag}_blockp99`, bp / cnt);
+      log(`${p}__${tag}_blockmean`, bm / cnt);
+    }
+  }
+  dispose(ctx);
+}
+
 function dispose(ctx: Ctx): void {
   for (const k of ctx.kernels) k.destroy();
   ctx.adapter.dispose();
@@ -627,6 +801,7 @@ function dispose(ctx: Ctx): void {
 
 try {
   const args = getArgs();
+  args0 = args;
   if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
@@ -646,6 +821,8 @@ try {
     if (checks.includes('equiv')) await checkEquiv(name, frameCount);
     if (checks.includes('converge')) await checkConverge(name, frameCount, refFrames, m, k, radius);
     if (checks.includes('biasscan')) await checkBiasScan(name, frameCount, refFrames, seeds, m, k, radius);
+    if (checks.includes('gi')) await checkGi(name, frameCount, refFrames, seeds, k, radius, args.modes ? args.modes.split(',') : null);
+    if (checks.includes('giframes')) await checkGiFrames(name, Math.min(refFrames, 512), step, seeds, m, k, radius);
     if (checks.includes('noise')) await checkNoise(name, refFrames, seeds, m, k, radius);
     if (checks.includes('motion')) await checkMotion(name, Math.min(refFrames, 512), step, m, k, radius);
     if (checks.includes('r6')) await checkR6(name, refFrames, seeds, m, k, radius);
