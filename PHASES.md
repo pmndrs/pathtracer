@@ -4,7 +4,7 @@ Agreed 2026-11-13 (decisions D1–D21 in [DECISIONS.md](DECISIONS.md)); no longe
 number from the bench. Details and rationale: [spec/SPEC-draft.md](spec/SPEC-draft.md) §11. Task-level progress:
 [TASKS.md](TASKS.md). Phases overlap: a phase starts as soon as what it needs exists, and its gate is checked when the
 numbers are in.
-Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-18._
+Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-19._
 
 ## 🟨 P0 — Foundations: know the number to beat
 
@@ -78,7 +78,7 @@ Already done early: our own blue-noise textures (P0.17, D16).
 (`docs/design/realtime.md`). Left: wavefront frame mode (P4.1b), ReSTIR defaults and the unification (P4.2d / P4.2g), R3, R6-R9.
 **Progress (2026-11-18, closed provisionally, D32):** the real-time path exists on both schedulers (megakernel and wavefront agree per pixel), ReSTIR DI is opt-in with unbiased defaults, and the chain is measured on the M5 Pro; the 30 fps gate on the RTX 3060L waits for P4.5b (Windows). Open: P4.2d (candidates / k / historyCap at equal chain cost), R3, R6-R9, the N / NRC integration. P4.5-P4.7 built and measured on the M5 Pro without a cache (`bench/realtime/`, page `realtime-pipeline`, docs/design/realtime.md section 5, bench/results/REALTIME-PIPELINE.md): kernel -> SVGF -> upscaler, one jitter owner (the sampler), reactive mask, preview chain. Provisional frame 19.6 ms (51 fps) at 960 x 540 -> 1080p, maxDepth 2 (31.0 ms with biased ReSTIR); steadier in motion than the preview pipeline's OIDN (boil 2.5x lower, FLIP 20% lower). The 30 fps gate on the 3060L is estimated at 23-32 fps without ReSTIR and waits for the 3060 run (P4.5b).
 
-## ⬜ P5 — Breadth
+## 🟨 P5 — Breadth
 
 Items: bindless Tier 3, ReSTIR GI, spectral + dispersion, volumes (WebVDB), MaterialX -> WGSL, tracing support for gi's Split RC, coop-matrix denoiser.
 Each item gated on its own bench row.

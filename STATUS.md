@@ -1,6 +1,6 @@
 # Status
 
-_Last updated 2026-11-18._
+_Last updated 2026-11-19._
 
 **Phase:** P0 passed its gate on the Mac (the RTX 3060 half waits on Windows). P1 (trace core) met its gate: reflections runs
 on it (P1.5, merged here; the reflections branch waits for reflections' own review). P2 (reference path tracer) passed the
@@ -69,11 +69,12 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
 - Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
 - Track N (merged into main 2026-11-18): the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
-- P5 (breadth) has four items merged on main: ReSTIR GI, volumes, spectral + dispersion, MaterialX -> WGSL (all opt-in, default kernels byte-identical; each passes its own correctness check on the M5). Left: bindless, Split RC tracing, coop-matrix denoiser, and the wavefront port of GI (volumes and spectral already run on the wavefront, per pixel equal to the megakernel except long dispersive glass paths, TASKS P5.v9 / P5.s7 / P5.s9).
+- P5 (breadth): 6 of 7 items built. On main: ReSTIR GI, volumes, spectral + dispersion, MaterialX -> WGSL, Split RC interval tracing for gi (all opt-in, default kernels byte-identical), each on both schedulers (per pixel equal except long dispersive glass paths, P5.s9 open). The subgroup-matrix denoiser is on Denoiser branch `feat/wgsl-sgm-v2` (unmerged, maintainer's call). Left: bindless (not on macOS yet) and the 3060 runs.
 - P3 / P4 closed on a provisional basis (D32): defaults flipped (packed scene copy, albedo correction texture, ReSTIR unbiased when on, `ptwfAutoPolicy` as the scheduler entry point with a kernel-size rule); open items in TASKS "Open after closing P3 / P4".
 - Cutouts in the real-time modes (R2b, D31): `preview` / `realtime` now use exact indirect hits plus `alphaShadow: 'transmit'` (beta 0.45) instead of D27's `opaqueSecondary`; max speed is the opt-in `alphaPolicy: 'opaqueShadow'`. Numbers are provisional (shared Mac) until the quiet pass.
-- Wide BVH: bvh 0.1.0 is on npm and we depend on it (D33, X4); `bvh4` and `cwbvh8` are a setting in every kernel (X1.i), trace-core clean, provisional M5 Pro: cwbvh8 -16..-26% megakernel time on Sponza / Cornell. Default still binary until the 3060 run picks one. `@pmndrs/downsampler` is a bench dependency (GPU texture mips, auto-exposure; X5).
+- Wide BVH: bvh 0.1.0 is on npm and we depend on it (D33, X4); `bvh4` and `cwbvh8` are a setting in every kernel (X1.i), trace-core clean, provisional M5 Pro: cwbvh8 -16..-26% megakernel time on Sponza / Cornell. Default still binary until the 3060 run picks one.
+- GPU texture mips are the library default (D34): `@pmndrs/raytracer` depends on `@pmndrs/downsampler` (npm, D33); texture loads ~10x faster (24 textures at 2048^2: 1469 -> 150 ms, provisional), images unchanged at the default `textureLod`, `mips: 'cpu'` stays a setting. The bench chain uses the same package for auto-exposure (X5).
 
 **Speed vs the web competitors (M5, provisional P3 gate, 2026-11-18):** with the auto scheduler we are fastest on Sponza (1.64x mutracer, 1.76x tgpt-wavefront, 5.0x tgpt-megakernel to equal error); on Cornell mutracer is about 10% faster to relMSE 1e-2 and we are 1.19x faster to 1e-3. Report: bench/results/P3-GATE.md (the quiet baseline of 2026-11-14 is bench/results/quiet-pass/20261114-1419/REPORT.md). Mrays/s on the 3060L: pending Windows (W13).
 
-**Waiting on the maintainer:** the wide-BVH default (needs the RTX 3060 run, QUIET-PASS). The Tier 1 gate (D23), the default layering (D24 + the correction) and the other P3 / P4 defaults are decided (D32, provisional); the quiet pass is an optional confirmation. Open on the 3060: W10, W13, P4.5b. Nothing blocks building meanwhile.
+**Waiting on the maintainer:** the wide-BVH default (needs the RTX 3060 run, QUIET-PASS). The Tier 1 gate (D23), the default layering (D24 + the correction) and the other P3 / P4 defaults are decided (D32, provisional); the quiet pass is an optional confirmation. Open on the 3060 (docs/WINDOWS-HANDOFF.md W10, W13-W16): DXC compile time, the P3 gate numbers, the P4 30 fps gate, the wide-BVH formats, `downsampler-check`. Nothing blocks building meanwhile.

@@ -11,6 +11,12 @@ for correctness only) is the second target, with Chrome running on D3D12 and com
 Nothing on the Mac has been checked on Windows yet. P0's job here is to show that the bench runs on Windows and to
 produce the first numbers there you can trust.
 
+**Update 2026-11-19:** `origin/windows-testing` was fast-forwarded to main (P3 and P4 closed provisionally on the M5, P5
+6 of 7 built, bvh and downsampler from npm, GPU mips the default). A local checkout: `git pull --ff-only` (or, with local
+commits, `git merge origin/main`), then `pnpm install` (new npm dependencies) and re-run `adapters:export` (scene exports
+changed). The open 3060 work, in priority order: **W13** (P3 gate), **P4.5b / W14** (30 fps), **W15** (wide BVH default),
+**W10** (DXC compile), **W16** (GPU mips). Each decides a default or a gate that is provisional on the M5 until then.
+
 ## Rules for this branch
 
 - **Where work goes:** work on `windows-testing`. Commit and push this branch only. Never push `main`; the Mac side
@@ -80,6 +86,10 @@ produce the first numbers there you can trust.
 | W11 | **VkNRC native NRC baseline** (TASKS N6.1, D28) | Clone AdamYuan/VkNRC at `a667859` into `.cache/native/vknrc`, build x64 Release as in its `windows-msvc.yml` (Vulkan SDK + VS 2022), apply the three local patches in [docs/design/nrc.md §9](design/nrc.md) (per-pass timestamps to CSV, fixed camera + frame count, PFM dump), run on the sponza-white OBJ (N6.2) | Per-pass ms on the 3060 and a PFM after a fixed frame count. Patches stay local (never commit VkNRC code, D29). Quiet-machine rules apply. |
 | W12 | **Track N (neural radiance cache) on the 3060** (milestone M6) | Its own handoff with its own branch (`windows-nrc`): [docs/design/nrc-windows-handoff.md](design/nrc-windows-handoff.md), tasks WN1-WN7 (W11 is WN7 there) | As listed there |
 | W13 | **P3 gate on the RTX 3060** (PHASES P3 is closed provisionally on the M5, D32; this is the 3060 half) | (a) time to equal quality against the web competitors: `node bench/adapters/matrix.ts --renderers tgpt-wavefront,tgpt-megakernel,mutracer,pt-auto,pt-megakernel --scenes cornell --spp 1024 --snapshots 4,16,64,256 --repeat 3 --interleave --name p3-gate-3060`, then `--scenes sponza-white --spp 512 --append`, then `node bench/adapters/baseline.ts --report p3-gate-3060 --csv` (the M5 table is `bench/results/P3-GATE.md`); (b) the Mrays/s gate: `node bench/runner/run.ts --page trace-timing --gpu nvidia --args scene=sponza-white` (incoherent bounce rays, batch method; gate >= 150 Mrays/s; last 3060 read: 102 bounce / 229 primary, P-W1, before any wide BVH) and the same with the wide-BVH branch once it is merged; (c) `ptwfAutoPolicy`'s choice on the 3060 (`pt-auto` vs the best fixed scheduler, `--page wf-sched-ab`) | The gate numbers on the 3060 in the same format; if `pt-auto` is not the fastest of ours, the policy constants get a per-device note. |
+
+| W14 | **P4 gate on the RTX 3060: 30 fps** (TASKS P4.5b) | `node bench/adapters/export-scenes.ts sponza-lamps`, then `node bench/runner/run.ts --page realtime-pipeline --gpu nvidia --timeout 3600000 --args scenes=sponza-white,sponza-lamps restir=off,on` (a worktree needs the `.claude/worktrees/upscaler` junction, CLAUDE.md Windows traps) | Frame ms and the stage split (kernel, SVGF, upscaler) at 960x540 -> 1080p, maxDepth 2, with and without ReSTIR, in TASKS P4.5b. The M5 estimate for the 3060 is 23-32 fps without ReSTIR, 19-29 with. |
+| W15 | **Wide BVH default** (TASKS X1.i, D33) | `node bench/runner/run.ts --page trace-timing --gpu nvidia --ab nodeFormat=quantized,cwbvh8 --repeat 3 --args scene=sponza-white wideDecode=folded`, then the same with `--ab nodeFormat=quantized,bvh4` (the page's own `pageAb` does not take `nodeFormat`); then `node bench/adapters/matrix.ts --renderers pt-megakernel --scenes cornell,sponza-white --spp 256 --repeat 3 --interleave --extra pt_bvh=cwbvh8 --name wide-3060` against the same without `--extra` | Mrays/s per ray class and ms/spp per format on the 3060 (the M5: cwbvh8 -26% Cornell, -16% Sponza megakernel time). Also check the wide walks' loops are not hit by the D3D12 loop-counter cost (P-W1): wide megakernel vs wavefront on Sponza should stay in the M5's ratio. Picks the library default. |
+| W16 | **GPU mips on D3D12** (TASKS X5, D34) | `node bench/runner/run.ts --page downsampler-check --gpu nvidia` | Level 0 identical, levels 1+ within 2 codes of the CPU chain on both the render and buffer paths for sRGB; GPU vs CPU load time. D34 made GPU mips the default on M5 evidence only. |
 
 Later, once the Mac side asks for it: the wide-BVH experiment (X1) in `~/Developer/bvh` needs its RTX 3060 runs.
 Its branch and exact commands will be in that repo's HANDOFF.md. The 1.3× decision gate needs this machine too.
