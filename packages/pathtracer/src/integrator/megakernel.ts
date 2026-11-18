@@ -33,7 +33,7 @@ import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
-import { PT_VOLUME_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
@@ -82,7 +82,7 @@ export interface PtMegakernelOptions {
    */
   blueNoise?: BlueNoiseTexture;
   /** `integrator.volumes` with a grid medium (P5): the density, x fastest then y then z, uploaded as an `r32float` 3D texture at group 2 binding `PT_VOLUME_BINDING`. */
-  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array };
+  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array } };
   /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
   textures?: TextureLayout | null;
   /**
@@ -223,6 +223,7 @@ export class PtMegakernel {
   private corrTexture: GPUTexture | null = null;
   /** P5: the density grid of a grid medium (group 2 binding `PT_VOLUME_BINDING`). */
   private volumeTexture: GPUTexture | null = null;
+  private majorantTexture: GPUTexture | null = null;
   private readonly hookLayout: GPUBindGroupLayout | null;
   private hookGroup: GPUBindGroup | null = null;
   private vbufferView: GPUTextureView | null = null;
@@ -284,6 +285,7 @@ export class PtMegakernel {
     const { code, map } = ptMegakernelBuild(caps, options);
     const volumeGrid = ptVolumeHasGrid(options.integrator?.volumes);
     if (volumeGrid && !options.volumeGrid) throw new Error('PtMegakernel: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
+    if (volumeGrid && options.integrator?.volumes?.majorant === 'brick' && !options.volumeGrid?.majorant) throw new Error("PtMegakernel: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
     const sharedHit = resolveIntegratorOptions(options.integrator ?? {}).restirShared;
     const layouts = [
@@ -301,6 +303,7 @@ export class PtMegakernel {
           ...(options.integrator?.restir ? [{ binding: PT_RESTIR_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(sharedHit ? [{ binding: PT_RESTIR_HIT_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
+          ...(volumeGrid && options.integrator?.volumes?.majorant === 'brick' ? [{ binding: PT_VOLUME_MAJORANT_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
           ...(volumeGrid ? [{ binding: PT_VOLUME_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
@@ -319,6 +322,10 @@ export class PtMegakernel {
     if (options.integrator?.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, layouts[0] as GPUBindGroupLayout, layouts[1] as GPUBindGroupLayout);
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
     if (volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid!, label);
+    if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
+      const mj = options.volumeGrid!.majorant!;
+      kernel.majorantTexture = createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
+    }
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     return kernel;
   }
@@ -491,6 +498,7 @@ export class PtMegakernel {
         ...(this.restir?.hitBuffer ? [{ binding: PT_RESTIR_HIT_BINDING, resource: { buffer: this.restir.hitBuffer } }] : []),
         ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
         ...(this.volumeTexture ? [{ binding: PT_VOLUME_BINDING, resource: this.volumeTexture.createView({ dimension: '3d' }) }] : []),
+        ...(this.majorantTexture ? [{ binding: PT_VOLUME_MAJORANT_BINDING, resource: this.majorantTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),
       ],
     });
@@ -605,6 +613,7 @@ export class PtMegakernel {
     this.fuzzTable?.destroy();
     this.corrTexture?.destroy();
     this.volumeTexture?.destroy();
+    this.majorantTexture?.destroy();
     this.restir?.destroy();
     this.blueTexture?.destroy();
     this.frameParamsBuffer?.destroy();

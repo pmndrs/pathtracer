@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabTransmittance, transmittance } from './volume.ts';
+import { brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -143,5 +143,57 @@ describe('closed forms', () => {
   });
   it('an absorber slab has no scatter term', () => {
     expect(slabSingleScatter(1.5, 0, 0.4, 0.7, 0.8, 1, 50)).toBeCloseTo(Math.exp((-1.5 * 0.7) / 0.8), 10);
+  });
+});
+
+describe('brick majorants and the DDA twin', () => {
+  const res = [19, 11, 26] as const;
+  const data = new Float32Array(res[0] * res[1] * res[2]).map((_, i) => ((i * 2654435761) % 1000) / 1000);
+  const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: 1 };
+  const dens = gridDensity(grid, data);
+  const mj = brickMajorants(res, data);
+
+  it('dimensions cover the support box [-1, n) of the trilinear lookup', () => {
+    expect(brickDims(res)).toEqual([3, 2, 4]);
+    expect(mj.resolution).toEqual([3, 2, 4]);
+    expect(mj.values).toHaveLength(24);
+  });
+
+  it('segments tile the clipped ray and every density sample inside a cell is at most that cell majorant', () => {
+    const r = rng(77);
+    for (let n = 0; n < 300; n++) {
+      // a random ray in index space through (and around) the grid
+      const a = [(r() * 1.4 - 0.2) * res[0], (r() * 1.4 - 0.2) * res[1], (r() * 1.4 - 0.2) * res[2]] as const;
+      const dd = [r() - 0.5, r() - 0.5, r() - 0.5];
+      const len = Math.hypot(...dd);
+      const b = dd.map((v) => (v / len) * 3) as unknown as readonly [number, number, number]; // index units per unit t
+      const segs = ddaSegments(mj.resolution, a, b, 40);
+      for (let i = 1; i < segs.length; i++) expect(segs[i]!.t0).toBeCloseTo(segs[i - 1]!.t1, 9);
+      for (const sg of segs) {
+        expect(sg.t1).toBeGreaterThanOrEqual(sg.t0 - 1e-9);
+        for (let k = 0; k < 6; k++) {
+          const t = sg.t0 + ((k + 0.5) / 6) * (sg.t1 - sg.t0);
+          const x = a[0] + b[0] * t, y = a[1] + b[1] * t, z = a[2] + b[2] * t;
+          // density lookup is in world space: invert the unit-cube mapping used by gridWorldToIndex
+          const d = dens((x + 0.5) / res[0], (y + 0.5) / res[1], (z + 0.5) / res[2]);
+          const m = mj.values[sg.cell[0] + mj.resolution[0] * (sg.cell[1] + mj.resolution[1] * sg.cell[2])]!;
+          expect(d).toBeLessThanOrEqual(m + 1e-6);
+        }
+      }
+      // outside the support box nothing is visited: the first segment starts where the ray enters it
+      if (segs.length > 0) {
+        const t = segs[0]!.t0 + 1e-6;
+        const u = [0, 1, 2].map((k) => (a[k]! + b[k]! * t + 1) / 8);
+        for (let k = 0; k < 3; k++) {
+          expect(u[k]!).toBeGreaterThanOrEqual(-1e-4);
+          expect(u[k]!).toBeLessThanOrEqual(mj.resolution[k]! + 1e-4);
+        }
+      }
+    }
+  });
+
+  it('a ray outside the support box has no segments', () => {
+    expect(ddaSegments(mj.resolution, [-50, 5, 5], [0, 1, 0], 100)).toEqual([]);
+    expect(ddaSegments(mj.resolution, [5, 5, 5], [1, 0, 0], 0)).toEqual([]);
   });
 });

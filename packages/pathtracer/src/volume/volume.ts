@@ -50,6 +50,16 @@ export interface PtVolumeOptions {
   materials: readonly PtMaterialVolume[];
   /** Medium id (index + 1) the camera starts in; 0 / undefined = vacuum. */
   cameraMedium?: number;
+  /**
+   * Transmittance of a shadow ray through a HOMOGENEOUS medium: `'analytic'` (default, `exp(-sigma_t d)`, no noise) or `'ratio'` (ratio tracking against the majorant, what pbrt does:
+   * same mean, more variance; the A/B of V241). A grid medium always uses ratio tracking.
+   */
+  shadowTracking?: 'analytic' | 'ratio';
+  /**
+   * Majorant of a grid medium: `'global'` (default; densityMax x max sigma_t everywhere, V243) or `'brick'` (the largest density per 8^3 voxels, walked by a DDA; needs
+   * `volumeGrid.majorant` = `brickMajorants(...)`, group 2 binding `PT_VOLUME_MAJORANT_BINDING`). Same estimator, fewer null collisions in a sparse grid; the A/B of V243.
+   */
+  majorant?: 'global' | 'brick';
 }
 
 /** Medium from the bench's coefficients. */
@@ -171,6 +181,69 @@ export function invertAffine(m: readonly number[]): number[] {
   const r10 = (f * g - d * i) * id, r11 = (a * i - c * g) * id, r12 = (c * d - a * f) * id;
   const r20 = (d * h - e * g) * id, r21 = (b * g - a * h) * id, r22 = (a * e - b * d) * id;
   return [r00, r01, r02, -(r00 * tx + r01 * ty + r02 * tz), r10, r11, r12, -(r10 * tx + r11 * ty + r12 * tz), r20, r21, r22, -(r20 * tx + r21 * ty + r22 * tz)];
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Brick majorants (`majorant: 'brick'`): a coarse grid of the largest density per 8^3 voxels, walked by a 3D DDA
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+export const BRICK = 8;
+
+/** Coarse grid dimensions of a density grid: coarse coordinate u = (index + 1) / 8, so cell c holds index space [8c - 1, 8c + 7) (the support of the trilinear lookup starts at -1). */
+export function brickDims(resolution: readonly [number, number, number]): [number, number, number] {
+  return [0, 1, 2].map((a) => Math.floor(((resolution[a] as number) + BRICK) / BRICK)) as [number, number, number];
+}
+
+/** The majorant density of every coarse cell: the maximum over the (up to 9^3) voxels its trilinear lookups can read, x fastest. */
+export function brickMajorants(resolution: readonly [number, number, number], data: ArrayLike<number>): { resolution: [number, number, number]; values: Float32Array } {
+  const [nx, ny, nz] = resolution;
+  const dims = brickDims(resolution);
+  const out = new Float32Array(dims[0] * dims[1] * dims[2]);
+  for (let ck = 0; ck < dims[2]; ck++) for (let cj = 0; cj < dims[1]; cj++) for (let ci = 0; ci < dims[0]; ci++) {
+    let m = 0;
+    for (let k = Math.max(0, ck * BRICK - 1); k <= Math.min(nz - 1, ck * BRICK + BRICK - 1); k++)
+      for (let j = Math.max(0, cj * BRICK - 1); j <= Math.min(ny - 1, cj * BRICK + BRICK - 1); j++)
+        for (let i = Math.max(0, ci * BRICK - 1); i <= Math.min(nx - 1, ci * BRICK + BRICK - 1); i++) m = Math.max(m, data[i + nx * (j + ny * k)] as number);
+    out[ci + dims[0] * (cj + dims[1] * ck)] = m;
+  }
+  return { resolution: dims, values: out };
+}
+
+export interface DdaSegment { t0: number; t1: number; cell: [number, number, number] }
+
+/** The coarse cells a ray crosses inside the grid's support box, in order, with the parametric range of each (twin of `ptDdaInit` / `ptDdaNext`). `a`, `b`: the ray in index space (point and direction per unit t). */
+export function ddaSegments(dims: readonly [number, number, number], a: VolRgb, b: VolRgb, tmax: number): DdaSegment[] {
+  const ua = a.map((v) => (v + 1) / BRICK), ub = b.map((v) => v / BRICK);
+  let tEnter = 0, tExit = tmax;
+  for (let k = 0; k < 3; k++) {
+    if (Math.abs(ub[k] as number) < 1e-20) {
+      if ((ua[k] as number) < 0 || (ua[k] as number) >= (dims[k] as number)) return [];
+    } else {
+      const t0 = (0 - (ua[k] as number)) / (ub[k] as number), t1 = ((dims[k] as number) - (ua[k] as number)) / (ub[k] as number);
+      tEnter = Math.max(tEnter, Math.min(t0, t1));
+      tExit = Math.min(tExit, Math.max(t0, t1));
+    }
+  }
+  if (!(tEnter < tExit)) return [];
+  const cell = [0, 1, 2].map((k) => Math.min(dims[k]! - 1, Math.max(0, Math.floor((ua[k] as number) + (ub[k] as number) * tEnter))));
+  const step = ub.map((v) => (v > 0 ? 1 : -1));
+  const tNext = [0, 1, 2].map((k) => (Math.abs(ub[k] as number) < 1e-20 ? 1e30 : ((cell[k] as number) + ((ub[k] as number) > 0 ? 1 : 0) - (ua[k] as number)) / (ub[k] as number)));
+  const dt = ub.map((v) => (Math.abs(v) < 1e-20 ? 1e30 : Math.abs(1 / v)));
+  const out: DdaSegment[] = [];
+  let t = tEnter;
+  for (let guard = 0; guard < 4096; guard++) {
+    let axis = 0;
+    if ((tNext[1] as number) < (tNext[axis] as number)) axis = 1;
+    if ((tNext[2] as number) < (tNext[axis] as number)) axis = 2;
+    const t1 = Math.min(tNext[axis] as number, tExit);
+    out.push({ t0: t, t1, cell: [cell[0] as number, cell[1] as number, cell[2] as number] });
+    t = t1;
+    if (t1 >= tExit) break;
+    cell[axis] = (cell[axis] as number) + (step[axis] as number);
+    tNext[axis] = (tNext[axis] as number) + (dt[axis] as number);
+    if ((cell[axis] as number) < 0 || (cell[axis] as number) >= (dims[axis] as number)) break;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

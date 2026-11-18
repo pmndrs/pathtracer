@@ -11,6 +11,8 @@ import type { PtMedium, PtVolumeOptions } from './volume.ts';
 import { ptMediumMajorant } from './volume.ts';
 
 export const PT_VOLUME_BINDING = 16;
+/** The coarse majorant grid of `majorant: 'brick'` (`r32float` 3D texture, one texel per 8^3 voxels). */
+export const PT_VOLUME_MAJORANT_BINDING = 17;
 
 const f32Lit = (v: number): string => {
   const f = Math.fround(v);
@@ -28,6 +30,7 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
     if (m.sigmaT.some((s) => !(s >= 0) || !Number.isFinite(s))) throw new RangeError(`integrator.volumes: medium ${i} has an invalid sigmaT`);
     if (!(m.g > -1 && m.g < 1)) throw new RangeError(`integrator.volumes: medium ${i} g ${m.g} is outside (-1, 1)`);
     if (m.grid && !(m.grid.densityMax >= 0)) throw new RangeError(`integrator.volumes: medium ${i} has an invalid grid densityMax`);
+    if (m.grid && !(Math.max(...m.sigmaT) > 0)) throw new RangeError(`integrator.volumes: grid medium ${i} has no extinction (sigmaT is 0)`);
   });
   const grids = v.media.filter((m) => m.grid);
   if (grids.length > 1) {
@@ -48,7 +51,7 @@ function mediumVec4s(m: PtMedium): string[] {
   return [
     row([...m.sigmaT, mu]),
     row([...m.albedo, m.g]),
-    row(grid ? [1, ...grid.resolution] : [0, 0, 0, 0]),
+    row(grid ? [Math.max(...m.sigmaT), ...grid.resolution] : [0, 0, 0, 0]),
     row(w.slice(0, 4)),
     row(w.slice(4, 8)),
     row(w.slice(8, 12)),
@@ -59,10 +62,13 @@ function mediumVec4s(m: PtMedium): string[] {
 export function ptVolumeWgsl(v: PtVolumeOptions): string {
   ptVolumeValidate(v);
   const grid = ptVolumeHasGrid(v);
+  const ratio = grid || v.shadowTracking === 'ratio';
+  const brick = grid && v.majorant === 'brick';
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
   const matRow = (m: (typeof mats)[number]): string => `vec4u(${m.interior}u, ${m.exterior}u, ${m.interior !== 0 || m.exterior !== 0 || m.boundary ? 1 : 0}u, ${m.boundary ? 1 : 0}u)`;
   return /* wgsl */ `
 ${grid ? `@group(2) @binding(${PT_VOLUME_BINDING}) var ptVolGrid: texture_3d<f32>;
+` : ''}${brick ? `@group(2) @binding(${PT_VOLUME_MAJORANT_BINDING}) var ptVolMaj: texture_3d<f32>;
 ` : ''}var<private> ptVolMedia: array<vec4f, ${v.media.length * 6}> = array<vec4f, ${v.media.length * 6}>(${v.media.flatMap(mediumVec4s).join(', ')});
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
 var<private> ptVolState: u32;
@@ -146,13 +152,160 @@ ${grid ? `    if (m.info.x == 0.0) {
 ` : `    return 1.0;
 `}}
 
+${brick ? `
+struct PtDda {
+    ua: vec3f,
+    ub: vec3f,
+    cell: vec3i,
+    tNext: vec3f,
+    dt: vec3f,
+    step: vec3i,
+    cdims: vec3i,
+    t: f32,
+    tExit: f32,
+    valid: bool,
+}
+
+// The ray in coarse-cell space u = (index + 1) / 8, clipped to the support box of the grid; the DDA then visits the cells in order.
+fn ptDdaInit(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32) -> PtDda {
+    let a = vec3f(dot(m.w0.xyz, o) + m.w0.w, dot(m.w1.xyz, o) + m.w1.w, dot(m.w2.xyz, o) + m.w2.w);
+    let b = vec3f(dot(m.w0.xyz, d), dot(m.w1.xyz, d), dot(m.w2.xyz, d));
+    let cdims = (vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w)) + vec3i(8)) / vec3i(8);
+    let ua = (a + vec3f(1.0)) * 0.125;
+    let ub = b * 0.125;
+    var s: PtDda;
+    s.ua = ua;
+    s.ub = ub;
+    s.cdims = cdims;
+    s.valid = false;
+    var tEnter = 0.0;
+    var tExit = tmax;
+    for (var k = 0; k < 3; k++) {
+        if (abs(ub[k]) < 1.0e-20) {
+            if (ua[k] < 0.0 || ua[k] >= f32(cdims[k])) {
+                return s;
+            }
+        } else {
+            let t0 = (0.0 - ua[k]) / ub[k];
+            let t1 = (f32(cdims[k]) - ua[k]) / ub[k];
+            tEnter = max(tEnter, min(t0, t1));
+            tExit = min(tExit, max(t0, t1));
+        }
+    }
+    if (!(tEnter < tExit)) {
+        return s;
+    }
+    s.cell = clamp(vec3i(floor(ua + ub * tEnter)), vec3i(0), cdims - vec3i(1));
+    s.step = select(vec3i(-1), vec3i(1), ub > vec3f(0.0));
+    let inv = select(vec3f(1.0e30), 1.0 / ub, abs(ub) >= vec3f(1.0e-20));
+    s.dt = abs(inv);
+    s.tNext = select(vec3f(1.0e30), (vec3f(s.cell) + select(vec3f(0.0), vec3f(1.0), ub > vec3f(0.0)) - ua) * inv, abs(ub) >= vec3f(1.0e-20));
+    s.t = tEnter;
+    s.tExit = tExit;
+    s.valid = true;
+    return s;
+}
+
+// (t0, t1, majorant density) of the next cell; t1 <= t0 = no more cells.
+fn ptDdaNext(s: ptr<function, PtDda>) -> vec3f {
+    if (!(*s).valid) {
+        return vec3f(0.0);
+    }
+    let t0 = (*s).t;
+    let tn = (*s).tNext;
+    var axis = 0;
+    if (tn.y < tn[axis]) {
+        axis = 1;
+    }
+    if (tn.z < tn[axis]) {
+        axis = 2;
+    }
+    let t1 = min(tn[axis], (*s).tExit);
+    let dens = textureLoad(ptVolMaj, vec3u((*s).cell), 0).x;
+    (*s).t = t1;
+    if (t1 >= (*s).tExit) {
+        (*s).valid = false;
+    } else {
+        (*s).cell[axis] += (*s).step[axis];
+        (*s).tNext[axis] += (*s).dt[axis];
+        if ((*s).cell[axis] < 0 || (*s).cell[axis] >= (*s).cdims[axis]) {
+            (*s).valid = false;
+        }
+    }
+    return vec3f(t0, t1, dens);
+}
+
+fn ptVolSampleBrick(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f>) -> PtVolEvent {
+    var dda = ptDdaInit(m, o, d, tmax);
+    for (var c = 0u; c < 4096u; c++) {
+        let sg = ptDdaNext(&dda);
+        if (!(sg.y > sg.x)) {
+            break;
+        }
+        let mu = sg.z * m.info.x;
+        if (!(mu > 0.0)) {
+            continue;
+        }
+        var t = sg.x;
+        for (var i = 0u; i < 4096u; i++) {
+            t += -log(1.0 - ptVolRand()) / mu;
+            if (t >= sg.y) {
+                break;
+            }
+            let st = m.sigmaT * ptVolDensity(m, o + d * t);
+            let ss = st * m.albedo;
+            let ssMax = ptMax3(ss);
+            let ps = ssMax / mu;
+            if (ptVolRand() < ps) {
+                *beta = *beta * (ss / ssMax);
+                return PtVolEvent(t, 1u);
+            }
+            *beta = *beta * ((vec3f(1.0) - st / mu) / (1.0 - ps));
+            if (!(ptMax3(*beta) > 0.0)) {
+                return PtVolEvent(t, 2u);
+            }
+        }
+    }
+    return PtVolEvent(tmax, 0u);
+}
+
+fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
+    var tr = vec3f(1.0);
+    var dda = ptDdaInit(m, o, d, len);
+    for (var c = 0u; c < 4096u; c++) {
+        let sg = ptDdaNext(&dda);
+        if (!(sg.y > sg.x)) {
+            break;
+        }
+        let mu = sg.z * m.info.x;
+        if (!(mu > 0.0)) {
+            continue;
+        }
+        var t = sg.x;
+        for (var i = 0u; i < 4096u; i++) {
+            t += -log(1.0 - ptVolRand()) / mu;
+            if (t >= sg.y) {
+                break;
+            }
+            tr = tr * (vec3f(1.0) - m.sigmaT * ptVolDensity(m, o + d * t) / mu);
+            if (!(ptMax3(tr) > 0.0)) {
+                return vec3f(0.0);
+            }
+        }
+    }
+    return tr;
+}
+` : ''}
 // One free-flight segment [0, tmax] of a path in medium 'id' (delta tracking). kind 0: reached tmax (beta carries the weight), 1: real scatter at t, 2: killed.
 fn ptVolSample(id: u32, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f>) -> PtVolEvent {
     let m = ptVolMedium(id);
     if (!(m.mu > 0.0)) {
         return PtVolEvent(tmax, 0u);
     }
-    var t = 0.0;
+${brick ? `    if (m.info.x != 0.0) {
+        return ptVolSampleBrick(m, o, d, tmax, beta);
+    }
+` : ''}    var t = 0.0;
     for (var i = 0u; i < 4096u; i++) {
         t += -log(1.0 - ptVolRand()) / m.mu;
         if (t >= tmax) {
@@ -177,7 +330,10 @@ fn ptVolSample(id: u32, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f
 // Transmittance estimate over a segment of length len: closed form (homogeneous) or ratio tracking (grid).
 fn ptVolTrSegment(id: u32, o: vec3f, d: vec3f, len: f32) -> vec3f {
     let m = ptVolMedium(id);
-${grid ? `    if (m.info.x != 0.0) {
+${brick ? `    if (m.info.x != 0.0) {
+        return ptVolTrBrick(m, o, d, len);
+    }
+` : ''}${ratio ? `    if (${grid && v.shadowTracking !== 'ratio' ? 'm.info.x != 0.0' : 'true'}) {
         var tr = vec3f(1.0);
         if (!(m.mu > 0.0)) {
             return tr;

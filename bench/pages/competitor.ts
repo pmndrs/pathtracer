@@ -64,6 +64,8 @@ try {
   const pt = {
     ...(args['pt_sampler'] ? { sampler: args['pt_sampler'] as 'owen-sobol' | 'pcg' | 'bluenoise' } : {}),
     ...(args['pt_nee'] ? { nee: args['pt_nee'] !== '0' } : {}),
+    ...(args['pt_volume_shadow'] ? { volumeShadow: args['pt_volume_shadow'] as 'analytic' | 'ratio' } : {}),
+    ...(args['pt_volume_majorant'] ? { volumeMajorant: args['pt_volume_majorant'] as 'global' | 'brick' } : {}),
     ...(args['pt_env'] ? { envSampling: args['pt_env'] as 'uniform' | 'importance' | 'none' } : {}),
     ...(args['pt_sun_visible'] ? { sunVisible: args['pt_sun_visible'] === '1' } : {}),
     ...(args['pt_sun_radius'] !== undefined ? { sunAngularRadius: numberArg(args, 'pt_sun_radius', 0) } : {}),

@@ -50,6 +50,7 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   const volGrid = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3, grid: { resolution: [8, 8, 8], worldToIndex: [8, 0, 0, 3.5, 0, 8, 0, 3.5, 0, 0, 8, 3.5], densityMax: 1 } }], materials: volHomog.materials };
   variants['vol-homogeneous'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volHomog } } as never);
   variants['vol-grid'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volGrid } } as never);
+  variants['vol-grid-brick'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } } as never);
   // Optional integrator outputs (R10 hooks, R4 counters, AOVs): only compiled when asked; the variants above stay byte-identical.
   const hookDemo = { wgsl: 'fn ptOnVertex(v: PtPathVertex) -> u32 { return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= 3u); }\nfn ptTerminate(v: PtPathVertex) -> vec3f { return vec3f(0.5); }' };
   for (const [name, integrator] of Object.entries(outputVariantOptions(hookDemo))) variants[`out-${name}`] = () => mk(caps, { format: {}, layout, integrator } as never);
