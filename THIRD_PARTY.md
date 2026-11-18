@@ -158,3 +158,10 @@ Generated assets (`bench/assets/generated/`, env maps and noise made by our own 
   `licenses/` and a section 1 entry.
 - ReSTIR DI (TASKS P4) is **our own code written from the papers**: Bitterli, Wyman, Pharr, Shirley, Lefohn, Jarosz 2020 (reservoir resampling, the biased 1/M combine, temporal and spatial reuse), Lin, Wyman, Yuksel 2022 (generalised RIS and the balance-heuristic combine), Talbot 2005 (RIS). No RTXDI / NVIDIA RTX SDK
   code was opened or ported (CLAUDE.md licence rules), and no code from Bevy Solari or Capsaicin was used either, so no notice is owed.
+
+## MaterialX (P5)
+
+| What | Source | Licence | Use |
+|---|---|---|---|
+| Node semantics (`packages/pathtracer/src/materialx/nodes.ts`): `place2d`, `tiledimage`, `normalmap`, `ramp*`, `split*`, `smoothstep`, `mix`, `remap`, `rotate2d`, `luminance` coefficients | MaterialX 1.38 standard library (`libraries/stdlib/genglsl`, `stdlib_ng.mtlx`), https://github.com/AcademySoftwareFoundation/MaterialX, read from the maintainer's checkout `~/Developer/MaterialX` | Apache-2.0 | Formulas re-implemented from the definitions (TypeScript and WGSL); no file copied. The `open_pbr_surface` / `standard_surface` / `gltf_pbr` input names come from the MaterialX libraries and the sample documents |
+| Sample documents used by `bench/materialx-coverage.ts` | `~/Developer/materialx-fidelity/third_party/materialx-samples` (MIT) and `~/Developer/MaterialX/resources/Materials/Examples` (Apache-2.0) | MIT / Apache-2.0 | Read at run time from the sibling checkouts for the coverage count; not copied into this repo. Our own test documents are inline in `bench/scenes/ab/materialx-scenes.ts` and use synthetic images (`bench/scenes/materialx-images.ts`) |

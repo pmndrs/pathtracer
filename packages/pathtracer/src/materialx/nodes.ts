@@ -179,7 +179,8 @@ function imageNode(tiled: boolean): NodeImpl {
     },
     wgsl: (a, ctx) => {
       const k = ctx.image(request(a));
-      if (k < 0) return a.v.default!;
+      if (k < 0) return a.v.default!; // not in the scene: the node's default, as the TypeScript twin does
+      ctx.need('image');
       const t = a.v.texcoord!;
       const uv = tiled
         ? `(((${t}).xy * (${a.v.uvtiling}).xy - (${a.v.uvoffset}).xy) / (${a.v.realworldimagesize}).xy) * (${a.v.realworldtilesize}).xy`

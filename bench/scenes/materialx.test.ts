@@ -32,7 +32,7 @@ describe('MaterialX bench scenes', () => {
     // Metalness ramps along u (smoothstep 0.55..0.75 of u): 0 at the left, 255 at the right; roughness is the rings.
     expect(mr.data[(128 * 256 + 2) * 4 + 2]).toBe(0);
     expect(mr.data[(128 * 256 + 253) * 4 + 2]).toBe(255);
-    const mat = scene.materials.subject as { baseColor: number[]; specularRoughness: number; baseMetalness: number; baseColorTexture: string };
+    const mat = scene.materials.subject as unknown as { baseColor: number[]; specularRoughness: number; baseMetalness: number; baseColorTexture: string };
     expect(mat.baseColor).toEqual([1, 1, 1]);
     expect(mat.specularRoughness).toBe(1);
     expect(mat.baseColorTexture).toBe('uv-bake-256.base');
@@ -65,6 +65,9 @@ describe('MaterialX bench scenes', () => {
       expect([...declaredIdentifiers(wgsl)].filter((n) => RESERVED.has(n))).toEqual([]);
       const fns = [...wgsl.matchAll(/^fn (\w+)/gm)].map((m) => m[1]);
       expect(new Set(fns).size).toBe(fns.length);
+      // Every generated helper that is called is declared (a missing `need` only fails on the GPU).
+      const called = new Set([...wgsl.matchAll(/\b(ptMtlx\w+)\(/g)].map((m) => m[1]));
+      for (const c of called) expect(fns, `ptMtlx function ${c}`).toContain(c);
     }
   });
   it('synthetic images are what the scenes say they are', () => {
