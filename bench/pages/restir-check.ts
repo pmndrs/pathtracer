@@ -711,6 +711,8 @@ function giFrameModes(m: number, k: number, radius: number): Mode[] {
     { name: 'di_bia', integrator: rs(di('biased')) },
     { name: 'digi_unb', integrator: rs({ ...di('unbiased'), gi: gi('unbiased') }) },
     { name: 'digi_bia', integrator: rs({ ...di('biased'), gi: gi('biased') }) },
+    // DI biased with initial visibility (the cheap DI) + GI unbiased: isolates the GI part where DI's unbiased mode is the noisy one (Sponza sun)
+    { name: 'dibia_giunb', integrator: rs({ ...di('biased'), gi: gi('unbiased') }) },
   ];
 }
 
@@ -749,6 +751,7 @@ async function checkGiFrames(name: string, refFrames: number, step: number, seed
     log(`${p}__${tag}_moving_blockp99`, bp);
   }
   for (const mode of giFrameModes(m, k, radius)) {
+    if (args0.modes && !args0.modes.split(',').includes(mode.name)) continue;
     const kernel = await makeKernel(ctx, mode.integrator);
     kernel.setLimits({ maxDepth: 2 });
     kernel.setCamera(poses[0] as PtLookAtCamera);
