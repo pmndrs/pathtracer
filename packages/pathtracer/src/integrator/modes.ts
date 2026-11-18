@@ -6,7 +6,7 @@
  * that is BIASED says so; the `reference` preset is today's defaults: exact everything, Owen-Sobol, accumulation, the scene's own depth.
  *
  *  - `reference`: nothing changes (documented explicitly so a page can print what a mode means).
- *  - `preview`: progressive but cheap: D27 cutouts, reduced secondary materials, cone texture LOD, AOVs for OIDN (P4.7 builds the pipeline), a shallow depth.
+ *  - `preview`: progressive but cheap: D31 cutouts (exact indirect, `transmit` shadows; `alphaPolicy: 'opaqueShadow'` is the max-speed opt-in), reduced secondary materials, cone texture LOD, AOVs for OIDN (P4.7 builds the pipeline), a shallow depth.
  *  - `realtime`: 1 spp frames for the temporal filter (P4.5): everything of `preview` plus per-frame outputs (`frame`), the blue-noise sampler when the texture is given, 2 bounces.
  *
  * The preset also names what the CALLER must do outside the kernel (`scenePacking` must be the same for `uploadSceneCopy` and the kernel, so `create` never changes it:
@@ -34,14 +34,19 @@ export interface PtModePreset {
 /** Status of each preset entry: what is measured, what is pending. Key = `<mode>.<entry>`. */
 export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'reference.*': 'today\'s defaults: exact cutouts, full materials, Owen-Sobol, accumulation; the gates run here',
-  'preview.alphaPolicy': 'opaqueSecondary: D27 (speed first); BIASED -3..-17% on card scenes, ~20-23% of trace time on a foliage scene (TASKS R2; R2b recovers the darkness)',
+  'preview.alphaPolicy': 'exact + alphaShadow transmit (D31, refines D27; R2b): indirect hits keep the exact cutout loop, cutout shadows cost about the solid walk and read within 0.2% of exact (calibrated beta 0.45); the cutout cards must be in instances with mask `alphaMixedMask` (bench adapter: automatic; library callers set `instance.mask`, else the shadows are the solid walk\'s -12%); provisional: shadow-ray saving kept 70-90% (megakernel foliage-mask 0.81 of exact time vs solid 0.76, wavefront 0.92 vs 0.89), quiet pass to confirm',
+  'preview.alphaShadow': 'transmit: see alphaPolicy above (D31); needs the cutout cards in `alphaMixedMask` instances and turns the walk\'s ray masks on (`ptNeedsRayMasks`)',
+  'preview.alphaTransmit': '0.45: the calibrated beta of the three foliage scenes (0.446-0.459; foliage-mask-dense 0.323); the mean image is linear in beta',
+  'preview.cutoutsMaxSpeed': 'opt in with `integrator: { alphaPolicy: \'opaqueShadow\' }` (the preset then keeps `alphaShadow` at \'policy\'): solid shadow rays, exact indirect; fastest (foliage-mask 0.76 megakernel / 0.89 wavefront of the exact time) but BIASED -5..-17% on card scenes (D27 / D31). `opaqueSecondary` buys nothing over it (V147)',
   'preview.materialLod': 'secondary from depth 1: R1; furnace within about 1%, kernel -6..-19% on the wavefront; timing in the QUIET-PASS queue; pending A/B against full (R9)',
   'preview.textureLod': 'cone, scale 1 (a full-pixel footprint at 1 spp, pbrt-v4 uses max(1/8, 1/sqrt(spp))): pending A/B (R9)',
   'preview.aovs': 'albedo + normal + viewZ for OIDN on the converged-ish frame (P2.34); the OIDN-small pipeline is P4.7',
   'preview.limits': 'maxDepth 4, no Russian roulette: pending A/B (R3)',
   'preview.layered': 'D24: albedo layering, internal base, albedoCorrection texture (P2.32b: furnace <= 1.003, within 4% of the walk on the Tier 1 class B scenes)',
   'preview.scenePacking': 'packed: P3.11, one storage buffer less in every kernel, per-pixel identical images; timing in the QUIET-PASS queue (default stays split until then)',
-  'realtime.alphaPolicy': 'as preview (D27)',
+  'realtime.alphaPolicy': 'as preview (D31: exact + transmit; max speed `alphaPolicy: \'opaqueShadow\'`)',
+  'realtime.alphaShadow': 'as preview (D31)',
+  'realtime.alphaTransmit': 'as preview (D31)',
   'realtime.materialLod': 'as preview (R1)',
   'realtime.textureLod': 'as preview',
   'realtime.layered': 'as preview (D24 + P2.32b)',
@@ -57,14 +62,14 @@ const PRESETS: Record<PtMode, PtModePreset> = {
   reference: { mode: 'reference', integrator: {}, layered: null, limits: null, scenePacking: null },
   preview: {
     mode: 'preview',
-    integrator: { alphaPolicy: 'opaqueSecondary', materialLod: 'secondary', textureLod: 'cone', aovs: true },
+    integrator: { alphaPolicy: 'exact', alphaShadow: 'transmit', alphaTransmit: 0.45, materialLod: 'secondary', textureLod: 'cone', aovs: true },
     layered: LAYERED,
     limits: { maxDepth: 4, rrStartDepth: 0, textureConeScale: 1 },
     scenePacking: 'packed',
   },
   realtime: {
     mode: 'realtime',
-    integrator: { alphaPolicy: 'opaqueSecondary', materialLod: 'secondary', textureLod: 'cone', frame: true },
+    integrator: { alphaPolicy: 'exact', alphaShadow: 'transmit', alphaTransmit: 0.45, materialLod: 'secondary', textureLod: 'cone', frame: true },
     layered: LAYERED,
     limits: { maxDepth: 2, rrStartDepth: 0, textureConeScale: 1 },
     scenePacking: 'packed',
@@ -100,8 +105,11 @@ export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'meg
   const set = (key: string, value: unknown): void => {
     if (merged[key] === undefined) merged[key] = value;
   };
+  // D31 max-speed opt-in: a caller who asks for a solid-shadow policy gets that policy's shadows, not the preset's `transmit` override.
+  const solidPolicy = merged.alphaPolicy !== undefined && merged.alphaPolicy !== 'exact';
   for (const [key, value] of Object.entries(preset.integrator)) {
     if (scheduler === 'wavefront' && key === 'frame') continue;
+    if (solidPolicy && (key === 'alphaShadow' || key === 'alphaTransmit')) continue;
     set(key, value);
   }
   // ReSTIR's passes compile the sampler text into kernels that do not bind the blue-noise texture (P4.2e): `restir` keeps Owen-Sobol until they do.

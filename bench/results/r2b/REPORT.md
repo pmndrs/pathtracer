@@ -81,6 +81,55 @@ Quality: against our exact 16384 spp render of the same scene (the sampler is de
 | foliage-mask-dense | pt-mk-firstk | -2.57% | 1.15e-2 | - | 3.0239..3.2547 | 0.881..0.980 (med 0.950) | 0.946 | 82.28% | 138.04 | 4.72216796875 |
 | foliage-mask-dense | pt-mk-classified | -0.00% | 7.85e-5 | - | 3.2039..3.6705 | 0.962..1.090 (med 1.008) | 1.003 | 100.88% | 1.00 | 4.72216796875 |
 
+## final, grid16 and grid12 (ab4 lists, 7 rounds; run 2026-11-18 after the merge onto track N main)
+
+The remaining pages of the first R2b pass, on the merged tree (kernels byte-identical to main with the settings off). Still NOT a quiet-machine result: page load1 was 8.8 (grid16 mk, a 10 s `vitest` ran inside it by mistake: its rounds are the ones to doubt), 5.0 (grid16 wf), 4.2 (grid12 mk), 3.4 (grid12 wf), with ChatGPT, Claude, Creative Cloud, Cursor, Discord, GitHub Desktop, Linear, Notion, Slack and Spotify open; the runner marked them best effort. Calibrated beta here is 0.446 (the 0.455 of foliage-mask is replaced by it). The within-page spread is small (max/min of a variant 1.01-1.06 except wavefront grid12, 1.07-1.20), unlike the first pass (grid16 mk 6.8 ms/spp, a burst: now 2.5). Per-round data: `final-foliage-mask-grid{16,12}-{mk,wf}.json`.
+
+Reading: on these two cut-out grids `transmit` gives back 26-33% (megakernel) and 26% / 7-15% (wavefront grid16 / grid12) of the solid walk's saving at -0.01% (beta 0.446) / +0.10% (beta 0.45) bias, i.e. the D31 preset costs about 0.85 of the exact time in the megakernel and 0.87-0.91 in the wavefront against solid's 0.79 / 0.86-0.87. `classified` is exact and 0.52 (mk) / 0.55 (wf) of the exact time on grid16 (0% mixed triangles) and 1.16 / 1.07 slower on grid12 (56% mixed). `roulette`, `stochastic` and `firstK` buy at most 3% of time and cost noise or bias.
+
+| scene | renderer | relBias | relMSE | vs ref2 (relMSE / relBias) | ms/spp min..max | ratio to exact (paired) | ratio of mins | saving lost vs solid | eqTime vs exact | load1 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| foliage-mask-grid16 | pt-megakernel | -0.00% | 8.79e-5 | - | 2.4882..2.5558 | - | - | - | - | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-shadow | -12.36% | 5.85e-2 | - | 1.9669..2.0058 | 0.784..0.795 (med 0.788) | 0.790 | - | 525.74 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-transmit@0.446 | -0.01% | 9.00e-2 | - | 2.1106..2.1779 | 0.841..0.858 (med 0.851) | 0.848 | 27.58% | 867.74 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-transmit@0.45 | 0.10% | 9.12e-2 | - | 2.1385..2.2053 | 0.853..0.864 (med 0.857) | 0.859 | 32.91% | 891.61 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-roulette10 | -0.00% | 1.67e-3 | - | 2.2139..2.2855 | 0.885..0.895 (med 0.889) | 0.890 | 47.38% | 16.88 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-roulette | -0.00% | 6.18e-4 | - | 2.4353..2.5254 | 0.970..0.988 (med 0.975) | 0.979 | 89.85% | 6.87 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-coverage | 1.50% | 1.09e-1 | - | 2.1164..2.1612 | 0.843..0.856 (med 0.849) | 0.851 | 28.68% | 1051.51 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-stochastic | -0.19% | 8.25e-2 | - | 2.4276..2.4901 | 0.967..0.998 (med 0.980) | 0.976 | 88.39% | 915.15 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-firstk | -1.65% | 7.51e-3 | - | 2.5093..2.5521 | 0.984..1.022 (med 1.019) | 1.008 | 104.05% | 86.08 | 8.8310546875 |
+| foliage-mask-grid16 | pt-mk-classified | -0.01% | 8.82e-5 | - | 1.2888..1.3133 | 0.506..0.525 (med 0.522) | 0.518 | -130.09% | 0.52 | 8.8310546875 |
+| foliage-mask-grid16 | pt-wavefront | -0.00% | 8.79e-5 | - | 2.2743..2.3023 | - | - | - | - | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-shadow | -12.36% | 5.85e-2 | - | 1.9847..2.0263 | 0.862..0.881 (med 0.872) | 0.873 | - | 580.37 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-transmit@0.446 | -0.01% | 9.00e-2 | - | 2.0596..2.1225 | 0.898..0.923 (med 0.906) | 0.906 | 25.86% | 926.36 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-transmit@0.45 | 0.10% | 9.12e-2 | - | 2.0602..2.0936 | 0.898..0.912 (med 0.907) | 0.906 | 26.06% | 939.73 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-roulette10 | 0.01% | 1.67e-3 | - | 2.1523..2.1972 | 0.938..0.958 (med 0.953) | 0.946 | 57.89% | 18.00 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-roulette | 0.00% | 6.13e-4 | - | 2.2694..2.2861 | 0.989..1.001 (med 0.993) | 0.998 | 98.31% | 6.95 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-coverage | 1.50% | 1.09e-1 | - | 2.0340..2.0625 | 0.886..0.904 (med 0.900) | 0.894 | 17.03% | 1105.59 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-stochastic | -0.19% | 8.25e-2 | - | 2.2724..2.2927 | 0.989..1.008 (med 0.993) | 0.999 | 99.33% | 937.78 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-firstk | -1.65% | 7.51e-3 | - | 2.2337..2.2849 | 0.973..1.005 (med 0.982) | 0.982 | 85.97% | 83.84 | 4.95263671875 |
+| foliage-mask-grid16 | pt-wf-classified | -0.01% | 8.82e-5 | - | 1.2422..1.2832 | 0.540..0.558 (med 0.547) | 0.546 | -256.34% | 0.55 | 4.95263671875 |
+| foliage-mask-grid12 | pt-megakernel | -0.00% | 8.79e-5 | - | 2.3327..2.3698 | - | - | - | - | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-shadow | -12.36% | 5.85e-2 | - | 1.8521..1.8676 | 0.786..0.801 (med 0.794) | 0.794 | - | 528.10 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-transmit@0.446 | -0.01% | 9.00e-2 | - | 1.9769..1.9932 | 0.839..0.854 (med 0.848) | 0.847 | 25.95% | 866.98 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-transmit@0.45 | 0.10% | 9.12e-2 | - | 1.9948..2.0062 | 0.847..0.858 (med 0.855) | 0.855 | 29.69% | 887.22 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-roulette10 | -0.00% | 1.67e-3 | - | 2.0669..2.1165 | 0.878..0.893 (med 0.887) | 0.886 | 44.69% | 16.82 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-roulette | -0.00% | 6.18e-4 | - | 2.2888..2.3446 | 0.970..0.989 (med 0.982) | 0.981 | 90.86% | 6.89 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-coverage | 1.50% | 1.09e-1 | - | 1.9896..2.0470 | 0.843..0.877 (med 0.853) | 0.853 | 28.59% | 1054.46 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-stochastic | -0.19% | 8.25e-2 | - | 2.2814..2.4055 | 0.968..1.015 (med 0.978) | 0.978 | 89.33% | 917.44 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-firstk | -1.65% | 7.51e-3 | - | 2.3697..2.4801 | 1.007..1.047 (med 1.016) | 1.016 | 107.70% | 86.72 | 4.2314453125 |
+| foliage-mask-grid12 | pt-mk-classified | -0.00% | 8.80e-5 | - | 2.7059..2.7317 | 1.149..1.165 (med 1.160) | 1.160 | 177.65% | 1.16 | 4.2314453125 |
+| foliage-mask-grid12 | pt-wavefront | -0.00% | 8.79e-5 | - | 2.1875..2.2837 | - | - | - | - | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-shadow | -12.36% | 5.85e-2 | - | 1.8822..2.2554 | 0.849..0.988 (med 0.860) | 0.860 | - | 572.31 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-transmit@0.446 | -0.01% | 9.00e-2 | - | 1.9021..2.1915 | 0.861..0.960 (med 0.869) | 0.870 | 6.53% | 889.58 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-transmit@0.45 | 0.10% | 9.12e-2 | - | 1.9281..2.1741 | 0.869..0.952 (med 0.882) | 0.881 | 15.04% | 914.49 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-roulette10 | 0.04% | 1.70e-3 | - | 2.0502..2.2461 | 0.924..0.984 (med 0.943) | 0.937 | 55.02% | 18.08 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-roulette | 0.02% | 6.18e-4 | - | 2.1477..2.2425 | 0.969..0.996 (med 0.982) | 0.982 | 86.95% | 6.90 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-coverage | 1.50% | 1.09e-1 | - | 1.9340..2.0513 | 0.872..0.898 (med 0.887) | 0.884 | 16.95% | 1093.05 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-stochastic | -0.19% | 8.26e-2 | - | 2.1503..2.2198 | 0.949..1.015 (med 0.976) | 0.983 | 87.81% | 922.88 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-firstk | -1.65% | 7.51e-3 | - | 2.1183..2.1767 | 0.930..0.988 (med 0.965) | 0.968 | 77.32% | 82.67 | 3.38134765625 |
+| foliage-mask-grid12 | pt-wf-classified | -0.00% | 8.80e-5 | - | 2.3643..2.3811 | 1.039..1.086 (med 1.070) | 1.081 | 157.90% | 1.08 | 3.38134765625 |
+
 ## first pass (ab2: 8 renderers, 5 rounds)
 
 

@@ -288,7 +288,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
     if (this.settings.tangent === 'uv') for (const mesh of input.meshes) if (mesh.tangents && mesh.uvs) mesh.tangents = uvTangents({ positions: mesh.positions, indices: mesh.indices ? Uint32Array.from(mesh.indices) : Uint32Array.from({ length: mesh.positions.length / 3 }, (_, i) => i), uvs: mesh.uvs as Float32Array });
     if (input.sun && this.settings.sunAngularRadius !== undefined) input.sun = { ...input.sun, angularRadius: this.settings.sunAngularRadius };
     // R2b `alphaShadow: 'transmit'`: every cutout card goes into the mask-`alphaMixedMask` instance group (no triangle split), the walk tells cards from the rest
-    if (this.settings.alphaShadow === 'transmit') {
+    // D31: a `preview` / `realtime` mode resolves to `transmit` too (unless the caller picked another shadow mode or a solid policy), so the cards need the mask the same way.
+    const modeTransmit = this.settings.alphaShadow === undefined && !!this.settings.mode && ptModePreset(this.settings.mode).integrator.alphaShadow === 'transmit' && (!this.settings.alphaPolicy || this.settings.alphaPolicy === 'exact');
+    if (this.settings.alphaShadow === 'transmit' || modeTransmit) {
       const mask = this.settings.alphaMixedMask ?? INSTANCE_MASK_MIXED;
       input.instances.forEach((inst) => {
         if (inst.material !== undefined && createMaterial(input.materials[inst.material] ?? {}).alphaMode === ALPHA_MODE.mask) inst.mask = mask;

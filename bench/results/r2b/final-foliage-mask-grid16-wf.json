@@ -1,0 +1,392 @@
+{
+  "schema": 1,
+  "runId": "20261118T022620Z-alpha-shadow-ab",
+  "startedAt": "2026-11-18T02:26:20.057Z",
+  "commit": "65db890-dirty",
+  "page": "alpha-shadow-ab",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/157.0.8103.80 headless",
+  "ok": true,
+  "totalMs": 173827,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 175 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "scene": "foliage-mask-grid16",
+        "renderers": "pt-wavefront,pt-wf-shadow,pt-wf-transmit@0.446,pt-wf-transmit@0.45,pt-wf-roulette10,pt-wf-roulette,pt-wf-coverage,pt-wf-stochastic,pt-wf-firstk,pt-wf-classified",
+        "spp": "1024",
+        "repeat": "7"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 173134,
+      "result": {
+        "scene": "foliage-mask-grid16",
+        "renderer": "alpha-shadow-ab",
+        "config": {
+          "spp": 1024,
+          "repeat": 7,
+          "renderers": [
+            "pt-wavefront",
+            "pt-wf-shadow",
+            "pt-wf-transmit@0.446",
+            "pt-wf-transmit@0.45",
+            "pt-wf-roulette10",
+            "pt-wf-roulette",
+            "pt-wf-coverage",
+            "pt-wf-stochastic",
+            "pt-wf-firstk",
+            "pt-wf-classified"
+          ],
+          "scene": "foliage-mask-grid16"
+        },
+        "metrics": {
+          "spp": 1024,
+          "repeat": 7
+        },
+        "notes": {
+          "rounds": {
+            "pt-wavefront": [
+              2.299707031226717,
+              2.2918945312558208,
+              2.3023437499941792,
+              2.28759765625,
+              2.2805664062325377,
+              2.2743164062558208,
+              2.294531250023283
+            ],
+            "pt-wf-shadow": [
+              2.026269531226717,
+              1.9860351562674623,
+              1.9846679687325377,
+              1.9937499999941792,
+              1.9875976562325377,
+              1.994726562523283,
+              2.0208984375058208
+            ],
+            "pt-wf-transmit@0.446": [
+              2.1224609375058208,
+              2.06884765625,
+              2.0746093750058208,
+              2.0733398437441792,
+              2.0658203125058208,
+              2.0892578125058208,
+              2.0595703125
+            ],
+            "pt-wf-transmit@0.45": [
+              2.0935546874825377,
+              2.0793945312325377,
+              2.0863281250058208,
+              2.0695312499883585,
+              2.0809570312558208,
+              2.0699218749941792,
+              2.060156250023283
+            ],
+            "pt-wf-roulette10": [
+              2.1971679687558208,
+              2.17236328125,
+              2.1882812499825377,
+              2.1864257812558208,
+              2.1737304687558208,
+              2.1785156250116415,
+              2.15234375
+            ],
+            "pt-wf-roulette": [
+              2.279882812523283,
+              2.2837890624941792,
+              2.2861328125,
+              2.2715820312441792,
+              2.276464843773283,
+              2.2759765624941792,
+              2.2694335937558208
+            ],
+            "pt-wf-coverage": [
+              2.0598632812616415,
+              2.0625,
+              2.0611328124941792,
+              2.06103515625,
+              2.06103515625,
+              2.0530273437616415,
+              2.0339843749825377
+            ],
+            "pt-wf-stochastic": [
+              2.2790039062674623,
+              2.2756835937616415,
+              2.27685546875,
+              2.2858398437674623,
+              2.2822265625,
+              2.2926757812383585,
+              2.272363281226717
+            ],
+            "pt-wf-firstk": [
+              2.2450195312558208,
+              2.2533203125058208,
+              2.2603515624941792,
+              2.24365234375,
+              2.2736328124883585,
+              2.2848632812383585,
+              2.2336914062325377
+            ],
+            "pt-wf-classified": [
+              1.283203125,
+              1.2632812499941792,
+              1.2421875,
+              1.2442382812441792,
+              1.2469726562558208,
+              1.2644531250116415,
+              1.24755859375
+            ]
+          },
+          "means": {
+            "pt-wf-classified": [
+              0.3466390418287847,
+              0.4598412402765825,
+              0.3002140615977866
+            ],
+            "pt-wf-firstk": [
+              0.339481209100389,
+              0.45324730392487256,
+              0.2958314425804686
+            ],
+            "pt-wf-stochastic": [
+              0.3457683706902996,
+              0.45926278379901003,
+              0.2997178668518609
+            ],
+            "pt-wf-coverage": [
+              0.3530673310008327,
+              0.4660617334389826,
+              0.30423712047423274
+            ],
+            "pt-wf-roulette": [
+              0.34669964419322546,
+              0.4598692014167318,
+              0.30028747511415227
+            ],
+            "pt-wf-roulette10": [
+              0.34674217648470707,
+              0.45990464947079696,
+              0.3003139691297959
+            ],
+            "pt-wf-transmit@0.45": [
+              0.34722275027767563,
+              0.46003265840001406,
+              0.300647162302339
+            ],
+            "pt-wf-transmit@0.446": [
+              0.34675626781106983,
+              0.4595594669088799,
+              0.3003608365766316
+            ],
+            "pt-wf-shadow": [
+              0.2947785515995444,
+              0.40681143878619574,
+              0.2684386812993095
+            ],
+            "pt-wavefront": [
+              0.34667824384847334,
+              0.4598426635636133,
+              0.30027687798667707
+            ]
+          },
+          "uploads": [
+            "pt-wavefront__foliage-mask-grid16",
+            "pt-wf-shadow__foliage-mask-grid16",
+            "pt-wf-transmit_b0.446__foliage-mask-grid16",
+            "pt-wf-transmit_b0.45__foliage-mask-grid16",
+            "pt-wf-roulette10__foliage-mask-grid16",
+            "pt-wf-roulette__foliage-mask-grid16",
+            "pt-wf-coverage__foliage-mask-grid16",
+            "pt-wf-stochastic__foliage-mask-grid16",
+            "pt-wf-firstk__foliage-mask-grid16",
+            "pt-wf-classified__foliage-mask-grid16"
+          ]
+        }
+      },
+      "load": {
+        "load1": 4.95263671875,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "GitHub Desktop",
+          "Linear",
+          "Notion",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 54,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [
+    {
+      "name": "pt-wavefront__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wavefront__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.078Z"
+    },
+    {
+      "name": "pt-wf-shadow__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-shadow__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.081Z"
+    },
+    {
+      "name": "pt-wf-transmit_b0.446__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-transmit_b0.446__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.084Z"
+    },
+    {
+      "name": "pt-wf-transmit_b0.45__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-transmit_b0.45__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.086Z"
+    },
+    {
+      "name": "pt-wf-roulette10__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-roulette10__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.088Z"
+    },
+    {
+      "name": "pt-wf-roulette__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-roulette__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.090Z"
+    },
+    {
+      "name": "pt-wf-coverage__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-coverage__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.093Z"
+    },
+    {
+      "name": "pt-wf-stochastic__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-stochastic__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.095Z"
+    },
+    {
+      "name": "pt-wf-firstk__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-firstk__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.098Z"
+    },
+    {
+      "name": "pt-wf-classified__foliage-mask-grid16",
+      "width": 320,
+      "height": 240,
+      "channels": 4,
+      "token": "71282-1794968780663-alpha-shadow-ab",
+      "slot": "1-run",
+      "pfm": "bench/results/incoming/20261118T022620Z-alpha-shadow-ab/1-run/pt-wf-classified__foliage-mask-grid16.pfm",
+      "bytes": 1228800,
+      "nonFinite": 0,
+      "receivedAt": "2026-11-18T02:29:13.101Z"
+    }
+  ],
+  "csvFile": null
+}

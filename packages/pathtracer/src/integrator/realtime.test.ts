@@ -211,12 +211,26 @@ describe('mode presets (P4.1)', () => {
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { restir: true } as object, blueNoise: {} }).integrator?.sampler).toBe('owen-sobol');
   });
 
-  it('preview: D27 cutouts, reduced secondary materials, AOVs for OIDN, no frame outputs', () => {
+  it('preview: D31 cutouts (exact + transmit), reduced secondary materials, AOVs for OIDN, no frame outputs', () => {
     const p = ptApplyMode({ mode: 'preview' as const, integrator: {} }).integrator;
-    expect(p.alphaPolicy).toBe('opaqueSecondary');
+    expect(p.alphaPolicy).toBe('exact');
+    expect(p.alphaShadow).toBe('transmit');
+    expect(p.alphaTransmit).toBe(0.45);
     expect(p.materialLod).toBe('secondary');
     expect(p.aovs).toBe(true);
     expect(p.frame).toBeUndefined();
+  });
+
+  it('D31 max-speed cutouts: asking for a solid policy drops the preset\'s transmit shadows', () => {
+    for (const mode of ['preview', 'realtime'] as const) {
+      const fast = ptApplyMode({ mode, integrator: { alphaPolicy: 'opaqueShadow' as const } }).integrator;
+      expect(fast.alphaPolicy).toBe('opaqueShadow');
+      expect(fast.alphaShadow).toBeUndefined();
+      expect(fast.alphaTransmit).toBeUndefined();
+      const own = ptApplyMode({ mode, integrator: { alphaPolicy: 'opaqueShadow' as const, alphaShadow: 'coverage' as const } }).integrator;
+      expect(own.alphaShadow).toBe('coverage');
+      expect(ptApplyMode({ mode, integrator: {} }).integrator.alphaShadow).toBe('transmit');
+    }
   });
 
   it('the D24 layering merges into layered materials where the caller left a field undefined', () => {

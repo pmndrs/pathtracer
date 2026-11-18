@@ -12,7 +12,7 @@ entry (a measured number and its TASKS / DIVERGES row, or "pending A/B").
 
 | entry | reference | preview | realtime | status |
 |---|---|---|---|---|
-| `alphaPolicy` | exact | opaqueSecondary | opaqueSecondary | D27, measured (R2): ~20-23% of trace time on a foliage scene, biased -3..-17% on cards |
+| `alphaPolicy` + `alphaShadow` | exact | exact + transmit 0.45 | exact + transmit 0.45 | D31 (refines D27, R2b): shadows at about the solid walk's cost within 0.2% of exact on foliage; `alphaPolicy: 'opaqueShadow'` is the max-speed opt-in (-5..-17% on cards, 0.76 / 0.89 of exact time on foliage-mask) |
 | `materialLod` | full | secondary (depth >= 1) | secondary | R1, furnace within ~1%; timing in QUIET-PASS; pending A/B (R9) |
 | `textureLod` | 0 | cone, scale 1 | cone, scale 1 | pending A/B |
 | layered materials | stochastic walk (adapter) | albedo + internal base + `texture` correction | same | D24 + P2.32b, measured |
