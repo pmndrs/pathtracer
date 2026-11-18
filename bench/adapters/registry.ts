@@ -194,6 +194,7 @@ export function unsupportedReason(features: FeatureSupport, scene: SceneDesc): s
       if (why) reasons.push(`material "${name}": ${why}`);
     }
   }
+  if ((scene.media && Object.keys(scene.media).length > 0 || scene.meshes.some((mesh) => mesh.medium)) && !features.media) reasons.push('participating media unsupported');
   if (Object.keys(scene.textures ?? {}).length > 0 && !features.textures) reasons.push('image textures unsupported');
   if (scene.meshes.some((mesh) => mesh.emission) && !features.emissiveMeshes) reasons.push('emissive meshes unsupported');
   if ((scene.lights?.length ?? 0) > 0 && !features.directionalLight) reasons.push('directional lights unsupported');

@@ -57,6 +57,8 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
       case 'black':
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         break;
+      case 'interface':
+        throw new Error('gltf: interface (medium boundary) materials are not expressible; the web competitors skip media scenes');
       case 'openpbr': {
         const { material, notes } = openPbrToGltfMaterial(m);
         g.pbrMetallicRoughness = material.pbrMetallicRoughness;

@@ -54,6 +54,8 @@ function bsdf(m: MaterialDesc, indent: string, textureFile: (name: string) => st
       return wrap(`<bsdf type="diffuse">${rgb('reflectance', m.reflectance)}</bsdf>`);
     case 'black':
       return wrap(`<bsdf type="diffuse">${rgb('reflectance', [0, 0, 0])}</bsdf>`);
+    case 'interface':
+      return `${indent}<bsdf type="null"/>`;
     case 'conductor': {
       const a = roughnessToAlpha(m.roughness);
       if (a === 0) return wrap(`<bsdf type="conductor">${optical('eta', m.eta)}${optical('k', m.k)}</bsdf>`);

@@ -37,6 +37,8 @@ function material(m: MaterialDesc, textureName: (name: string) => string): strin
       return `Material "diffuse" "rgb reflectance" [ ${vec(m.reflectance)} ]`;
     case 'black':
       return `Material "diffuse" "rgb reflectance" [ 0 0 0 ]`;
+    case 'interface':
+      return `Material "interface"`;
     case 'conductor':
       return `Material "conductor" "rgb eta" [ ${vec(m.eta)} ] "rgb k" [ ${vec(m.k)} ] "float roughness" ${num(roughnessToAlpha(m.roughness))} "bool remaproughness" false`;
     case 'dielectric':

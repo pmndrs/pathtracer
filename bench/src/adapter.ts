@@ -22,7 +22,9 @@ export interface RendererInfo {
 
 /** Which parts of the scene schema the renderer can represent exactly. Unsupported scenes are skipped, not faked. */
 export interface FeatureSupport {
-  materials: ReadonlyArray<'diffuse' | 'conductor' | 'dielectric' | 'black' | 'pbr' | 'openpbr'>;
+  materials: ReadonlyArray<'diffuse' | 'conductor' | 'dielectric' | 'black' | 'pbr' | 'openpbr' | 'interface'>;
+  /** Renders participating media (`SceneDesc.media`, `MeshDesc.medium`, `MaterialDesc` 'interface'; P5). Absent = false: such scenes are skipped. */
+  media?: boolean;
   /** Renders `SceneDesc.textures` (image-textured materials). Absent = false: textured scenes are skipped. */
   textures?: boolean;
   emissiveMeshes: boolean;

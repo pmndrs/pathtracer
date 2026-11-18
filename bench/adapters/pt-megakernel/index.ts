@@ -13,6 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
+import { sceneVolumes } from '../../scenes/volumes.ts';
 import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
@@ -140,7 +141,8 @@ const toImage = (image: PtImage): Image => ({ width: image.width, height: image.
 export class PtMegakernelAdapter implements RendererAdapter {
   readonly info: RendererInfo;
   readonly features: FeatureSupport = {
-    materials: ['diffuse', 'conductor', 'dielectric', 'black', 'pbr', 'openpbr'],
+    materials: ['diffuse', 'conductor', 'dielectric', 'black', 'pbr', 'openpbr', 'interface'],
+    media: true,
     materialUnsupported: (m) => (this.settings.coverage ? null : openPbrUnsupported(m)),
     textures: true,
     emissiveMeshes: true,
@@ -390,7 +392,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _layers;
     void _appends;
     void _sort;
-    const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const volumes = sceneVolumes(scene, input);
+    if (volumes && this.settings.scheduler === 'wavefront') throw new Error(`pt-megakernel: scene '${scene.name}' has participating media; they run on the megakernel only (P5)`);
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: volumes.grid } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(volumes ? { volumes: volumes.options } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     this.lastKernelOptions = kernelOptions as unknown as PtMegakernelOptions;
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}), ...(this.settings.appends !== undefined ? { appends: this.settings.appends } : {}), ...(this.settings.sort !== undefined ? { sort: this.settings.sort } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);

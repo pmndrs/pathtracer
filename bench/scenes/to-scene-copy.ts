@@ -51,6 +51,8 @@ export interface DescSceneCopyInput extends SceneCopyInput {
   materialNames: string[];
   /** `MeshDesc.name` per mesh, in order. */
   meshNames: string[];
+  /** P5: per material, the media on its two sides (`SceneDesc.media` order + 1, 0 = none) and whether it is a pure medium boundary (`interface`). Empty when the scene has no media. */
+  materialVolumes: Array<{ interior: number; exterior: number; boundary: boolean }>;
 }
 
 /** glTF `anisotropyRotation` (radians, any sign) as the scene copy's unorm field: turns in [0, 1). */
@@ -105,6 +107,7 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
     case 'dielectric':
       return { baseWeight: 0, baseColor: [0, 0, 0], transmissionWeight: 1, transmissionColor: [1, 1, 1], transmissionDepth: 0, specularWeight: 1, ior: desc.ior, specularRoughness: desc.roughness };
     case 'black':
+    case 'interface':
       return { baseColor: [0, 0, 0], baseWeight: 0, specularWeight: 0 };
   }
 }
@@ -133,6 +136,14 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
   const materials: RtMaterialInput[] = [];
   const materialNames: string[] = [];
   const meshNames: string[] = [];
+  const materialVolumes: Array<{ interior: number; exterior: number; boundary: boolean }> = [];
+  const mediumNames = Object.keys(scene.media ?? {});
+  const mediumId = (name: string | undefined): number => {
+    if (name === undefined) return 0;
+    const i = mediumNames.indexOf(name);
+    if (i < 0) throw new RangeError(`scene '${scene.name}': unknown medium '${name}'`);
+    return i + 1;
+  };
   const known = new Map<string, number>();
   const textureNames = Object.keys(scene.textures ?? {});
   const textureSlot = (name: string): number => {
@@ -146,13 +157,17 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
     if (!base) throw new RangeError(`scene '${scene.name}': mesh '${mesh.name}' uses unknown material '${mesh.material}'`);
     if (materialUsesTexture(base) && !mesh.uv) throw new RangeError(`scene '${scene.name}': mesh '${mesh.name}' uses textured material '${mesh.material}' but has no \`uv\``);
     const emission = mesh.emission;
-    const key = emission ? `${mesh.material}+emission(${emission.join(',')})${mesh.twoSided ? '+twoSided' : ''}` : mesh.material;
+    const interior = mediumId(mesh.medium?.interior), exterior = mediumId(mesh.medium?.exterior);
+    const boundary = base.type === 'interface';
+    if (boundary && !mesh.medium) throw new RangeError(`scene '${scene.name}': mesh '${mesh.name}' has an interface material but no \`medium\``);
+    const key = (emission ? `${mesh.material}+emission(${emission.join(',')})${mesh.twoSided ? '+twoSided' : ''}` : mesh.material) + (mesh.medium ? `+medium(${interior}|${exterior})` : '');
     let index = known.get(key);
     if (index === undefined) {
       index = materials.length;
       known.set(key, index);
       materials.push(emission ? { ...materialFromDesc(base, textureSlot), emissionColor: [...emission], emissionTwoSided: !!mesh.twoSided } : materialFromDesc(base, textureSlot));
       materialNames.push(key);
+      materialVolumes.push({ interior, exterior, boundary });
     }
     return index;
   };
@@ -183,7 +198,7 @@ export function sceneDescToCopyInput(scene: SceneDesc, options: DescToSceneCopyO
   const sun = directional[0] ? { direction: [...directional[0].direction] as [number, number, number], irradiance: [...directional[0].irradiance] as [number, number, number], angularRadius: directional[0].angularRadius ?? 0 } : null;
 
   const textures = textureNames.map((name) => ({ ...generateTexture((scene.textures as NonNullable<SceneDesc['textures']>)[name] as NonNullable<SceneDesc['textures']>[string]), label: name }));
-  return { meshes, instances, materials, materialNames, meshNames, ...(textures.length > 0 ? { textures } : {}), sun, environment: environmentFromDesc(scene.environment, options), options: options.copy };
+  return { meshes, instances, materials, materialNames, meshNames, materialVolumes: mediumNames.length > 0 ? materialVolumes : [], ...(textures.length > 0 ? { textures } : {}), sun, environment: environmentFromDesc(scene.environment, options), options: options.copy };
 }
 
 /** `sceneDescToCopyInput` + `buildSceneCopy`. */

@@ -24,3 +24,5 @@ export * from './wavefront/wavefront-wgsl.ts';
 export * from './wavefront/wavefront.ts';
 export * from './restir/restir-wgsl.ts';
 export * from './restir/restir.ts';
+export * from './volume/volume.ts';
+export * from './volume/volume-wgsl.ts';
