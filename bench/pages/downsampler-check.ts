@@ -100,13 +100,18 @@ try {
       pattern(640, 480, true, 13), // not a power of two: stored 512x512 or 1024x512 after the resample (the same for both builds)
     ];
     const cpu = buildSceneTextures(inputs, { mips: 'cpu' });
-    const variants: Array<[string, ConstructorParameters<typeof Downsampler>[1]]> = [['sample', {}], ['load', { averageAccess: 'load' }]];
+    // 'sample' / 'load' take the buffer path for the sRGB buckets (all below the 1920x1080 `renderPathMinTexels`); 'render' lowers that
+    // threshold so every sRGB chain goes through render passes instead (linear chains stay on storage). The two must give the same bits.
+    const variants: Array<[string, ConstructorParameters<typeof Downsampler>[1]]> = [['sample', {}], ['load', { averageAccess: 'load' }], ['render', { renderPathMinTexels: 1 }], ['render-load', { renderPathMinTexels: 1, averageAccess: 'load' }]];
+    const srgbLevels: Record<string, Uint8Array[]> = {};
     for (const [name, options] of variants) {
+      const srgbOut: Uint8Array[] = (srgbLevels[name] = []);
       const downsampler = new Downsampler(device, options);
       const gpuBuilt = buildSceneTextures(inputs); // the default is 'gpu' (D34)
       const uploaded = uploadSceneTextures(device, gpuBuilt, `mips ${name}`, downsampler, true);
       const uploadedFor = (_bucket: number) => ({ textures: uploaded.textures.slice(_bucket, _bucket + 1) });
       await device.queue.onSubmittedWorkDone();
+      notes[`mipsPaths_${name}`] = uploaded.textures.map((t, b) => `${cpu.buckets[b]!.colorSpace}: ${downsampler.outputPath(t)}`);
       const stats: Record<string, { bytes: number; differing: number; maxDiff: number; over1: number }> = {};
       let worst = 0;
       for (let b = 0; b < cpu.buckets.length; b++) {
@@ -115,6 +120,7 @@ try {
         for (let level = 0; level < bucket.mipLevels; level++) {
           const gpuBytes = await readLevel(device, texture, level, bucket.layers);
           const cpuBytes = bucket.mips[level]!;
+          if (bucket.colorSpace === 'srgb') srgbOut.push(gpuBytes);
           const key = `${bucket.colorSpace}_L${level === 0 ? '0' : level <= 2 ? '1-2' : level <= 5 ? '3-5' : '6+'}`;
           const s = (stats[key] ??= { bytes: 0, differing: 0, maxDiff: 0, over1: 0 });
           for (let i = 0; i < cpuBytes.length; i++) {
@@ -165,6 +171,24 @@ try {
       if (worst > 2) failures.push(`mips ${name}: a code differs by ${worst} from the CPU chain (documented: a rounding step)`);
       if (stats['srgb_L0']!.differing || stats['linear_L0']!.differing) failures.push(`mips ${name}: level 0 changed`);
       for (const t of uploaded.textures) t.destroy();
+    }
+    // sRGB render path vs buffer path, per source access: the library documents the same bits (srgbRounding 'exact', the default).
+    for (const [access, buffer, render] of [['sample', 'sample', 'render'], ['load', 'load', 'render-load']] as const) {
+      let differing = 0;
+      let maxDiff = 0;
+      let bytes = 0;
+      const a = srgbLevels[buffer]!;
+      const b = srgbLevels[render]!;
+      for (let l = 0; l < a.length; l++)
+        for (let i = 0; i < a[l]!.length; i++) {
+          const d = Math.abs((a[l]![i] as number) - (b[l]![i] as number));
+          bytes++;
+          if (d) differing++;
+          if (d > maxDiff) maxDiff = d;
+        }
+      metrics[`mips_srgb_${access}_render_vs_buffer_differing_bytes`] = differing;
+      metrics[`mips_srgb_${access}_render_vs_buffer_differing_frac`] = differing / bytes;
+      metrics[`mips_srgb_${access}_render_vs_buffer_max_diff`] = maxDiff;
     }
     // The library default (D34): no generator passed, `rtMipGenerator(device)` fills the levels; same bytes as an explicit default Downsampler.
     {

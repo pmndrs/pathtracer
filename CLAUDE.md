@@ -835,3 +835,12 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   `requiredFeatures(adapter)` / `requiredLimits(adapter)` for six levels per dispatch; with the default limits it does fewer per dispatch, same result. sRGB chains take its render or buffer path (same bits).
 - `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
   `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.
+- Windows: the main checkout (not only worktrees) gets `bench/node_modules/denoiser` and `bench/node_modules/@pmndrs/upscaler` junctions from the Mac `link:` paths
+  (`pmndrs/Denoiser/...`, `pmndrs/upscaler`), which do not exist here: typecheck fails in `oidn.ts` / `chain.ts`. Re-point them (local only, never commit):
+  `New-Item -ItemType Junction bench/node_modules/denoiser -Target <pmndrs/denoiser/denoiser/packages/denoiser>` and `.../@pmndrs/upscaler` -> `GitHub/upscaler/upscaler`; `pnpm install` recreates the broken ones.
+- Windows: the CWBVH8 ANY-HIT walk is 2.4-3x slower than the binary one in Chrome / D3D12 on the RTX 3060 (closest-hit is fine; bvh4 is fine), and 1.25x FASTER on dawn.node Vulkan on the same GPU;
+  `disable_robustness` and `d3d12_dont_use_shader_model_66_or_higher` do not change it (TASKS X1.i). Judge any wide-BVH default on D3D12 by shadow / AO rays, not primary rays.
+- Windows: `downsampler-check` needs `--timeout 900000` here (part B builds 24 textures of 2048^2 on the CPU: > 60 s on a busy i9-11900H); `big=0` takes ~25 s.
+- Windows: dawn.node ships `dist/<platform>/dawn.node` for every platform: copy `vulkan-1.dll` into `dist/win32-x64/` (a `Get-ChildItem -Filter dawn.node | Select -First 1` finds `darwin-universal`).
+- Windows: no Mitsuba or pbrt reference PFMs on this machine (only their `.json`), and no LLVM, so Mitsuba's `llvm_ad_rgb` (the reference variant) does not run without installing LLVM;
+  `baseline.ts` needs `mitsuba3-llvm_ad_rgb-4096spp.pfm` and takes its noise floor from the pbrt one. Copy `bench/references/**` from the Mac before W13's analysis.
