@@ -24,3 +24,7 @@ export * from './wavefront/wavefront-wgsl.ts';
 export * from './wavefront/wavefront.ts';
 export * from './restir/restir-wgsl.ts';
 export * from './restir/restir.ts';
+export * from './spectral/cie1931.ts';
+export * from './spectral/rgb2spec.ts';
+export * from './spectral/spectral-wgsl.ts';
+export * from './spectral/wavelengths.ts';

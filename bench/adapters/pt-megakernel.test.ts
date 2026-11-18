@@ -34,8 +34,13 @@ describe('pt-megakernel adapter', () => {
     const skipped = allScenes.filter((scene) => unsupportedReason(adapter.features, scene) !== null).map((scene) => scene.name);
     // The Tier 1 glTF scenes use `openpbr` materials. Waves 1 and 2 render all of them (the fuzz lobe, P2.25, made SheenTestGrid renderable; the thin film, P2.27, too).
     const tier1Gltf = new Set([...tier1GltfSceneDescs, ...tier1TexturedGltfSceneDescs].map((s) => s.name));
-    expect(skipped.filter((name) => !tier1Gltf.has(name))).toEqual([]);
-    expect(skipped.filter((name) => tier1Gltf.has(name))).toEqual([]);
+    // Dispersion (P5) needs the spectral mode: skipped without `spectral`, rendered with it.
+    const dispersive = ['dispersion-prism', 'DispersionTest-notex'];
+    expect(skipped.filter((name) => !tier1Gltf.has(name) && !dispersive.includes(name))).toEqual([]);
+    expect(skipped.filter((name) => tier1Gltf.has(name) && !dispersive.includes(name))).toEqual([]);
+    expect(skipped.filter((name) => dispersive.includes(name)).sort()).toEqual([...dispersive].sort());
+    const spectral = new PtMegakernelAdapter({ spectral: true });
+    for (const name of dispersive) expect(unsupportedReason(spectral.features, getScene(name))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('SheenTestGrid-notex'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('env-sphere'))).toBeNull();
     expect(unsupportedReason(adapter.features, getScene('sponza-white'))).toBeNull();

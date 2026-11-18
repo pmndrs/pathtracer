@@ -80,14 +80,15 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
         ...(desc.emissiveTexture ? { emissionTexture: texture(desc.emissiveTexture) } : {}),
       };
     case 'openpbr': {
-      // The fields the scene copy has today; dispersion, subsurface, diffuse roughness and the metal's F82 tint have no
-      // record slot yet (P2.21+), the rest map one to one.
+      // The fields the scene copy has today; subsurface, diffuse roughness and the metal's F82 tint have no record slot yet (P2.21+), the rest map one to one.
+      // Dispersion (P5) is KHR_materials_dispersion's 20 / Abbe number, scaled; only the spectral mode reads it.
       const m = resolveOpenPbr(desc);
       const tex = (name: string | undefined) => (name ? texture(name) : undefined);
       const baseColorTexture = tex(m.baseColorTexture), roughnessMetalTexture = tex(m.metallicRoughnessTexture), normalTexture = tex(m.normalTexture), emissionTexture = tex(m.emissiveTexture);
       return {
         baseColor: [...m.baseColor], baseWeight: m.baseWeight, metalness: m.baseMetalness,
         specularWeight: m.specularWeight, specularColor: [...m.specularColor], specularRoughness: m.specularRoughness, ior: m.specularIor,
+        dispersion: m.transmissionDispersionScale > 0 && m.transmissionDispersionAbbeNumber > 0 ? (m.transmissionDispersionScale * 20) / m.transmissionDispersionAbbeNumber : 0,
         specularAnisotropy: m.specularRoughnessAnisotropy, anisotropyRotation: rotationTurns(m.anisotropyRotation),
         transmissionWeight: m.transmissionWeight, transmissionColor: [...m.transmissionColor], transmissionDepth: m.transmissionDepth,
         coatWeight: m.coatWeight, coatColor: [...m.coatColor], coatRoughness: m.coatRoughness, coatIor: m.coatIor,

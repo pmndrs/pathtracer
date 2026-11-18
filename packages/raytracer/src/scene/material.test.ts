@@ -3,6 +3,7 @@ import { roughnessToAlpha } from '../contract/conventions.ts';
 import { TEXTURE_SLOT_NONE } from './constants.ts';
 import {
   ALPHA_MODE,
+  MATERIAL_DISPERSION_MAX,
   MATERIAL_RECORD_BYTES,
   MATERIAL_RECORD_VEC4S,
   MATERIAL_RECORD_WORDS,
@@ -136,8 +137,9 @@ describe('record layout', () => {
     expect(MATERIAL_RECORD_VEC4S * 16).toBe(MATERIAL_RECORD_BYTES);
   });
 
-  it('the 25 unorm16 values plus one spare fill words 16-28 and the reserved words are 3', () => {
-    expect(Math.max(...Object.values(U16_SLOT)) + 3).toBeLessThanOrEqual(25 + 2); // last colour slot + its two followers
+  it('the 25 unorm16 values plus the P5 dispersion fill words 16-28 and the reserved words are 3', () => {
+    expect(Math.max(...Object.values(U16_SLOT))).toBe(25); // the last half of word 28
+    expect(U16_SLOT.dispersion).toBe(25);
     expect(U16_SLOT.alphaCutoff).toBe(24);
     expect(MATERIAL_WORD.unorm + Math.ceil(25 / 2)).toBe(MATERIAL_THIN_FILM_WORDS.first);
     expect(MATERIAL_THIN_FILM_WORDS.first + MATERIAL_THIN_FILM_WORDS.count).toBe(MATERIAL_RECORD_WORDS);
@@ -301,5 +303,23 @@ describe('createMaterial and the table', () => {
 
   it('alpha is perceptual roughness squared (contract)', () => {
     for (const r of [0, 0.1, 0.5, 1]) expect(materialAlpha({ specularRoughness: r })).toBe(f32(roughnessToAlpha(r)));
+  });
+});
+
+describe('dispersion (P5)', () => {
+  it('lives in the high half of word 28 and leaves the cutoff half alone', () => {
+    const words = new Uint32Array(MATERIAL_RECORD_WORDS);
+    packMaterial(createMaterial({ alphaCutoff: 0.5, dispersion: 0.4 }), words);
+    expect(words[28]! & 0xffff).toBe(toUnorm16(0.5));
+    expect(words[28]! >>> 16).toBe(toUnorm16(0.4 / MATERIAL_DISPERSION_MAX));
+    const back = unpackMaterial(words);
+    expect(Math.abs(back.dispersion - 0.4)).toBeLessThan((MATERIAL_DISPERSION_MAX * 0.5) / 65535 + 1e-6);
+    expect(back.alphaCutoff).toBe(fromUnorm16(toUnorm16(0.5)));
+  });
+  it('a material without dispersion packs the same words as before the field existed', () => {
+    const words = new Uint32Array(MATERIAL_RECORD_WORDS);
+    packMaterial(createMaterial({ alphaCutoff: 0.25 }), words);
+    expect(words[28]! >>> 16).toBe(0);
+    expect(unpackMaterial(words).dispersion).toBe(0);
   });
 });

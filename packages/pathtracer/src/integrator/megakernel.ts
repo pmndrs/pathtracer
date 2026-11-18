@@ -33,6 +33,8 @@ import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
+import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
+import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
@@ -80,6 +82,11 @@ export interface PtMegakernelOptions {
    * `fetchBlueNoise` / `decodeBlueNoisePng`; D16, our own textures), power-of-two sides. Uploaded as an `rg32float` texture at group 2 binding `PT_BLUENOISE_BINDING`.
    */
   blueNoise?: BlueNoiseTexture;
+  /**
+   * `integrator.spectral` only (P5): the RGB -> spectrum table (`buildRgb2SpecTable(res)`, `res` = `integrator.spectral.res`, default 64). Omitted: `defaultRgb2SpecTable(res)`
+   * (fitted on first use and kept; res 64 takes ~4 s in Node, res 32 ~0.5 s), so a page builds it once and passes it here.
+   */
+  spectralTable?: Rgb2SpecTable;
   /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
   textures?: TextureLayout | null;
   /**
@@ -196,6 +203,14 @@ export function createBlueNoiseTexture(device: GPUDevice, tex: BlueNoiseTexture,
   return texture;
 }
 
+/** The spectral mode's `rgba32float` table texture (`rgb2SpecTexture`; textureLoad, `unfilterable-float`). */
+export function createSpectralTexture(device: GPUDevice, table: Rgb2SpecTable, label: string): GPUTexture {
+  const { width, height, data } = rgb2SpecTexture(table);
+  const texture = device.createTexture({ label: `${label} spectral table`, size: [width, height], format: 'rgba32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
+  device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * 16, rowsPerImage: height }, [width, height]);
+  return texture;
+}
+
 export class PtMegakernel {
   readonly device: GPUDevice;
   readonly options: PtMegakernelOptions;
@@ -221,6 +236,8 @@ export class PtMegakernel {
   private lastEncodedCamera: PtLookAtCamera | null = null;
   private blueTextureView: GPUTextureView | null = null;
   private corrTextureView: GPUTextureView | null = null;
+  /** P5: the spectral mode's table texture (group 2 binding `PT_SPEC_BINDING`). */
+  private specTexture: GPUTexture | null = null;
   private jitter: [number, number] = [0, 0];
   /** ReSTIR DI passes (`integrator.restir`, P4): run before every sample dispatch. */
   restir: PtRestirPasses | null = null;
@@ -269,7 +286,11 @@ export class PtMegakernel {
     }
     const { code, map } = ptMegakernelBuild(caps, options);
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
-    const sharedHit = resolveIntegratorOptions(options.integrator ?? {}).restirShared;
+    const resolvedOptions = resolveIntegratorOptions(options.integrator ?? {});
+    const sharedHit = resolvedOptions.restirShared;
+    const spectral = resolvedOptions.spectral;
+    const specTable = spectral ? (options.spectralTable ?? defaultRgb2SpecTable(spectral?.res)) : null;
+    if (spectral && specTable && specTable.res !== spectral.res) throw new Error(`PtMegakernel: integrator.spectral.res is ${spectral.res} but the spectral table has res ${specTable.res} (pass \`spectral: { res: ${specTable.res} }\`)`);
     const layouts = [
       device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) }),
       device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) }),
@@ -285,6 +306,7 @@ export class PtMegakernel {
           ...(options.integrator?.restir ? [{ binding: PT_RESTIR_SHADE_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(sharedHit ? [{ binding: PT_RESTIR_HIT_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
+          ...(spectral ? [{ binding: PT_SPEC_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
       }),
@@ -302,6 +324,7 @@ export class PtMegakernel {
     if (options.integrator?.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, layouts[0] as GPUBindGroupLayout, layouts[1] as GPUBindGroupLayout);
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
+    if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);
     return kernel;
   }
 
@@ -472,6 +495,7 @@ export class PtMegakernel {
         ...(this.restir?.reservoirs ? [{ binding: PT_RESTIR_SHADE_BINDING, resource: { buffer: this.restir.reservoirs } }] : []),
         ...(this.restir?.hitBuffer ? [{ binding: PT_RESTIR_HIT_BINDING, resource: { buffer: this.restir.hitBuffer } }] : []),
         ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
+        ...(this.specTexture ? [{ binding: PT_SPEC_BINDING, resource: this.specTexture.createView() }] : []),
         ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),
       ],
     });
@@ -587,6 +611,7 @@ export class PtMegakernel {
     this.corrTexture?.destroy();
     this.restir?.destroy();
     this.blueTexture?.destroy();
+    this.specTexture?.destroy();
     this.frameParamsBuffer?.destroy();
     this.frameBuffer?.destroy();
     this.accum?.destroy();
