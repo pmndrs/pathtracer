@@ -81,3 +81,5 @@ Already done early: our own blue-noise textures (P0.17, D16).
 
 Bindless Tier 3, ReSTIR GI, spectral, volumes (WebVDB), MaterialX → WGSL, tracing support for gi's Split RC,
 coop-matrix denoiser. Each item gated on its own bench row.
+
+**Progress (2026-11-18):** volumes built (TASKS P5.v1-P5.v8): homogeneous and dense-grid media on the megakernel, delta tracking, NEE through media with MIS, scene schema and pbrt / Mitsuba exporters, real VDB via WebVDB; seven closed forms pass and four scenes agree with pbrt and Mitsuba at the references' own noise floor (`bench/results/VOLUMES.md`, docs/design/volumes.md). Open: brick-majorant timing and defaults (quiet pass), wavefront support, NanoVDB traversal.

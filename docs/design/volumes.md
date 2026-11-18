@@ -1,6 +1,6 @@
 # Participating media (P5)
 
-Status: built on the megakernel (homogeneous and dense-grid media, scattering, NEE through media); the wavefront refuses `integrator.volumes`.
+Status: built and checked on the megakernel (homogeneous and dense-grid media, scattering, NEE through media; seven closed forms and four scenes against pbrt / Mitsuba); the wavefront refuses `integrator.volumes`. Settings with an A/B: `volumes.shadowTracking` (analytic | ratio, V241), `volumes.majorant` (global | brick, V243).
 Code: `packages/pathtracer/src/volume/` (`volume.ts` TS twins and closed forms, `volume-wgsl.ts` WGSL), hooks in `integrator/integrator-wgsl.ts`
 (`ptPath`, `ptSampleLd`), `integrator/megakernel.ts` (the 3D density texture), scene side `bench/scenes/volumes.ts`, `bench/scenes/volumes/index.ts`,
 exporters `bench/exporters/media.ts`. DIVERGES V240-V247.
@@ -77,6 +77,8 @@ Scenes against pbrt-v4 and Mitsuba 3 at 4096 spp (128x128; relMSE with the metri
 | `vol-vdb-smoke` | 4.8e-5, 0.00% | 3.8e-5, 0.00% | 3.7e-5, -0.00% |
 
 The Cornell scene's 1% is the colour of the walls, not the medium: the plain `cornell` references already differ by pbrt -0.69% (spectral uplift of the chromatic reflectances); we agree with Mitsuba (RGB).
+
+Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match and why): [bench/results/VOLUMES.md](../../bench/results/VOLUMES.md). The scenes and what each proves are listed at the top of `bench/scenes/volumes/index.ts`.
 
 ## 6. Open problems
 
