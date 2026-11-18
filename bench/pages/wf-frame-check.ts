@@ -43,6 +43,8 @@ interface Case {
   pan?: boolean;
   size?: number;
   settings?: PtAdapterSettings;
+  /** Planes compared on rgb only: the alpha of the diffuse plane is the first bounce distance, which differs by design on an alpha MASK scene (V211: a cutout skip moves the first bounce). */
+  rgbOnly?: readonly (typeof PLANES)[number][];
 }
 
 const CASES: Record<string, Case> = {
@@ -55,10 +57,14 @@ const CASES: Record<string, Case> = {
   lamps: { scene: 'sponza-lamps', pan: true },
   // alpha MASK with the exact shadow policy (alphaShadow 'policy' with alphaPolicy exact; the weighted policies hash their own per-ray random numbers: not per-pixel comparable)
   // the same without the realtime preset (full materials, level-0 textures, Owen-Sobol): separates a preset effect from a frame-plane effect
-  'foliage-plain': { scene: 'foliage-mask', settings: { mode: undefined, frame: true, alphaShadow: 'policy' } },
-  'foliage-tex0': { scene: 'foliage-mask', settings: { alphaShadow: 'policy', textureLod: 0 } },
-  'foliage-matfull': { scene: 'foliage-mask', settings: { alphaShadow: 'policy', materialLod: 'full' } },
-  foliage: { scene: 'foliage-mask', settings: { alphaShadow: 'policy' } },
+  'foliage-plain': { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { mode: undefined, frame: true, alphaShadow: 'policy' } },
+  'foliage-tex0': { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy', textureLod: 0 } },
+  'foliage-matfull': { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy', materialLod: 'full' } },
+  foliage: { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy' } },
+  // P4.1c regression: the cutout test of the wavefront's intersect kernel must read the texture with the same (widened, depth >= materialLodDepth) footprint as the megakernel (`PtwfConfig.lodTexDepth`)
+  // `foliage` above is the depth-1 case (every indirect hit reduced); this one moves the threshold to depth 2 over 4 bounces, so the bias is applied at some depths and not at others
+  'foliage-lod2': { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy', maxDepth: 4, materialLodDepth: 2 } },
+  'tex-mask': { scene: 'tex-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy', maxDepth: 3 } },
 };
 
 function orbit(scene: SceneDesc, frames: number, stepDeg: number, pan: boolean): PtLookAtCamera[] {
@@ -97,12 +103,12 @@ interface Agree {
   rels: number[];
 }
 
-function compare(a: Float32Array, b: Float32Array, tol: number, into: Agree): void {
+function compare(a: Float32Array, b: Float32Array, tol: number, into: Agree, channels = 4): void {
   for (let i = 0; i < a.length; i += 4) {
     let diff = 0;
     let size = 0;
     let identical = true;
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < channels; k++) {
       const x = a[i + k] as number;
       const y = b[i + k] as number;
       if (!Object.is(x, y)) identical = false;
@@ -243,7 +249,7 @@ async function runCase(name: string, c: Case, o: Opts): Promise<void> {
     device.queue.submit([e2.finish()]);
     const a: PtFrame = await mk.readFrame();
     const b: PtFrame = await wf.readFrame();
-    for (const p of PLANES) compare(a[p], b[p], o.tol, agree[p]);
+    for (const p of PLANES) compare(a[p], b[p], o.tol, agree[p], c.rgbOnly?.includes(p) ? 3 : 4);
     for (let i = 0; i < b.radiance.length; i += 4) {
       for (let k = 0; k < 3; k++) {
         const rec = (b.diffuse[i + k] as number) * (b.albedo[i + k] as number) + (b.specular[i + k] as number) * (b.specularFactor[i + k] as number) + (b.emission[i + k] as number);

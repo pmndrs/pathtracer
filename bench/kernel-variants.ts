@@ -106,6 +106,8 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     'pbr-albedoInternal-corr-lut': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut' } } } },
     'pbr-albedoInternal-corr-texture': { format: {}, layout, integrator: { materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } } } },
     // P4.1b / P4.2a: the real-time options on the plain scheduler (frame planes in the accumulator tail, blue noise, ReSTIR DI at the first vertex).
+    // P4.1c: R1 (`materialLod: 'secondary'`) x cone texture LOD x alpha MASK: the intersect kernel's cutout test takes the widened footprint of depth >= N (`PtwfConfig.lodTexDepth`); the other kernels are the plain `tex-mask` text.
+    'tex-mask-cone-lod': { format: {}, layout: texLayout, textures, integrator: { alphaMask: true, textureLod: 'cone', materialLod: 'secondary' } },
     'rt-frame': { format: {}, layout, integrator: { frame: true } },
     'rt-frame-bluenoise': { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } },
     'rt-restir': { format: {}, layout, integrator: { restir: { bias: 'unbiased' } } },

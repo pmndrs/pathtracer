@@ -21,7 +21,7 @@
  * Not yet (P3.3+): compaction, octant binning, material sorting, subgroup-aggregated appends. Refill and layers (P3.2) are the `PtwfConfig` variants of the
  * kernels: inline refill restarts a finished slot in the shade kernel, batch refill dispatches the camera kernel over the film from the args kernel's decision.
  */
-import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, ptShadowNeedsScene, ptShadowWeighted, ptShadowWeightWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_ESCAPED_WGSL, PT_LOD_TEX_BIAS, PT_MIS_WGSL, PT_PARAMS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, ptLodSnippets, ptMaskIndirect, ptMaskShadow, ptShadowNeedsScene, ptShadowWeighted, ptShadowWeightWgsl, resolveIntegratorOptions, type PtIntegratorOptions, type ResolvedIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { ptFrameAddWgsl, ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } from '../integrator/outputs-wgsl.ts';
 import { PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL } from '../restir/restir-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
@@ -55,6 +55,12 @@ export interface PtwfConfig {
   sortRay?: boolean;
   /** R1b: with refill, a queue mixes depths, so the two shade kernels of `materialLod: 'secondary'` each skip the entries of the other class (`first`: depth < `depth`, `second`: depth >= `depth`). */
   lodGate?: { role: 'first' | 'second'; depth: number };
+  /**
+   * R1 x alpha MASK x cone LOD: the INTERSECT kernel decides the cutouts, and the megakernel decides them with the same widened footprint (`PT_LOD_TEX_BIAS`) it shades with at
+   * depth >= `materialLodDepth` (its `mat` is one texture read per hit). The intersect kernel is built with `materialLod: 'full'`, so the depth is passed here (set only when
+   * `materialLod: 'secondary'`, textures, cone LOD and alpha MASK are all on; absent = the intersect text is unchanged).
+   */
+  lodTexDepth?: number;
 }
 export const PTWF_PLAIN: PtwfConfig = { refill: false, batch: false, threshold: 0.25, layers: 1 };
 
@@ -368,7 +374,7 @@ ${o.primary === 'vbuffer' ? `    var hit: RtHit;
         }
         let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_UV | RT_SURF_TEXFRAME);
         let coneW = rtConeAt(RtCone(st.coneWidth, st.coneSpread), hit.t);
-        let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
+        let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${wf.lodTexDepth !== undefined ? ` * select(1.0, ${PT_LOD_TEX_BIAS}, st.depth >= ${wf.lodTexDepth}u)` : ''}, PT_TEX_CONE);
         let a = rtApplyMaterialTextures(m, surf.uv, fp);
         if (!(a.opacity < a.alphaCutoff)) {
             break;

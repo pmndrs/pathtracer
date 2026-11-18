@@ -144,6 +144,9 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   const sampler = parts.slice(1, 2).concat(parts.slice(-1)).join('\n'); // Owen-Sobol + the sampler's ptSample2D
   // The appended integrator text is written against the split bindings; `full` (rtModuleWgsl) already has the packed ones.
   const px = (code: string): string => ((options.scenePacking ?? DEFAULT_SCENE_PACKING) === 'packed' ? rtPackSceneAccess(code) : code);
+  // R1 x alpha MASK x cone LOD: the cutout test of the intersect kernel uses the widened footprint of depth >= N like the megakernel's (see `PtwfConfig.lodTexDepth`)
+  const ro = resolveIntegratorOptions(integratorOptions);
+  const intersectWf: PtwfConfig = lodOn && ro.alphaMask && ro.textures && ro.textureLod === 'cone' ? { ...wf, lodTexDepth: lod.lodDepth } : wf;
   let shadeSecondary: RtWgslBuild | undefined;
   if (lodOn) {
     const second = ptShadingModulesWgsl({ ...options, integrator: { ...ptSecondaryIntegratorOptions(options.integrator), materialLod: 'secondary', materialLodDepth: lod.lodDepth } });
@@ -155,7 +158,7 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   return {
     ...(shadeSecondary ? { shadeSecondary } : {}),
     camera: rtTransformWgsl(px(`${sampler}\n${ptwfCameraWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfCamera'] }),
-    intersect: rtTransformWgsl(px(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${resolveIntegratorOptions(integratorOptions).primary === 'vbuffer' ? `${ptVbufferWgsl()}\n` : ''}${ptwfIntersectWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfIntersect'] }),
+    intersect: rtTransformWgsl(px(`${usesScene('intersect', integratorOptions, null) ? full : walk}\n${resolveIntegratorOptions(integratorOptions).primary === 'vbuffer' ? `${ptVbufferWgsl()}\n` : ''}${ptwfIntersectWgsl(integratorOptions, intersectWf)}`), { ...t, keep: ['ptwfIntersect'] }),
     shade: rtTransformWgsl(px(`${stripWalkBindings(full)}\n${parts.join('\n')}\n${outputs ? `${outputs}\n` : ''}${ptwfShadeWgsl(integratorOptions, lodOn && wf.refill ? { ...wf, lodGate: { role: 'first' as const, depth: lod.lodDepth } } : wf)}`), { ...t, keep: ['ptwfShade'] }),
     shadow: rtTransformWgsl(px(`${usesScene('shadow', integratorOptions, null) ? full : walk}\n${ptwfShadowWgsl(integratorOptions, wf)}`), { ...t, keep: ['ptwfShadow'] }),
     args: rtTransformWgsl(ptwfArgsWgsl(wf), { ...t, keep: ['ptwfArgsMain'] }),

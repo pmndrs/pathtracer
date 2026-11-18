@@ -77,6 +77,27 @@ describe('materialLod (R1)', () => {
     expect(bytes.shadeSecondary).toBeLessThan(50_000);
   });
 
+  it('alpha MASK x cone LOD (P4.1c): the intersect kernel decides cutouts with the widened footprint of depth >= N, as the megakernel does; no other combination changes its text', () => {
+    const build = (integrator: object, extra: object = {}) => ptWavefrontBuild(caps, { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { alphaMask: true, ...integrator }, shortenNames: false, minify: false, ...extra });
+    const cone = { textureLod: 'cone' as const };
+    const on = build({ ...cone, materialLod: 'secondary', materialLodDepth: 2 });
+    expect(on.intersect.code).toContain('select(1.0, 2.0, st.depth >= 2u)');
+    expect(build({ ...cone, materialLod: 'secondary' }).intersect.code).toContain('st.depth >= 1u)');
+    // the megakernel's cutout test is on the same lod-widened `fp` (the line the intersect kernel mirrors)
+    const mk = ptMegakernelBuild(caps, { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { alphaMask: true, ...cone, materialLod: 'secondary', materialLodDepth: 2 }, shortenNames: false, minify: false }).code;
+    expect(mk).toContain('select(1.0, PT_LOD_TEX_BIAS, lod)');
+    // off: material LOD full, level-0 textures, no cutouts -> the plain text
+    for (const [name, integrator] of [['materialLod full', { ...cone }], ['textureLod 0', { materialLod: 'secondary' as const }]] as const) {
+      expect(build(integrator).intersect.code, name).not.toContain('PT_LOD_TEX_BIAS');
+      expect(build(integrator).intersect.code, name).not.toMatch(/st\.depth >= \d+u\)/);
+    }
+    expect(ptWavefrontBuild(caps, { format: {}, layout: texLayout, textures: { buckets: [bucket] }, integrator: { ...cone, materialLod: 'secondary' }, shortenNames: false, minify: false }).intersect.code).not.toMatch(/st\.depth >= \d+u\)/);
+    // the other kernels are the ones without the option
+    const off = build({ ...cone });
+    for (const k of ['camera', 'shade', 'shadow', 'args'] as const) expect(on[k].code, k).toBe(off[k].code);
+    expect(balanced(on.intersect.code)).toBe(true);
+  });
+
   it('refill modes (R1b): both shade kernels exist, each skipping the other depth class (a refilled queue mixes depths)', () => {
     for (const refill of [true, 'batch', 'ordered'] as const) {
       const b = ptWavefrontBuild(caps, { format: {}, layout, integrator: { materials: materials('albedo'), materialLod: 'secondary', materialLodDepth: 1 }, refill, shortenNames: false, minify: false });
