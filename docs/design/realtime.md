@@ -1,8 +1,9 @@
 # Real-time mode foundation (P4.1)
 
 What the library gives a real-time pipeline (spec section 7: demod -> SVGF-class temporal + spatial filter -> upscaler) and
-what it leaves to the engine. Checked by `node bench/runner/run.ts --page realtime-check`. The filter (P4.5) and the upscaler
-(P4.6) are separate tasks; this note is the contract they read.
+what it leaves to the engine. Checked by `node bench/runner/run.ts --page realtime-check`. Sections 1-4 are the contract (P4.1);
+section 5 is the chain that consumes it: the filter (P4.5), the upscaler (P4.6) and the preview pipeline (P4.7), measured in
+[bench/results/REALTIME-PIPELINE.md](../../bench/results/REALTIME-PIPELINE.md).
 
 ## 1. Mode presets (`integrator/modes.ts`)
 
@@ -106,3 +107,65 @@ and `primary: 'vbuffer'` with frame outputs is untested (the frame planes read t
   `texture-formats-tier1` / `bgra8unorm-storage` style caps on some devices; P4.5 decides when it knows what the filter reads.
 * Megakernel only. The wavefront shade kernel is at 8 of the 10 Apple storage buffers; 1 more (frame planes) fits only with
   `scenePacking: 'packed'`. A wavefront frame mode is P4.1b.
+
+## 5. The chain: kernel -> filter -> upscaler (P4.5, P4.6, P4.7)
+
+The library stays dependency-free: the Denoiser and the upscaler are siblings, so the chain lives in the bench (`bench/realtime/chain.ts`, the code track N's `bench/nrc/pipeline.ts`
+had; `nrc-pipeline` and `realtime-pipeline` import the same file) and this section is how an engine wires it. `bench/realtime/session.ts` (`RealtimePipelineSession`) is the whole
+thing for a plain kernel with no cache; page `realtime-pipeline` checks it.
+
+```
+PtMegakernel { mode: 'realtime', maxDepth 2, [restir] }   960 x 540       one encode = one frame = one sample per pixel
+   frameBuffers { accum, planes }  (storage buffers, plane-major)
+        |  PipelineArm.accumulate + pack (compute, ~1.4 ms at 960 x 540):  planes -> rgba16float / r32float textures through ONE buffer and
+        |  copyBufferToTexture (rows 256-aligned), device depth from viewZ (one render pass, frag_depth, near 0.05 / far 200)
+        v
+   Denoiser DiffuseSpecularDenoiser.dispatchBoth (SVGF, anti-lag auto, remodulate: true)    diffuse = plane 0 / albedo factor, specular = plane 1 / specular factor
+        |  composite (diffuse + specular; the raw sky where every sample missed the scene)         + reactive mask pass (optional)
+        v
+   pmndrs/upscaler temporal (jitter: false), render -> display (2x)  [color, depth, velocity = the motion plane, reactive]
+        v
+   tonemap (exposure, ACES fit, sRGB) -> rgba8unorm
+```
+
+An engine's calls per frame, in order: `kernel.nextFrame(camera)` (first frame and after a cut: `setCamera`, `setPrevCamera(camera)`, `restir.setPreviousCamera(null)`, `arm.resetHistory()`);
+`arm.beginFrame(e); kernel.encode(e, 1); arm.accumulate(e, kernel.frameBuffers); arm.pack(e, 1)`; submit; `await arm.post(camera, { tonemap: true })` (the Denoiser and the upscaler submit
+their own command buffers; nothing is read back). The camera is the UNJITTERED pinhole of the kernel; the host's cameras give `FrameCamera.view / projection / prevView / prevProjection`
+(`chain-math.ts`: the same conventions as the kernel's `ptCameraBasis`, three's WebGPU projection for the upscaler). History resets on a cut; instance motion is not in the planes (static scenes).
+
+**Jitter owner (P4.6 decision): the kernel's sampler, as in track N.** Pair 0 jitters every pixel's primary ray inside the pixel (blue noise without ReSTIR, Owen-Sobol with it); the upscaler
+runs `jitter: false`, the denoiser gets `jitter [0, 0]`, motion is jitter-free by construction. The alternatives, both built in the library but not wired here: the upscaler as owner (one Halton offset per frame
+through a uniform camera shift in the kernel: N11.2, not built) and `primary: 'vbuffer'` + `setVbufferJitter` (needs a raster pass and `encode(1)`; the planes are untested with it). Reasons to keep the sampler:
+no kernel change, no second owner by construction, and per-pixel blue-noise jitter already gives the upscaler distinct sub-pixel samples; what it cannot do is reconstruct above the render
+resolution from known offsets (the 2x reconstruction floor of the control row, relMSE 0.015 on sponza-white, is the price; A/B in N11.2).
+
+**Reactive mask (R7, `settings.reactive`, off by default).** `r = strength * clamp(1 - (n - 1) / cap, 0, 1)` per render pixel from the SVGF history length n (alpha of its accumulation texture), written as rgba8unorm and
+passed as the upscaler's `reactive` input: fresh and disoccluded pixels favour the current frame. On the orbit it lowers the upscaler's darkening (-4.8% against -7.0%) and the error at the last pose slightly (FLIP 0.107 against 0.110) but
+costs 2.3x the boil (0.0082 against 0.0036): off by default, a quality-vs-steadiness setting. It reads the Denoiser's internal `accum` debug texture.
+
+**P4.7, the preview pipeline,** is the same chain with `denoise: 'oidn'` (`moving: 'fast'` every frame, `stillSamples: Infinity`, `hold: false`) at a lower render size and maxDepth 4 (`RealtimePipelineSession { preview: true }`, page args `res=640x360 maxDepth=4 variants=svgf,oidn-fast`).
+It runs the real-time frame kernel (OIDN's albedo and normal guides come from the frame planes), not `mode: 'preview'` (whose AOV path serves `pt_denoise=oidn`, the converged-frame variant). Numbers: REALTIME-PIPELINE.md. OIDN small costs 4.6 ms at 640 x 360 and 11.8 ms at 960 x 540 on the M5 Pro (wall clock, awaited, provisional) against 1.2 ms for SVGF at 960 x 540; the preview frame (640 x 360 -> 1280 x 720, maxDepth 4) is 20.1 ms (13.3 trace + 0.6 pack + 5.0 OIDN + 0.4 upscale), SVGF in the same configuration 14.9 ms.
+
+**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants), wavefront frame mode (P4.1b), the wavefront with ReSTIR. An emitter seen directly
+by the primary ray is demodulated by the albedo floor (1e-3: emission / 1e-3 reaches SVGF and the f16 clamp of `pipePack` at 65000) and breaks the diffuse plane: keep emitters out of the primary view (`sponza-lamps` hangs its lamps below eye level) or add the
+emission after the filter (a plane for it is the fix; TASKS P4.5a).
+
+### Results (M5 Pro, provisional timing; own depth-2 references at 1920 x 1080)
+
+Detail and every table: [REALTIME-PIPELINE.md](../../bench/results/REALTIME-PIPELINE.md). sponza-white, 960 x 540 -> 1920 x 1080, maxDepth 2:
+
+| stage | ms (load 3-10; batched wall clock, PROVISIONAL) |
+|---|---|
+| path trace (NEE) | 15.2 |
+| path trace + ReSTIR DI (biased + visibility / unbiased) | 20.6 / 17.5 |
+| accumulate + pack (frame planes -> textures, depth) | 1.35 |
+| denoise + composite (SVGF) | 1.2 |
+| upscale | 0.75 |
+| tonemap | 0.04 |
+| **whole frame, NEE / ReSTIR biased / ReSTIR unbiased** | **19.6 (51 fps) / 31.0 (32 fps) / 21.0 (48 fps)** |
+
+Quality (static, frame 64, against our own 1024 spp depth-2 reference): raw 4.5, denoised 0.065, final 0.056 relMSE (resolution floor 0.015), final FLIP 0.103; moving camera: boil 0.0036 (k = 1)
+against 0.0090 for OIDN small, the preview pipeline's denoiser. P4 exit gate (about 30 fps on a 3060L-class GPU, half-res -> 1080p, 2 bounces + ReSTIR DI; steadier in motion than preview mode):
+the second half holds (2.5x / 1.9x lower boil, 20% lower FLIP than OIDN small at the same size); the first half is an ESTIMATE: this Mac's trace is 15.2 ms, the only 3060L-over-M5 ratio we have is 74.1 ms (3060L, 8 vertices with RR from 4, throttled, N11) against
+55.5 ms (M5 Pro, 8 vertices, no RR, load 14), i.e. 1.3x (more once RR is accounted for: about 2.1x), so the 3060L trace is about 20-32 ms; with the track N chain's 11 ms of pack, denoise and upscale on that GPU the frame is 31-43 ms without ReSTIR (23-32 fps) and
+34-54 ms with it (19-29 fps): borderline without ReSTIR, short with it on a full Sponza. The M5 Pro is comfortably inside the gate (32-51 fps). Settle on the 3060 (`realtime-pipeline` with `--gpu nvidia`; TASKS P4.5b) before calling the gate.

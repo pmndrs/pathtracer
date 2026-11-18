@@ -74,7 +74,8 @@ in motion than preview mode on the Denoiser scorecard metrics.
 
 Already done early: our own blue-noise textures (P0.17, D16).
 **Progress (2026-11-15):** P4.1 built (megakernel): mode presets, the blue-noise sampler, per-frame denoiser inputs (demodulated diffuse / specular, normal, viewZ, camera motion, roughness), `realtime-check` page
-(`docs/design/realtime.md`). Left: the temporal filter integration (P4.5), upscaler (P4.6), preview pipeline (P4.7), wavefront frame mode (P4.1b), ReSTIR DI, R3, R6-R9.
+(`docs/design/realtime.md`). Left: wavefront frame mode (P4.1b), ReSTIR defaults and the unification (P4.2d / P4.2g), R3, R6-R9.
+**Progress (2026-11-18):** P4.5-P4.7 built and measured on the M5 Pro without a cache (`bench/realtime/`, page `realtime-pipeline`, docs/design/realtime.md section 5, bench/results/REALTIME-PIPELINE.md): kernel -> SVGF -> upscaler, one jitter owner (the sampler), reactive mask, preview chain. Provisional frame 19.6 ms (51 fps) at 960 x 540 -> 1080p, maxDepth 2 (31.0 ms with biased ReSTIR); steadier in motion than the preview pipeline's OIDN (boil 2.5x lower, FLIP 20% lower). The 30 fps gate on the 3060L is estimated at 23-32 fps without ReSTIR and waits for the 3060 run (P4.5b).
 
 ## ⬜ P5 — Breadth
 
