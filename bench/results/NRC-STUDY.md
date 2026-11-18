@@ -155,7 +155,7 @@ network gets each vertex's real roughness (it read 1 everywhere before, N-I10; n
 | (relMSE unless noted) | Plain | Network | Hash grid | Hash, direction bins |
 |---|---|---|---|---|
 | Warm, single frame | 32.0 | 1.72 | **1.70** | 1.74 |
-| Warm, accumulated 16 frames | 2.69 | **0.092** | 0.106 | 0.106 |
+| Warm, accumulated 16 frames | 18.1 (a firefly: 10.7 at 4 frames) | **0.092** | 0.106 | 0.106 |
 | Warm, accumulated 256 frames | 0.826 | **0.013** | 0.026 | 0.023 |
 | LDR-FLIP, single frame / 256 frames | 0.457 / 0.111 | **0.272 / 0.103** | 0.311 / 0.149 | 0.298 / 0.127 |
 | Bias after 256 frames | +0.04% | +0.9% | +0.3% | −0.3% |
