@@ -19,9 +19,9 @@
  *     pt.setCamera(cam0);  encode(1);  ...  pt.nextFrame(cam1);  pt.encode(encoder, 1);     // the old camera is the previous one (motion)
  *     const { accum, planes } = pt.frameBuffers;                                              // or: const frame = await pt.readFrame();
  */
-import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, sceneFormatOf, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings } from '@pmndrs/raytracer';
+import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, sceneFormatOf, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings, rtSetResourceTable, rtUsesResourceTable } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
-import type { BlueNoiseTexture, Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout } from '@pmndrs/raytracer';
+import type { BlueNoiseTexture, Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout, RtResourceTable } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl, ptBsdfReducedWgsl, ptLayeredDispatchWgsl, ptReducedKernelFeatures } from '../bsdf/adapter.ts';
 import { ptBsdfWgsl } from '../bsdf/bsdf-wgsl.ts';
 import { ptLayeredWgsl } from '../bsdf/layered-wgsl.ts';
@@ -263,6 +263,8 @@ export class PtMegakernel {
   private slot = 0;
   private walkGroup: GPUBindGroup | null = null;
   private sceneGroup: GPUBindGroup | null = null;
+  /** The scene copy's texture table (`binding: 'table'`, P1.4c2), set on every pass. */
+  private textureTable: RtResourceTable | null = null;
   private ioGroup: GPUBindGroup | null = null;
   private accum: GPUBuffer | null = null;
   private width = 0;
@@ -336,7 +338,7 @@ export class PtMegakernel {
       ...(options.integrator?.hooks ? [device.createBindGroupLayout({ label: `${label} hooks`, entries: options.integrator.hooks.bindings ?? [] })] : []),
     ];
     // On a compile error this throws with original line numbers, names and source text (rtCreateComputePipelineAsync).
-    const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: layouts }), code, map, entryPoint: 'ptMain', sourceMap: options.sourceMap });
+    const pipeline = await rtCreateComputePipelineAsync(device, { label, layout: device.createPipelineLayout({ bindGroupLayouts: layouts, ...(rtUsesResourceTable(options.textures) ? { usesResourceTable: true } : {}) } as GPUPipelineLayoutDescriptor), code, map, entryPoint: 'ptMain', sourceMap: options.sourceMap });
     let fuzzTable: GPUBuffer | null = null;
     if (options.integrator?.materials?.features.fuzz) {
       const table = ptFuzzTableF32();
@@ -372,8 +374,10 @@ export class PtMegakernel {
     if (trace.nodeFormat !== sceneFormatOf(this.options.format).nodeFormat) throw new Error(`PtMegakernel.setScene: the kernel walks '${sceneFormatOf(this.options.format).nodeFormat}' nodes but the scene is '${trace.nodeFormat}'`);
     if ((this.options.scenePacking ?? DEFAULT_SCENE_PACKING) !== scene.packing) throw new Error(`PtMegakernel.setScene: the kernel was built for scene packing '${this.options.scenePacking ?? DEFAULT_SCENE_PACKING}' but the scene copy is '${scene.packing}' (build both with the same packing)`);
     if (!!this.options.textures !== !!scene.textures) throw new Error(`PtMegakernel.setScene: the kernel was built ${this.options.textures ? 'with' : 'without'} textures but the scene copy has ${scene.textures ? 'some' : 'none'}`);
+    if (rtUsesResourceTable(this.options.textures) !== rtUsesResourceTable(scene.textures?.layout)) throw new Error(`PtMegakernel.setScene: the kernel reads textures through ${rtUsesResourceTable(this.options.textures) ? 'a resource table' : 'texture array bindings'} but the scene copy's textures were built with binding '${scene.textures?.layout.binding ?? 'arrays'}' (build both with the same TextureOptions.binding)`);
     this.walkGroup = this.device.createBindGroup({ label: 'pt walk', layout: this.walkLayout, entries: rtSceneBindGroupEntries(trace) });
     this.sceneGroup = this.device.createBindGroup({ label: 'pt scene', layout: this.sceneLayout, entries: rtSceneCopyBindGroupEntries(scene) });
+    this.textureTable = scene.textures?.table ?? null;
   }
 
   /**
@@ -537,6 +541,7 @@ export class PtMegakernel {
       this.hookGroup = this.device.createBindGroup({ label: 'pt hooks (empty)', layout: this.hookLayout, entries: [] });
     }
     const pass = encoder.beginComputePass({ label: 'pt samples', timestampWrites });
+    if (this.textureTable) rtSetResourceTable(pass, this.textureTable);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.walkGroup);
     pass.setBindGroup(1, this.sceneGroup);

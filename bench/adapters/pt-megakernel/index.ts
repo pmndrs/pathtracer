@@ -89,6 +89,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** bvh scene options (X1.i, D25; page args `pt_bvh`, `pt_bvh_decode`, `pt_bvh_walk`): `nodeFormat` `quantized` (default) | `f32` | the experimental wide `bvh4` | `cwbvh8` (hits are the same, tie order aside); `decode` `exact` | `folded` (wide only, default folded); `walk` `nested` | `single` (bvh4 only). */
   /** Texture mip levels (X5, page arg `pt_mips`): `gpu` (default since D34: level 0 only on the CPU, levels 1+ by `@pmndrs/downsampler` in `uploadSceneCopy`; codes differ from the CPU chain by up to 2) or `cpu` (every level built in `buildSceneTextures`). */
   mips?: 'cpu' | 'gpu';
+  /** Texture binding (P1.4c2, page arg `pt_tex_binding`): `arrays` (default, every device) or `table` (resource table, Tier 3; megakernel only; Chrome on Metal fails compute passes with a table, V296). Same texels: images equal `arrays` unless `arrays` had to merge buckets. */
+  textureBinding?: 'arrays' | 'table';
   bvh?: { nodeFormat?: NodeFormat; decode?: 'exact' | 'folded'; walk?: 'nested' | 'single' };
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
@@ -266,6 +268,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         ...(settings.bvh && Object.keys(settings.bvh).length ? { bvh: settings.bvh } : {}),
         ...(settings.mips === 'cpu' ? { mips: 'cpu' } : {}),
+        ...(settings.textureBinding === 'table' ? { textureBinding: 'table' } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         ...(settings.mode ? { mode: settings.mode } : {}),
         ...(settings.sampler === 'bluenoise' || settings.mode === 'realtime' ? { blueNoise: settings.blueNoise ?? 'gf-vec2-64', ...(settings.blueNoiseShift ? { blueNoiseShift: settings.blueNoiseShift } : {}), ...(settings.blueNoisePairs ? { blueNoisePairs: settings.blueNoisePairs } : {}) } : {}),
@@ -380,7 +383,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
     );
     builder.dispose();
     this.trace = uploadTraceScene(device, data, scene.name);
-    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.mips === 'cpu' ? { textures: { ...input.options?.textures, mips: 'cpu' as const } } : {}), ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
+    const textureOptions = { ...(this.settings.mips === 'cpu' ? { mips: 'cpu' as const } : {}), ...(this.settings.textureBinding === 'table' ? { binding: 'table' as const } : {}) };
+    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(Object.keys(textureOptions).length ? { textures: { ...input.options?.textures, ...textureOptions } } : {}), ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
     this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}) });
     this.lastLoad = { caps, copy, input };
     const loadMs = performance.now() - t0;

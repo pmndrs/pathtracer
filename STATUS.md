@@ -34,7 +34,8 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
     like the others (relMSE 4.8e-5 at 4096 spp).
   - Both libraries add an energy-compensation trick to rough metals that can't be switched off, so that one test is
     reported separately.
-- **Capability detection.** This Mac is "tier 2": subgroups, f16 and timestamps, but no bindless.
+- **Capability detection.** This Mac is "tier 2" in Chrome stable: subgroups, f16 and timestamps, but no bindless. Chrome 160 Canary
+  adds the resource table (tier 3), but Metal cannot use it in compute passes yet, so bindless still can't run here (P1.4c2).
 - **Literature check.**
   - OIDN 3 on Nov 30 is an alpha; temporal denoising for all GPUs comes in March 2027.
   - NVIDIA's blue-noise textures can't be used (non-commercial licence), so we generate our own.
@@ -69,7 +70,7 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
 - Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
 - Track N (merged into main 2026-11-18): the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
-- P5 (breadth): 6 of 7 items built. On main: ReSTIR GI, volumes, spectral + dispersion, MaterialX -> WGSL, Split RC interval tracing for gi (all opt-in, default kernels byte-identical), each on both schedulers (per pixel equal except long dispersive glass paths, P5.s9 open). The subgroup-matrix denoiser is on Denoiser branch `feat/wgsl-sgm-v2` (unmerged, maintainer's call). Left: bindless (not on macOS yet) and the 3060 runs.
+- P5 (breadth): 6 of 7 items built. On main: ReSTIR GI, volumes, spectral + dispersion, MaterialX -> WGSL, Split RC interval tracing for gi (all opt-in, default kernels byte-identical), each on both schedulers (per pixel equal except long dispersive glass paths, P5.s9 open). The subgroup-matrix denoiser is on Denoiser branch `feat/wgsl-sgm-v2` (unmerged, maintainer's call). Bindless is built too (opt-in, megakernel): this Mac's Canary has the feature but Metal can't use it in compute and SwiftShader gets divergent lookups wrong, so whether it works (and is faster) is a 3060 question (W17). Left: the 3060 runs.
 - P3 / P4 closed on a provisional basis (D32): defaults flipped (packed scene copy, albedo correction texture, ReSTIR unbiased when on, `ptwfAutoPolicy` as the scheduler entry point with a kernel-size rule); open items in TASKS "Open after closing P3 / P4".
 - Cutouts in the real-time modes (R2b, D31): `preview` / `realtime` now use exact indirect hits plus `alphaShadow: 'transmit'` (beta 0.45) instead of D27's `opaqueSecondary`; max speed is the opt-in `alphaPolicy: 'opaqueShadow'`. Numbers are provisional (shared Mac) until the quiet pass.
 - Wide BVH: bvh 0.1.0 is on npm and we depend on it (D33, X4); `bvh4` and `cwbvh8` are a setting in every kernel (X1.i), trace-core clean, provisional M5 Pro: cwbvh8 -16..-26% megakernel time on Sponza / Cornell. Default still binary until the 3060 run picks one.

@@ -19,7 +19,8 @@ export function capsDefines(caps: Caps): Defines {
 
 /**
  * WGSL `enable` lines for the features the device has. Immediates are a language feature and need no `enable`.
- * Bindless needs no enable line in current Chrome; update here if that changes.
+ * The resource table's `enable chromium_experimental_resource_table;` is NOT here: only kernels built with a `table` texture layout
+ * need it, so `rtModuleWgsl` adds it per kernel (`rtTextureTableEnable`) and every other kernel keeps its text.
  */
 export function wgslEnableLines(caps: Caps): string {
   const lines: string[] = [];

@@ -15,7 +15,7 @@ import { surfaceVertexOffsets, type SurfaceLayout } from './surface-table.ts';
 import { RT_CORE_WGSL, rtBatchArgsWgsl, rtBatchWgsl, rtSurfaceWgsl } from './wgsl-source.ts';
 import { RT_INTERVAL_WGSL } from './interval.ts';
 import { DEFAULT_SCENE_PACKING, SCENE_HEADER_VEC4S, sceneCopyStorageBuffers, type SceneCopyPacking } from '../scene/constants.ts';
-import { rtPackSceneAccess, rtSceneWgsl } from '../scene/scene-wgsl.ts';
+import { rtPackSceneAccess, rtSceneWgsl, rtTextureTableEnable } from '../scene/scene-wgsl.ts';
 import type { TextureLayout } from '../scene/texture.ts';
 import { rtShadeWgsl } from '../shade/shade-wgsl.ts';
 import type { RtShadeOptions } from '../shade/shade.ts';
@@ -389,7 +389,12 @@ function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): st
 export function rtModuleWgsl(caps: Caps, options: RtModuleOptions = {}): string {
   const traceSlot = options.traceSlot ?? { group: 0, firstBinding: 0 };
   const source = inlineSource({ ...options, traceSlot });
-  const code = buildWgsl((options.stripComments ?? true) ? stripWgslComments(source) : source, caps, coreDefines(options));
+  let code = buildWgsl((options.stripComments ?? true) ? stripWgslComments(source) : source, caps, coreDefines(options));
+  if (options.scene && options.scene.textures?.binding === 'table') {
+    if (caps.resourceTable === 'none') throw new Error("rtModuleWgsl: textures with binding 'table' need a device with a resource table (caps.resourceTable is 'none'); build the textures with binding 'arrays'");
+    // Enable lines go first; this one before the caps' own (order among enables is free). The extra line shifts error lines by one (`rtMapCompilationInfo` maps from the final text).
+    code = `${rtTextureTableEnable(caps.featureNames.samplingResourceTable ?? caps.featureNames.heterogeneousResourceTable)}\n${code}`;
+  }
   return options.minify ? rtMinifyWgsl(code) : code;
 }
 

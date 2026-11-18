@@ -5,7 +5,7 @@
 import { Downsampler } from '@pmndrs/downsampler/webgpu';
 import { DEFAULT_SCENE_PACKING, type SceneCopyPacking } from './constants.ts';
 import { packSceneCopy, packedSceneCopyBytes, type SceneCopy } from './scene-copy.ts';
-import type { SceneTextures, TextureLayout, TextureWrap } from './texture.ts';
+import { textureTableSize, type SceneTextures, type TextureLayout, type TextureWrap } from './texture.ts';
 
 // GPUBufferUsage bits, spelled out so this module loads in Node (tests) where the WebGPU globals do not exist.
 const STORAGE = 0x80;
@@ -19,13 +19,32 @@ const TEXTURE_RENDER = 0x10;
 
 const ADDRESS_MODE: Record<TextureWrap, GPUAddressMode> = { repeat: 'repeat', clamp: 'clamp-to-edge', mirror: 'mirror-repeat' };
 
-/** The texture arrays of a scene on the GPU: one `texture_2d_array` + one trilinear sampler per bucket. */
+/**
+ * The part of Chrome's `GPUResourceTable` (`chromium-experimental-sampling-resource-table`, not in @webgpu/types yet) the upload uses.
+ * Created by `device.createResourceTable({ size })`; a compute pass binds it with `setResourceTable(table)` and a pipeline layout that reads it
+ * needs `usesResourceTable: true`.
+ */
+export interface RtResourceTable {
+  insert(resource: GPUTextureView | GPUSampler): number;
+  destroy(): void;
+  readonly size: number;
+  label: string;
+}
+
+/** `pass.setResourceTable(table)` (Chrome's resource table): call before the dispatches of a kernel whose textures use `binding: 'table'`. */
+export function rtSetResourceTable(pass: GPUComputePassEncoder, table: RtResourceTable): void {
+  (pass as unknown as { setResourceTable(t: RtResourceTable): void }).setResourceTable(table);
+}
+
+/** The texture arrays of a scene on the GPU: one `texture_2d_array` + one trilinear sampler per bucket (and, for `binding: 'table'`, the table holding them). */
 export interface SceneTextureBuffers {
   readonly textures: readonly GPUTexture[];
   readonly views: readonly GPUTextureView[];
   readonly samplers: readonly GPUSampler[];
   readonly layout: TextureLayout;
   readonly byteLength: number;
+  /** `binding: 'table'`: views at index = bucket, samplers at index = buckets + bucket (`rtTexturesWgsl`). Bind with `rtSetResourceTable`. */
+  readonly table?: RtResourceTable;
 }
 
 export interface SceneCopyBuffers {
@@ -112,7 +131,7 @@ export function uploadSceneCopy(device: GPUDevice, copy: SceneCopy, options: Upl
       ...(textures ? { textures } : {}),
       destroy() {
         packed.destroy();
-        textures?.textures.forEach((t) => t.destroy());
+        destroySceneTextures(textures);
       },
     };
   }
@@ -137,7 +156,7 @@ export function uploadSceneCopy(device: GPUDevice, copy: SceneCopy, options: Upl
     destroy() {
       table.destroy();
       data.destroy();
-      textures?.textures.forEach((t) => t.destroy());
+      destroySceneTextures(textures);
     },
   };
 }
@@ -168,12 +187,24 @@ export function writeSceneCopy(device: GPUDevice, buffers: SceneCopyBuffers, cop
  * Creates one texture array per bucket (`rgba8unorm-srgb` for colour, `rgba8unorm` for data, every mip level written from the CPU
  * chain, or levels 1+ generated here by the default `rtMipGenerator` when the textures were built with `mips: 'gpu'`) with a trilinear sampler whose address mode is the bucket's wrap. Fails clearly when a limit is exceeded.
  */
+function destroySceneTextures(textures: SceneTextureBuffers | undefined): void {
+  textures?.textures.forEach((t) => t.destroy());
+  textures?.table?.destroy();
+}
+
+/** Chrome's table cap (no adapter limit yet; gpuweb proposals/bindless.md). */
+export const RT_RESOURCE_TABLE_MAX = 65536;
+
 export function uploadSceneTextures(device: GPUDevice, textures: SceneTextures, label = 'rt scene', mipGenerator?: RtMipGenerator, copySrc = false): SceneTextureBuffers {
   const generator = mipGenerator ?? (textures.gpuMips ? rtMipGenerator(device) : undefined);
   const { limits } = device;
   const encoder = generator ? device.createCommandEncoder({ label: `${label} mips` }) : null;
   const count = textures.buckets.length;
-  if (count > limits.maxSampledTexturesPerShaderStage || count > limits.maxSamplersPerShaderStage) throw new RangeError(`${label}: ${count} texture arrays exceed the device's limits (${limits.maxSampledTexturesPerShaderStage} sampled textures, ${limits.maxSamplersPerShaderStage} samplers per stage)`);
+  const useTable = textures.binding === 'table';
+  if (useTable) {
+    if (typeof (device as unknown as { createResourceTable?: unknown }).createResourceTable !== 'function') throw new Error(`${label}: textures built with binding 'table' need a device created with the resource-table feature (requestDeviceForCaps requests it when the adapter has it)`);
+    if (2 * count > RT_RESOURCE_TABLE_MAX) throw new RangeError(`${label}: ${count} texture arrays need ${2 * count} resource-table entries, over ${RT_RESOURCE_TABLE_MAX}`);
+  } else if (count > limits.maxSampledTexturesPerShaderStage || count > limits.maxSamplersPerShaderStage) throw new RangeError(`${label}: ${count} texture arrays exceed the device's limits (${limits.maxSampledTexturesPerShaderStage} sampled textures, ${limits.maxSamplersPerShaderStage} samplers per stage)`);
   const gpuTextures: GPUTexture[] = [];
   const views: GPUTextureView[] = [];
   const samplers: GPUSampler[] = [];
@@ -204,15 +235,22 @@ export function uploadSceneTextures(device: GPUDevice, textures: SceneTextures, 
     device.queue.submit([encoder.finish()]);
     if (generator?.release) for (const texture of gpuTextures) generator.release(texture);
   }
-  const layout: TextureLayout = { buckets: textures.buckets.map(({ width, height, colorSpace, wrap, layers, mipLevels }) => ({ width, height, colorSpace, wrap, layers, mipLevels })) };
-  return { textures: gpuTextures, views, samplers, layout, byteLength: textures.byteLength };
+  const layout: TextureLayout = { buckets: textures.buckets.map(({ width, height, colorSpace, wrap, layers, mipLevels }) => ({ width, height, colorSpace, wrap, layers, mipLevels })), ...(useTable ? { binding: 'table' as const } : {}) };
+  if (!useTable) return { textures: gpuTextures, views, samplers, layout, byteLength: textures.byteLength };
+  const table = (device as unknown as { createResourceTable(d: { label?: string; size: number }): RtResourceTable }).createResourceTable({ label: `${label} textures`, size: textureTableSize(layout) });
+  // Order is the WGSL's contract: view i at index i, sampler i at index count + i. A fresh table hands out 0, 1, 2, ...; check rather than assume.
+  [...views, ...samplers].forEach((resource, i) => {
+    const index = table.insert(resource);
+    if (index !== i) throw new Error(`${label}: resource table put entry ${i} at index ${index}`);
+  });
+  return { textures: gpuTextures, views, samplers, layout, byteLength: textures.byteLength, table };
 }
 
 export function rtSceneCopyBindGroupEntries(buffers: SceneCopyBuffers, firstBinding = 0): GPUBindGroupEntry[] {
   const list = buffers.packing === 'packed' ? [buffers.packed as GPUBuffer] : [buffers.table as GPUBuffer, buffers.data as GPUBuffer];
   const entries: GPUBindGroupEntry[] = list.map((buffer, i) => ({ binding: firstBinding + i, resource: { buffer } }));
   const t = buffers.textures;
-  if (t) {
+  if (t && !t.table) {
     // Textures after the buffer bindings (2, or 1 packed), then one sampler per texture (the same order as the WGSL declarations).
     const next = firstBinding + list.length;
     t.views.forEach((view, i) => entries.push({ binding: next + i, resource: view }));
@@ -221,14 +259,19 @@ export function rtSceneCopyBindGroupEntries(buffers: SceneCopyBuffers, firstBind
   return entries;
 }
 
-/** Layout entries of the scene copy's bindings: table, data (one binding when `packing` is 'packed'), then (when `textures` is given) the texture arrays and their samplers. */
+/** Layout entries of the scene copy's bindings: table, data (one binding when `packing` is 'packed'), then (when `textures` is given, `arrays` binding) the texture arrays and their samplers. A `table` layout adds none: the pipeline layout needs `usesResourceTable` instead (`rtUsesResourceTable`). */
 export function rtSceneCopyLayoutEntries(firstBinding = 0, textures?: TextureLayout | null, packing: SceneCopyPacking = DEFAULT_SCENE_PACKING): GPUBindGroupLayoutEntry[] {
   const count = packing === 'packed' ? 1 : 2;
   const entries: GPUBindGroupLayoutEntry[] = Array.from({ length: count }, (_, i) => ({ binding: firstBinding + i, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }));
-  if (textures) {
+  if (textures && textures.binding !== 'table') {
     const n = textures.buckets.length;
     for (let i = 0; i < n; i++) entries.push({ binding: firstBinding + count + i, visibility: COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } });
     for (let i = 0; i < n; i++) entries.push({ binding: firstBinding + count + n + i, visibility: COMPUTE, sampler: { type: 'filtering' } });
   }
   return entries;
+}
+
+/** True when a kernel built for this texture layout reads a resource table: its pipeline layout needs `usesResourceTable: true`. */
+export function rtUsesResourceTable(textures: TextureLayout | null | undefined): boolean {
+  return textures?.binding === 'table';
 }

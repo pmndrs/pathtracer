@@ -311,6 +311,7 @@ export class PtWavefront {
     const specTable = resolved.spectral ? (options.spectralTable ?? defaultRgb2SpecTable(resolved.spectral.res)) : null;
     if (resolved.spectral && specTable && specTable.res !== resolved.spectral.res) throw new Error(`PtWavefront: integrator.spectral.res is ${resolved.spectral.res} but the spectral table has res ${specTable.res} (pass \`spectral: { res: ${specTable.res} }\`)`);
     if (extra.blueNoise) validateBlueNoise(options.blueNoise);
+    if (options.textures?.binding === 'table') throw new Error("PtWavefront: textures with binding 'table' (resource table, P1.4c2) run on the megakernel only for now; build the textures with binding 'arrays'");
     device.pushErrorScope('validation');
     // One layout per kernel with only the buffers it declares: a shared layout would bind 3 (walk) + 2 (scene) + 7 buffers and pass the
     // 10-storage-buffers-per-stage limit of Apple GPUs (Chrome/Metal). A kernel that has no walk (or no scene) gets an empty group there.

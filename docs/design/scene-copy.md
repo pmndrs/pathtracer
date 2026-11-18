@@ -137,6 +137,11 @@ _D32 (2026-11-18): `DEFAULT_SCENE_PACKING` is `packed` (provisional: per-pixel i
    - *Atlas*: one texture, no layers. Con: bleeding across tiles (needs gutters), wrap must be done in the shader (so no hardware repeat),
      mips cross tiles. Not recommended.
    - *Bindless*: no pad, no switch, no merge. Con: not available on macOS; needs `chromium-experimental-sampling-resource-table`.
+     **Built (P1.4c2, 2026-11-19)** as `TextureOptions.binding: 'table'`: the size-bucket arrays themselves go into the table, so texels,
+     samplers and images equal the `arrays` path whenever `arrays` did not merge (and merging is what the table removes: 20 groups cost
+     33.3 MiB as 8 merged arrays, 21.8 MiB in the table). The lookup is one `getResource` line whatever the bucket count. Open before it can
+     be a default: Metal fails compute passes with a table (Chrome 160 Canary, V296) and SwiftShader breaks divergent indices (V297); the 3060
+     decides whether real drivers get divergent indices right (W17, `--page bindless-check`).
    Suggestion: keep size buckets; add bindless as Tier 3 behind the same slot API (P1.4c2). Settle with: Sponza-with-textures (P1.4c3) and a
    Bistro-class scene, same camera, spp, seed: ms per spp (quiet pass), texture bytes, and the image difference (must be bit-identical except
    for resampled non-power-of-two sources); buckets vs one fixed array (a setting) vs bindless on the 3060.

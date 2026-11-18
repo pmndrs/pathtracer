@@ -435,14 +435,36 @@ fn rtLightPmfOfHit(instance: u32, triangle: u32) -> f32 {
 `;
 }
 
-/** The texture arrays, their samplers and the lookups. One `texture_2d_array` + sampler pair per bucket; `rtTexSample` switches on the slot's bucket. */
+/** WGSL `enable` line of a `table` texture layout (`enable chromium_experimental_resource_table;` for Chrome's prefixed feature). Callers put it first. */
+export function rtTextureTableEnable(featureName: string | undefined): string {
+  return featureName?.startsWith('chromium-experimental') ? 'enable chromium_experimental_resource_table;' : 'enable resource_table;';
+}
+
+/**
+ * The texture arrays, their samplers and the lookups. `arrays`: one `texture_2d_array` + sampler pair per bucket; `rtTexSample` switches on
+ * the slot's bucket. `table` (P1.4c2): no bindings; the bucket indexes a resource table (`getResource`), its sampler sits `buckets` entries later.
+ * The `table` text needs the resource-table `enable` line first (`rtModuleWgsl` adds it).
+ */
 export function rtTexturesWgsl(o: { group: number; firstBinding: number; layout: TextureLayout; packing?: SceneCopyPacking }): string {
   const n = o.layout.buckets.length;
   const first = o.firstBinding + rtSceneBufferBindings(o.packing);
   const decls: string[] = [];
-  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${first + i}) var rtTex${i}: texture_2d_array<f32>;`);
-  for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${first + n + i}) var rtSmp${i}: sampler;`);
-  const cases = Array.from({ length: n }, (_, i) => `        case ${i}u: {\n            return textureSampleLevel(rtTex${i}, rtSmp${i}, uv, layer, lod);\n        }`).join('\n');
+  let lookup: string;
+  if (o.layout.binding === 'table') {
+    // A `getResource` of the wrong type returns a default resource (no error): every bucket is inserted as a '2d-array' view, even with one layer.
+    lookup = `    return textureSampleLevel(getResource<texture_2d_array<f32>>(r.x), getResource<sampler>(${n}u + r.x), uv, i32(r.y), lod);`;
+  } else {
+    for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${first + i}) var rtTex${i}: texture_2d_array<f32>;`);
+    for (let i = 0; i < n; i++) decls.push(`@group(${o.group}) @binding(${first + n + i}) var rtSmp${i}: sampler;`);
+    const cases = Array.from({ length: n }, (_, i) => `        case ${i}u: {\n            return textureSampleLevel(rtTex${i}, rtSmp${i}, uv, layer, lod);\n        }`).join('\n');
+    lookup = `    let layer = i32(r.y);
+    switch (r.x) {
+${cases}
+        default: {
+            return vec4f(1.0);
+        }
+    }`;
+  }
   return /* wgsl */ `
 ${decls.join('\n')}
 
@@ -451,13 +473,7 @@ fn rtTexRecord(slot: u32) -> vec4u {
 }
 
 fn rtTexSampleRecord(r: vec4u, uv: vec2f, lod: f32) -> vec4f {
-    let layer = i32(r.y);
-    switch (r.x) {
-${cases}
-        default: {
-            return vec4f(1.0);
-        }
-    }
+${lookup}
 }
 
 fn rtTexSample(slot: u32, uv: vec2f, lod: f32) -> vec4f {

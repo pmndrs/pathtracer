@@ -457,6 +457,7 @@ export class RtIntervalTracer {
     const sceneLayout = device.createBindGroupLayout({ label: `${label} scene`, entries: withBindings(rtWalkEntries(format)) });
     const ioLayout = device.createBindGroupLayout({ label: `${label} io`, entries: rtIntervalEntries(resolved) });
     const shaded = resolved.output === 'shaded';
+    if (options.scene?.textures?.binding === 'table') throw new Error("RtIntervalTracer: textures with binding 'table' (resource table) are not wired into the interval tracer; use binding 'arrays'");
     const copyLayout = shaded ? device.createBindGroupLayout({ label: `${label} scene copy`, entries: rtSceneCopyLayoutEntries(0, options.scene?.textures ?? undefined, options.scene?.packing ?? DEFAULT_SCENE_PACKING) }) : null;
     const code = rtIntervalKernelWgsl(caps, { ...options, ...resolved });
     const layouts = copyLayout ? [sceneLayout, ioLayout, copyLayout] : [sceneLayout, ioLayout];

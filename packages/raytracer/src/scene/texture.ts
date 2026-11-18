@@ -1,7 +1,8 @@
 /**
  * Material textures for the scene copy (P1.4c, first slice): the layout that works on every WebGPU device, its CPU build, and the
- * TypeScript twins of the shader lookup. Bindless (`chromium-experimental-sampling-resource-table`, textures only, not on macOS)
- * stays a later Tier 3 option behind the same slot API: a material references a texture by slot, the slot says where it lives.
+ * TypeScript twins of the shader lookup. Bindless (`chromium-experimental-sampling-resource-table`, textures only; P1.4c2) is the
+ * Tier 3 option behind the same slot API: a material references a texture by slot, the slot says where it lives. With
+ * `binding: 'table'` the arrays go into one `GPUResourceTable` instead of `buckets.length` bindings (see `TextureBinding`).
  *
  * Layout ("size buckets"): every texture is resampled to a power-of-two size (nearest in log space, capped at `maxSize`),
  * gets a full mip chain built here on the CPU, and is stored as one layer of a `texture_2d_array` shared by all textures of the
@@ -24,6 +25,14 @@
  */
 
 export type TextureWrap = 'repeat' | 'clamp' | 'mirror';
+/**
+ * How the kernel reaches the arrays (P1.4c2). `arrays` (default, every device): one `texture_2d_array` + sampler binding per bucket and a
+ * `switch` on the slot's bucket in `rtTexSample`. `table` (Tier 3, `sampling-resource-table`): the arrays (views at table index = bucket) and
+ * their samplers (index = bucket count + bucket) go into one `GPUResourceTable`; the lookup is `getResource` on the slot's bucket, no switch and
+ * no binding limit, so buckets are never merged (`maxBuckets` defaults to unlimited). Same texels and samplers, so the same image as `arrays`
+ * whenever `arrays` did not have to merge. Chrome 160 Canary on Metal exposes the feature but fails a COMPUTE pass with a table (V296).
+ */
+export type TextureBinding = 'arrays' | 'table';
 export type TextureColorSpace = 'srgb' | 'linear';
 
 export interface TextureInput {
@@ -56,6 +65,8 @@ export interface TextureOptions {
    * exact old bytes. `false` stores one level (every lookup is the base level).
    */
   mips?: boolean | 'cpu' | 'gpu';
+  /** Default `arrays`. `table` needs a device with a resource table (`caps.resourceTable !== 'none'`); see {@link TextureBinding}. */
+  binding?: TextureBinding;
 }
 
 export interface TextureBucket {
@@ -89,11 +100,15 @@ export interface SceneTextures {
   byteLength: number;
   /** `TextureOptions.mips: 'gpu'` (the default): `buckets[].mips` hold level 0 only and the upload builds levels 1+ on the GPU. */
   gpuMips?: boolean;
+  /** Present (and `table`) only for `TextureOptions.binding: 'table'`; absent means `arrays`. */
+  binding?: 'table';
 }
 
 /** What the WGSL generator and the bind group layout need to know: no texel data. */
 export interface TextureLayout {
   buckets: ReadonlyArray<Pick<TextureBucket, 'width' | 'height' | 'colorSpace' | 'wrap' | 'layers' | 'mipLevels'>>;
+  /** `table`: the arrays live in a resource table (P1.4c2). Absent = `arrays` (the key is left out so `arrays` layouts keep their shape). */
+  binding?: 'table';
 }
 
 export const TEXTURE_RECORD_VEC4S = 1;
@@ -101,7 +116,12 @@ export const TEXTURE_RECORD_WORDS = 4;
 export const DEFAULT_MAX_TEXTURE_BUCKETS = 8;
 
 export function textureLayoutOf(textures: SceneTextures): TextureLayout {
-  return { buckets: textures.buckets.map(({ width, height, colorSpace, wrap, layers, mipLevels }) => ({ width, height, colorSpace, wrap, layers, mipLevels })) };
+  return { buckets: textures.buckets.map(({ width, height, colorSpace, wrap, layers, mipLevels }) => ({ width, height, colorSpace, wrap, layers, mipLevels })), ...(textures.binding === 'table' ? { binding: 'table' as const } : {}) };
+}
+
+/** Resource-table size of a `table` layout: one view per bucket (index = bucket) then one sampler per bucket (index = buckets + bucket). */
+export function textureTableSize(layout: TextureLayout): number {
+  return 2 * layout.buckets.length;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -298,7 +318,8 @@ function mergeGroups(groups: Group[], maxBuckets: number, maxLayers: number): Gr
 export function buildSceneTextures(inputs: readonly TextureInput[], options: TextureOptions = {}): SceneTextures {
   const maxSize = options.maxSize ?? 4096;
   if (!isPowerOfTwo(maxSize)) throw new RangeError(`textures: maxSize must be a power of two, got ${maxSize}`);
-  const maxBuckets = options.maxBuckets ?? DEFAULT_MAX_TEXTURE_BUCKETS;
+  const table = options.binding === 'table';
+  const maxBuckets = options.maxBuckets ?? (table ? Number.POSITIVE_INFINITY : DEFAULT_MAX_TEXTURE_BUCKETS);
   const maxLayers = options.maxLayers ?? 256;
   const rounding = options.rounding ?? 'nearest';
   const mode = options.mips ?? 'gpu';
@@ -349,7 +370,7 @@ export function buildSceneTextures(inputs: readonly TextureInput[], options: Tex
     }
   }
   if (buckets.length > maxBuckets) throw new RangeError(`textures: ${buckets.length} arrays needed but at most ${maxBuckets} are allowed`);
-  return { buckets, slots, byteLength, ...(gpuMips ? { gpuMips: true } : {}) };
+  return { buckets, slots, byteLength, ...(gpuMips ? { gpuMips: true } : {}), ...(table ? { binding: 'table' as const } : {}) };
 }
 
 /** Writes one slot record (4 words) at `words[wordOffset]`. */
