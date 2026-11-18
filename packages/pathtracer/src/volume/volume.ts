@@ -187,7 +187,7 @@ export function slabTransmittance(sigmaT: number, thickness: number, mu = 1): nu
  * (no other light), counting the unscattered light and at most ONE scattering event (pbrt `maxdepth` 1 + the free medium vertex; see volume-check's depth
  * note). Isotropic or HG phase; the slab is bounded by interface surfaces (no reflection). Quadrature over the scatter depth and the exit direction.
  */
-export function slabSingleScatter(sigmaT: number, albedo: number, g: number, thickness: number, mu: number, L = 1, steps = 400): number {
+export function slabSingleScatter(sigmaT: number, albedo: number, g: number, thickness: number, mu: number, L = 1, steps = 96, nmu = 120, nphi = 32): number {
   const unscattered = L * Math.exp((-sigmaT * thickness) / mu);
   // scatter at slab depth z (along the ray: s = z / mu); then the sky light arrives from direction w' (cos mu' with the normal, both hemispheres: light comes
   // from above through the thickness z (up) or from below through thickness - z (down)), phase p(wo, wi) with wo = -ray direction.
@@ -199,7 +199,6 @@ export function slabSingleScatter(sigmaT: number, albedo: number, g: number, thi
     const s = z / mu;
     const wDepth = sigmaT * albedo * Math.exp(-sigmaT * s) * (thickness / nz / mu);
     // integrate the phase over the sphere of incoming directions
-    const nmu = 200, nphi = 64;
     let inner = 0;
     for (let a = 0; a < nmu; a++) {
       const c = -1 + ((a + 0.5) / nmu) * 2; // cos of wi with +z

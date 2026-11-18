@@ -58,7 +58,10 @@ export const toGltf: Exporter = (scene: SceneDesc, opts) => {
         ext['KHR_materials_specular'] = { specularFactor: 0 };
         break;
       case 'interface':
-        throw new Error('gltf: interface (medium boundary) materials are not expressible; the web competitors skip media scenes');
+        // a medium boundary has no glTF form: written as a black surface (the web competitors skip media scenes through FeatureSupport; our own adapter reads only triangles from this file)
+        ext['KHR_materials_specular'] = { specularFactor: 0 };
+        approx.add('interface: participating media and medium boundaries are not expressible in glTF; the surface is written black.');
+        break;
       case 'openpbr': {
         const { material, notes } = openPbrToGltfMaterial(m);
         g.pbrMetallicRoughness = material.pbrMetallicRoughness;

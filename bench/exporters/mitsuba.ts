@@ -23,6 +23,7 @@ import { channelLevels, srgbToLinear, TextureSet } from './textures.ts';
 import type { NativeTexture } from './textures.ts';
 import type { HomogeneousAbsorber, NativeCtx } from './openpbr.ts';
 import type { Exporter, ExportedFile } from './types.ts';
+import { mitsubaMedium } from './media.ts';
 import type { OpenPbrParams, Rgb } from '../scenes/schema.ts';
 
 /** Does Mitsuba's bitmap lookup want v = 0 at the bottom of the image (like pbrt)? Verified with an asymmetric texture, see bench/references/README.md. */
@@ -236,7 +237,8 @@ export const toMitsuba: Exporter = (scene, opts) => {
     const m = scene.materials[w.material];
     if (m?.type === 'openpbr' && !openpbr.has(w.material)) openpbr.set(w.material, mitsubaOpenPbr(w.material, m, ctx));
   }
-  const volumetric = [...openpbr.values()].some((o) => o.medium || o.masked);
+  const hasMedia = Object.keys(scene.media ?? {}).length > 0;
+  const volumetric = hasMedia || [...openpbr.values()].some((o) => o.medium || o.masked);
   const noRr = scene.integrator.rrStartDepth === undefined;
   const maxDepth = scene.integrator.maxDepth + 1;
   const rrDepth = noRr ? 1_000_000 : Math.max(1, scene.integrator.rrStartDepth!);
@@ -249,12 +251,19 @@ export const toMitsuba: Exporter = (scene, opts) => {
   x.push(`    <integer name="max_depth" value="${maxDepth}"/>`);
   x.push(`    <integer name="rr_depth" value="${rrDepth}"/>`);
   x.push(`  </integrator>`);
+  for (const [name, medium] of Object.entries(scene.media ?? {})) {
+    const out = mitsubaMedium(name, medium, medium.type === 'grid' ? scene.meshes.find((m) => m.medium?.interior === name)?.transform : undefined);
+    x.push(out.xml);
+    if (out.file) files.push(out.file);
+  }
+  if (hasMedia) approximations.push('mitsuba: participating media use `volpath` (max_depth = ours + 1); homogeneous media are written as scale x rgb (rgb must lie in [0, 1]); grids are `heterogeneous` media with a `.vol` gridvolume (grey sigma_t, trilinear, clamp outside: the scene keeps a zero border so it matches pbrt).');
   x.push(`  <sensor type="perspective">`);
   x.push(`    <float name="fov" value="${num(c.yFovDeg)}"/>`);
   x.push(`    <string name="fov_axis" value="y"/>`);
   x.push(`    <float name="near_clip" value="0.001"/>`);
   x.push(`    <float name="far_clip" value="10000"/>`);
   x.push(`    <transform name="to_world"><lookat origin="${c.position.join(', ')}" target="${c.target.join(', ')}" up="${c.up.join(', ')}"/></transform>`);
+  if (scene.cameraMedium) x.push(`    <ref id="${scene.cameraMedium}"/>`);
   x.push(`    <sampler type="multijitter"><integer name="sample_count" value="${opts.spp}"/></sampler>`);
   x.push(`    <film type="hdrfilm"><integer name="width" value="${scene.film.width}"/><integer name="height" value="${scene.film.height}"/><string name="pixel_format" value="rgb"/><string name="component_format" value="float32"/><rfilter type="box"/></film>`);
   x.push(`  </sensor>`);
@@ -303,6 +312,8 @@ export const toMitsuba: Exporter = (scene, opts) => {
       else emission = o.emission;
     }
     const shapeBsdf = o ? `    ${o.xml}` : bsdf(m, '    ', textureFile);
+    if (w.desc.medium?.interior) x.push(`    <ref name="interior" id="${w.desc.medium.interior}"/>`);
+    if (w.desc.medium?.exterior) x.push(`    <ref name="exterior" id="${w.desc.medium.exterior}"/>`);
     // `rgb` on a spectrum-typed medium parameter is read as a reflectance and must lie in [0, 1]: sigma_t = scale * rgb with rgb = sigma / max(sigma)
     const sMax = o?.medium ? Math.max(...o.medium.sigma) : 0;
     const medium = o?.medium ? `    <medium name="interior" type="homogeneous">${rgb('sigma_t', o.medium.sigma.map((v) => Number((v / sMax).toPrecision(9))))}${rgb('albedo', [0, 0, 0])}<float name="scale" value="${sMax}"/></medium>` : undefined;
