@@ -202,7 +202,7 @@ export type MediumDesc = ({ type: 'homogeneous' } | {
    * across `bounds`, zero outside; pbrt `uniformgrid` / Mitsuba `gridvolume` convention). `density` is x fastest, then y, then z (nx * ny * nz values).
    * The box is in the coordinate frame of the mesh that bounds the medium (its object space, so the mesh transform moves the grid with it).
    */
-  type: 'grid'; resolution: readonly [number, number, number]; density: readonly number[] | Float32Array; bounds: readonly [Vec3, Vec3];
+  type: 'grid'; resolution: readonly [number, number, number]; /** The values, or `densityFile` instead (a raw little-endian float32 file under bench/assets, same order; large grids such as a converted `.vdb`). Exactly one of the two. */ density?: readonly number[] | Float32Array; densityFile?: string; bounds: readonly [Vec3, Vec3];
 }) & {
   sigmaA: Rgb;
   sigmaS: Rgb;

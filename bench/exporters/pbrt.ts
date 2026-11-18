@@ -254,7 +254,7 @@ export const toPbrt: Exporter = (scene, opts) => {
     lines.push(...o.textures, ...o.decls);
     if (o.medium) lines.push(`MakeNamedMedium "med-${name}" "string type" "homogeneous" "rgb sigma_a" [ ${vec(o.medium.sigma)} ] "rgb sigma_s" [ 0.0 0.0 0.0 ] "float scale" 1.0`);
   }
-  for (const [name, medium] of Object.entries(scene.media ?? {})) lines.push(...pbrtMedium(name, medium, medium.type === 'grid' ? scene.meshes.find((m) => m.medium?.interior === name)?.transform : undefined));
+  for (const [name, medium] of Object.entries(scene.media ?? {})) lines.push(...pbrtMedium(name, medium, medium.type === 'grid' ? scene.meshes.find((m) => m.medium?.interior === name)?.transform : undefined, opts.assetsDir));
   if (hasMedia) approximations.push('pbrt: participating media use `volpath` (patched no-RR, V59); RGB sigma_a / sigma_s are uplifted to unbounded spectra (grey is exact, saturated colours are off per channel, V62); grids are `uniformgrid` media (dense density, no NanoVDB converter).');
   if (volumetric && !hasMedia) approximations.push('pbrt: absorption-only interior media use `volpath` (patched no-RR, bench/references/pbrt-no-rr.patch) and RGB `sigma_a` that pbrt uplifts to unbounded spectra (a coloured sigma is slightly off per channel: measured by bench/references/openpbr-check.ts).');
 

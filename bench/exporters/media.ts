@@ -8,19 +8,31 @@
  *    `scale`, `albedo` = constant volume. A Mitsuba grid medium is a single-channel sigma_t (grey), so the exporter throws for a chromatic one. Scenes keep a
  *    zero border of at least one voxel so pbrt's zero outside and Mitsuba's clamp agree.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { MediumDesc, Mat4, Rgb } from '../scenes/schema.ts';
+
+/** The density values of a grid medium: inline, or read from `densityFile` under `assetsDir` (raw little-endian float32). */
+export function mediumDensity(m: Extract<MediumDesc, { type: 'grid' }>, assetsDir: string): ArrayLike<number> {
+  if (m.density) return m.density;
+  if (!m.densityFile) throw new RangeError('grid medium has neither density nor densityFile');
+  const buf = readFileSync(join(assetsDir, m.densityFile));
+  const [nx, ny, nz] = m.resolution;
+  if (buf.byteLength !== nx * ny * nz * 4) throw new RangeError(`${m.densityFile}: ${buf.byteLength} bytes for a ${nx} x ${ny} x ${nz} float32 grid (run the generator)`);
+  return new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+}
 
 const num = (v: number): string => (Number.isInteger(v) ? `${v}.0` : String(Number(v.toPrecision(9))));
 const vec = (v: readonly number[]): string => v.map(num).join(' ');
 
 /** pbrt `MakeNamedMedium` lines (an `AttributeBegin` block sets the medium frame for a grid). */
-export function pbrtMedium(name: string, m: MediumDesc, transform?: Mat4): string[] {
+export function pbrtMedium(name: string, m: MediumDesc, transform: Mat4 | undefined, assetsDir: string): string[] {
   const common = `"rgb sigma_a" [ ${vec(m.sigmaA)} ] "rgb sigma_s" [ ${vec(m.sigmaS)} ] "float scale" ${num(m.scale ?? 1)} "float g" ${num(m.g ?? 0)}`;
   if (m.type === 'homogeneous') return [`MakeNamedMedium "${name}" "string type" "homogeneous" ${common}`];
   const [nx, ny, nz] = m.resolution;
   const lines = ['AttributeBegin'];
   if (transform) lines.push(`  ConcatTransform [ ${vec(transform)} ]`);
-  lines.push(`  MakeNamedMedium "${name}" "string type" "uniformgrid" ${common} "integer nx" ${nx} "integer ny" ${ny} "integer nz" ${nz} "point3 p0" [ ${vec(m.bounds[0])} ] "point3 p1" [ ${vec(m.bounds[1])} ] "float density" [ ${Array.from(m.density as ArrayLike<number>, (v) => num(v)).join(' ')} ]`);
+  lines.push(`  MakeNamedMedium "${name}" "string type" "uniformgrid" ${common} "integer nx" ${nx} "integer ny" ${ny} "integer nz" ${nz} "point3 p0" [ ${vec(m.bounds[0])} ] "point3 p1" [ ${vec(m.bounds[1])} ] "float density" [ ${Array.from(mediumDensity(m, assetsDir), (v) => num(v)).join(' ')} ]`);
   lines.push('AttributeEnd');
   return lines;
 }
@@ -43,7 +55,7 @@ export function mitsubaVol(resolution: readonly [number, number, number], densit
 }
 
 /** A Mitsuba `<medium id="name">` element (and the `.vol` file it needs, if any). */
-export function mitsubaMedium(name: string, m: MediumDesc, transform: Mat4 | undefined): { xml: string; file?: { path: string; data: Buffer } } {
+export function mitsubaMedium(name: string, m: MediumDesc, transform: Mat4 | undefined, assetsDir: string): { xml: string; file?: { path: string; data: Buffer } } {
   const scale = m.scale ?? 1;
   const sigmaT = [0, 1, 2].map((i) => (m.sigmaA[i] as number) + (m.sigmaS[i] as number));
   const albedo = sigmaT.map((t, i) => (t > 0 ? (m.sigmaS[i] as number) / t : 0));
@@ -62,7 +74,7 @@ export function mitsubaMedium(name: string, m: MediumDesc, transform: Mat4 | und
   const matrix = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15].map((i) => num(toWorld[i] as number)).join(' ');
   const file = `${name}.vol`;
   const xml = `  <medium type="heterogeneous" id="${name}"><volume name="sigma_t" type="gridvolume"><string name="filename" value="${file}"/><string name="filter_type" value="trilinear"/><string name="wrap_mode" value="clamp"/><transform name="to_world"><matrix value="${matrix}"/></transform></volume><volume name="albedo" type="constvolume"><rgb name="value" value="${vec(albedo.map((v) => Number(v.toPrecision(9))))}"/></volume><float name="scale" value="${num(sMax * scale)}"/>${phase}</medium>`;
-  return { xml, file: { path: file, data: mitsubaVol(m.resolution, m.density as ArrayLike<number>, [[0, 0, 0], [1, 1, 1]]) } };
+  return { xml, file: { path: file, data: mitsubaVol(m.resolution, mediumDensity(m, assetsDir), [[0, 0, 0], [1, 1, 1]]) } };
 }
 
 /** a * b for column-major 4x4 matrices. */

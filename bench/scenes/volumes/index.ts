@@ -1,5 +1,5 @@
 import { gridDensity, gridWorldToIndex, slabSingleScatter } from '@pmndrs/pathtracer';
-import { compose, rotationX, translation } from '../geometry.ts';
+import { compose, rotationX, scaling, translation } from '../geometry.ts';
 import type { MediumDesc, MeshDesc, SceneDesc } from '../schema.ts';
 import { cornell } from '../tier0/cornell.ts';
 
@@ -19,7 +19,7 @@ import { cornell } from '../tier0/cornell.ts';
  * Reference scenes (`volumeReferenceScenes`, compared with pbrt-v4 and Mitsuba 3 at 4096 spp): `vol-cornell-smoke` (a homogeneous smoke cube in the Cornell box), `vol-milk-sphere`
  * (a scattering medium inside a smooth glass sphere, sun + sky), `vol-grid-cloud` (a procedural density grid under a sun, shadow on a floor).
  */
-const NARROW = (position: readonly [number, number, number]) => ({ type: 'perspective' as const, position, target: [0, 0, 0] as const, up: [0, 1, 0] as const, yFovDeg: 1 });
+const NARROW = (position: readonly [number, number, number], target: readonly [number, number, number] = [0, 0, 0]) => ({ type: 'perspective' as const, position, target, up: [0, 1, 0] as const, yFovDeg: 1 });
 const FILM = { width: 32, height: 32, filter: 'box' as const };
 const SKY = { type: 'uniform' as const, radiance: [1, 1, 1] as const };
 const facingCamera = (z: number) => compose(translation(0, 0, z), rotationX(Math.PI / 2));
@@ -49,7 +49,7 @@ export const volCameraMedium: SceneDesc = {
   name: 'vol-camera-medium',
   purpose: 'Camera inside an absorbing medium that fills space, an emitter 3 m away: pixel = L exp(-sigma_a 3) (P5, cameraMedium).',
   tier: 1,
-  camera: NARROW([0, 0, 0]),
+  camera: NARROW([0, 0, 0], [0, 0, -1]),
   film: FILM,
   integrator: { maxDepth: 8 },
   materials: { back: { type: 'black' } },
@@ -212,6 +212,30 @@ export const volGridCloud: SceneDesc = {
   environment: { type: 'uniform', radiance: [0.4, 0.4, 0.4] },
 };
 
+/**
+ * A real OpenVDB density: WebVDB's `smoke.vdb` (OpenVDB sample model, CC BY-SA 4.0: THIRD_PARTY), converted by `node bench/scenes/volumes/vdb-grid.ts` (2^3 box average, 2 zero cells of border, peak
+ * normalised to 1) to `bench/assets/generated/volumes/vdb-smoke.f32` (git-ignored derivative). The plume is 109 m tall in the file; the mesh scales it to 1.6 m.
+ */
+const VDB_SMOKE = { resolution: [60, 115, 60] as const, half: [28.571428571428573, 54.76190476190476, 28.571428571428573] as const, height: 1.6 };
+const vdbScale = VDB_SMOKE.height / (2 * VDB_SMOKE.half[1]);
+export const volVdbSmoke: SceneDesc = {
+  version: 1,
+  name: 'vol-vdb-smoke',
+  purpose: "WebVDB's smoke.vdb (a real fog volume, 60x115x60 after 2x downsampling) as a heterogeneous medium, sun + sky over a floor (P5; needs `node bench/scenes/volumes/vdb-grid.ts` first).",
+  tier: 2,
+  camera: { type: 'perspective', position: [0, 0.9, 3.4], target: [0, 0.8, 0], up: [0, 1, 0], yFovDeg: 35 },
+  film: { width: 128, height: 128, filter: 'box' },
+  integrator: { maxDepth: 40 },
+  materials: { boundary: { type: 'interface' }, floor: { type: 'diffuse', reflectance: [0.6, 0.6, 0.6] } },
+  media: { plume: { type: 'grid', resolution: VDB_SMOKE.resolution, densityFile: 'generated/volumes/vdb-smoke.f32', bounds: [[-VDB_SMOKE.half[0], -VDB_SMOKE.half[1], -VDB_SMOKE.half[2]], [VDB_SMOKE.half[0], VDB_SMOKE.half[1], VDB_SMOKE.half[2]]], sigmaA: [1, 1, 1], sigmaS: [10, 10, 10], g: 0.2 } },
+  meshes: [
+    { name: 'floor', geometry: { type: 'quad', size: [8, 8] }, material: 'floor', transform: translation(0, -0.01, 0) },
+    { name: 'plume-box', geometry: { type: 'box', size: [2 * VDB_SMOKE.half[0], 2 * VDB_SMOKE.half[1], 2 * VDB_SMOKE.half[2]] }, material: 'boundary', transform: compose(translation(0, VDB_SMOKE.height / 2, 0), scaling(vdbScale)), medium: { interior: 'plume' } },
+  ],
+  lights: [{ type: 'directional', direction: [-0.5, -1, -0.4], irradiance: [3, 3, 3] }],
+  environment: { type: 'uniform', radiance: [0.4, 0.4, 0.4] },
+};
+
 export const volumeCheckScenes: readonly SceneDesc[] = [volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab];
-export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud];
+export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud, volVdbSmoke];
 export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes];

@@ -1,0 +1,65 @@
+# Participating media (P5)
+
+Status: built on the megakernel (homogeneous and dense-grid media, scattering, NEE through media); the wavefront refuses `integrator.volumes`.
+Code: `packages/pathtracer/src/volume/` (`volume.ts` TS twins and closed forms, `volume-wgsl.ts` WGSL), hooks in `integrator/integrator-wgsl.ts`
+(`ptPath`, `ptSampleLd`), `integrator/megakernel.ts` (the 3D density texture), scene side `bench/scenes/volumes.ts`, `bench/scenes/volumes/index.ts`,
+exporters `bench/exporters/media.ts`. DIVERGES V240-V247.
+
+## 1. Scene model
+
+- `SceneDesc.media`: named media. `homogeneous` = `{ sigmaA, sigmaS, g?, scale? }` (RGB per metre, pbrt's parameters); `grid` adds a dense density grid
+  (`resolution`, `density` x fastest, `bounds` in the owning mesh's object space; voxel centres at `(i + 0.5) / n`, trilinear, zero outside = pbrt `uniformgrid`).
+- `MeshDesc.medium = { interior?, exterior? }`: the media on the two sides of a closed, outward-wound mesh (interior = the side its normals point away from).
+  `MaterialDesc { type: 'interface' }` is a pure boundary (pbrt `interface`, Mitsuba `null`); any other material works too (a glass sphere full of milk).
+- `SceneDesc.cameraMedium`: the medium the camera starts in (homogeneous only).
+- State: one medium id per path (`curMed`, 0 = vacuum). At a surface with a medium pair the next direction decides it (`dot(wi, ng) < 0` = interior); a surface
+  without a pair keeps it (pbrt: no `MediumInterface` transition = the ray's own medium). Nesting is "last boundary wins", no stack (pbrt's too).
+
+## 2. Estimators (`volume.ts` header has the algebra)
+
+Free flight is **delta tracking against a scalar majorant** `mu = max density * max_c sigma_t,c`. A tentative collision is a scatter, an absorption or a null event with
+per-channel shares `(sigma_s, sigma_a, mu - sigma_t) / mu`. Absorption contributes nothing so it is never sampled: scatter with the scalar probability
+`ps = max_c sigma_s,c / mu` (weight `sigma_s / max sigma_s <= 1`), null otherwise (weight `(1 - sigma_t / mu) / (1 - ps)`), reaching the segment end has weight 1. A grey medium
+gets weights 1 (scatter) and 0 or 1 (null; 0 kills the path = absorption by roulette), a chromatic one the per-channel ratios, so one path serves RGB. This is unbiased
+for any `ps in (0, 1]`; the choice makes the scatter weight at most 1 per channel.
+
+- **NEE at a medium vertex** (`ptSampleLdMedium`): `L = Le * p_HG * Tr / (pmf pdf) * MIS`, MIS (power heuristic, `ptMis`) against the HG sample that then reaches the light.
+- **Phase sampling**: HG is sampled exactly (pbrt-v4 `SampleHenyeyGreenstein`), so `f cos / pdf = 1` and the throughput is untouched; `prevPdf = p_HG` feeds the MIS weight of
+  an emitter or sky hit afterwards.
+- **Shadow transmittance** (`ptVolTr`): a closest-hit loop; a boundary surface passes the ray and switches the medium, any other surface blocks it. Per segment: closed form
+  `exp(-sigma_t d)` for a homogeneous medium, **ratio tracking** (product of `1 - sigma_t / mu` over the tentative collisions) for a grid. Shadow rays through solid geometry are
+  zero, so a glass boundary shadows its inside like in pbrt and Mitsuba (no caustic path through it).
+- Weights of MIS depend on directions only (not on transmittance), which is what keeps the estimator unbiased when the transmittance itself is a random estimate.
+- `maxDepth` counts a medium scatter like a surface vertex (`depth >= maxDepth` ends the path before the scatter), the same rule as pbrt `volpath`; Mitsuba's `max_depth` is ours + 1.
+  Boundary crossings are free (capped at 256 per path).
+- Random numbers: the vertex dimensions (`ptSample2D`) drive NEE and the phase sample like a surface vertex; the variable-length tracking loops draw from a per-path PCG
+  stream seeded from `(pixelSeed, sampleIndex)` (`ptVolSeed`), so a render is deterministic.
+
+## 3. Grids
+
+A grid medium's density is a `texture_3d<f32>` (`r32float`, `textureLoad`, 8-tap manual trilinear, zero outside) at group 2 binding 16 (`PT_VOLUME_BINDING`), uploaded by
+`PtMegakernel.create({ volumeGrid })`. One grid per kernel (all grid media would share one texture). The medium owns a row-major 3x4 world-to-index matrix (`gridWorldToIndex`,
+the owning mesh's transform inverted), so an instance transform moves the grid. The **majorant is global** (`densityMax * max sigma_t`); a brick / coarse-grid majorant with a DDA
+walk is the next step (open problem 1) and would cut the null collisions in sparse volumes.
+WebVDB: the density arrives as a dense array. `bench/scenes/volumes/vdb-grid.ts` rasterises a `.vdb` float grid parsed by WebVDB's `vdb-web-tools` (`parseVdb`) to such an array
+(see TASKS P5.v7); a NanoVDB traversal in WGSL (WebVDB's `nanovdb-wgsl`) would keep it sparse but adds a storage buffer and ~10 KB of WGSL (open problem 2).
+
+## 4. Kernel size and gating
+
+Every kernel without `integrator.volumes` is byte-identical (`node bench/size-snapshot.ts`, 224 variants compared before / after). The media code adds 3.0 KB (homogeneous, 43.7 KB)
+and 3.9 KB (grid, 44.7 KB) to the plain megakernel (40.8 KB); with the OpenPBR layered lobes (49-53 KB) a media scene would pass 50 KB (D26 applies: measure on the 3060 first).
+`volumes` cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, alpha MASK, hooks, counters, AOVs or the Beer-law absorber of P2.22; the wavefront throws
+(`ptwfUnsupported`): it would need a medium stage between intersect and shade (the path state has no room for the medium id and the PCG stream today).
+
+## 5. Checks (closed forms first)
+
+See the results table in TASKS P5.v3 / P5.v5; the scenes and what each one proves are listed at the top of `bench/scenes/volumes/index.ts`.
+`node bench/adapters/matrix.ts --renderers pt-megakernel --scenes vol-absorb-slab,... --spp 4096 --name vol-check --load-wait 0` then `node bench/adapters/pt-agreement.ts --report vol-check`.
+
+## 6. Open problems
+
+1. Brick / coarse-grid majorant (DDA) for sparse grids; today the null-collision count scales with `densityMax * path length`.
+2. NanoVDB traversal instead of a dense texture (memory: 48^3 = 0.4 MB is nothing, a 512^3 fog volume is 512 MB dense).
+3. Wavefront support (medium stage), ReSTIR / real-time modes with media.
+4. Spectral media: RGB sigma with the per-channel weights above is exact in RGB; pbrt's spectral uplift of a saturated sigma differs (V62), so references use grey sigma.
+5. Emissive media (`Le`), several grids per scene, nested media with a stack.

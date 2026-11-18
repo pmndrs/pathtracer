@@ -18,7 +18,12 @@ export function sceneHasMedia(scene: SceneDesc): boolean {
   return Object.keys(scene.media ?? {}).length > 0 || scene.meshes.some((m) => m.medium) || scene.cameraMedium !== undefined;
 }
 
-export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, 'materialVolumes'>): SceneVolumes | null {
+/** The `densityFile` paths of the scene's grid media (relative to bench/assets): the page fetches them before `sceneVolumes`. */
+export function sceneDensityFiles(scene: SceneDesc): string[] {
+  return Object.values(scene.media ?? {}).flatMap((m) => (m.type === 'grid' && m.densityFile ? [m.densityFile] : []));
+}
+
+export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, 'materialVolumes'>, files: ReadonlyMap<string, Float32Array> = new Map()): SceneVolumes | null {
   if (!sceneHasMedia(scene)) return null;
   const names = Object.keys(scene.media ?? {});
   let grid: SceneVolumes['grid'];
@@ -28,7 +33,10 @@ export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, '
     if (grid) throw new RangeError(`scene '${scene.name}': more than one grid medium (one 3D texture per kernel)`);
     const owners = scene.meshes.filter((m) => m.medium?.interior === name);
     if (owners.length !== 1) throw new RangeError(`scene '${scene.name}': grid medium '${name}' must be the interior of exactly one mesh (found ${owners.length}): its transform places the grid`);
-    const density = Float32Array.from(d.density as ArrayLike<number>);
+    const loaded = d.densityFile ? files.get(d.densityFile) : undefined;
+    if (d.densityFile && !loaded) throw new RangeError(`scene '${scene.name}': grid medium '${name}' needs its density file '${d.densityFile}' (run the generator, then pass it in \`files\`)`);
+    if (!d.densityFile && !d.density) throw new RangeError(`scene '${scene.name}': grid medium '${name}' has neither density nor densityFile`);
+    const density = loaded ?? Float32Array.from(d.density as ArrayLike<number>);
     const [nx, ny, nz] = d.resolution;
     if (density.length !== nx * ny * nz) throw new RangeError(`scene '${scene.name}': grid medium '${name}' has ${density.length} values for ${nx} x ${ny} x ${nz}`);
     let max = 0;

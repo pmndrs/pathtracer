@@ -252,7 +252,7 @@ export const toMitsuba: Exporter = (scene, opts) => {
   x.push(`    <integer name="rr_depth" value="${rrDepth}"/>`);
   x.push(`  </integrator>`);
   for (const [name, medium] of Object.entries(scene.media ?? {})) {
-    const out = mitsubaMedium(name, medium, medium.type === 'grid' ? scene.meshes.find((m) => m.medium?.interior === name)?.transform : undefined);
+    const out = mitsubaMedium(name, medium, medium.type === 'grid' ? scene.meshes.find((m) => m.medium?.interior === name)?.transform : undefined, opts.assetsDir);
     x.push(out.xml);
     if (out.file) files.push(out.file);
   }
