@@ -66,6 +66,19 @@ describe('media export (P5)', () => {
     expect(input.materialVolumes.some((m) => m.interior === 0 && m.exterior === 0)).toBe(true);
   });
 
+  it('a densityFile grid needs its file at load time, takes it when given, and the exporters name the same box', () => {
+    const scene = getScene('vol-vdb-smoke');
+    const input = sceneDescToCopyInput(scene);
+    expect(() => sceneVolumes(scene, input)).toThrow(/density file/);
+    const [nx, ny, nz] = (scene.media!.plume as { resolution: [number, number, number] }).resolution;
+    const files = new Map([['generated/volumes/vdb-smoke.f32', new Float32Array(nx * ny * nz).fill(0.25)]]);
+    const v = sceneVolumes(scene, input, files)!;
+    expect(v.grid!.resolution).toEqual([nx, ny, nz]);
+    expect(v.options.media[0]!.grid!.densityMax).toBeCloseTo(0.25, 6);
+    // the grid's world-to-index scale is (n / extent) / mesh scale: one voxel is extent / n in the mesh's object space, scaled by the 1.6 / 109.5 mesh transform
+    expect(v.options.media[0]!.grid!.worldToIndex[0]).toBeCloseTo(nx / (2 * 28.571428571428573) / (1.6 / (2 * 54.76190476190476)), 4);
+  });
+
   it('an interface mesh without a medium is an error, and so is a grid with no owner mesh', () => {
     const s = getScene('vol-absorb-slab');
     expect(() => sceneDescToCopyInput({ ...s, meshes: s.meshes.map((m) => ({ ...m, medium: undefined })) })).toThrow(/interface material but no/);

@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export interface VdbDense {
   resolution: [number, number, number];
@@ -25,13 +25,16 @@ export interface VdbDense {
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+/** A plain Node `import()` (Vitest's module graph would try to resolve a file outside the repository). */
+const nodeImport = new Function('p', 'return import(p)') as (p: string) => Promise<unknown>;
+
 export const GENERATED_DIR = resolve(HERE, '..', '..', 'assets', 'generated', 'volumes');
 
 export async function convertVdb(file: string, options: { downsample?: number; border?: number; grid?: string } = {}): Promise<VdbDense> {
   const down = options.downsample ?? 2;
   const border = options.border ?? 2;
   const webvdb = process.env.WEBVDB_DIR ?? join(homedir(), 'Developer', 'WebVDB');
-  const tools = (await import(join(webvdb, 'packages', 'vdb-web-tools', 'dist', 'index.js'))) as { parseVdb(b: ArrayBuffer): { grids: Array<{ name: string; gridType: string; indexBBox: { min: number[]; max: number[] } | null; activeVoxelCount: bigint; transform: { voxelSize: number[] }; iterLeaves(): Iterable<{ origin: number[]; values: Float32Array; valueMask: Uint32Array }> }> } };
+  const tools = (await nodeImport(pathToFileURL(join(webvdb, 'packages', 'vdb-web-tools', 'dist', 'index.js')).href)) as { parseVdb(b: ArrayBuffer): { grids: Array<{ name: string; gridType: string; indexBBox: { min: number[]; max: number[] } | null; activeVoxelCount: bigint; transform: { voxelSize: number[] }; iterLeaves(): Iterable<{ origin: number[]; values: Float32Array; valueMask: Uint32Array }> }> } };
   const bytes = readFileSync(file);
   const vdb = tools.parseVdb(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   const grid = vdb.grids.find((g) => (options.grid ? g.name === options.grid : g.gridType.startsWith('Tree_float'))) ;

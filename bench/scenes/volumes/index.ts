@@ -223,11 +223,11 @@ export const volVdbSmoke: SceneDesc = {
   name: 'vol-vdb-smoke',
   purpose: "WebVDB's smoke.vdb (a real fog volume, 60x115x60 after 2x downsampling) as a heterogeneous medium, sun + sky over a floor (P5; needs `node bench/scenes/volumes/vdb-grid.ts` first).",
   tier: 2,
-  camera: { type: 'perspective', position: [0, 0.9, 3.4], target: [0, 0.8, 0], up: [0, 1, 0], yFovDeg: 35 },
+  camera: { type: 'perspective', position: [0, 0.9, 2.6], target: [0, 0.8, 0], up: [0, 1, 0], yFovDeg: 35 },
   film: { width: 128, height: 128, filter: 'box' },
   integrator: { maxDepth: 40 },
   materials: { boundary: { type: 'interface' }, floor: { type: 'diffuse', reflectance: [0.6, 0.6, 0.6] } },
-  media: { plume: { type: 'grid', resolution: VDB_SMOKE.resolution, densityFile: 'generated/volumes/vdb-smoke.f32', bounds: [[-VDB_SMOKE.half[0], -VDB_SMOKE.half[1], -VDB_SMOKE.half[2]], [VDB_SMOKE.half[0], VDB_SMOKE.half[1], VDB_SMOKE.half[2]]], sigmaA: [1, 1, 1], sigmaS: [10, 10, 10], g: 0.2 } },
+  media: { plume: { type: 'grid', resolution: VDB_SMOKE.resolution, densityFile: 'generated/volumes/vdb-smoke.f32', bounds: [[-VDB_SMOKE.half[0], -VDB_SMOKE.half[1], -VDB_SMOKE.half[2]], [VDB_SMOKE.half[0], VDB_SMOKE.half[1], VDB_SMOKE.half[2]]], sigmaA: [4, 4, 4], sigmaS: [36, 36, 36], g: 0.2 } },
   meshes: [
     { name: 'floor', geometry: { type: 'quad', size: [8, 8] }, material: 'floor', transform: translation(0, -0.01, 0) },
     { name: 'plume-box', geometry: { type: 'box', size: [2 * VDB_SMOKE.half[0], 2 * VDB_SMOKE.half[1], 2 * VDB_SMOKE.half[2]] }, material: 'boundary', transform: compose(translation(0, VDB_SMOKE.height / 2, 0), scaling(vdbScale)), medium: { interior: 'plume' } },
