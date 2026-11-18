@@ -54,8 +54,9 @@ export function loadMtlxMaterial(source: string, options: MtlxLoadOptions = {}):
   const constants: MtlxMaterial['constants'] = {};
   const varying: MtlxMaterial['varying'] = {};
   const dep = new Map<MtlxIr, boolean>();
+  const foldMemo = new Map<MtlxIr, MtlxIr>(); // shared, so a subgraph two inputs read is folded (and later emitted) once
   for (const slot of Object.values(surface.slots)) {
-    const folded = foldConstants(slot.ir, ctx, new Map(), dep);
+    const folded = foldConstants(slot.ir, ctx, foldMemo, dep);
     (folded.kind === 'const' ? constants : varying)[slot.key] = { ...slot, ir: folded };
   }
   const images: MtlxImageRequest[] = [];
@@ -66,7 +67,7 @@ export function loadMtlxMaterial(source: string, options: MtlxLoadOptions = {}):
   }
   const material: MtlxMaterial = { name: shader.name, category: shader.category, doc, lowering, surface, lengthScale: options.lengthScale ?? 0.01, constants, varying, images, categories: [] };
   if (surface.normal) {
-    const folded = foldConstants(surface.normal.ir, ctx, new Map(), dep);
+    const folded = foldConstants(surface.normal.ir, ctx, foldMemo, dep);
     material.normal = { ir: folded, type: surface.normal.type };
     if (folded.kind === 'op') {
       for (const r of collectImages(folded)) if (!images.some((o) => o.file === r.file && o.srgb === r.srgb && o.uaddress === r.uaddress && o.vaddress === r.vaddress)) images.push(r);

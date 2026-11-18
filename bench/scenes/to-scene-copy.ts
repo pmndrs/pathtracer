@@ -112,7 +112,7 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
 /** Does the material read any texture (so its meshes need uvs)? */
 export function materialUsesTexture(desc: MaterialDesc): boolean {
   if (desc.type === 'diffuse') return !!desc.reflectanceTexture;
-  if (desc.type === 'pbr' || desc.type === 'openpbr') return !!(desc.baseColorTexture || desc.metallicRoughnessTexture || desc.normalTexture || desc.emissiveTexture);
+  if (desc.type === 'pbr' || desc.type === 'openpbr') return !!((desc.type === 'openpbr' && desc.materialx) || desc.baseColorTexture || desc.metallicRoughnessTexture || desc.normalTexture || desc.emissiveTexture);
   return false;
 }
 
