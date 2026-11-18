@@ -14,6 +14,7 @@
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
 import { sceneDensityFiles, sceneVolumes } from '../../scenes/volumes.ts';
+import type { Rgb2SpecTable } from '@pmndrs/pathtracer';
 import { brickMajorants, PtMegakernel, PtWavefront, ptwfAutoPolicy, ptApplyMode, ptMegakernelWgsl, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
@@ -102,6 +103,21 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   shortenNames?: boolean;
 }
 
+/**
+ * P5: the RGB -> spectrum table of resolution `res`: the prebuilt `bench/assets/generated/rgb2spec-<res>.f32` (`node bench/spectral-table.ts`) when the server has it, else
+ * undefined (the kernel then fits it in the page: ~4 s at res 64).
+ */
+async function fetchSpectralTable(res: number): Promise<Rgb2SpecTable | undefined> {
+  try {
+    const r = await fetch(`/bench/assets/generated/rgb2spec-${res}.f32`);
+    if (!r.ok) return undefined;
+    const data = new Float32Array(await r.arrayBuffer());
+    return data.length === 3 * res * res * res * 3 ? { res, data } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Concatenates glb primitives (already world space) into one triangle mesh. */
 function mergeMeshes(parts: readonly TriangleMesh[]): TriangleMesh {
   let vertices = 0;
@@ -129,11 +145,11 @@ export const PT_ADAPTER_ID = 'pt-megakernel';
 export const PT_WAVEFRONT_ADAPTER_ID = 'pt-wavefront';
 
 /** Why an `openpbr` material is not rendered exactly: the OpenPBR lobes the megakernel does not have yet (P2.23+, class C), or null. */
-export function openPbrUnsupported(desc: MaterialDesc): string | null {
+export function openPbrUnsupported(desc: MaterialDesc, options: { spectral?: boolean } = {}): string | null {
   if (desc.type !== 'openpbr') return null;
   const m = resolveOpenPbr(desc);
   const missing: string[] = [];
-  if (m.transmissionDispersionScale > 0) missing.push('dispersion (P2.28)');
+  if (m.transmissionDispersionScale > 0 && !options.spectral) missing.push('dispersion (needs pt_spectral=1: P2.28 / P5)');
   if (m.subsurfaceWeight > 0) missing.push('diffuse transmission (P2.29)');
   // P2.26: anisotropic metals have the tangent frame and the split GGX alphas; a dielectric lobe (and a coat over the metal) is still isotropic
   if (m.specularRoughnessAnisotropy > 0 && (m.baseMetalness === 0 || m.coatWeight > 0)) missing.push('anisotropy on a dielectric or under a coat (P2.26 does metals only)');
@@ -147,7 +163,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
   readonly features: FeatureSupport = {
     materials: ['diffuse', 'conductor', 'dielectric', 'black', 'pbr', 'openpbr', 'interface'],
     media: true,
-    materialUnsupported: (m) => (this.settings.coverage ? null : openPbrUnsupported(m)),
+    materialUnsupported: (m) => (this.settings.coverage ? null : openPbrUnsupported(m, { spectral: !!this.settings.spectral })),
     textures: true,
     emissiveMeshes: true,
     directionalLight: true,
@@ -269,6 +285,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         layerDepth: settings.layerDepth ?? 64,
         layerThickness: settings.layerThickness ?? 1e-6,
         ...(settings.restir ? { restir: JSON.stringify(resolveRestirOptions(settings.restir)) } : {}),
+        ...(settings.spectral ? { spectral: JSON.stringify(settings.spectral) } : {}),
         ...(settings.materialLod === 'secondary' ? { materialLod: 'secondary', materialLodDepth: settings.materialLodDepth ?? 1 } : {}),
         transmissionTint: settings.transmissionTint ?? true,
         ...(settings.textureLod === 'cone' ? { textureConeScale: settings.textureConeScale ?? 'auto' } : {}),
@@ -406,9 +423,10 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const volumes = sceneVolumes(scene, input, densityFiles);
     if (volumes && this.settings.scheduler === 'wavefront') throw new Error(`pt-megakernel: scene '${scene.name}' has participating media; they run on the megakernel only (P5)`);
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
-    if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes) {
+    if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;
       const choice = ptwfAutoPolicy({ width: scene.film.width, height: scene.film.height, maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, subgroups: caps.subgroups, kernelBytes });
       if (choice.scheduler === 'wavefront') {

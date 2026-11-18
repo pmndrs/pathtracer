@@ -18,6 +18,7 @@ import type { EnvironmentDesc, MaterialDesc, SceneDesc } from '../schema.ts';
 import anisotropy from './golden/AnisotropyStrengthTest.json' with { type: 'json' };
 import attenuation from './golden/AttenuationTest.json' with { type: 'json' };
 import clearcoat from './golden/ClearCoatTest.json' with { type: 'json' };
+import dispersion from './golden/DispersionTest.json' with { type: 'json' };
 import emissive from './golden/EmissiveStrengthTest.json' with { type: 'json' };
 import ior from './golden/IORTestGrid.json' with { type: 'json' };
 import iridescence from './golden/IridescenceDielectricSpheres.json' with { type: 'json' };
@@ -191,6 +192,19 @@ const sidecars = {
     environment: SKY,
     dropMaterials: (iridescence as GoldenFile).materials.filter((m) => m.i % 7 !== 2 || m.i >= 343).map((m) => m.i),
   }, 'gltf'),
+  // 5 x 5 closed prisms (16 mm wide) on a cyclorama: base IOR 1.0 / 1.33 / 1.5 / 1.76 / 2.42 (rows) x KHR_materials_dispersion 1..5 (columns, Abbe 40 .. 8). The model is in
+  // metres but tiny (the grid is 0.15 m across): scaled x100 so the ray offsets are comfortable. Labels dropped, textured backdrop = grey Lambertian (P5, P2.28; class B', pbrt only).
+  dispersion: make(dispersion as GoldenFile, {
+    name: 'DispersionTest-notex',
+    purpose: 'Khronos DispersionTest without textures (labels dropped, cloth backdrop = grey Lambertian), scaled x100: 25 glass prisms, IOR 1.0-2.42 x KHR_materials_dispersion 1-5, under the sky. Tier 1 dispersion (P5, P2.28); pbrt-v4 spectral eta is the only reference.',
+    scale: 100,
+    camera: { type: 'perspective', position: [0, 0.2, 22], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 28 },
+    film: { width: 800, height: 640, filter: 'box' },
+    integrator: { maxDepth: 16 },
+    environment: SKY,
+    dropMaterials: ['LabelMat'],
+    replace: { 'Cloth Backdrop': GREY },
+  }),
   // 4 x 4 spheres sheenColor 0..1 x sheenRoughness 0..1 in front of a backdrop at z = -0.04.
   sheen: make(sheen as GoldenFile, {
     name: 'SheenTestGrid-notex',

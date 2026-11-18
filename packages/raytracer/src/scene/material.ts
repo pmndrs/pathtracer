@@ -23,9 +23,9 @@
  *     w8      transmissionDepth f32   w9  coatIor f32       w10 flags       w11 (baseColor, roughnessMetal) texture slots u16 x2
  *     w12     (normal, emission) texture slots u16 x2
  *     w13-15  conductorEta, conductorK as f16 x6
- *     w16-28  25 unorm16 values, two per word, low half first (`U16_SLOT`), then one spare half
+ *     w16-28  26 unorm16 values, two per word, low half first (`U16_SLOT`; the last is the P5 dispersion)
  *     w29-31  thin film (P2.27): weight, thickness in micrometres, ior, f32 each; all 0 when the weight is 0 (the decode then gives the defaults 0, 0.5, 1.4).
- *             Subsurface and dispersion have no slot yet.
+ *             Subsurface has no slot yet.
  */
 import { LUMA, TEXTURE_SLOT_NONE } from './constants.ts';
 
@@ -72,7 +72,12 @@ export const U16_SLOT = {
   sheenColor: 20, // 20, 21, 22
   opacity: 23,
   alphaCutoff: 24,
+  /** P5: `dispersion / MATERIAL_DISPERSION_MAX` (the high half of word 28, which used to be spare). */
+  dispersion: 25,
 } as const;
+
+/** KHR_materials_dispersion `dispersion` (20 / Abbe number) is stored as unorm16 of `dispersion / MATERIAL_DISPERSION_MAX` (0 = none; glass is 0.3-1, dense flint ~2). */
+export const MATERIAL_DISPERSION_MAX = 8;
 
 export const MATERIAL_FLAG = {
   /** Bits 0-1: alpha mode. */
@@ -129,6 +134,8 @@ export interface RtMaterial {
   roughnessMetalTexture: number;
   normalTexture: number;
   emissionTexture: number;
+  /** KHR_materials_dispersion (20 / Abbe number; P5): the IOR of the dielectric varies with wavelength (Cauchy law through `ior` at 587.56 nm); only the spectral mode reads it. 0 = none. */
+  dispersion: number;
   /** OpenPBR `thin_film_weight` (coverage, [0, 1]); 0 = no film. */
   thinFilmWeight: number;
   /** OpenPBR `thin_film_thickness` in micrometres. */
@@ -181,6 +188,7 @@ export function defaultMaterial(): RtMaterial {
     roughnessMetalTexture: TEXTURE_SLOT_NONE,
     normalTexture: TEXTURE_SLOT_NONE,
     emissionTexture: TEXTURE_SLOT_NONE,
+    dispersion: 0,
     thinFilmWeight: 0,
     thinFilmThickness: 0.5,
     thinFilmIor: 1.4,
@@ -286,6 +294,7 @@ function slotsOf(m: RtMaterial): Record<number, number> {
   put3(U16_SLOT.sheenColor, m.sheenColor, 'sheenColor');
   put(U16_SLOT.opacity, m.opacity, 'opacity');
   put(U16_SLOT.alphaCutoff, m.alphaCutoff, 'alphaCutoff');
+  put(U16_SLOT.dispersion, finite(m.dispersion, 'dispersion') / MATERIAL_DISPERSION_MAX, 'dispersion');
   return s;
 }
 
@@ -363,6 +372,7 @@ export function unpackMaterial(words: ArrayLike<number>, wordOffset = 0): RtMate
     emissionLuminance: f(MATERIAL_WORD.emissionLuminance),
     opacity: unorm(U16_SLOT.opacity),
     alphaCutoff: unorm(U16_SLOT.alphaCutoff),
+    dispersion: Math.fround(unorm(U16_SLOT.dispersion) * MATERIAL_DISPERSION_MAX),
     alphaMode: flags & MATERIAL_FLAG.alphaModeMask,
     thinWalled: (flags & MATERIAL_FLAG.thinWalled) !== 0,
     conductorEtaK: (flags & MATERIAL_FLAG.conductorEtaK) !== 0,

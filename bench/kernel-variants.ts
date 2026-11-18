@@ -74,6 +74,13 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   variants['rt-frame-emission-none'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, frameEmission: 'none' } } as never);
   variants['rt-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise' } } as never);
   variants['rt-pbr-albedo-frame-bluenoise'] = () => mk(caps, { format: {}, layout, integrator: { frame: true, sampler: 'bluenoise', materials: { features: feat, layered: { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } } } } as never);
+  // Spectral transport (P5, megakernel only): only compiled with `integrator.spectral`; every variant above stays byte-identical.
+  variants['spectral'] = () => mk(caps, { format: {}, layout, integrator: { spectral: true } } as never);
+  variants['spectral-nodisp'] = () => mk(caps, { format: {}, layout, integrator: { spectral: { dispersion: false } } } as never);
+  variants['spectral-env'] = () => mk(caps, { format: {}, layout, integrator: { spectral: true, envMap: true, envSampling: 'importance' } } as never);
+  variants['spectral-pbr-albedo'] = () => mk(caps, { format: {}, layout, integrator: { spectral: true, ...mat({ layering: 'albedo' }).integrator } } as never);
+  variants['spectral-pbr-stochastic'] = () => mk(caps, { format: {}, layout, integrator: { spectral: true, ...mat({ layering: 'stochastic', maxDepth: 64 }).integrator } } as never);
+  variants['spectral-tex'] = () => mk(caps, { format: {}, layout: texLayout, textures, integrator: { spectral: true } } as never);
   return variants;
 }
 

@@ -17,6 +17,7 @@ import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dime
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
 import { ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
+import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
@@ -162,6 +163,14 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    * `materials.features.medium` absorber (`materials` may be set for other lobes).
    */
   volumes?: PtVolumeOptions | null;
+  /**
+   * Spectral transport (P5, `docs/design/spectral.md`): paths carry three wavelengths (hero sampling) in the lanes of the vec3 throughput; every RGB reflectance,
+   * conductor eta / k, transmission / coat / sheen colour is uplifted to its sigmoid-polynomial spectrum (Jakob and Hanika 2019, as pbrt-v4), emission and the
+   * environment / sun to the same times D65, and the sample is converted to linear Rec.709 by the CIE 1931 matching functions. Opt-in (default off: the kernel text is
+   * unchanged). Needs the table texture (`PtMegakernelOptions.spectralTable`, group 2 binding `PT_SPEC_BINDING`); megakernel only; no hooks / frame / AOVs / ReSTIR.
+   * `true` = `{ res: 64, dispersion: true }`; with dispersion a dielectric with `RtMaterial.dispersion > 0` follows a Cauchy law and keeps only the hero wavelength.
+   */
+  spectral?: boolean | PtSpectralOptions;
   /** @internal Set by the wavefront builder on its secondary shade kernel: every vertex it shades is reduced (no run-time branch). */
   lodKernel?: 'secondary';
 }
@@ -234,6 +243,8 @@ export interface ResolvedIntegratorOptions {
   restirShared: boolean;
   /** P5 participating media (`PtIntegratorOptions.volumes`). */
   volumes: PtVolumeOptions | null;
+  /** Spectral transport (P5), or null. */
+  spectral: ResolvedSpectralOptions | null;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
@@ -254,7 +265,10 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
   const alphaTransmit = o.alphaTransmit ?? 0.5;
   if (alphaShadow === 'transmit' && !(alphaTransmit >= 0 && alphaTransmit <= 1)) throw new RangeError(`integrator.alphaTransmit must be in [0, 1], got ${alphaTransmit}`);
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), volumes: o.volumes ?? null };
+  const spectral = resolveSpectralOptions(o.spectral);
+  if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
+  if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), volumes: o.volumes ?? null, spectral };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -501,6 +515,7 @@ fn ptShadowWeight(ray: RtRay, h: vec3u) -> f32 {
 /** The integrator module text, to append after the raytracer module, the light sampling, the Owen-Sobol functions, the BSDF, its adapter and the sampler. */
 export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const o = resolveIntegratorOptions(options);
+  const spec = o.spectral;
   const tex = o.textures;
   const mask = o.alphaMask;
   const maskShadow = ptMaskShadow(o);
@@ -610,7 +625,7 @@ ${PT_PARAMS_WGSL}
 ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> ptRestirRes: array<vec4u>;
 ` : ''}${o.restirShared ? `@group(2) @binding(${PT_RESTIR_HIT_BINDING}) var<storage, read> ptRestirHit: array<vec4u>;
 ` : ''}
-${ptCommonHeadWgsl(o)}
+${spec ? `${ptSpectralWgsl(spec)}\n` : ''}${ptCommonHeadWgsl(o)}
 
 ${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}
 ${restir ? `
@@ -694,10 +709,10 @@ ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
     if (!li.delta) {
         w = ptMis(pl, e.pdf);
     }
-    return ${vol ? 'li.radiance * f * tr * (w / pl)' : `li.radiance * f * (w ${shadowWeighted ? '* vis ' : ''}/ pl)`};
+    return ${vol ? `${spec ? 'ptSpecIllum(li.radiance)' : 'li.radiance'} * f * tr * (w / pl)` : `${spec ? 'ptSpecIllum(li.radiance)' : 'li.radiance'} * f * (w ${shadowWeighted ? '* vis ' : ''}/ pl)`};
 }
 
-${PT_ESCAPED_WGSL}
+${spec ? PT_ESCAPED_WGSL.replace('le += rtEnvironmentLe(e, dir) * w;', 'le += ptSpecIllum(rtEnvironmentLe(e, dir)) * w;').replace('le += rtSunRadiance(s) * w;', 'le += ptSpecIllum(rtSunRadiance(s)) * w;') : PT_ESCAPED_WGSL}
 
 fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
 ${bn ? `    ptBnPixel = px;
@@ -705,7 +720,8 @@ ${bn ? `    ptBnPixel = px;
     let maxDepth = ptParams.limits.x;
     let rrStart = ptParams.limits.y;
     let pixelSeed = ptPixelSeed(px.x, px.y, dims.w);
-    let jitter = ${vb ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER)'};
+${spec ? `    ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);
+` : ''}    let jitter = ${vb ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER)'};
     let ndc = vec2f(((f32(px.x) + jitter.x) / f32(dims.x)) * 2.0 - 1.0, 1.0 - ((f32(px.y) + jitter.y) / f32(dims.y)) * 2.0);
     let origin = ptParams.origin.xyz;
     var ray = RtRay(origin, 0.0, normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y), PT_FAR);
@@ -768,13 +784,13 @@ ${frame ? `        if (depth == 1u && fBounce == 0.0) {
 ` : ''}${volSurface}${lodS.decl}${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
         let coneW = rtConeAt(cone, hit.t);
         let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${lodS.texBias}, PT_TEX_CONE);
-        let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);
+        let mat = ${spec ? 'ptSpecMaterial(' : ''}rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp)${spec ? ', hit.material)' : ''};
         var shadingN = surf.shadingNormal;
         if (mat.normalTexture != RT_TEXTURE_NONE) {
             let nr = rtTexRecord(mat.normalTexture);
             shadingN = rtApplyNormalMap(surf.shadingNormal, surf.tangent, rtTexSampleRecord(nr, surf.uv, rtTexLodOf(nr, fp)).xyz);
         }` : `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${aniso ? ' | RT_SURF_TANGENT' : ''});
-        let mat = rtMaterial(hit.material);`}
+        let mat = ${spec ? 'ptSpecMaterial(rtMaterial(hit.material), hit.material)' : 'rtMaterial(hit.material)'};`}
 ${medium ? `        beta = beta * exp(-sigma * hit.t);
 ` : ''}${mask ? `        if (${maskIndirect ? '' : 'depth == 0u && '}mat.alphaMode == RT_ALPHA_MASK && mat.opacity < mat.alphaCutoff) {
             skips += 1u;
@@ -787,7 +803,14 @@ ${counters ? `                termReason = 6u;
             continue;
         }
 ` : ''}
-${hooks ? `        var hookEmitted = vec3f(0.0);
+${spec?.dispersion ? `        if (ptSpecDisp) {
+            ptSpecDisp = false;
+            if (!ptSpecHero) {
+                ptSpecHero = true;
+                beta = beta * vec3f(3.0, 0.0, 0.0);
+            }
+        }
+` : ''}${hooks ? `        var hookEmitted = vec3f(0.0);
 ` : ''}        if (mat.emissionLuminance > 0.0 && (hit.frontFace || mat.emissionTwoSided)) {
             var w = 1.0;
             if (!(depth == 0u || specularBounce) && PT_NEE) {
@@ -886,7 +909,7 @@ ${counters ? `                    termReason = 3u;
     }
 ${counters ? `    ptCountEnd(pxIndex, depth, termReason);
 ` : ''}${frame ? `    ptFramePlanes(pxIndex, dims.x * dims.y, radiance, ${emit ? 'vec3f(0.0), fEmit' : 'fDirect, vec3f(0.0)'}, fBounce, fSeen, fIsSpec, fNormal, fViewZ, fMotion, fRough, fAlbedo, fSpec);
-` : ''}    return PtRadiance(${emit ? 'radiance + fEmit' : 'radiance'}, 0.0);
+` : ''}    return PtRadiance(${spec ? 'ptSpecToRgb(radiance)' : emit ? 'radiance + fEmit' : 'radiance'}, 0.0);
 }
 
 @compute @workgroup_size(${PT_WORKGROUP[0]}, ${PT_WORKGROUP[1]})

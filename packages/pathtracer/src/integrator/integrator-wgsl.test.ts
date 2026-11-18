@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, frameEmission: 'none', accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false, restirShared: false, volumes: null });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, frameEmission: 'none', accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false, restirShared: false, volumes: null, spectral: null });
   });
 
   it('bakes the settings in as module constants', () => {

@@ -34,6 +34,8 @@ import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
+import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_PARAMS_BYTES, PT_WORKGROUP, ptIntegratorWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from './integrator-wgsl.ts';
@@ -83,6 +85,11 @@ export interface PtMegakernelOptions {
   blueNoise?: BlueNoiseTexture;
   /** `integrator.volumes` with a grid medium (P5): the density, x fastest then y then z, uploaded as an `r32float` 3D texture at group 2 binding `PT_VOLUME_BINDING`. */
   volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array } };
+  /**
+   * `integrator.spectral` only (P5): the RGB -> spectrum table (`buildRgb2SpecTable(res)`, `res` = `integrator.spectral.res`, default 64). Omitted: `defaultRgb2SpecTable(res)`
+   * (fitted on first use and kept; res 64 takes ~4 s in Node, res 32 ~0.5 s), so a page builds it once and passes it here.
+   */
+  spectralTable?: Rgb2SpecTable;
   /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
   textures?: TextureLayout | null;
   /**
@@ -208,6 +215,14 @@ export function createVolumeTexture(device: GPUDevice, grid: NonNullable<PtMegak
   return texture;
 }
 
+/** The spectral mode's `rgba32float` table texture (`rgb2SpecTexture`; textureLoad, `unfilterable-float`). */
+export function createSpectralTexture(device: GPUDevice, table: Rgb2SpecTable, label: string): GPUTexture {
+  const { width, height, data } = rgb2SpecTexture(table);
+  const texture = device.createTexture({ label: `${label} spectral table`, size: [width, height], format: 'rgba32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
+  device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * 16, rowsPerImage: height }, [width, height]);
+  return texture;
+}
+
 export class PtMegakernel {
   readonly device: GPUDevice;
   readonly options: PtMegakernelOptions;
@@ -236,6 +251,8 @@ export class PtMegakernel {
   private lastEncodedCamera: PtLookAtCamera | null = null;
   private blueTextureView: GPUTextureView | null = null;
   private corrTextureView: GPUTextureView | null = null;
+  /** P5: the spectral mode's table texture (group 2 binding `PT_SPEC_BINDING`). */
+  private specTexture: GPUTexture | null = null;
   private jitter: [number, number] = [0, 0];
   /** ReSTIR DI passes (`integrator.restir`, P4): run before every sample dispatch. */
   restir: PtRestirPasses | null = null;
@@ -287,7 +304,11 @@ export class PtMegakernel {
     if (volumeGrid && !options.volumeGrid) throw new Error('PtMegakernel: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick' && !options.volumeGrid?.majorant) throw new Error("PtMegakernel: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
-    const sharedHit = resolveIntegratorOptions(options.integrator ?? {}).restirShared;
+    const resolvedOptions = resolveIntegratorOptions(options.integrator ?? {});
+    const sharedHit = resolvedOptions.restirShared;
+    const spectral = resolvedOptions.spectral;
+    const specTable = spectral ? (options.spectralTable ?? defaultRgb2SpecTable(spectral?.res)) : null;
+    if (spectral && specTable && specTable.res !== spectral.res) throw new Error(`PtMegakernel: integrator.spectral.res is ${spectral.res} but the spectral table has res ${specTable.res} (pass \`spectral: { res: ${specTable.res} }\`)`);
     const layouts = [
       device.createBindGroupLayout({ label: `${label} walk`, entries: withBindings(rtWalkEntries(options.format)) }),
       device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) }),
@@ -305,6 +326,7 @@ export class PtMegakernel {
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(volumeGrid && options.integrator?.volumes?.majorant === 'brick' ? [{ binding: PT_VOLUME_MAJORANT_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
           ...(volumeGrid ? [{ binding: PT_VOLUME_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
+          ...(spectral ? [{ binding: PT_SPEC_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
       }),
@@ -327,6 +349,7 @@ export class PtMegakernel {
       kernel.majorantTexture = createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
     }
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
+    if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);
     return kernel;
   }
 
@@ -499,6 +522,7 @@ export class PtMegakernel {
         ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
         ...(this.volumeTexture ? [{ binding: PT_VOLUME_BINDING, resource: this.volumeTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.majorantTexture ? [{ binding: PT_VOLUME_MAJORANT_BINDING, resource: this.majorantTexture.createView({ dimension: '3d' }) }] : []),
+        ...(this.specTexture ? [{ binding: PT_SPEC_BINDING, resource: this.specTexture.createView() }] : []),
         ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),
       ],
     });
@@ -616,6 +640,7 @@ export class PtMegakernel {
     this.majorantTexture?.destroy();
     this.restir?.destroy();
     this.blueTexture?.destroy();
+    this.specTexture?.destroy();
     this.frameParamsBuffer?.destroy();
     this.frameBuffer?.destroy();
     this.accum?.destroy();

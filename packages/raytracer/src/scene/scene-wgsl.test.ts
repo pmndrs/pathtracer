@@ -102,7 +102,8 @@ describe('scene copy WGSL', () => {
 
   it('RtMaterial has exactly the TypeScript material\'s fields', () => {
     // The thin-film triple is not in the WGSL struct (the default kernel text stays byte-identical): the pathtracer's `ptMaterialFilm` reads its words (P2.27).
-    const film = ['thinFilmWeight', 'thinFilmThickness', 'thinFilmIor'];
+    // `dispersion` (P5) is read by the spectral mode's `ptMaterialDispersion`, for the same reason.
+    const film = ['thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'dispersion'];
     expect(fieldsOf(rtMaterialWgsl(), 'RtMaterial').sort()).toEqual(Object.keys(defaultMaterial()).filter((k) => !film.includes(k)).sort());
   });
 
