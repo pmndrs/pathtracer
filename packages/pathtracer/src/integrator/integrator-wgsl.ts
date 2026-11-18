@@ -15,7 +15,8 @@ import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dimensions.ts';
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
-import { PT_RESTIR_HIT_BINDING, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
+import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
+import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
   /** `'owen-sobol'` (reference), `'pcg'` (debug) or `'bluenoise'` (P4.1, real-time frames: needs `PtMegakernelOptions.blueNoise`, megakernel only; `dimensions.ts`). */
@@ -223,6 +224,8 @@ export interface ResolvedIntegratorOptions {
   restir: boolean;
   /** ReSTIR with `sharedHit` and trace-mode primaries: the shade kernel resolves its primary hit from the V-buffer texel the G-buffer pass wrote (P4.2c). */
   restirShared: boolean;
+  /** ReSTIR GI on top of DI (`PtRestirOptions.gi`, P5): the shade ends the path at the first non-delta vertex and adds the final GI reservoir's contribution. */
+  restirGi: boolean;
 }
 
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
@@ -239,7 +242,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
   const alphaTransmit = o.alphaTransmit ?? 0.5;
   if (alphaShadow === 'transmit' && !(alphaTransmit >= 0 && alphaTransmit <= 1)) throw new RangeError(`integrator.alphaTransmit must be in [0, 1], got ${alphaTransmit}`);
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace') };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -512,6 +515,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const counters = o.counters;
   const aovs = o.aovs;
   const restir = o.restir;
+  const gi = o.restirGi;
   const frame = o.frame;
   // P4.5a: light the primary BSDF does not modulate (an emitter or the sky seen directly, or through perfect mirrors) goes to `fEmit` instead of `radiance`; the beauty is their sum.
   const emit = o.frameEmission !== 'none';
@@ -535,6 +539,7 @@ ${PT_PARAMS_WGSL}
 @group(2) @binding(0) var<uniform> ptParams: PtParams;
 @group(2) @binding(1) var<storage, read_write> ptAccum: array<vec4f>;
 ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> ptRestirRes: array<vec4u>;
+` : ''}${gi ? `@group(2) @binding(${PT_RESTIR_GI_SHADE_BINDING}) var<storage, read> ptRestirGiRes: array<vec4u>;
 ` : ''}${o.restirShared ? `@group(2) @binding(${PT_RESTIR_HIT_BINDING}) var<storage, read> ptRestirHit: array<vec4u>;
 ` : ''}
 ${ptCommonHeadWgsl(o)}
@@ -572,7 +577,9 @@ ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
     }
     return li.radiance * f * (rw / li.pdf);
 }
-` : ''}
+` : ''}${gi ? `
+${PT_RESTIR_OCT_WGSL}
+${ptRestirGiShadeWgsl(evalFn)}` : ''}
 fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters || restir ? ', pxIndex: u32' : ''}) -> vec3f {
 ${restir ? `    if (vertex == 0u) {
         return ptRestirLd(p, ng, frame, wo, bp, pxIndex);
@@ -763,7 +770,14 @@ ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
         if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
 ${addRadiance(`beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters || restir ? ', pxIndex' : ''})`, 'vertex', '            ')}        }
 
-${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' })};
+${gi ? `        if (vertex == 0u && !ptBsdfIsDelta(bp)) {
+            // ReSTIR GI: the final reservoir stands for everything after this vertex (the 2-bounce estimate); the DI term above is the direct light.
+            radiance += beta * ptRestirGiLi(surf.position, frame, wo, bp, pxIndex);
+${frame ? `            fBounce = ptGiDist;
+` : ''}${term(7)}            break;
+        }
+
+` : ''}${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' })};
         if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
 ${addRadiance('beta * ptTerminate(hv)', 'vertex + 1u', '            ')}${term(4)}            break;
         }

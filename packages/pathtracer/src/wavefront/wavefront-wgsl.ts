@@ -34,6 +34,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
   if (o.restir && o.restirShared) return 'integrator.restir.sharedHit (the shared primary hit joins the wavefront camera kernel: TASKS P4.2a follow-up)';
   if (o.restir && o.hooks) return 'integrator.restir with hooks';
+  if (o.restirGi) return 'integrator.restir.gi (ReSTIR GI is megakernel only: the shade kernel would need the GI reservoir binding and the path-ending hook)';
   if (o.alphaMask && o.counters) return 'integrator.counters with alpha MASK (the cutout re-traces happen in the intersect kernel, which has no counter buffer)';
   return null;
 }

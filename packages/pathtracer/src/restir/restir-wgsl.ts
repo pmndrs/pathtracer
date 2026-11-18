@@ -26,7 +26,8 @@
  * one vec4u per pixel, four regions (A init, B temporal, F0 / F1 final, ping-pong by frame parity). Reservoir words: light index, u (2 x unorm16),
  * bits(W), M. Needs `integrator.nee`, no textures, legacy materials (`materials: null`), no alpha mask.
  */
-import { PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { PT_ESCAPED_WGSL, PT_MIS_WGSL, PT_VISIBLE_MASKED_WGSL, ptCommonHeadWgsl, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
+import { ptRestirGiWgsl, resolveRestirGiOptions, type PtRestirGiOptions, type ResolvedRestirGiOptions } from './restir-gi-wgsl.ts';
 
 export interface PtRestirOptions {
   /** RIS candidates per pixel (M). Default 8. 1 with temporal and spatial off equals plain NEE (no MIS) in distribution. */
@@ -57,6 +58,12 @@ export interface PtRestirOptions {
    * DIVERGES V171). Ignored with `primary: 'vbuffer'` (the engine's V-buffer is already shared). Default false.
    */
   sharedHit?: boolean;
+  /**
+   * ReSTIR GI (P5, docs/design/restir-gi.md): resample the secondary path vertex x2 (with the radiance it reflects) of one BSDF-sampled ray per pixel, with temporal and spatial reuse and
+   * the reconnection Jacobian, on top of this DI pipeline (it needs the same G-buffer and replaces the path's continuation after the first non-delta vertex: the GI term is a 2-bounce
+   * estimate). Default null: no GI code at all (every kernel text is unchanged).
+   */
+  gi?: PtRestirGiOptions | null;
 }
 
 export interface ResolvedRestirOptions {
@@ -72,6 +79,8 @@ export interface ResolvedRestirOptions {
   normalCos: number;
   depthRel: number;
   sharedHit: boolean;
+  /** Present only when GI is on (the key is absent otherwise: a DI-only configuration's JSON, and the adapter's config hash, do not change). */
+  gi?: ResolvedRestirGiOptions;
 }
 
 export const PT_RESTIR_MAX_CANDIDATES = 64;
@@ -98,6 +107,7 @@ export function resolveRestirOptions(o: PtRestirOptions = {}): ResolvedRestirOpt
     normalCos: o.normalCos ?? 0.9,
     depthRel: o.depthRel ?? 0.1,
     sharedHit: o.sharedHit ?? false,
+    ...(o.gi ? { gi: resolveRestirGiOptions(o.gi) } : {}),
   };
 }
 
@@ -119,11 +129,12 @@ export const PT_RESTIR_SHADE_BINDING = 11;
 /** Binding of the shared primary hit buffer in the megakernel's io group (`restir.sharedHit`). */
 export const PT_RESTIR_HIT_BINDING = 15;
 export const PT_RESTIR_ENTRIES = ['ptRestirGbuf', 'ptRestirInit', 'ptRestirTemporal', 'ptRestirSpatial'] as const;
+export { PT_RESTIR_GI_ENTRIES } from './restir-gi-wgsl.ts';
 /** G-buffer `material` word of a pixel whose camera ray hit nothing (a real material is a bvh index below 2^16, or `RT_NO_MATERIAL` = 0xffffffff). */
 export const PT_RESTIR_GBUF_MISS = 0xfffffffe;
 
 /** The words of a G-buffer record for these integrator options (P4.2b/c): position, octahedral normal, material, then the texture footprint and a per-vertex random for stochastic material picks when the scene needs them. */
-export function ptRestirGbufLayout(integrator: PtIntegratorOptions = {}): { words: number; uv: number | null; mix: number | null } {
+export function ptRestirGbufLayout(integrator: PtIntegratorOptions = {}): { words: number; uv: number | null; mix: number | null; ng: number | null } {
   const o = resolveIntegratorOptions(integrator);
   const mats = o.materials;
   const needMix = !!(mats?.features.mix || (o.lod !== 'off' && mats));
@@ -138,7 +149,12 @@ export function ptRestirGbufLayout(integrator: PtIntegratorOptions = {}): { word
     mix = words;
     words += 1;
   }
-  return { words, uv, mix };
+  let ng: number | null = null;
+  if (o.restirGi) {
+    ng = words; // the geometric normal (octahedral) for the secondary ray's origin offset: the shading normal can sit on the other side of the surface at a grazing direction
+    words += 1;
+  }
+  return { words, uv, mix, ng };
 }
 
 /** Bytes of the two G-buffer frames at `pixels` pixels (before P4.2c this was 2 x 32 B per pixel). */
@@ -176,7 +192,7 @@ fn ptRsOctDecode(w: u32) -> vec3f {
 }`;
 
 /** The ReSTIR passes, to append after the shading modules (light sampling, BSDF, adapter, sampler) of a build whose raytracer module has the walk at group 0 and the scene at group 1. */
-export function ptRestirWgsl(integrator: PtIntegratorOptions = {}): string {
+export function ptRestirWgsl(integrator: PtIntegratorOptions = {}, part: 'all' | 'di' | 'gi' = 'all'): string {
   const o = resolveIntegratorOptions(integrator);
   const head = ptCommonHeadWgsl(o);
   const tex = o.textures;
@@ -235,7 +251,8 @@ struct PtRsGeom {
     depth: f32,
     n: vec3f,
     mat: u32,
-    eye: vec3f,${tex ? `
+    eye: vec3f,${gl.ng !== null ? `
+    ng: vec3f,` : ''}${tex ? `
     uv: vec2f,
     fp: f32,` : ''}${gl.mix !== null ? `
     mixU: f32,` : ''}
@@ -289,7 +306,8 @@ fn ptRsLoadGeom(fsel: u32, pix: u32, prev: bool) -> PtRsGeom {
     }
     g.p = vec3f(bitcast<f32>(ptRsGbuf[i]), bitcast<f32>(ptRsGbuf[i + 1u]), bitcast<f32>(ptRsGbuf[i + 2u]));
     g.n = ptRsOctDecode(ptRsGbuf[i + 3u]);
-    g.eye = select(ptRsParams.curOrigin.xyz, ptRsParams.prevOrigin.xyz, prev);
+${gl.ng !== null ? `    g.ng = ptRsOctDecode(ptRsGbuf[i + ${gl.ng}u]);
+` : ''}    g.eye = select(ptRsParams.curOrigin.xyz, ptRsParams.prevOrigin.xyz, prev);
     g.depth = dot(g.p - g.eye, select(ptRsParams.curForward.xyz, ptRsParams.prevForward.xyz, prev));${tex ? `
     g.uv = vec2f(bitcast<f32>(ptRsGbuf[i + ${gl.uv}u]), bitcast<f32>(ptRsGbuf[i + ${(gl.uv ?? 0) + 1}u]));
     g.fp = bitcast<f32>(ptRsGbuf[i + ${(gl.uv ?? 0) + 2}u]);` : ''}${gl.mix !== null ? `
@@ -397,7 +415,7 @@ fn ptRsSurfaceOk(a: PtRsGeom, b: PtRsGeom) -> bool {
     return b.depth > 0.0 && dot(a.n, b.n) >= ptRsParams.thr.y && abs(a.depth - b.depth) <= ptRsParams.thr.z * a.depth;
 }
 
-@compute @workgroup_size(${8}, ${8})
+${part === 'gi' ? '' : `@compute @workgroup_size(${8}, ${8})
 fn ptRestirGbuf(@builtin(global_invocation_id) id: vec3u) {
     let P = ptRsParams;
     if (id.x >= P.dims.x || id.y >= P.dims.y) {
@@ -454,7 +472,8 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
         ptRsGbuf[i + 1u] = bitcast<u32>(surf.position.y);
         ptRsGbuf[i + 2u] = bitcast<u32>(surf.position.z);
         ptRsGbuf[i + 3u] = ptRsOctEncode(${tex ? 'shadingN' : 'surf.shadingNormal'});
-        ptRsGbuf[i + 4u] = hit.material;${tex ? `
+        ptRsGbuf[i + 4u] = hit.material;${gl.ng !== null ? `
+        ptRsGbuf[i + ${gl.ng}u] = ptRsOctEncode(hit.normal);` : ''}${tex ? `
         ptRsGbuf[i + ${gl.uv}u] = bitcast<u32>(surf.uv.x);
         ptRsGbuf[i + ${(gl.uv ?? 0) + 1}u] = bitcast<u32>(surf.uv.y);
         ptRsGbuf[i + ${(gl.uv ?? 0) + 2}u] = bitcast<u32>(fp);` : ''}${gl.mix !== null ? `
@@ -621,6 +640,6 @@ fn ptRestirSpatial(@builtin(global_invocation_id) id: vec3u) {
         n += 1u;
     }
     ptRsStoreRes(P.reg.w, pix, ptRsMerge(n, &gs, &bps, &rs, (P.cfg.z & PT_RS_FLAG_UNBIASED) != 0u, seed, P.dims.z, cap, PT_RS_KEY_SPATIAL));
-}
-`;
+}`}
+${o.restirGi && part !== 'di' ? ptRestirGiWgsl({ prelude: `${PT_MIS_WGSL}\n\n${PT_ESCAPED_WGSL}`, evalFn, sampleFn: layered ? 'ptSample' : 'ptBsdfSample', mixArg: mats ? (gl.mix !== null ? ', ptRsRand2(seed, P.dims.z, PT_GI_KEY_MIX).x' : ', 0.0') : '' }) : ''}`;
 }
