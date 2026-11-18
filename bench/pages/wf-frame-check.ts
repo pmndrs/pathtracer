@@ -16,7 +16,7 @@
  * megakernel and the wavefront interleaved (A B B A ...). Reports ms per frame (min / median / max over the rounds) and the paired wavefront / megakernel ratio per round (min..max).
  * `res=960x540` sets the film of both kernels after the load (a file scene cannot be resized by its description; the kernels can).
  *
- * Args: cases=cornell,...  frames=6  step=1 (degrees)  restir=off|unbiased|biased  tol=1e-5  size=128 (Cornell side; file scenes keep their film)  scheduler=plain|  packing=packed|split
+ * Args: cases=cornell,...  frames=6  step=1 (degrees)  restir=off|unbiased|biased  emit=none|primary|mirror (frameEmission)  tol=1e-5  size=128 (Cornell side; file scenes keep their film)  scheduler=plain|  packing=packed|split
  */
 import type { PtLookAtCamera, PtMegakernel, PtRestirOptions, PtWavefront, PtWavefrontOptions, PtFrame } from '@pmndrs/pathtracer';
 import type { AdapterSummary } from '../runner/contract.ts';
@@ -35,7 +35,7 @@ const note = (m: string): void => {
 
 type V3 = [number, number, number];
 
-const PLANES = ['radiance', 'diffuse', 'specular', 'normalViewZ', 'motionRoughness', 'albedo', 'specularFactor'] as const;
+const PLANES = ['radiance', 'diffuse', 'specular', 'normalViewZ', 'motionRoughness', 'albedo', 'specularFactor', 'emission'] as const;
 
 interface Case {
   scene: string;
@@ -131,6 +131,7 @@ interface Opts {
   step: number;
   tol: number;
   restir: PtRestirOptions | null;
+  frameEmission?: 'none' | 'primary' | 'mirror';
   packing: 'packed' | 'split';
   size: number;
   res: [number, number] | null;
@@ -198,7 +199,7 @@ async function runCase(name: string, c: Case, o: Opts): Promise<void> {
     const s = c.size ?? o.size;
     scene = { ...scene, film: { ...scene.film, width: s, height: s } };
   }
-  const settings: PtAdapterSettings = { nee: true, mode: 'realtime', scenePacking: o.packing, maxDepth: 2, rrStartDepth: 0, ...(o.restir ? { restir: o.restir } : {}), ...(c.settings ?? {}) };
+  const settings: PtAdapterSettings = { nee: true, mode: 'realtime', scenePacking: o.packing, maxDepth: 2, rrStartDepth: 0, ...(o.restir ? { restir: o.restir } : {}), ...(o.frameEmission ? { frameEmission: o.frameEmission } : {}), ...(c.settings ?? {}) };
   const adapter = new PtMegakernelAdapter(settings);
   await adapter.load(scene);
   const mk = adapter.renderer as PtMegakernel;
@@ -245,7 +246,7 @@ async function runCase(name: string, c: Case, o: Opts): Promise<void> {
     for (const p of PLANES) compare(a[p], b[p], o.tol, agree[p]);
     for (let i = 0; i < b.radiance.length; i += 4) {
       for (let k = 0; k < 3; k++) {
-        const rec = (b.diffuse[i + k] as number) * (b.albedo[i + k] as number) + (b.specular[i + k] as number) * (b.specularFactor[i + k] as number);
+        const rec = (b.diffuse[i + k] as number) * (b.albedo[i + k] as number) + (b.specular[i + k] as number) * (b.specularFactor[i + k] as number) + (b.emission[i + k] as number);
         const want = b.radiance[i + k] as number;
         if (!Number.isFinite(rec) || !Number.isFinite(want)) nonFinite++;
         else identityWorst = Math.max(identityWorst, Math.abs(rec - want) / Math.max(Math.abs(want), 1e-3));
@@ -288,6 +289,7 @@ try {
     step: numberArg(args, 'step', 1),
     tol: numberArg(args, 'tol', 1e-5),
     restir,
+    ...(args.emit ? { frameEmission: args.emit as 'none' | 'primary' | 'mirror' } : {}),
     packing: (args.packing ?? 'packed') as 'packed' | 'split',
     size: numberArg(args, 'size', 128),
     res: args.res ? (args.res.split('x').map(Number) as [number, number]) : null,
@@ -305,7 +307,7 @@ try {
     await runCase(n, c, opts);
   }
   const total = Object.entries(metrics).filter(([k]) => k.endsWith('_mismatch')).reduce((sum, [, v]) => sum + v, 0);
-  reportResult({ scene: 'wf-frame-check', renderer: 'ours', config: { cases: names.join(','), frames: opts.frames, restir: args.restir ?? 'off', packing: opts.packing, res: args.res ?? 'film', timing: opts.timing, wavefront: JSON.stringify(wavefront) }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems } }, { adapter: adapterSummary, deviceErrors });
+  reportResult({ scene: 'wf-frame-check', renderer: 'ours', config: { cases: names.join(','), frames: opts.frames, restir: args.restir ?? 'off', emit: args.emit ?? 'default', packing: opts.packing, res: args.res ?? 'film', timing: opts.timing, wavefront: JSON.stringify(wavefront) }, valid: total === 0 && deviceErrors.length === 0, metrics: { ...metrics, mismatches: total }, notes: { problems } }, { adapter: adapterSummary, deviceErrors });
   if (total > 0) throw new Error(`wf-frame-check: ${total} mismatches. First:\n${problems.join('\n')}`);
 } catch (error) {
   reportError(error, { adapter: adapterSummary, deviceErrors });

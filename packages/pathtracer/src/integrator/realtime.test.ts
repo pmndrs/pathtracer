@@ -175,9 +175,21 @@ describe('per-frame outputs (P4.1)', () => {
   it('the wavefront kernels write the frame planes where the radiance lands (P4.1b)', () => {
     const wf = ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true }, prune: false, shortenNames: false, minify: false } as never);
     // shade: planes 2-5 and the emission part of 0 / 1 at depth 0, the bounce distance at depth 1, everything else through the class add; the camera kernel overwrites the accumulator
-    expect(wf.shade.code).toContain('ptFramePlanes(path, n, fDirect, fDirect');
+    // default frameEmission 'mirror' (P4.5a): emission / sky of a pure path go to plane 6, a path carries the impure bit
+    expect(wf.shade.code).toContain('ptFramePlanes(path, n, vec3f(0.0), vec3f(0.0), fEmit');
     expect(wf.shade.code).toContain('ptFrameBounce(path, n, hit.t)');
-    expect(wf.shade.code).toContain('ptwfAddRadianceF(path, n, radiance, fDirect)');
+    expect(wf.shade.code).toContain('ptwfAddRadianceE(path, n, radiance, fEmit, fEmitW)');
+    expect(wf.shade.code).toContain('fn ptFrameAddEmit(');
+    expect(wf.shade.code).toContain('ptFramePureNext(!st.impure, specularBounce, bp.kind)');
+    expect(wf.shade.code).toContain('p.depth = s2.w & 0x0fffffffu;');
+    // legacy 'none': the P4.1 split (emission seen by a specular primary in the diffuse plane), no impure bit
+    const legacy = ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true, frameEmission: 'none' }, prune: false, shortenNames: false, minify: false } as never);
+    expect(legacy.shade.code).toContain('ptFramePlanes(path, n, fDirect, fDirect, vec3f(0.0)');
+    expect(legacy.shade.code).toContain('ptwfAddRadianceF(path, n, radiance, fDirect)');
+    expect(legacy.shade.code).not.toContain('impure');
+    const primary = ptWavefrontBuild(caps, { format: {}, layout, integrator: { frame: true, frameEmission: 'primary' }, prune: false, shortenNames: false, minify: false } as never);
+    expect(primary.shade.code).toMatch(/if \(depth == 0u\) \{\s*fEmit \+=/);
+    expect(primary.shade.code).not.toContain('impure');
     expect(wf.shade.code).toContain(`@group(2) @binding(${PT_FRAME_PARAMS_BINDING}) var<uniform> ptFrameParams`);
     expect(wf.camera.code).toContain('ptAccum[path] = vec4f(0.0, 0.0, 0.0, 1.0);');
     expect(wf.shadow.code).toContain('ptFrameAdd(path, n, ptwfF3(r2));');

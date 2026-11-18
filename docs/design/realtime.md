@@ -123,6 +123,10 @@ Where they differ:
   own function: the primary miss writes its sky through the same call). Everything gathered after that lands in the plane of the primary lobe's class **divided by that class's factor, at the moment it is added**
   (`ptFrameAdd`: shade for emission / escape / `ptTerminate` at depth >= 1, the shadow kernel for next-event light; the class and factors are read back from planes 4 / 5). The depth-1 shade writes the first bounce ray's hit distance
   into the alpha of the class plane (`ptFrameBounce`). The beauty is accumulated as before; the camera kernel overwrites it (`accumulate: false`).
+* **Emission plane (P4.5a, plane 6).** `frameEmission` works as in the megakernel (default `mirror`): the pure part of a path's emission / sky goes to plane 6 and the beauty is `radiance + emission`. The depth-0 write puts a primary
+  emitter / sky in plane 6 (`ptFramePlanes` with `emit`), later pure contributions are added by `ptFrameAddEmit` (shade, depth >= 1: a mirror chain reaching a lamp or the sky). A path's purity is ONE bit of the path state: bit 28 of the
+  depth word is set when the path left the perfect-mirror chain (`impure`, set = impure so a fresh word is unchanged and the V-buffer test `(word & 0x1fffffff) == 0` stays valid), `ptFramePureNext` is the megakernel's own function;
+  only kernels built with `frameEmission: 'mirror'` have it and read the depth with 28 bits. `primary` needs no state, `none` is the P4.1 split (`fDirect`).
 * **Equivalence.** A sum of quotients instead of the megakernel's quotient of a sum: per pixel <= 5e-7 relative to the megakernel's frame (checks below), geometry planes bit-identical. `diffuse x albedo factor + specular x specular factor = radiance` holds to 2e-7.
 * Not combinable: `frame` + `aovs` (both use the tail; the real-time preset has no AOVs), `frame` + `refill` / `layers` (throws). A first cutout hit on the BOUNCE ray of an alpha-MASK scene records its own hit distance in the megakernel and the
   distance of the solid hit past the cutouts on the wavefront (its intersect kernel loops the cutouts).
