@@ -15,7 +15,7 @@
  * The params uniform is a ring of dynamic-offset slots like the megakernel's, with one record per depth iteration
  * (`PTWF_PARAM_SLOTS`; `maxPassesPerEncode()` says how many sample passes fit in one `encode`).
  */
-import { rtCreateComputePipelineAsync, rtModuleWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtTransformWgsl, rtWalkEntries, withBindings } from '@pmndrs/raytracer';
+import { rtCreateComputePipelineAsync, rtModuleWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, rtSceneBindGroupEntries, sceneFormatOf, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtTransformWgsl, rtWalkEntries, withBindings } from '@pmndrs/raytracer';
 import type { BlueNoiseTexture, Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
@@ -361,6 +361,8 @@ export class PtWavefront {
   }
 
   setScene(trace: TraceScene, scene: SceneCopyBuffers): void {
+    // A wide scene read by a binary walk (or the reverse) is garbage, not an error: the node formats must agree (X1.i).
+    if (trace.nodeFormat !== sceneFormatOf(this.options.format).nodeFormat) throw new Error(`PtWavefront.setScene: the kernel walks '${sceneFormatOf(this.options.format).nodeFormat}' nodes but the scene is '${trace.nodeFormat}'`);
     if ((this.options.scenePacking ?? DEFAULT_SCENE_PACKING) !== scene.packing) throw new Error(`PtWavefront.setScene: the kernel was built for scene packing '${this.options.scenePacking ?? DEFAULT_SCENE_PACKING}' but the scene copy is '${scene.packing}' (build both with the same packing)`);
     if (!!this.options.textures !== !!scene.textures) throw new Error(`PtWavefront.setScene: the kernel was built ${this.options.textures ? 'with' : 'without'} textures but the scene copy has ${scene.textures ? 'some' : 'none'}`);
     this.walkGroup = this.device.createBindGroup({ label: 'ptwf walk', layout: this.layouts.walk, entries: rtSceneBindGroupEntries(trace) });

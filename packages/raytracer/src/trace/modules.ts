@@ -135,13 +135,38 @@ export function rtBoundWalkLoops(walk: string): string {
     const step = `rtWalkStep${index++}`; // unique per walk loop (rtShortenWgsl wants unique names)
     return `for (var ${step} = 0u; ${step} < 0xffffffffu; ${step}++) {`;
   });
-  const [head = '', ...rest] = bounded.split(WALK_TAIL);
-  return rest.reduce((out, part, i) => out + WALK_RETURNS[i] + part, head);
+  if (bounded.includes(WALK_TAIL)) {
+    const [head = '', ...rest] = bounded.split(WALK_TAIL);
+    return rest.reduce((out, part, i) => out + WALK_RETURNS[i] + part, head);
+  }
+  // Wide walks (bvh4 / cwbvh8, X1.i): the helper loops end in `break` and already `return` after the loop; the two walk functions end with the loop, so each gets its final return.
+  return WIDE_WALK_FUNCTIONS.reduce((out, [name, ret]) => {
+    const start = out.indexOf(`fn ${name}(`);
+    const end = out.indexOf('\n    }\n}\n', start);
+    return out.slice(0, end + 7) + `    ${ret}\n` + out.slice(end + 7);
+  }, bounded);
 }
 
-/** True when `rtBoundWalkLoops` recognises bvh's walk: two walk functions, each with a descent and a pop `loop`, each ending in WALK_TAIL. */
+/** The wide walks' two entry functions (each ends with its endless descent loop) and the return the rewrite appends. */
+const WIDE_WALK_FUNCTIONS: ReadonlyArray<readonly [string, string]> = [
+  // Unreachable (the loop only leaves through its own returns, and 2^32 - 1 iterations are never run), so the miss record serves whatever the walk calls its locals (bvh4 `single` has its own).
+  ['bvhWalkClosest', 'return BvhHit(-1.0, 0u, 0u, vec2f(0.0), true, BVH_NO_MATERIAL, vec3f(0.0));'],
+  ['bvhWalkAny', 'return false;'],
+];
+
+/**
+ * True when `rtBoundWalkLoops` recognises bvh's walk: the binary walk (four `loop`s, two functions ending in WALK_TAIL) or a wide walk
+ * (bvh4 / cwbvh8: every `loop` rewritable, both walk functions ending with the loop). Anything else is left alone.
+ */
 export function rtBoundWalkLoopsApplies(walk: string): boolean {
-  return (walk.match(/\bloop \{/g) ?? []).length === 4 && walk.split(WALK_TAIL).length === 3 && /\bfn bvhWalkClosest\b[\s\S]*\bfn bvhWalkAny\b/.test(walk);
+  const loops = (walk.match(/\bloop \{/g) ?? []).length;
+  if (loops === 0 || !/\bfn bvhWalkClosest\b[\s\S]*\bfn bvhWalkAny\b/.test(walk)) return false;
+  if (walk.includes(WALK_TAIL)) return loops === 4 && walk.split(WALK_TAIL).length === 3;
+  return WIDE_WALK_FUNCTIONS.every(([name]) => {
+    const start = walk.indexOf(`fn ${name}(`);
+    const end = start < 0 ? -1 : walk.indexOf('\n    }\n}\n', start);
+    return end > 0 && !walk.slice(start, end).includes('\n}\n') && /\bloop \{/.test(walk.slice(start, end));
+  });
 }
 
 function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string {

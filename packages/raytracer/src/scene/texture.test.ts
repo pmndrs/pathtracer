@@ -299,3 +299,29 @@ describe('texture frame and normal maps', () => {
     expect(Number.isFinite(applyNormalMap(n, [0, 1, 0], 1, [0.9, 0.2, 0.8])[0])).toBe(true);
   });
 });
+
+describe("TextureOptions.mips 'gpu' (X2.d)", () => {
+  const input = (w: number, h: number, srgb: boolean) => ({ width: w, height: h, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), data: Uint8Array.from({ length: w * h * 4 }, (_, i) => (i * 37 + (i >> 5)) & 255) });
+  it('keeps level 0 only, plans and counts the full chain, and the level-0 twin is unchanged', () => {
+    for (const srgb of [true, false]) {
+      const cpu = buildSceneTextures([input(64, 32, srgb), input(64, 32, srgb)]);
+      const gpu = buildSceneTextures([input(64, 32, srgb), input(64, 32, srgb)], { mips: 'gpu' });
+      expect(gpu.gpuMips).toBe(true);
+      expect(cpu.gpuMips).toBeUndefined();
+      expect(gpu.buckets[0]!.mips).toHaveLength(1);
+      expect(gpu.buckets[0]!.mipLevels).toBe(cpu.buckets[0]!.mipLevels);
+      expect(gpu.slots).toEqual(cpu.slots);
+      expect(gpu.byteLength).toBe(cpu.byteLength);
+      expect(Array.from(gpu.buckets[0]!.mips[0]!)).toEqual(Array.from(cpu.buckets[0]!.mips[0]!));
+      expect(sampleSceneTexture(gpu, 1, 0.3, 0.6, 0)).toEqual(sampleSceneTexture(cpu, 1, 0.3, 0.6, 0));
+      expect(() => sampleSceneTexture(gpu, 0, 0.3, 0.6, 2)).toThrow(/built on the GPU/);
+    }
+  });
+  it('copies a same-size byte texture without the per-element callback (and still masks a plain array to bytes)', () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4]);
+    const out = resampleTexture({ width: 1, height: 1, colorSpace: 'linear', data: bytes }, 1, 1);
+    expect(Array.from(out)).toEqual([1, 2, 3, 4]);
+    expect(out).not.toBe(bytes);
+    expect(Array.from(resampleTexture({ width: 1, height: 1, colorSpace: 'linear', data: [257, 2, 3, 4] }, 1, 1))).toEqual([1, 2, 3, 4]);
+  });
+});

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 import { ptCameraBasis } from '@pmndrs/pathtracer';
-import { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './chain-math.ts';
+import { PIPE_FAR, PIPE_NEAR, autoExposureCpu, projectionMatrix, resample, viewMatrix, worldMatrix } from './chain-math.ts';
 
 const cam: PtLookAtCamera = { position: [-8, 1.7, 0], target: [10, 2.6, 0], up: [0, 1, 0], yFovDeg: 60 };
 
@@ -60,5 +60,21 @@ describe('resample', () => {
     const up = resample({ width: w, height: h, channels: 1, data }, 96, 54);
     expect(mean(down.data)).toBeCloseTo(mean(data), 2);
     expect(mean(up.data)).toBeCloseTo(mean(data), 2);
+  });
+});
+
+describe('autoExposureCpu', () => {
+  it('a grey field of luma L gives key / L, clamped, and floors black texels', () => {
+    const grey = new Float32Array(4 * 16).map((_, i) => (i % 4 === 3 ? 1 : 0.5));
+    expect(autoExposureCpu(grey).exposure).toBeCloseTo(0.18 / 0.5, 12);
+    expect(autoExposureCpu(grey, { key: 100 }).exposure).toBe(64);
+    expect(autoExposureCpu(grey, { key: 1e-9 }).exposure).toBe(1 / 64);
+    const black = new Float32Array(4 * 4);
+    expect(autoExposureCpu(black).meanLogLuma).toBeCloseTo(Math.log(6.1e-5), 12);
+  });
+  it('is the geometric mean: a half at 0.1 and a half at 0.4 reads 0.2', () => {
+    const img = new Float32Array(8 * 4);
+    for (let i = 0; i < 8; i++) img.set(i < 4 ? [0.1, 0.1, 0.1, 1] : [0.4, 0.4, 0.4, 1], i * 4);
+    expect(autoExposureCpu(img).exposure).toBeCloseTo(0.18 / 0.2, 6); // f32 inputs
   });
 });

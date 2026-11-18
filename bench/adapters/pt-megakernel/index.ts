@@ -11,7 +11,8 @@
  * Timing: wall clock around the dispatches, `onSubmittedWorkDone` at the end of the timed region, readback excluded (snapshot
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
-import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
+import { Downsampler } from '@pmndrs/downsampler/webgpu';
+import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type NodeFormat, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
 import { sceneDensityFiles, sceneVolumes } from '../../scenes/volumes.ts';
 import type { Rgb2SpecTable } from '@pmndrs/pathtracer';
@@ -86,6 +87,10 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   layers?: number;
   /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`, `packed` since D32). Images are per-pixel identical; only the addressing differs. */
   scenePacking?: 'split' | 'packed';
+  /** bvh scene options (X1.i, D25; page args `pt_bvh`, `pt_bvh_decode`, `pt_bvh_walk`): `nodeFormat` `quantized` (default) | `f32` | the experimental wide `bvh4` | `cwbvh8` (hits are the same, tie order aside); `decode` `exact` | `folded` (wide only, default folded); `walk` `nested` | `single` (bvh4 only). */
+  /** Texture mip levels (X2.d, page arg `pt_mips`): `cpu` (default: built in `buildSceneTextures`) or `gpu` (level 0 only on the CPU, levels 1+ by `@pmndrs/downsampler`; codes differ from the CPU chain by up to 2). */
+  mips?: 'cpu' | 'gpu';
+  bvh?: { nodeFormat?: NodeFormat; decode?: 'exact' | 'folded'; walk?: 'nested' | 'single' };
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
   /**
@@ -260,6 +265,8 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.volumeMajorant ? { volumeMajorant: settings.volumeMajorant } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
+        ...(settings.bvh && Object.keys(settings.bvh).length ? { bvh: settings.bvh } : {}),
+        ...(settings.mips === 'gpu' ? { mips: 'gpu' } : {}),
         sampler: settings.sampler ?? 'owen-sobol',
         ...(settings.mode ? { mode: settings.mode } : {}),
         ...(settings.sampler === 'bluenoise' || settings.mode === 'realtime' ? { blueNoise: settings.blueNoise ?? 'gf-vec2-64', ...(settings.blueNoiseShift ? { blueNoiseShift: settings.blueNoiseShift } : {}), ...(settings.blueNoisePairs ? { blueNoisePairs: settings.blueNoisePairs } : {}) } : {}),
@@ -370,12 +377,12 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const data = await buildTraceScene(
       input.meshes.map((mesh) => ({ positions: mesh.positions, indices: mesh.indices ? Uint32Array.from(mesh.indices) : null })),
       input.instances.map((instance) => ({ ...instance, static: true })),
-      { build: (geometry) => builder.build(geometry), mergeStaticInstances: true },
+      { build: (geometry) => builder.build(geometry), mergeStaticInstances: true, ...(this.settings.bvh?.nodeFormat ? { nodeFormat: this.settings.bvh.nodeFormat } : {}) },
     );
     builder.dispose();
     this.trace = uploadTraceScene(device, data, scene.name);
-    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
-    this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}) });
+    const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(this.settings.mips === 'gpu' ? { textures: { ...input.options?.textures, mips: 'gpu' as const } } : {}), ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
+    this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}), ...(this.settings.mips === 'gpu' ? { mipGenerator: new Downsampler(device) } : {}) });
     this.lastLoad = { caps, copy, input };
     const loadMs = performance.now() - t0;
 
@@ -427,7 +434,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const volumes = sceneVolumes(scene, input, densityFiles);
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
     if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;

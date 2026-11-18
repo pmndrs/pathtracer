@@ -15,9 +15,10 @@
  *             submit; arm.post(camera, reset)  (the denoiser and the upscaler record and submit their own command buffers; no readback)
  */
 import { DiffuseSpecularDenoiser } from 'denoiser/realtime';
+import { ScalarReduction } from '@pmndrs/downsampler/webgpu';
 import { Upscaler } from '@pmndrs/upscaler';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
-import { cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix, worldMatrix } from './chain-math.ts';
+import { AUTO_EXPOSURE, cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix, worldMatrix } from './chain-math.ts';
 
 export { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './chain-math.ts';
 
@@ -493,7 +494,7 @@ export class PipelineArm {
 
     const denoiser = new DiffuseSpecularDenoiser(device, { ...(s.denoiser ?? {}), remodulate: true } as never);
     denoiser.configure({ width: w, height: h });
-    const tonemapParams = device.createBuffer({ label: `${label} tonemap params`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const tonemapParams = device.createBuffer({ label: `${label} tonemap params`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     device.queue.writeBuffer(tonemapParams, 0, new Float32Array([1, 0, 0, 0]));
     const display = device.createTexture({ label: `${label} display`, size: { width: s.displayWidth, height: s.displayHeight }, format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | TEX | COPY_SRC_T });
     const reactiveMask = s.reactive ? mk('reactive', 'rgba8unorm', TEX | GPUTextureUsage.STORAGE_BINDING) : undefined;
@@ -662,17 +663,58 @@ export class PipelineArm {
     this.upscaler.dispatch({ color: this.keys.color, depth: this.keys.depth, velocity: this.keys.velocity, ...(reactive && this.keys.reactive ? { reactive: this.keys.reactive } : {}), reset, deltaTime } as never, this.upCamera as never);
   }
 
-  /** The display stage: exposure, ACES, sRGB -> `display` (rgba8unorm, display res) from the upscaler's output. */
-  tonemap(exposure = 1): void {
-    this.device.queue.writeBuffer(this.tonemapParams, 0, new Float32Array([exposure, 0, 0, 0]));
+  /**
+   * The display stage: exposure, ACES, sRGB -> `display` (rgba8unorm, display res) from the upscaler's output. `exposure` is a number, or `'auto'`:
+   * the geometric-mean luminance of the `final` stage is reduced on the GPU (`@pmndrs/downsampler` `ScalarReduction`, two dispatches, no readback)
+   * straight into the tonemap parameters, exposure = `AUTO_EXPOSURE.key` / mean, clamped (chain-math.ts has the CPU twin). The result is not
+   * smoothed over time: a caller that wants adaptation blends it itself.
+   */
+  tonemap(exposure: number | 'auto' = 1): void {
+    if (exposure !== 'auto') this.device.queue.writeBuffer(this.tonemapParams, 0, new Float32Array([exposure, 0, 0, 0]));
     this.tonemapGroup ??= this.device.createBindGroup({ layout: this.tonemapPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.tonemapParams } }, { binding: 1, resource: this.stage('final').createView() }, { binding: 2, resource: this.display.createView() }] });
     const encoder = this.device.createCommandEncoder({ label: 'pipe tonemap' });
+    if (exposure === 'auto') {
+      const auto = this.autoExposure();
+      auto.reduction.encode(encoder, { width: this.s.displayWidth, height: this.s.displayHeight, bindGroup: auto.group });
+    }
     const pass = encoder.beginComputePass({ label: 'pipe tonemap' });
     pass.setPipeline(this.tonemapPipe);
     pass.setBindGroup(0, this.tonemapGroup);
     pass.dispatchWorkgroups(Math.ceil(this.s.displayWidth / 8), Math.ceil(this.s.displayHeight / 8));
     pass.end();
     this.device.queue.submit([encoder.finish()]);
+  }
+
+  private autoExposureState: { reduction: ScalarReduction; group: GPUBindGroup } | null = null;
+
+  /** The auto-exposure reduction (made on first use; reads the `final` stage, writes `tonemapParams[0]`). */
+  private autoExposure(): { reduction: ScalarReduction; group: GPUBindGroup } {
+    if (this.autoExposureState) return this.autoExposureState;
+    const { key, min, max, lumaFloor } = AUTO_EXPOSURE;
+    const reduction = new ScalarReduction(this.device, {
+      bindings: {
+        wgsl: '@group(1) @binding(0) var colour: texture_2d<f32>;\n@group(1) @binding(1) var<storage, read_write> exposureOut: array<f32>;',
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float' } },
+          { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        ],
+      },
+      load: `fn load(texel: vec2i, layer: u32) -> vec4f {
+  let c = max(textureLoad(colour, texel, 0).rgb, vec3f(0.0));
+  return vec4f(log(max(dot(c, vec3f(0.2126, 0.7152, 0.0722)), ${lumaFloor.toExponential()})), 0.0, 0.0, 0.0);
+}`,
+      finish: `fn finish(value: vec4f, weight: f32) {
+  exposureOut[0] = clamp(${key} / exp(value.x), ${min}, ${max});
+}`,
+    });
+    const layout = reduction.bindGroupLayouts[1] as GPUBindGroupLayout;
+    const group = this.device.createBindGroup({ layout, entries: [{ binding: 0, resource: this.stage('final').createView() }, { binding: 1, resource: { buffer: this.tonemapParams, size: 4 } }] });
+    return (this.autoExposureState = { reduction, group });
+  }
+
+  /** The exposure the last `tonemap('auto')` (or `tonemap(x)`) used (a readback: not for a frame loop). */
+  async readExposure(): Promise<number> {
+    return new Float32Array(await readBuffer(this.device, this.tonemapParams, 16))[0] as number;
   }
 
   /**

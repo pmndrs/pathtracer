@@ -32,6 +32,7 @@ import { getScene } from '../scenes/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { BoilMeter, tonemappedLuma } from '../realtime/boil.ts';
 import { readTextureRgba16f, resample, type PipelineStage } from '../realtime/chain.ts';
+import { autoExposureCpu } from '../realtime/chain-math.ts';
 import { RealtimePipelineSession } from '../realtime/session.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -353,6 +354,23 @@ try {
             worst = Math.max(worst, Math.abs((fr.diffuse[j] as number) * (fr.albedo[j] as number) + (fr.specular[j] as number) * (fr.specularFactor[j] as number) + (fr.emission[j] as number) - b) / (Math.abs(b) + 1e-3));
           }
         metrics[`${tag}_plane_identity_max_rel`] = worst;
+        // Auto-exposure (X2.d): the GPU reduction of the `final` stage (@pmndrs/downsampler ScalarReduction) against its CPU twin on the same texels.
+        if (args.autoExposure === '1') {
+          session.arm.tonemap('auto');
+          await device.queue.onSubmittedWorkDone();
+          const gpuExposure = await session.arm.readExposure();
+          const cpu = autoExposureCpu((await readTextureRgba16f(device, session.arm.stage('final'))).data);
+          metrics[`${tag}_auto_exposure_gpu`] = gpuExposure;
+          metrics[`${tag}_auto_exposure_cpu`] = cpu.exposure;
+          metrics[`${tag}_auto_exposure_rel_err`] = Math.abs(gpuExposure - cpu.exposure) / cpu.exposure;
+          // Provisional cost: 32 back-to-back tonemaps, auto vs fixed (wall clock of queued submissions, one wait; the cost of the two reduction dispatches).
+          for (const mode of ['fixed', 'auto'] as const) {
+            const t0 = performance.now();
+            for (let i = 0; i < 32; i++) session.arm.tonemap(mode === 'auto' ? 'auto' : 1);
+            await device.queue.onSubmittedWorkDone();
+            metrics[`${tag}_tonemap_${mode}_ms`] = (performance.now() - t0) / 32;
+          }
+        }
       }
 
       // ---- control (N11.5): the upscaler alone on a noise-free input

@@ -22,11 +22,11 @@
  * single-pass snapshot after the timed region (`results_identical`, the run is invalid otherwise). One readback of the
  * resolved timestamps per method after its region; no mapAsync inside any timed region.
  *
- * Args: scene=sponza-white rays=1048576 workgroupSize=64 rayLayout=aos hitRecord=full repeats=30 warmupMs=2000
+ * Args: scene=sponza-white nodeFormat=quantized|f32|bvh4|cwbvh8 wideDecode=exact|folded wideWalk=nested|single merge=1|0 rays=1048576 workgroupSize=64 rayLayout=aos hitRecord=full repeats=30 warmupMs=2000
  *       timing=both batchSeconds=0.5 samples=6 pageAb=<key>=<A>,<B>
  * A/B a setting across page runs with the runner: `--ab workgroupSize=64,128`; or in-page with `--args pageAb=...`.
  */
-import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
+import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type NodeFormat, type TraceSceneBuffers } from '@pmndrs/bvh';
 import {
   BATCH_WORKGROUP_SIZES,
   RtBatchTracer,
@@ -109,11 +109,13 @@ try {
   // Scene: bvh defaults (quantized nodes, record leaves, static instances merged), as SceneTrees would make it.
   const scene = await loadTraceScene(sceneName);
   const builder = createMeshBvhBuilder();
-  const data = await buildTraceScene(scene.meshes, scene.instances, { build: (geometry) => builder.build(geometry), mergeStaticInstances: true });
+  // `nodeFormat=quantized|f32|bvh4|cwbvh8` (X1.i): the wide formats are collapsed at assembly; `wideDecode=exact|folded` and `wideWalk=nested|single` are their walk levers.
+  const nodeFormat = (args.nodeFormat ?? 'quantized') as NodeFormat;
+  const data = await buildTraceScene(scene.meshes, scene.instances, { build: (geometry) => builder.build(geometry), mergeStaticInstances: args.merge !== '0', nodeFormat });
   const buildersUsedWorkers = builder.usesWorker;
   builder.dispose();
   const gpuScene: TraceSceneBuffers = uploadTraceScene(device, data, sceneName);
-  const format = { nodeFormat: gpuScene.nodeFormat, triangleLeaves: gpuScene.triangleLeaves, positionLayout: gpuScene.positionLayout };
+  const format = { nodeFormat: gpuScene.nodeFormat, triangleLeaves: gpuScene.triangleLeaves, positionLayout: gpuScene.positionLayout, ...(args.wideDecode ? { wideDecode: args.wideDecode as 'exact' | 'folded' } : {}), ...(args.wideWalk ? { wideWalk: args.wideWalk as 'nested' | 'single' } : {}) };
   // ---- Variants: one (the page args), or two when `pageAb=<key>=<A>,<B>` asks for an in-page A/B ----
   // The A/B runs inside one page and one GPU session, interleaved ABBA, so a clock change hits both alike (P1.6a).
   interface Variant {

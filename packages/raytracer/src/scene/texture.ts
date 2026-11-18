@@ -47,8 +47,13 @@ export interface TextureOptions {
   maxBuckets?: number;
   /** Layers per array. Default 256 (the WebGPU default `maxTextureArrayLayers`). */
   maxLayers?: number;
-  /** Build the mip chain. Default true; false stores one level (every lookup is the base level). */
-  mips?: boolean;
+  /**
+   * Build the mip chain. Default true (on the CPU: 2x2 box in linear light, about 50 ms per megapixel, so 24 textures of 2048x2048
+   * take ~5 s); false stores one level (every lookup is the base level); `'gpu'` plans the full chain but builds only level 0 here: the
+   * upload (`uploadSceneCopy({ mipGenerator })`) fills levels 1+ on the GPU (a `@pmndrs/downsampler` `Downsampler`, X2.d). The CPU
+   * twin then has level 0 only (`sampleSceneTexture` throws above it), and the codes can differ from the CPU chain by a rounding step.
+   */
+  mips?: boolean | 'gpu';
 }
 
 export interface TextureBucket {
@@ -58,7 +63,7 @@ export interface TextureBucket {
   wrap: TextureWrap;
   layers: number;
   mipLevels: number;
-  /** One array per mip level: `layers * w * h * 4` bytes, layer-major, row 0 = top. */
+  /** One array per mip level: `layers * w * h * 4` bytes, layer-major, row 0 = top. Level 0 only when `SceneTextures.gpuMips`. */
   mips: Uint8Array[];
 }
 
@@ -78,8 +83,10 @@ export interface TextureSlot {
 export interface SceneTextures {
   buckets: TextureBucket[];
   slots: TextureSlot[];
-  /** Bytes of texel data including mips. */
+  /** Bytes of texel data including mips (the GPU's, also when `gpuMips` leaves them out of `buckets[].mips`). */
   byteLength: number;
+  /** `TextureOptions.mips: 'gpu'`: `buckets[].mips` hold level 0 only and the upload needs a mip generator. */
+  gpuMips?: boolean;
 }
 
 /** What the WGSL generator and the bind group layout need to know: no texel data. */
@@ -207,7 +214,8 @@ function toBytes(values: Float32Array, srgb: boolean): Uint8Array {
 
 /** Resamples to `dw x dh` (tent filter: bilinear up, area-weighted down). Returns the RGBA8 bytes, colour space preserved. Exported for tests. */
 export function resampleTexture(input: TextureInput, dw: number, dh: number): Uint8Array {
-  if (input.width === dw && input.height === dh) return Uint8Array.from(input.data as ArrayLike<number>, (v) => v & 255);
+  // A byte array is copied with the typed-array constructor (memcpy); `Uint8Array.from(.., fn)` costs ~60 ns per byte (6 s for 24 textures of 1024x1024).
+  if (input.width === dw && input.height === dh) return input.data instanceof Uint8Array || input.data instanceof Uint8ClampedArray ? new Uint8Array(input.data) : Uint8Array.from(input.data, (v) => v & 255);
   let values = toFloat(input);
   if (input.width !== dw) values = resampleAxis(values, input.width, input.height, dw, input.height, true);
   if (input.height !== dh) values = resampleAxis(values, dw, input.height, dw, dh, false);
@@ -292,6 +300,7 @@ export function buildSceneTextures(inputs: readonly TextureInput[], options: Tex
   const maxLayers = options.maxLayers ?? 256;
   const rounding = options.rounding ?? 'nearest';
   const wantMips = options.mips ?? true;
+  const gpuMips = options.mips === 'gpu';
 
   inputs.forEach((t, i) => {
     if (!Number.isInteger(t.width) || !Number.isInteger(t.height) || t.width < 1 || t.height < 1) throw new RangeError(`texture ${i}${t.label ? ` (${t.label})` : ''}: bad size ${t.width}x${t.height}`);
@@ -316,15 +325,15 @@ export function buildSceneTextures(inputs: readonly TextureInput[], options: Tex
       const levels = wantMips ? mipLevelCount(g.width, g.height) : 1;
       const srgb = g.colorSpace === 'srgb';
       const mips: Uint8Array[] = [];
-      for (let l = 0; l < levels; l++) mips.push(new Uint8Array(members.length * Math.max(1, g.width >> l) * Math.max(1, g.height >> l) * 4));
+      for (let l = 0; l < (gpuMips ? 1 : levels); l++) mips.push(new Uint8Array(members.length * Math.max(1, g.width >> l) * Math.max(1, g.height >> l) * 4));
       members.forEach((inputIndex, layer) => {
         const input = inputs[inputIndex] as TextureInput;
         let level = resampleTexture(input, g.width, g.height);
         let w = g.width;
         let h = g.height;
-        for (let l = 0; l < levels; l++) {
+        for (let l = 0; l < mips.length; l++) {
           (mips[l] as Uint8Array).set(level, layer * w * h * 4);
-          if (l + 1 < levels) {
+          if (l + 1 < mips.length) {
             level = downsampleBytes(level, w, h, srgb);
             w = Math.max(1, w >> 1);
             h = Math.max(1, h >> 1);
@@ -333,11 +342,11 @@ export function buildSceneTextures(inputs: readonly TextureInput[], options: Tex
         slots[inputIndex] = { bucket: buckets.length, layer, width: g.width, height: g.height, mipLevels: levels, sourceWidth: input.width, sourceHeight: input.height, ...(input.label ? { label: input.label } : {}) };
       });
       buckets.push({ width: g.width, height: g.height, colorSpace: g.colorSpace, wrap: g.wrap, layers: members.length, mipLevels: levels, mips });
-      byteLength += mips.reduce((n, m) => n + m.byteLength, 0);
+      byteLength += gpuMips ? members.length * 4 * Array.from({ length: levels }, (_, l) => Math.max(1, g.width >> l) * Math.max(1, g.height >> l)).reduce((n, texels) => n + texels, 0) : mips.reduce((n, m) => n + m.byteLength, 0);
     }
   }
   if (buckets.length > maxBuckets) throw new RangeError(`textures: ${buckets.length} arrays needed but at most ${maxBuckets} are allowed`);
-  return { buckets, slots, byteLength };
+  return { buckets, slots, byteLength, ...(gpuMips ? { gpuMips: true } : {}) };
 }
 
 /** Writes one slot record (4 words) at `words[wordOffset]`. */
@@ -377,7 +386,8 @@ export function wrapIndex(i: number, n: number, wrap: TextureWrap): number {
 export function sampleBucketLevel(bucket: TextureBucket, layer: number, level: number, u: number, v: number): [number, number, number, number] {
   const w = Math.max(1, bucket.width >> level);
   const h = Math.max(1, bucket.height >> level);
-  const data = bucket.mips[level] as Uint8Array;
+  const data = bucket.mips[level];
+  if (!data) throw new RangeError(`texture level ${level}: this scene's mips are built on the GPU (TextureOptions.mips 'gpu'); the CPU twin has level 0 only`);
   const x = u * w - 0.5;
   const y = v * h - 0.5;
   const x0 = Math.floor(x);

@@ -29,6 +29,7 @@ import {
   uploadTraceScene,
   type CpuTracer,
   type MeshBvhBuilder,
+  type NodeFormat,
   type TinyBvhBuilder,
   type TraceSceneBuffers,
   type TraceSceneData,
@@ -86,10 +87,18 @@ interface Format extends ResolvedSceneFormat {
   name: string;
   merge: boolean;
 }
-const FORMATS: Format[] = [
+const ALL_FORMATS: Format[] = [
   { name: 'quantized-records-merged', nodeFormat: 'quantized', triangleLeaves: 'records', positionLayout: 'vec4', merge: true },
   { name: 'f32-indexed', nodeFormat: 'f32', triangleLeaves: 'indexed', positionLayout: 'vec4', merge: false },
+  // Wide nodes (X1.i, bvh 0.1.0 experimental): folded plane decode by default (D25); `exact` and bvh4's single-loop walk are the other levers.
+  { name: 'bvh4-records-merged', nodeFormat: 'bvh4', triangleLeaves: 'records', positionLayout: 'vec4', merge: true, wideDecode: 'folded' },
+  { name: 'bvh4-records-merged-exact', nodeFormat: 'bvh4', triangleLeaves: 'records', positionLayout: 'vec4', merge: true, wideDecode: 'exact' },
+  { name: 'bvh4-single-instanced', nodeFormat: 'bvh4', triangleLeaves: 'records', positionLayout: 'vec4', merge: false, wideWalk: 'single', wideDecode: 'folded' },
+  { name: 'cwbvh8-records-merged', nodeFormat: 'cwbvh8', triangleLeaves: 'records', positionLayout: 'vec4', merge: true, wideDecode: 'folded' },
+  { name: 'cwbvh8-records-instanced', nodeFormat: 'cwbvh8', triangleLeaves: 'records', positionLayout: 'vec4', merge: false, wideDecode: 'exact' },
 ];
+/** Page arg `formats=<name,name|all>`: the default is every format above (the first two are the production formats). */
+let FORMATS: Format[] = ALL_FORMATS;
 
 interface RaySet {
   name: string;
@@ -206,7 +215,7 @@ interface Kernels {
 }
 
 async function makeKernels(device: GPUDevice, caps: Caps, format: Format): Promise<Kernels> {
-  const base = { nodeFormat: format.nodeFormat, triangleLeaves: format.triangleLeaves, positionLayout: format.positionLayout };
+  const base = { nodeFormat: format.nodeFormat, triangleLeaves: format.triangleLeaves, positionLayout: format.positionLayout, ...(format.wideWalk ? { wideWalk: format.wideWalk } : {}), ...(format.wideDecode ? { wideDecode: format.wideDecode } : {}) };
   const make = (options: BatchKernelOptions, name: string) => RtBatchTracer.create(device, caps, { ...base, ...options, label: `${format.name} ${name}` });
   const variants = async (mode: 'closest' | 'visible') => {
     const list: [string, BatchKernelOptions][] = [
@@ -544,6 +553,12 @@ try {
   const sceneNames = (args.scenes ?? 'cornell,quad-light,edges,sponza-white').split(',').filter(Boolean);
   const perSet = numberArg(args, 'rays', 8192);
   const withSceneTrees = (args.sceneTrees ?? '1') !== '0';
+  if (args.formats && args.formats !== 'all') {
+    const names = args.formats.split(',').filter(Boolean);
+    FORMATS = names.map((n) => ALL_FORMATS.find((f) => f.name === n) ?? (() => { throw new Error(`unknown format '${n}' (have ${ALL_FORMATS.map((f) => f.name).join(', ')})`); })());
+  }
+  /** SceneTrees' node format (`treesFormat=quantized|f32|bvh4|cwbvh8`): the production trees are quantized unless the app asks for a wide scene. */
+  const treesFormat = (args.treesFormat ?? 'quantized') as NodeFormat;
 
   if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -617,7 +632,7 @@ try {
       // GPU first trees are traced first (held refinements), then tinybvh's refined trees after the swap.
       // Default worker mode ('auto'), but through our own pool so a silent fallback to inline builds shows its reason.
       const pool = createBvhWorkerPool();
-      const trees = await SceneTrees.create(device, { label: `${name} SceneTrees`, holdRefinements: true, workers: pool, warn: () => {} });
+      const trees = await SceneTrees.create(device, { label: `${name} SceneTrees`, holdRefinements: true, workers: pool, warn: () => {}, nodeFormat: treesFormat });
       const handles = scene.meshes.map((mesh) => trees.addMesh(mesh));
       for (const instance of scene.instances) {
         trees.addInstance({ mesh: handles[instance.meshIndex] as number, objectToWorld: instance.objectToWorld, instanceIndex: instance.instanceIndex, mask: instance.mask, material: instance.material, static: instance.static });
@@ -697,7 +712,7 @@ try {
     {
       scene: sceneNames.join('+'),
       renderer: 'rt-trace-core',
-      config: { packing: PACKING, perSet, formats: FORMATS.map((f) => f.name), sceneTrees: withSceneTrees, caps: { tier: caps.tier, subgroups: caps.subgroups } },
+      config: { packing: PACKING, perSet, formats: FORMATS.map((f) => f.name), sceneTrees: withSceneTrees, treesFormat, caps: { tier: caps.tier, subgroups: caps.subgroups } },
       metrics,
       notes: { primaryDetails: total.primaryDetails, workers: { oracleBuilderUsesWorker: builder.usesWorker, ...workerNotes }, perScene, bySet: total.bySet, examples: total.examples },
     },

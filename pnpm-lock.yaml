@@ -44,6 +44,9 @@ importers:
       '@pmndrs/bvh':
         specifier: ^0.1.0
         version: 0.1.0(three@0.187.0)
+      '@pmndrs/downsampler':
+        specifier: ^0.1.0
+        version: 0.1.0(three@0.187.0)
       '@pmndrs/pathtracer':
         specifier: workspace:*
         version: link:../packages/pathtracer
@@ -334,6 +337,14 @@ packages:
     peerDependenciesMeta:
       '@babylonjs/core':
         optional: true
+      three:
+        optional: true
+
+  '@pmndrs/downsampler@0.1.0':
+    resolution: {integrity: sha512-PQf5QLUEy5qRl+2e0gHVfdMcfinqHjG/HJKO4xk+EJrOgeucNzUesGuSHq/eyAy8s22hvf/4oQPV3fntM7WKSw==}
+    peerDependencies:
+      three: '>=0.170.0'
+    peerDependenciesMeta:
       three:
         optional: true
 
@@ -1298,6 +1309,10 @@ snapshots:
   '@petamoriken/float16@3.9.3': {}
 
   '@pmndrs/bvh@0.1.0(three@0.187.0)':
+    optionalDependencies:
+      three: 0.187.0
+
+  '@pmndrs/downsampler@0.1.0(three@0.187.0)':
     optionalDependencies:
       three: 0.187.0
 

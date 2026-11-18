@@ -28,6 +28,12 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
     env: () => mk(caps, { format: {}, layout, integrator: { envMap: true, envSampling: 'importance' } }),
     pcg: () => mk(caps, { format: {}, layout, integrator: { sampler: 'pcg', nee: false } }),
     readable: () => mk(caps, { format: {}, layout, minify: false, shortenNames: false }),
+    // Wide BVH walks (X1.i): bvh4 (nested, single-loop L7) and cwbvh8, folded plane decode (the default of a wide format), and the exact decode.
+    'bvh4': () => mk(caps, { format: { nodeFormat: 'bvh4' }, layout }),
+    'bvh4-single': () => mk(caps, { format: { nodeFormat: 'bvh4', wideWalk: 'single' }, layout }),
+    'bvh4-exact': () => mk(caps, { format: { nodeFormat: 'bvh4', wideDecode: 'exact' }, layout }),
+    'cwbvh8': () => mk(caps, { format: { nodeFormat: 'cwbvh8' }, layout }),
+    'cwbvh8-exact': () => mk(caps, { format: { nodeFormat: 'cwbvh8', wideDecode: 'exact' }, layout }),
   };
   // OpenPBR-mode variants (layered lobe, P2.21; coated metal, P2.23): the byte-identity check also covers scenes with layered materials.
   const feat = { mix: true, thin: true, layered: true, medium: true };

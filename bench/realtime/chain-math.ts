@@ -93,3 +93,22 @@ export function resample(img: { width: number; height: number; channels: number;
   const b = img.height === H ? a : resampleAxis(a, W, img.height, c, H, false);
   return { width: W, height: H, channels: c, data: b };
 }
+
+/** Auto-exposure constants shared by the GPU reduction (`PipelineArm.tonemap('auto')`, @pmndrs/downsampler `ScalarReduction`) and its CPU twin. */
+export const AUTO_EXPOSURE = { key: 0.18, min: 1 / 64, max: 64, lumaFloor: 6.1e-5 } as const;
+
+/**
+ * CPU twin of the auto-exposure reduction: exposure = key / geometric-mean luminance of an RGBA image (Rec.709 luma of the clamped-positive
+ * rgb, each texel floored at `lumaFloor` before the log), clamped to [min, max]. Sums in f64.
+ */
+export function autoExposureCpu(rgba: ArrayLike<number>, options: { key?: number; min?: number; max?: number } = {}): { exposure: number; meanLogLuma: number } {
+  const { key, min, max, lumaFloor } = { ...AUTO_EXPOSURE, ...options };
+  const texels = rgba.length / 4;
+  let sum = 0;
+  for (let i = 0; i < texels; i++) {
+    const luma = 0.2126 * Math.max(rgba[i * 4]!, 0) + 0.7152 * Math.max(rgba[i * 4 + 1]!, 0) + 0.0722 * Math.max(rgba[i * 4 + 2]!, 0);
+    sum += Math.log(Math.max(luma, lumaFloor));
+  }
+  const meanLogLuma = sum / texels;
+  return { exposure: Math.min(max, Math.max(min, key / Math.exp(meanLogLuma))), meanLogLuma };
+}
