@@ -110,3 +110,11 @@ young cells across neighbours' lookups).
 the grid beats the network at every checkpoint, keeps a 1.5× lead over plain under OIDN on an accumulated still view (the network's falls to
 1×), and is ahead of plain on every measure from 10 training frames. Tables: [NRC-PIPELINE.md](../../bench/results/NRC-PIPELINE.md) "Hash grid
 in the same chain".
+
+## 8. A glossy scene (N7b)
+
+`sponza-glossy` (metal floor 0.15, metal columns 0.3): per frame the grid ties the network (steady 1.67 vs 1.64) at 0.65 vs 0.92 of a plain
+sample, but its converged image has twice the network's error (256 frames: 0.026 vs 0.013) and a worse FLIP than plain path tracing
+(0.149 vs 0.111): one value per cell averages the reflection over all view directions. `dirBins` (N × N octahedral bins of the outgoing
+direction at vertices with roughness < 0.5, `hgDirBins`) was tried at 4 × 4 and barely helps (0.023; single frames noisier, 1.71), because
+each bin gets a sixteenth of the samples. Default off. Tables: [NRC-STUDY.md](../../bench/results/NRC-STUDY.md) "Glossy floor and columns".

@@ -143,6 +143,45 @@ exactly; the network's direction and albedo inputs would matter on glossy or tex
 M5 Pro (subgroup-matrix inference, cache frame 0.61 of a plain sample) the gap would be smaller; on Windows with Dawn/Vulkan matrices
 (3.85 ms per million queries) the network frame would drop to ~0.8 of a plain sample, still above the grid.
 
+## Glossy floor and columns: network vs hash grid (N7b, 2026-11-18)
+
+Does the network's direction and roughness input pay off where the cached radiance depends on the view? `sponza-glossy`
+(`bench/scenes/tier2/sponza-glossy.ts`): sponza-white with the floor of both storeys a polished grey metal (roughness 0.15) and the ground-floor
+columns satin metal (0.3), everything else the grey Lambertian. `nrc-study scene=sponza-glossy scenario=all res=1280x720 steps=4 ref=ours`
+(our own 4096 spp references), RTX 3060, headless; quality is deterministic for a seed. Runs `20261117T233402Z` (network),
+`234918Z` (hash grid, defaults), `20261118T000335Z` (hash grid, 4 × 4 direction bins at glossy vertices, `hgDirBins=4`). Since this run the
+network gets each vertex's real roughness (it read 1 everywhere before, N-I10; no change on sponza-white, which is all Lambert).
+
+| (relMSE unless noted) | Plain | Network | Hash grid | Hash, direction bins |
+|---|---|---|---|---|
+| Warm, single frame | 32.0 | 1.72 | **1.70** | 1.74 |
+| Warm, accumulated 16 frames | 2.69 | **0.092** | 0.106 | 0.106 |
+| Warm, accumulated 256 frames | 0.826 | **0.013** | 0.026 | 0.023 |
+| LDR-FLIP, single frame / 256 frames | 0.457 / 0.111 | **0.272 / 0.103** | 0.311 / 0.149 | 0.298 / 0.127 |
+| Bias after 256 frames | +0.04% | +0.9% | +0.3% | −0.3% |
+| Steady state (median of 8 single frames) | 50.3 | **1.64** | 1.67 | 1.71 |
+| First frame after a cut / fly-through | — | **1.74 / 1.61** | 1.74 / 1.63 | 1.89 / 1.71 |
+| Fresh cache, frame 4 | — | **1.40** | 1.96 | 2.10 |
+| Unseen corridor: steady / first frame after the cut (plain 326) | 326 | **5.49 / 4.52** | 5.59 / 4.72 | 5.65 / 4.75 |
+| Flicker (plain 1.61) | 1.61 | **0.90** | 0.94 | 0.97 |
+| Cache frame / plain sample (headless, hot card) | 1 | 0.92 | **0.65** | 0.66 |
+
+* Plain path tracing is far worse here than on sponza-white (single frame 32 vs 9, still 0.83 after 256 frames): the polished floor turns
+  the sun and sky into caustic fireflies at deep vertices. Both caches end those paths at vertex 1, so they are 20-30× better per frame.
+* **Per frame the two caches are still within a few percent** (steady 1.64 vs 1.67); per unit of time the grid stays ahead on single
+  frames (0.65 vs 0.92 of a plain sample: about 1.4× the network's efficiency).
+* **Where the image converges, the network wins clearly**: accumulated 256 frames it has half the grid's error (0.013 vs 0.026), and in
+  FLIP the grid (0.149) is even worse than plain path tracing (0.111) while the network (0.103) is better. That error is a floor, not noise
+  (more frames do not remove it): one value per cell averages the reflection seen from all directions and blurs it at cell size. The
+  network's direction and roughness inputs represent it. The network also learns faster from a fresh start (frame 4: 1.40 vs 1.96).
+* **Direction bins do not fix it** (4 × 4 octahedral bins of wo at glossy vertices): splitting a cell 16 ways leaves each bin with a sixteenth
+  of the samples, so single frames get noisier (1.71 vs 1.67) and the converged floor barely moves (0.023 vs 0.026; FLIP 0.127 vs 0.149).
+  Kept as a setting (`dirBins`, default off).
+
+**Reading (Q4, refined):** on a view-independent (diffuse) scene the hash grid wins outright; once glossy surfaces carry the cached light
+the network's inputs pay: same single-frame error, half the converged error and a visibly sharper image, at 1.4× the grid's frame cost in
+Chrome on Windows. Which is better is a property of the scene and of how long the camera rests.
+
 ## A region the cache never saw: the upper gallery
 
 View: inside the upper gallery's north corridor (camera (−8, 4.95, −4.5) looking along +x): its vault and back wall are not

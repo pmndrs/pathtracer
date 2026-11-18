@@ -28,7 +28,7 @@
  *    bench/references/sponza-white-vknrc/ when rendered there; until then the static reference is our own path tracer at refSpp at the
  *    study's film (no pbrt-vs-Mitsuba floor in that case).
  *
- * Args: scenario=static|adapt|unseen|cold|all  lighting=scene|vknrc  ref=ours (no Mitsuba PFM: our own path tracer at refSpp)  refSpp=4096  refC=1 (load the saved corridor reference)
+ * Args: scenario=static|adapt|unseen|cold|all  lighting=scene|vknrc  scene=sponza-glossy (N7b)  ref=ours (no Mitsuba PFM: our own path tracer at refSpp)  refSpp=4096  refC=1 (load the saved corridor reference)
  *       outputInit=zero|he  warmupFrames=0  lrWarmupFrames=0  ema=warmup|plain|off (N6f; defaults zero + warmup)  res=1280x720  frames=1,4,16,64,256  warm=300  infer=sgm|portable  subgroups=4  precision=f16  steps=2  training=inline|replay
  *       trainSelect=tile|pixel  queryDepth=1  lr=0.002  upload=1 (PFMs of the 16- and 256-frame images)  flip=1
  * Timing rows are wall clock per submit (best effort on a shared machine); the quality numbers are deterministic for a seed.
@@ -43,6 +43,7 @@ import type { Image } from '../src/adapter.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { sponzaWhite, sponzaWhiteVknrc } from '../scenes/tier2/sponza-white.ts';
+import { sponzaGlossy } from '../scenes/tier2/sponza-glossy.ts';
 import { NrcCache } from '../nrc/cache.ts';
 import { hashGridArgs } from '../nrc/hash-grid.ts';
 import { inferArmOptions } from './mlp-common.ts';
@@ -96,7 +97,8 @@ try {
   if (!Number.isInteger(factor) || 720 / height !== factor) throw new Error('res must be 1280x720 divided by an integer (640x360, 320x180)');
 
   const lighting = args.lighting === 'vknrc' ? 'vknrc' : 'scene';
-  const scene = lighting === 'vknrc' ? sponzaWhiteVknrc : sponzaWhite;
+  // scene=sponza-glossy (N7b): metal floor and columns, view-dependent radiance at cache vertices; needs ref=ours (no native references).
+  const scene = args.scene === 'sponza-glossy' ? sponzaGlossy : lighting === 'vknrc' ? sponzaWhiteVknrc : sponzaWhite;
   const refDir = `/bench/references/${scene.name}`;
   const adapter = new PtMegakernelAdapter();
   await adapter.load(scene);

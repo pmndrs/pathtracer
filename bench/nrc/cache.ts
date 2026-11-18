@@ -49,11 +49,18 @@ fn nrcSpherical(d: vec3f) -> vec2f {
     return vec2f(acos(clamp(d.y, -1.0, 1.0)) * 0.3183098861837907, atan2(d.z, d.x) * 0.15915494309189535 + 0.5);
 }
 
+// Roughness input (N-I10): the legacy material adapter makes a material with metalness < 0.5 a pure Lambertian (roughness 1 for the
+// cache) and anything else a GGX conductor with the material's specular roughness.
+fn nrcRoughness(v: PtPathVertex) -> f32 {
+    let m = rtMaterial(v.material);
+    return select(1.0, m.specularRoughness, m.metalness >= 0.5);
+}
+
 fn nrcWrite(slot: u32, v: PtPathVertex) {
     let b = slot * ${NRC_RECORD_VEC4}u;
     nrcRecords[b] = vec4f(v.position, f32(v.pixel));
     nrcRecords[b + 1u] = vec4f(nrcSpherical(v.wo), nrcSpherical(v.normal));
-    nrcRecords[b + 2u] = vec4f(v.albedo, 1.0);
+    nrcRecords[b + 2u] = vec4f(v.albedo, nrcRoughness(v));
     nrcRecords[b + 3u] = vec4f(v.throughput, 1.0);
 }
 
@@ -95,6 +102,13 @@ fn nrcSpherical(d: vec3f) -> vec2f {
     return vec2f(acos(clamp(d.y, -1.0, 1.0)) * 0.3183098861837907, atan2(d.z, d.x) * 0.15915494309189535 + 0.5);
 }
 
+// Roughness input (N-I10): the legacy material adapter makes a material with metalness < 0.5 a pure Lambertian (roughness 1 for the
+// cache) and anything else a GGX conductor with the material's specular roughness.
+fn nrcRoughness(v: PtPathVertex) -> f32 {
+    let m = rtMaterial(v.material);
+    return select(1.0, m.specularRoughness, m.metalness >= 0.5);
+}
+
 // Training-path slot + 1 for this pixel and sample, 0 when the path is not a training path. Tiles (tileEvery > 0): every
 // tileEvery-th 8 x 8 tile (the megakernel's workgroup) trains, rotating with the sample, so a workgroup is all training paths or
 // none (no lane waits on a long training path; VkNRC picks whole subgroups for the same reason). Pixels: one pixel per
@@ -133,7 +147,7 @@ fn nrcQuery(v: PtPathVertex, flag: f32) -> u32 {
     let b = q * ${NRC_RECORD_VEC4}u;
     nrcRecords[b] = vec4f(v.position, f32(v.pixel));
     nrcRecords[b + 1u] = vec4f(nrcSpherical(v.wo), nrcSpherical(v.normal));
-    nrcRecords[b + 2u] = vec4f(v.albedo, 1.0);
+    nrcRecords[b + 2u] = vec4f(v.albedo, nrcRoughness(v));
     nrcRecords[b + 3u] = vec4f(v.throughput, flag);
     return q + 1u;
 }
@@ -151,7 +165,7 @@ fn ptOnVertex(v: PtPathVertex) -> u32 {
             let b = (v.depth * nrcHook.slots + slot) * ${NRC_RECORD_VEC4}u;
             nrcTrain[b] = vec4f(v.position, f32(v.pixel));
             nrcTrain[b + 1u] = vec4f(nrcSpherical(v.wo), nrcSpherical(v.normal));
-            nrcTrain[b + 2u] = vec4f(v.albedo, 1.0);
+            nrcTrain[b + 2u] = vec4f(v.albedo, nrcRoughness(v));
             nrcTrain[b + 3u] = vec4f(v.throughput, 1.0);
             if (display && v.depth == nrcHook.stopDepth) {
                 _ = nrcQuery(v, 1.0);

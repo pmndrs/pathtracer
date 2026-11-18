@@ -39,6 +39,11 @@ export interface HashGridSettings {
   minSamples: number;
   /** Lookup jitter as a fraction of the cell size, in the tangent plane (0 = off). */
   jitter: number;
+  /**
+   * Direction bins at glossy vertices (record roughness < 0.5): the cell also splits by the outgoing direction wo into N × N octahedral
+   * bins (0 = off: one view-independent value per cell, SHaRC's default). Lambert vertices (roughness 1) always use one bin.
+   */
+  dirBins: number;
 }
 
 export const DEFAULT_HASH_GRID: HashGridSettings = {
@@ -55,6 +60,7 @@ export const DEFAULT_HASH_GRID: HashGridSettings = {
   pyramid: true,
   minSamples: 64,
   jitter: 0,
+  dirBins: 0,
 };
 
 /** Bucket size (slots probed per lookup); a compile-time constant so the loops have a constant trip count (Tint loop counters on D3D12). */
@@ -72,7 +78,7 @@ struct HgParams {
   cam: vec4f,
   minCell: f32, jitter: f32, decay: f32, minSamples: f32,
   mask: u32, stale: u32, normals: u32, queryCap: u32,
-  recordCap: u32, _a: u32, _b: u32, _c: u32,
+  recordCap: u32, dirBins: u32, _b: u32, _c: u32,
 }
 @group(0) @binding(0) var<uniform> hg: HgParams;
 
@@ -108,9 +114,19 @@ fn hgBin(n: vec3f) -> u32 {
 }
 fn hgCellSize(level: u32) -> f32 { return hg.minCell * exp2(f32(level)); }
 // (bucket start, checksum != 0) of the cell holding p at a level.
+// Octahedral bin (1-based; 0 = none) of the outgoing direction (record word r1.xy, θ/π and φ/2π) at a glossy vertex.
+fn hgDirBin(e: vec2f, rough: f32) -> u32 {
+  if (hg.dirBins == 0u || rough >= 0.5) { return 0u; }
+  let d = hgNormal(e);
+  var o = d.xz / (abs(d.x) + abs(d.y) + abs(d.z));
+  if (d.y < 0.0) { o = (1.0 - abs(o.yx)) * select(vec2f(-1.0), vec2f(1.0), o >= vec2f(0.0)); }
+  let n = f32(hg.dirBins);
+  let c = min(vec2u((o * 0.5 + 0.5) * n), vec2u(hg.dirBins - 1u));
+  return 1u + c.x + c.y * hg.dirBins;
+}
 fn hgKey(p: vec3f, bin: u32, level: u32) -> vec2u {
   let u = bitcast<vec3u>(vec3i(floor(p / hgCellSize(level))));
-  let lb = level | (bin << 8u);
+  let lb = level | (bin << 8u);  // bin: normal bin | direction bin << 4
   let h = hgMix(hgMix(hgMix(hgMix(u.x + 0x9e3779b9u) ^ u.y) ^ u.z) ^ lb);
   let g = hgMix2(hgMix2(hgMix2(hgMix2(u.z ^ 0x27d4eb2fu) + u.x) + u.y) + lb * 0x165667b1u);
   return vec2u(h & hg.mask & ~${BUCKET - 1}u, max(g, 1u));
@@ -158,7 +174,7 @@ fn hgLookup(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation
       o -= n * dot(o, n);
       p += o;
     }
-    let bin = hgBin(n);
+    let bin = hgBin(n) | (hgDirBin(queries[b + 1u].xy, queries[b + 2u].w) << 4u);
     var out = vec4f(0.0, 0.0, 0.0, -1.0);
     for (var j = 0u; j <= HG_FALLBACK; j++) {
       let s = hgFind(hgKey(p, bin, l0 + j));
@@ -214,7 +230,7 @@ fn hgUpdate(@builtin(global_invocation_id) gid: vec3u) {
   let b = r * ${RECORD_VEC4}u;
   let p = records[b].xyz;
   let t = records[b + 3u].xyz;
-  let bin = hgBin(hgNormal(records[b + 1u].zw));
+  let bin = hgBin(hgNormal(records[b + 1u].zw)) | (hgDirBin(records[b + 1u].xy, records[b + 2u].w) << 4u);
   let l0 = hgLevel(p);
   let f = atomicLoad(&stats[0]);
   let u = vec3f(hgRand(r, f * 3u + 7u), hgRand(r, f * 3u + 8u), hgRand(r, f * 3u + 9u));
@@ -393,7 +409,7 @@ export class HashGrid {
     const f = new Float32Array(this.paramWords);
     const u = new Uint32Array(this.paramWords);
     f.set([...this.camera, this.pixelAngle * s.cellPixels, s.minCell, s.jitter, 1 - 1 / Math.max(1, s.historyFrames), s.minSamples]);
-    u.set([this.entries - 1, s.staleFrames, s.normalBins ? 1 : 0, this.queryCap, this.recordCap, 0, 0, 0], 8);
+    u.set([this.entries - 1, s.staleFrames, s.normalBins ? 1 : 0, this.queryCap, this.recordCap, Math.max(0, Math.floor(s.dirBins)), 0, 0], 8);
     this.device.queue.writeBuffer(this.params, 0, this.paramWords);
   }
 
@@ -459,7 +475,7 @@ export class HashGrid {
   }
 }
 
-/** Hash grid settings from page args (`hgLog2 hgMinCell hgCellPx hgNormals hgHistory hgStale hgFallback hgPyramid hgMinSamples hgJitter`); absent keys keep the defaults. */
+/** Hash grid settings from page args (`hgLog2 hgMinCell hgCellPx hgNormals hgHistory hgStale hgFallback hgPyramid hgMinSamples hgJitter hgDirBins`); absent keys keep the defaults. */
 export function hashGridArgs(args: Record<string, string | undefined>): Partial<HashGridSettings> {
   const out: Partial<HashGridSettings> = {};
   const num = (key: string, field: keyof HashGridSettings) => {
@@ -474,6 +490,7 @@ export function hashGridArgs(args: Record<string, string | undefined>): Partial<
   num('hgFallback', 'fallbackLevels');
   num('hgMinSamples', 'minSamples');
   num('hgJitter', 'jitter');
+  num('hgDirBins', 'dirBins');
   if (args.hgNormals !== undefined) out.normalBins = args.hgNormals !== '0';
   if (args.hgPyramid !== undefined) out.pyramid = args.hgPyramid !== '0';
   return out;
