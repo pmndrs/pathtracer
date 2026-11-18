@@ -33,6 +33,8 @@ only through the solid-angle density that `rtSampleLightLi` returns, so the very
 
 ## Bias correction (runtime flag, D11: both built)
 
+**Defaults (D32, provisional):** ReSTIR stays opt-in; when on, `bias: 'unbiased'` (no initial visibility), M 8, temporal, spatial `k` 2 (random offsets); the `realtime` preset adds `sharedHit` on the megakernel. `biased` (with visibility) stays a setting: it darkens 4-17% on the A/B scenes (REALTIME-PIPELINE.md section 4). The table below is the menu, not the default.
+
 | `bias` | combine | cost | notes |
 |---|---|---|---|
 | `biased` | Bitterli et al. Alg. 5: `w_i = phat_dst(y_i) W_i M_i`, `W = wsum / (phat_dst(y) sum M)` | one target evaluation per merged reservoir | biased where a neighbour's sample has no support at the destination (a light behind this pixel's horizon, occluded...), darker there |
@@ -49,7 +51,7 @@ Pairwise MIS (O(n) target evaluations) is not built; with k = 2 neighbours the q
 - Temporal: the primary hit position is projected through the previous camera (the megakernel's: `setPrevCamera` / `nextFrame`, else the last encoded frame's; P4.2e, DIVERGES V170). Reject on out-of-frame, previous
   G-buffer miss, `dot(n, n_prev) < normalCos` (0.9) or `|depth - depth_prev| > depthRel * depth` (0.1). `temporalPick: 'random'` shifts the projected position by a
   uniform +-0.5 px before the floor (a stochastic bilinear pick: no fixed sub-pixel pattern); `'nearest'` is the baseline. The history confidence is capped: stored `M <= historyCap x candidates` (20).
-- Spatial: `k` (default 1, at most 8) neighbours at `neighbours: 'random'` offsets (uniform in a disc of `spatialRadius` = 16 px, a fresh pair per pixel and frame) or `'fixed'` (one golden-angle
+- Spatial: `k` (default 2 since D32, was 1; at most 8) neighbours at `neighbours: 'random'` offsets (uniform in a disc of `spatialRadius` = 16 px, a fresh pair per pixel and frame) or `'fixed'` (one golden-angle
   spiral for every pixel and frame: the structured baseline). Same rejection tests. One iteration; its output is next frame's history.
 
 ## Unification with the real-time mode (P4.2b, P4.2c, P4.2e)

@@ -26,6 +26,11 @@ export interface PtwfAutoInput {
   frame?: boolean;
   /** Triangles in the scene (used by the `frame` rule only; unknown = treated as small). */
   triangles?: number;
+  /**
+   * D32: the megakernel's shipped WGSL size in bytes for this scene's features (`ptMegakernelWgsl(caps, options).length`). Past `PTWF_AUTO_KERNEL_LIMIT` a rule that picked the megakernel picks the
+   * plain wavefront instead (its kernels stay under 50 KB even with every material feature: D26, Windows DXC compile time grows with shader size). Unknown = no such rule.
+   */
+  kernelBytes?: number;
 }
 
 export interface PtwfAutoChoice {
@@ -58,7 +63,23 @@ export function ptwfAutoLayers(pixels: number): number {
 export const PTWF_AUTO_FRAME_TRIANGLES = 100_000;
 export const PTWF_AUTO_FRAME_FILM = 1 << 17;
 
+/** D26 / D32: a megakernel above this many bytes of WGSL is routed to the wavefront (the ~50 KB DXC class; layered + fuzz + film + coated-metal kernels are 51-55 KB). */
+export const PTWF_AUTO_KERNEL_LIMIT = 50_000;
+
+/**
+ * The recommended entry point for the scheduler choice (D32): call it with what is known before the first frame and pass `scheduler`, `refill`, `layers`, `appends`, `sort` on to
+ * `PtMegakernel.create` or `PtWavefront.create` (spread it, then your own overrides). Real-time callers pass `frame: true` and `triangles`; OpenPBR scenes pass `kernelBytes` so a megakernel over
+ * the ~50 KB class goes to the wavefront whatever the other rules say.
+ */
 export function ptwfAutoPolicy(input: PtwfAutoInput): PtwfAutoChoice {
+  const choice = ptwfAutoRules(input);
+  if (choice.scheduler === 'megakernel' && input.kernelBytes !== undefined && input.kernelBytes > PTWF_AUTO_KERNEL_LIMIT) {
+    return { scheduler: 'wavefront', refill: false, layers: 1, appends: input.subgroups ? 'subgroup' : 'atomic', sort: 'none', reason: `megakernel is ${input.kernelBytes} bytes of WGSL (> ${PTWF_AUTO_KERNEL_LIMIT}, the DXC class, D26): plain wavefront (${choice.reason})` };
+  }
+  return choice;
+}
+
+function ptwfAutoRules(input: PtwfAutoInput): PtwfAutoChoice {
   const pixels = input.width * input.height;
   if (!(pixels > 0) || !Number.isFinite(pixels)) throw new RangeError(`ptwfAutoPolicy: bad film ${input.width}x${input.height}`);
   const appends = input.subgroups ? ('subgroup' as const) : ('atomic' as const);

@@ -10,7 +10,7 @@ import { ptLayered, ptLayeredCoatedConductor } from './layered.ts';
 import { layeredQuadrature } from './layered.testutil.ts';
 
 const dirAt = (mu: number): [number, number, number] => [Math.sqrt(1 - mu * mu), 0, mu];
-const optionsFor = (ms: RtMaterial[]): PtMaterialOptions => ({ features: ptMaterialFeatures(ms), layered: { layering: 'albedo' } });
+const optionsFor = (ms: RtMaterial[]): PtMaterialOptions => ({ features: ptMaterialFeatures(ms), layered: { layering: 'albedo', albedoCorrection: 'none' } });
 
 /** Albedo of the stochastic reduced BSDF at `muO`: the u-average of the albedo of the lobe it picks (the kernel treats the pick as the whole BSDF). */
 function reducedAlbedo(m: RtMaterial, options: PtMaterialOptions, mu: number, n = 400): [number, number, number] {
@@ -40,7 +40,7 @@ describe('reduced material (R1)', () => {
         const m = createMaterial({ baseColor: base, baseWeight: 1, specularWeight: 1, ior: 1.5, specularRoughness: rough, metalness: 0 });
         const o = optionsFor([m]);
         for (const mu of [0.2, 0.5, 0.9]) {
-          const full = layeredQuadrature(ptLayered(base, 1.5, rough), dirAt(mu), { layering: 'albedo', albedoBase: 'internal' }, 200, 120).albedo;
+          const full = layeredQuadrature(ptLayered(base, 1.5, rough), dirAt(mu), { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'none' }, 200, 120).albedo;
           const red = reducedAlbedo(m, o, mu);
           for (let c = 0; c < 3; c++) expect(Math.abs((red[c] as number) - (full[c] as number)), `rough ${rough} base ${base} mu ${mu} ch ${c}: ${red[c]} vs ${full[c]}`).toBeLessThan(0.03 * (full[c] as number) + 0.005);
         }
@@ -54,7 +54,7 @@ describe('reduced material (R1)', () => {
       const m = createMaterial({ baseColor: base, baseWeight: 1, specularWeight: 1, ior: 1.5, specularRoughness: 0.8, coatWeight: 1, coatIor: 1.6, coatRoughness: rough, metalness: 0 });
       const o = optionsFor([m]);
       for (const mu of [0.3, 0.8]) {
-        const full = layeredQuadrature(ptLayered(base, 1.6, rough), dirAt(mu), { layering: 'albedo', albedoBase: 'internal' }, 200, 120).albedo;
+        const full = layeredQuadrature(ptLayered(base, 1.6, rough), dirAt(mu), { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'none' }, 200, 120).albedo;
         const red = reducedAlbedo(m, o, mu);
         for (let c = 0; c < 3; c++) expect(Math.abs((red[c] as number) - (full[c] as number)), `coat rough ${rough} mu ${mu} ch ${c}`).toBeLessThan(0.03 * (full[c] as number) + 0.005);
       }
@@ -71,7 +71,7 @@ describe('reduced material (R1)', () => {
       for (const mu of [0.4, 0.9]) {
         const p = ptBsdfReduced(m, o, 0.5, mu);
         expect(p.kind).toBe(PT_BSDF_CONDUCTOR);
-        const full = layeredQuadrature(ptLayeredCoatedConductor(eta, k, br, 1.5, cr), dirAt(mu), { layering: 'albedo', albedoBase: 'internal' }, 200, 120).albedo;
+        const full = layeredQuadrature(ptLayeredCoatedConductor(eta, k, br, 1.5, cr), dirAt(mu), { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'none' }, 200, 120).albedo;
         const red = bruteForceAlbedo(p, dirAt(mu), {}, 160, 96).refl;
         for (let c = 0; c < 3; c++) expect(Math.abs((red[c] as number) - (full[c] as number)), `base ${br} coat ${cr} mu ${mu} ch ${c}: ${red[c]} vs ${full[c]}`).toBeLessThan(0.06 * (full[c] as number) + 0.01);
       }

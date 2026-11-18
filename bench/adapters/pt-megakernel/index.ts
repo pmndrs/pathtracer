@@ -13,7 +13,7 @@
  */
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
-import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptwfAutoPolicy, ptApplyMode, ptMegakernelWgsl, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -77,7 +77,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** P3.9: pick scheduler, refill, layers, appends and sort with `ptwfAutoPolicy` from the film, maxDepth and the device (overrides those settings; the choice is recorded in the row's stats). */
   auto?: boolean;
   layers?: number;
-  /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`). Images are per-pixel identical; only the addressing differs. */
+  /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`, `packed` since D32). Images are per-pixel identical; only the addressing differs. */
   scenePacking?: 'split' | 'packed';
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */
   passesPerSubmit?: number;
@@ -391,6 +391,15 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _appends;
     void _sort;
     const kernelOptions = { ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf(this.trace), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
+    if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront') {
+      const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;
+      const choice = ptwfAutoPolicy({ width: scene.film.width, height: scene.film.height, maxDepth: this.settings.maxDepth ?? scene.integrator.maxDepth, subgroups: caps.subgroups, kernelBytes });
+      if (choice.scheduler === 'wavefront') {
+        this.settings = { ...this.settings, scheduler: choice.scheduler, refill: choice.refill, layers: choice.layers, appends: choice.appends, sort: choice.sort };
+        this.autoReason = choice.reason;
+      }
+    }
     this.lastKernelOptions = kernelOptions as unknown as PtMegakernelOptions;
     this.kernel = this.settings.scheduler === 'wavefront' ? await PtWavefront.create(device, caps, { ...kernelOptions, ...(this.settings.refill !== undefined ? { refill: this.settings.refill } : {}), ...(this.settings.refillThreshold !== undefined ? { refillThreshold: this.settings.refillThreshold } : {}), ...(this.settings.layers !== undefined ? { layers: this.settings.layers } : {}), ...(this.settings.appends !== undefined ? { appends: this.settings.appends } : {}), ...(this.settings.sort !== undefined ? { sort: this.settings.sort } : {}) }) : await PtMegakernel.create(device, caps, kernelOptions);
     this.kernel.setScene(this.trace, this.sceneBuffers);

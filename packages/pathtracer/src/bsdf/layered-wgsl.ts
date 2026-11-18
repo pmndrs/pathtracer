@@ -15,7 +15,7 @@
 
 import { PT_LAYERED_LUT_N, ptLayeredLut } from './layered-lut.ts';
 import { ptAlbedoBaseInternal, type PtLayeredOptions } from './layered.ts';
-import { PT_LAYER_CORR_BINDING, PT_LAYER_CORR_NM, PT_LAYER_CORR_NR, ptLayerCorrLut } from './layered-correction.ts';
+import { PT_LAYER_CORR_BINDING, PT_LAYER_CORR_NM, PT_LAYER_CORR_NR, ptAlbedoCorrectionKind, ptLayerCorrLut } from './layered-correction.ts';
 
 function f32List(a: Float32Array): string {
   return Array.from(a)
@@ -149,7 +149,7 @@ ${cond ? `fn ptLayerSmoothBase(p: PtLayeredParams) -> bool { return p.isCond && 
 }
 fn ptLayerFail() -> PtBsdfSample { return PtBsdfSample(vec3f(0.0), vec3f(0.0), 0.0, 0u, 1.0); }
 
-${stochastic ? stochasticWgsl(cond) : albedoWgsl(n, cond, internal && options.albedoCorrection && options.albedoCorrection !== 'none' ? options.albedoCorrection : undefined)}
+${stochastic ? stochasticWgsl(cond) : albedoWgsl(n, cond, ptAlbedoCorrectionKind(options))}
 `;
 }
 

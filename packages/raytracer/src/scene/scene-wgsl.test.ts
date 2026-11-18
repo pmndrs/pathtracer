@@ -30,14 +30,14 @@ function sceneOptions(): RtModuleOptions[] {
       for (const positions of [false, true])
         for (const triangleLeaves of ['records', 'indexed'] as const)
           for (const nodeFormat of ['f32', 'quantized'] as const)
-            out.push({ triangleLeaves, nodeFormat, scene: { slot, layout: { normals, uvs, positions } } });
+            out.push({ triangleLeaves, nodeFormat, scene: { slot, packing: 'split', layout: { normals, uvs, positions } } });
   return out;
 }
 
 describe('scene copy WGSL', () => {
   it('declares no identifier that WGSL reserves', () => {
-    const code = rtModuleWgsl(allFeatures, { triangleLeaves: 'indexed', scene: { slot, layout: { normals: true, uvs: true, positions: true } } });
-    const bad = [...declaredIdentifiers(rtSceneWgsl({ group: 0, firstBinding: 0 })), ...declaredIdentifiers(code)].filter((name) => RESERVED.has(name));
+    const code = rtModuleWgsl(allFeatures, { triangleLeaves: 'indexed', scene: { slot, packing: 'split', layout: { normals: true, uvs: true, positions: true } } });
+    const bad = [...declaredIdentifiers(rtSceneWgsl({ group: 0, firstBinding: 0, packing: 'split' })), ...declaredIdentifiers(code)].filter((name) => RESERVED.has(name));
     expect(bad).toEqual([]);
     // The detector does catch the keyword that failed on the GPU.
     expect([...declaredIdentifiers('let meta = 1u;')].filter((n) => RESERVED.has(n))).toEqual(['meta']);
@@ -70,13 +70,13 @@ describe('scene copy WGSL', () => {
     expect(stripped).not.toContain('//');
     const sample = 'let a = 1; // trailing\n/* block\n over lines */ let b = 2;\n';
     expect(stripWgslComments(sample)).toBe('let a = 1;\n\n let b = 2;\n');
-    const unstripped = rtModuleWgsl(noFeatures, { triangleLeaves: 'indexed', scene: { slot, layout: { normals: true, uvs: true, positions: true } }, stripComments: false });
-    expect(unstripped.length).toBeGreaterThan(rtModuleWgsl(noFeatures, { triangleLeaves: 'indexed', scene: { slot, layout: { normals: true, uvs: true, positions: true } } }).length);
+    const unstripped = rtModuleWgsl(noFeatures, { triangleLeaves: 'indexed', scene: { slot, packing: 'split', layout: { normals: true, uvs: true, positions: true } }, stripComments: false });
+    expect(unstripped.length).toBeGreaterThan(rtModuleWgsl(noFeatures, { triangleLeaves: 'indexed', scene: { slot, packing: 'split', layout: { normals: true, uvs: true, positions: true } } }).length);
   });
 
   it('declares no name twice, and nothing outside the rt prefix beyond the bvh walk', () => {
     const walk = new Set(declared(traceModuleWgsl({ triangleLeaves: 'indexed' })));
-    const code = rtModuleWgsl(noFeatures, { triangleLeaves: 'indexed', scene: { slot, layout: { normals: true, uvs: true, positions: true } } });
+    const code = rtModuleWgsl(noFeatures, { triangleLeaves: 'indexed', scene: { slot, packing: 'split', layout: { normals: true, uvs: true, positions: true } } });
     const names = declared(code);
     const seen = new Set<string>();
     for (const name of names) {
@@ -88,13 +88,13 @@ describe('scene copy WGSL', () => {
 
   it('can leave out materials, lights or surface', () => {
     const layout = { normals: true, uvs: false, positions: false };
-    const noMaterials = rtModuleWgsl(noFeatures, { scene: { slot, layout, materials: false } });
+    const noMaterials = rtModuleWgsl(noFeatures, { scene: { slot, packing: 'split', layout, materials: false } });
     expect(noMaterials).not.toContain('fn rtMaterial(');
     expect(noMaterials).toContain('fn rtSampleLight(');
-    const noLights = rtModuleWgsl(noFeatures, { scene: { slot, layout, lights: false } });
+    const noLights = rtModuleWgsl(noFeatures, { scene: { slot, packing: 'split', layout, lights: false } });
     expect(noLights).not.toContain('fn rtSampleLight(');
     expect(noLights).toContain('fn rtMaterial(');
-    const noSurface = rtModuleWgsl(noFeatures, { scene: { slot, layout, surface: false } });
+    const noSurface = rtModuleWgsl(noFeatures, { scene: { slot, packing: 'split', layout, surface: false } });
     expect(noSurface).not.toContain('fn rtSurface(');
     expect(noSurface).toContain('fn rtMaterial(');
     expect(noSurface).toContain('fn rtLightIndexOfHit(');
@@ -121,7 +121,7 @@ describe('scene copy WGSL', () => {
     expect([at(SCENE_HEADER.instanceSlots), at(SCENE_HEADER.materialCount), at(SCENE_HEADER.materialBase), at(SCENE_HEADER.lightCount), at(SCENE_HEADER.lightBase), at(SCENE_HEADER.triangleLightCount), at(SCENE_HEADER.sunLight), at(SCENE_HEADER.envLight), at(SCENE_HEADER.totalPower), at(SCENE_HEADER.sceneRadius)]).toEqual([
       '0.x', '1.x', '1.y', '1.z', '1.w', '2.x', '2.y', '2.z', '3.x', '3.y',
     ]);
-    const info = rtSceneBindingsWgsl({ group: 0, firstBinding: 0 });
+    const info = rtSceneBindingsWgsl({ group: 0, firstBinding: 0, packing: 'split' });
     expect(info).toContain('rtSceneTable[0].x, h1.x, h1.z, h2.x, bitcast<f32>(h3.x), bitcast<f32>(h3.y)');
     expect(rtLightsWgsl()).toContain('return rtSceneTable[1].z;');
     expect(rtLightsWgsl()).toContain('rtSceneTable[2].y');
@@ -130,11 +130,11 @@ describe('scene copy WGSL', () => {
 
   it('binding budget: scene copy 2, walk 3 (4 indexed)', () => {
     expect(SCENE_COPY_STORAGE_BUFFERS).toBe(2);
-    expect(rtSceneEntries()).toHaveLength(2);
-    const scene = { slot, layout: { normals: true, uvs: true, positions: true } };
+    expect(rtSceneEntries('split')).toHaveLength(2);
+    const scene = { slot, packing: 'split' as const, layout: { normals: true, uvs: true, positions: true } };
     expect(rtModuleStorageBuffers({ scene })).toBe(5);
     expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', scene })).toBe(6);
-    expect(rtSceneWgsl({ group: 0, firstBinding: 4 })).toContain('@group(0) @binding(5)');
+    expect(rtSceneWgsl({ group: 0, firstBinding: 4, packing: 'split' })).toContain('@group(0) @binding(5)');
   });
 });
 
@@ -142,7 +142,7 @@ describe('scene copy WGSL: textures (P1.4c)', () => {
   const layout = { normals: true, uvs: true, positions: true };
   const bucket = (srgb: boolean) => ({ width: 64, height: 64, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), wrap: 'repeat' as const, layers: 3, mipLevels: 7 });
   const textures = { buckets: [bucket(true), bucket(false), bucket(false), bucket(true)] };
-  const withTextures = (caps = allFeatures, extra: Partial<RtModuleOptions> = {}) => rtModuleWgsl(caps, { triangleLeaves: 'indexed', scene: { slot, layout, textures }, ...extra });
+  const withTextures = (caps = allFeatures, extra: Partial<RtModuleOptions> = {}) => rtModuleWgsl(caps, { triangleLeaves: 'indexed', scene: { slot, packing: 'split', layout, textures }, ...extra });
 
   it('adds the arrays, samplers and lookups after the two buffers, and nothing at all without textures', () => {
     const code = withTextures();
@@ -155,7 +155,7 @@ describe('scene copy WGSL: textures (P1.4c)', () => {
     for (const fn of ['rtTexSample', 'rtTexSampleRecord', 'rtTexLodOf', 'rtApplyMaterialTextures', 'rtApplyNormalMap']) expect(code).toContain(`fn ${fn}(`);
     expect(code).toContain('uvDensity: f32');
     expect(code).toContain('tangent: vec4f');
-    const plain = rtModuleWgsl(allFeatures, { triangleLeaves: 'indexed', scene: { slot, layout } });
+    const plain = rtModuleWgsl(allFeatures, { triangleLeaves: 'indexed', scene: { slot, packing: 'split', layout } });
     expect(plain).not.toMatch(/rtTex|uvDensity|RT_SURF_TEXFRAME|rtApplyMaterialTextures/);
   });
 
@@ -174,8 +174,8 @@ describe('scene copy WGSL: textures (P1.4c)', () => {
 
   it('needs materials, uvs and positions', () => {
     expect(() => rtSceneWgsl({ group: 0, firstBinding: 0, materials: false, textures })).toThrow(/materials/);
-    expect(() => rtModuleWgsl(allFeatures, { scene: { slot, layout: { normals: true, uvs: false, positions: true }, textures } })).toThrow(/uvs and positions/);
-    expect(() => rtModuleWgsl(allFeatures, { scene: { slot, layout: { normals: true, uvs: true, positions: false }, textures } })).toThrow(/uvs and positions/);
+    expect(() => rtModuleWgsl(allFeatures, { scene: { slot, packing: 'split', layout: { normals: true, uvs: false, positions: true }, textures } })).toThrow(/uvs and positions/);
+    expect(() => rtModuleWgsl(allFeatures, { scene: { slot, packing: 'split', layout: { normals: true, uvs: true, positions: false }, textures } })).toThrow(/uvs and positions/);
   });
 
   it('the surface carries the frame only when asked for at compile time', () => {

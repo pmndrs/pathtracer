@@ -154,7 +154,7 @@ describe('generated WGSL', () => {
       for (const uvs of [false, true])
         for (const positions of [false, true])
           for (const triangleLeaves of ['records', 'indexed'] as const) {
-            const scene = { slot: { group: 2, firstBinding: 0 }, layout: { normals, uvs, positions }, materials: false, lights: false };
+            const scene = { slot: { group: 2, firstBinding: 0 }, packing: 'split' as const, layout: { normals, uvs, positions }, materials: false, lights: false };
             const code = rtModuleWgsl(allFeatures, { triangleLeaves, scene });
             expect(code.length).toBeLessThan(KERNEL_BYTE_LIMIT);
             for (const fn of ['rtVisible', 'rtVisibleSegment', 'rtClosest', 'rtClosestCone', 'rtSurface', 'rtSegment', 'rtConePropagate']) expect(code).toContain(`fn ${fn}(`);
@@ -223,7 +223,7 @@ describe('struct layouts against the TypeScript constants', () => {
 
   it('binding budget: walk 3 (4 indexed), scene copy 2', () => {
     expect(rtModuleStorageBuffers()).toBe(3);
-    expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', scene: { slot: { group: 1, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: false } } })).toBe(6);
+    expect(rtModuleStorageBuffers({ triangleLeaves: 'indexed', scene: { slot: { group: 1, firstBinding: 0 }, packing: 'split', layout: { normals: true, uvs: false, positions: false } } })).toBe(6);
   });
 });
 

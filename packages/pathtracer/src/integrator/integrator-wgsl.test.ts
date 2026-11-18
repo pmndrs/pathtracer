@@ -72,7 +72,7 @@ describe('integrator WGSL', () => {
   });
 
   it('puts the bindings where the host expects them: walk group 0, scene group 1, io group 2', () => {
-    const code = ptMegakernelWgsl(caps, { format: {}, layout, minify: false, shortenNames: false });
+    const code = ptMegakernelWgsl(caps, { format: {}, layout, scenePacking: 'split', minify: false, shortenNames: false });
     expect(code).toMatch(/@group\(0\) @binding\(0\)/);
     expect(code).toMatch(/@group\(1\) @binding\(0\) var<storage, read> rtSceneTable/);
     expect(code).toMatch(/@group\(1\) @binding\(1\) var<storage, read> rtSceneData/);
@@ -195,7 +195,7 @@ describe('integrator WGSL', () => {
     });
 
     it('binds the arrays then their samplers after the two scene buffers, in group 1', () => {
-      const code = ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, minify: false, shortenNames: false });
+      const code = ptMegakernelWgsl(caps, { format: {}, layout: texLayout, textures, scenePacking: 'split', minify: false, shortenNames: false });
       for (let i = 0; i < 3; i++) {
         expect(code).toContain(`@group(1) @binding(${2 + i}) var rtTex${i}: texture_2d_array<f32>;`);
         expect(code).toContain(`@group(1) @binding(${5 + i}) var rtSmp${i}: sampler;`);
@@ -306,15 +306,16 @@ describe('integrator WGSL', () => {
     it('sizes (minified, short names; P2.21/22/30): thin +0.5 KB, medium +0.3 KB, layered albedo +7.9 KB, stochastic +9.1 KB; all lobes with an env map under 53.7 KB', () => {
       const legacy = ptMegakernelWgsl(caps, { format: {}, layout }).length;
       const size = (f: Partial<PtMaterialFeatures>, layered?: PtMaterialOptions['layered'], extra: object = {}) => build(feats(f, layered), extra).length;
+      const all = { layered: true, mix: true, thin: true, medium: true };
       expect(size({})).toBeLessThan(legacy + 100);
       expect(size({ mix: true })).toBeLessThan(legacy + 150);
       expect(size({ thin: true })).toBeLessThan(legacy + 600);
       expect(size({ medium: true })).toBeLessThan(legacy + 400);
       // Caps raised by 150 B (P-W1): the constant-bounded walk loops (rtBoundWalkLoops) add ~130 B to every kernel with both walks.
-      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(48_850);
+      // D32: the default albedo layering carries the `texture` correction (+0.8 KB of text) and the scene copy is packed (-0.1 KB).
+      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(49_600);
       expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(50_050);
-      const all = { layered: true, mix: true, thin: true, medium: true };
-      expect(size(all, { layering: 'albedo' })).toBeLessThan(49_650);
+      expect(size(all, { layering: 'albedo' })).toBeLessThan(50_400);
       expect(size(all, { layering: 'stochastic' })).toBeLessThan(50_850);
       expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(53_650);
     });

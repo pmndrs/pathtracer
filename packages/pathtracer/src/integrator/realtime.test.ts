@@ -293,6 +293,17 @@ describe('mode presets (P4.1)', () => {
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { restir: true } as object, blueNoise: {} }).integrator?.sampler).toBe('bluenoise'); // P4.2e: ReSTIR binds the texture too
   });
 
+  it('realtime + ReSTIR (D32): sharedHit on for the megakernel with trace primaries and positions in the layout; the caller and the other cases win', () => {
+    const o = { mode: 'realtime' as const, layout: { positions: true }, integrator: { restir: {} } };
+    expect((ptApplyMode(o).integrator.restir as { sharedHit?: boolean }).sharedHit).toBe(true);
+    expect((ptApplyMode({ ...o, integrator: { restir: { sharedHit: false } } }).integrator.restir as { sharedHit?: boolean }).sharedHit).toBe(false);
+    expect((ptApplyMode(o, 'wavefront').integrator.restir as { sharedHit?: boolean }).sharedHit).toBeUndefined(); // the wavefront has no shared hit (P4.2a)
+    expect((ptApplyMode({ ...o, layout: { positions: false } }).integrator.restir as { sharedHit?: boolean }).sharedHit).toBeUndefined();
+    expect((ptApplyMode({ ...o, integrator: { restir: {}, primary: 'vbuffer' as const } }).integrator.restir as { sharedHit?: boolean }).sharedHit).toBeUndefined();
+    expect((ptApplyMode({ ...o, mode: 'preview' as const }).integrator.restir as { sharedHit?: boolean }).sharedHit).toBeUndefined(); // preview is progressive, not a frame mode
+    expect(ptApplyMode({ ...o, integrator: {} }).integrator.restir).toBeUndefined(); // ReSTIR stays opt-in
+  });
+
   it('preview: D31 cutouts (exact + transmit), reduced secondary materials, AOVs for OIDN, no frame outputs', () => {
     const p = ptApplyMode({ mode: 'preview' as const, integrator: {} }).integrator;
     expect(p.alphaPolicy).toBe('exact');

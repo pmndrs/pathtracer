@@ -1,5 +1,5 @@
 // Writes the shipped kernel text of the Tier 0 / env / textured variants to a directory (byte-identity check between two commits).
-//   node bench/size-snapshot.ts <outDir> [split|packed]   (scene copy packing, P3.11; default: the library default. `split` text must stay byte-identical across commits)
+//   node bench/size-snapshot.ts <outDir> [split|packed]   (scene copy packing, P3.11; default: the library default (`packed` since D32). `split` text must stay byte-identical across commits)
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { buildCaps } from '@pmndrs/raytracer';
 import { kernelVariants, restirKernelVariants, wavefrontKernelVariants } from './kernel-variants.ts';

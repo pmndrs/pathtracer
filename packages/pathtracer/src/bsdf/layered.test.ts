@@ -116,7 +116,7 @@ describe('white furnace', () => {
   it("albedo layering, albedoBase 'internal': still 1 (the extra light comes back out of the interface)", () => {
     for (const th of THETAS) {
       const p = ptLayered(WHITE, 1.5, 0.3);
-      const q = layeredQuadrature(p, dirFromAngles(th), { ...ALBEDO, albedoBase: 'internal' }, 200, 180);
+      const q = layeredQuadrature(p, dirFromAngles(th), { ...ALBEDO, albedoBase: 'internal', albedoCorrection: 'none' }, 200, 180);
       expect(q.albedo[0], `theta ${th}`).toBeGreaterThan(0.96);
       expect(q.albedo[0], `theta ${th}`).toBeLessThan(1.04);
     }
@@ -239,7 +239,7 @@ describe('reciprocity', () => {
     const b = ptLayeredEval(p, wi, wo, ALBEDO).f[0];
     expect(Math.abs(a - b) / a).toBeGreaterThan(0.01);
     expect(Math.abs(a - b) / a).toBeLessThan(0.1);
-    const o2 = { ...ALBEDO, albedoBase: 'internal' as const };
+    const o2 = { ...ALBEDO, albedoBase: 'internal' as const, albedoCorrection: 'none' as const };
     expect(ptLayeredEval(p, wo, wi, o2).f[0]).toBeCloseTo(ptLayeredEval(p, wi, wo, o2).f[0], 12);
   });
 

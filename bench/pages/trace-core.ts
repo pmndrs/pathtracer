@@ -49,6 +49,7 @@ import {
   rtSceneBindGroupEntries,
   rtSceneCopyBindGroupEntries,
   rtSceneCopyLayoutEntries,
+  DEFAULT_SCENE_PACKING,
   type SceneCopyPacking,
   rtWalkEntries,
   unpackRay,
@@ -173,8 +174,8 @@ async function readBack(device: GPUDevice, buffers: GPUBuffer[]): Promise<ArrayB
 }
 
 /** The page's own kernel on the inline module: L1 with a cone, L0, and the full `rtSurface` per ray. */
-/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split). */
-let PACKING: SceneCopyPacking = 'split';
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default: the library default, packed since D32). */
+let PACKING: SceneCopyPacking = DEFAULT_SCENE_PACKING;
 
 const INLINE_KERNEL = /* wgsl */ `
 struct PageParams { count: u32, mask: u32, pad0: u32, pad1: u32, cone: vec4f }
@@ -739,7 +740,7 @@ let deviceErrors: string[] = [];
 try {
   const args = getArgs();
   if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
-  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? DEFAULT_SCENE_PACKING;
   const sceneNames = (args.scenes ?? 'cornell,quad-light,edges,sponza-white').split(',').filter(Boolean);
   const perSet = numberArg(args, 'rays', 8192);
   const withSceneTrees = (args.sceneTrees ?? '1') !== '0';

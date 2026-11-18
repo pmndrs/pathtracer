@@ -1,6 +1,6 @@
 /**
  * Scene copy packing (P3.11) in the integrator kernels: a packed kernel binds one scene buffer, reaches every table / data word through the
- * rewritten accessors (nothing of the split names is left, in the appended integrator text too), and the split kernels are the unchanged default.
+ * rewritten accessors (nothing of the split names is left, in the appended integrator text too), and the split kernels are the pre-D32 default text (`scenePacking: 'split'`); the library default is `packed` since D32.
  * The images of the two are compared on the GPU (`matrix.ts --renderers pt-megakernel,pt-mk-packed,pt-wavefront,pt-wf-packed`).
  */
 import { buildCaps } from '@pmndrs/raytracer';
@@ -27,10 +27,10 @@ const groupBindings = (code: string, group: number): number[] => [...code.matchA
 
 describe('packed megakernel / wavefront text (P3.11)', () => {
   for (const [name, options] of variants) {
-    it(`${name}: megakernel binds one scene buffer and no split name is left; split is unchanged`, () => {
-      const split = ptMegakernelBuild(caps, options as never).code;
+    it(`${name}: megakernel binds one scene buffer and no split name is left; the default is packed`, () => {
+      const split = ptMegakernelBuild(caps, { ...options, scenePacking: 'split' } as never).code;
       const packed = ptMegakernelBuild(caps, { ...options, scenePacking: 'packed' } as never).code;
-      expect(ptMegakernelBuild(caps, { ...options, scenePacking: 'split' } as never).code).toBe(split);
+      expect(ptMegakernelBuild(caps, options as never).code).toBe(packed);
       expect(split).toMatch(/rtSceneTable/);
       expect(packed).not.toMatch(/rtSceneTable|rtSceneData/);
       expect(packed).toMatch(/@group\(1\)\s*@binding\(0\)var<storage,\s*read>\s*rtScene:\s*array<vec4u>/);
@@ -40,7 +40,7 @@ describe('packed megakernel / wavefront text (P3.11)', () => {
     });
 
     it(`${name}: every wavefront kernel is rewritten the same way`, () => {
-      const split = ptWavefrontBuild(caps, options as never);
+      const split = ptWavefrontBuild(caps, { ...options, scenePacking: 'split' } as never);
       const packed = ptWavefrontBuild(caps, { ...options, scenePacking: 'packed' } as never);
       for (const kernel of PTWF_KERNELS) {
         expect(packed[kernel].code, kernel).not.toMatch(/rtSceneTable|rtSceneData/);
@@ -51,7 +51,7 @@ describe('packed megakernel / wavefront text (P3.11)', () => {
   }
 
   it('the packed kernel stays within a hundred bytes of the split one (the data accessor replaces a binding)', () => {
-    const split = ptMegakernelBuild(caps, { format: {}, layout } as never).code.length;
+    const split = ptMegakernelBuild(caps, { format: {}, layout, scenePacking: 'split' } as never).code.length;
     const packed = ptMegakernelBuild(caps, { format: {}, layout, scenePacking: 'packed' } as never).code.length;
     expect(Math.abs(packed - split)).toBeLessThan(400);
   });

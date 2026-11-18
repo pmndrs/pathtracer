@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ptwfAutoLayers, ptwfAutoPolicy } from './auto-policy.ts';
+import { PTWF_AUTO_KERNEL_LIMIT, ptwfAutoLayers, ptwfAutoPolicy } from './auto-policy.ts';
 
 describe('wavefront auto policy (P3.9)', () => {
   it('short paths: megakernel whatever the film', () => {
@@ -21,6 +21,16 @@ describe('wavefront auto policy (P3.9)', () => {
     expect(ptwfAutoPolicy({ width: 960, height: 540, maxDepth: 2, subgroups: true, frame: true, triangles: 40 }).scheduler).toBe('megakernel');
     expect(ptwfAutoPolicy({ width: 128, height: 128, maxDepth: 2, subgroups: true, frame: true, triangles: 262_000 }).scheduler).toBe('megakernel');
     expect(ptwfAutoPolicy({ width: 960, height: 540, maxDepth: 2, subgroups: true }).scheduler).toBe('megakernel'); // not a frame: unchanged
+  });
+
+  it('kernel size (D32): a megakernel over the ~50 KB DXC class goes to the plain wavefront, a smaller one keeps the rules', () => {
+    const small = { width: 960, height: 540, maxDepth: 2, subgroups: true, frame: true, triangles: 40 };
+    expect(ptwfAutoPolicy({ ...small, kernelBytes: PTWF_AUTO_KERNEL_LIMIT }).scheduler).toBe('megakernel');
+    expect(ptwfAutoPolicy({ ...small, kernelBytes: 52_000 })).toMatchObject({ scheduler: 'wavefront', refill: false, layers: 1, appends: 'subgroup', sort: 'none' });
+    expect(ptwfAutoPolicy({ ...small, kernelBytes: 52_000 }).reason).toMatch(/DXC/);
+    expect(ptwfAutoPolicy({ width: 256, height: 256, maxDepth: 1, subgroups: false, kernelBytes: 53_000 })).toMatchObject({ scheduler: 'wavefront', appends: 'atomic' });
+    // a rule that already picked the wavefront (and its refill) is untouched
+    expect(ptwfAutoPolicy({ width: 512, height: 512, maxDepth: 32, subgroups: true, kernelBytes: 53_000 })).toMatchObject({ scheduler: 'wavefront', refill: 'inline' });
   });
 
   it('layers: monotone in the film, 1..32', () => {

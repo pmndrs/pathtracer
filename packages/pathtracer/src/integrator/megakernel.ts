@@ -83,7 +83,7 @@ export interface PtMegakernelOptions {
   /** Texture arrays of the scene (`copy.textureLayout`, P1.4c): compiles the texture lookups and binds them next to the scene copy. Omit for an untextured scene. */
   textures?: TextureLayout | null;
   /**
-   * How the scene copy is bound (P3.11): `split` (two storage buffers, the default `DEFAULT_SCENE_PACKING`) or `packed` (one: frees a binding in the kernel).
+   * How the scene copy is bound (P3.11): `split` (two storage buffers) or `packed` (one: frees a binding in the kernel; the default `DEFAULT_SCENE_PACKING`, D32).
    * Upload the scene copy with the same `uploadSceneCopy(..., { packing })`; `setScene` throws on a mismatch.
    */
   scenePacking?: SceneCopyPacking;

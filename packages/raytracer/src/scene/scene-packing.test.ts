@@ -57,8 +57,8 @@ describe('packed scene copy layout', () => {
     expect(rtModuleStorageBuffers({ scene: { slot, layout, packing: 'packed' } })).toBe(rtModuleStorageBuffers({ scene: { slot, layout, packing: 'split' } }) - 1);
   });
 
-  it('the library default stays split until the quiet-pass A/B (flip DEFAULT_SCENE_PACKING when it is in)', () => {
-    expect(DEFAULT_SCENE_PACKING).toBe('split');
+  it('the library default is packed (D32, provisional until the optional quiet-pass confirmation)', () => {
+    expect(DEFAULT_SCENE_PACKING).toBe('packed');
   });
 });
 
@@ -83,7 +83,7 @@ describe('rtPackSceneAccess', () => {
 });
 
 describe('packed WGSL', () => {
-  const split = (extra = {}) => rtModuleWgsl(caps, { triangleLeaves: 'indexed', scene: { slot, layout, ...extra }, shade: true });
+  const split = (extra = {}) => rtModuleWgsl(caps, { triangleLeaves: 'indexed', scene: { slot, layout, packing: 'split', ...extra }, shade: true });
 
   it('declares one scene binding and the textures right after it; nothing of the split names is left', () => {
     const code = split({ packing: 'packed', textures });
@@ -98,12 +98,13 @@ describe('packed WGSL', () => {
     expect(bindings).toEqual([0, 1, 2, 3, 4]);
   });
 
-  it('keeps the split text: nothing changes unless packing is asked for', () => {
+  it('keeps the split text on request (the default is packed since D32)', () => {
     const plain = split();
     expect(split({ packing: 'split' })).toBe(plain);
     expect(plain).toContain('@group(1) @binding(1) var<storage, read> rtSceneData: array<u32>;');
     expect(plain).not.toMatch(/rtSceneWord|rtScene\[/);
-    expect(rtSceneWgsl({ group: 0, firstBinding: 0 })).toBe(rtSceneWgsl({ group: 0, firstBinding: 0, packing: 'split' }));
+    expect(rtSceneWgsl({ group: 0, firstBinding: 0 })).toBe(rtSceneWgsl({ group: 0, firstBinding: 0, packing: 'packed' }));
+    expect(rtSceneWgsl({ group: 0, firstBinding: 0, packing: 'split' })).toContain('rtSceneTable');
     expect(rtLightsWgsl()).toContain('rtSceneTable[1].z');
   });
 

@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { PtVec3 } from './bsdf.ts';
 import { ptLayered, ptLayeredEval, ptLayeredSample, ptInternalReflectance, type PtLayeredOptions } from './layered.ts';
-import { PT_LAYER_CORR_NM, PT_LAYER_CORR_NR, ptLayerCorrCoefs, ptLayerCorrection, ptLayerCorrLut, ptLayerCorrTextureHalf } from './layered-correction.ts';
+import { PT_LAYER_CORR_NM, PT_LAYER_CORR_NR, ptLayerCorrNeedsTexture, ptLayerCorrCoefs, ptLayerCorrection, ptLayerCorrLut, ptLayerCorrTextureHalf } from './layered-correction.ts';
 import { PT_LAYER_CORR_DATA } from './layered-correction-data.ts';
 import { ptLayeredWgsl } from './layered-wgsl.ts';
 import { evalAlbedo, layeredQuadrature, sampleAlbedo } from './layered.testutil.ts';
 import { f16BitsToF32 } from '@pmndrs/raytracer';
 
-const INTERNAL: PtLayeredOptions = { layering: 'albedo', albedoBase: 'internal' };
+const INTERNAL: PtLayeredOptions = { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'none' };
+/** D32: with nothing set, an albedo layering has the `texture` correction. */
+const DEFAULTED: PtLayeredOptions = { layering: 'albedo' };
 const LUT: PtLayeredOptions = { ...INTERNAL, albedoCorrection: 'lut' };
 const TEX: PtLayeredOptions = { ...INTERNAL, albedoCorrection: 'texture' };
 const woAt = (mu: number): PtVec3 => [Math.sqrt(1 - mu * mu), 0, mu];
@@ -83,6 +85,23 @@ describe("albedoCorrection against the stochastic walk (the fit's ground truth, 
     const a = layeredQuadrature(p, woAt(0.5), LUT, 120, 108).albedo[0];
     const b = layeredQuadrature(p, woAt(0.5), TEX, 120, 108).albedo[0];
     expect(Math.abs(a - b)).toBeLessThan(2e-3);
+  });
+});
+
+describe('albedoCorrection default (D32)', () => {
+  it("an albedo layering with nothing set is the 'texture' correction; 'none', the stochastic walk and the openpbr base opt out", () => {
+    const p = ptLayered([0.8, 0.5, 0.2], 1.5, 0.6, { thickness: 1e-6 });
+    const wi: PtVec3 = [0.3, 0.2, Math.sqrt(1 - 0.13)];
+    expect(ptLayeredEval(p, woAt(0.6), wi, DEFAULTED)).toEqual(ptLayeredEval(p, woAt(0.6), wi, TEX));
+    expect(ptLayeredEval(p, woAt(0.6), wi, DEFAULTED).f[0]).toBeLessThan(ptLayeredEval(p, woAt(0.6), wi, INTERNAL).f[0]);
+    expect(ptLayeredWgsl(DEFAULTED)).toBe(ptLayeredWgsl(TEX));
+    expect(ptLayeredWgsl(DEFAULTED)).not.toBe(ptLayeredWgsl(INTERNAL));
+    expect(ptLayeredWgsl({ layering: 'albedo', albedoBase: 'openpbr' })).not.toContain('ptLayerCorr');
+    expect(ptLayeredWgsl({ layering: 'stochastic' })).not.toContain('ptLayerCorr');
+    expect(ptLayerCorrNeedsTexture(undefined)).toBe(true);
+    expect(ptLayerCorrNeedsTexture({ albedoCorrection: 'none' })).toBe(false);
+    expect(ptLayerCorrNeedsTexture({ albedoCorrection: 'lut' })).toBe(false);
+    expect(ptLayerCorrNeedsTexture({ layering: 'stochastic' })).toBe(false);
   });
 });
 

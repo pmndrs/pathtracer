@@ -54,7 +54,7 @@ import {
   type PtVec3,
 } from './bsdf.ts';
 import { ptDielectricF0, ptLayeredAlbedo } from './layered-lut.ts';
-import { ptLayerCorrection, type PtAlbedoCorrection } from './layered-correction.ts';
+import { ptAlbedoCorrectionKind, ptLayerCorrection, type PtAlbedoCorrection } from './layered-correction.ts';
 
 /** Set on the sample of a stochastic layered BSDF: `pdf` is only proportional to the true density (pbrt `pdfIsProportional`). */
 export const PT_FLAG_PROPORTIONAL = 8;
@@ -113,7 +113,7 @@ export interface PtLayeredOptions extends PtBsdfOptions {
    */
   albedoBase?: 'openpbr' | 'internal';
   /**
-   * Albedo layering with the `'internal'` base only (P2.32b, DIVERGES V97). `'none'` (default): the closed form as is. `'lut'` / `'texture'`: the base lobe is multiplied by the fitted
+   * Albedo layering with the `'internal'` base only (P2.32b, DIVERGES V97). `'texture'` (default, D32): the fitted correction in an 8 x 8 texture; `'none'`: the closed form as is. `'lut'` / `'texture'`: the base lobe is multiplied by the fitted
    * correction `c(r, mu_o, base Ri)` (`layered-correction.ts`) that brings its energy to the stochastic walk's (the closed form reads +11-15% bright on a bright rough base).
    * `'lut'` keeps the table as a WGSL const array, `'texture'` as an 8 x 8 `rgba16float` texture bound at group 2 `PT_LAYER_CORR_BINDING`; the CPU twin is the same for both.
    */
@@ -600,7 +600,7 @@ function corrFactor(p: PtLayeredParams, mu: number, corr: 'lut' | 'texture' | un
 }
 
 function corrKind(o: PtLayeredOptions): 'lut' | 'texture' | undefined {
-  return ptAlbedoBaseInternal(o) && o.albedoCorrection && o.albedoCorrection !== 'none' ? o.albedoCorrection : undefined;
+  return ptAlbedoCorrectionKind(o);
 }
 
 function albedoMix(p: PtLayeredParams, mu: number, internal: boolean, corr?: 'lut' | 'texture'): Mix {

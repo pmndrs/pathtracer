@@ -28,6 +28,20 @@ export const PT_LAYER_CORR_BINDING = 10;
 
 export type PtAlbedoCorrection = 'none' | 'lut' | 'texture';
 
+/**
+ * The library default of `albedoCorrection` (D32, provisional): the fitted `texture` correction on the albedo layering's internal base. P2.32b: it removes the +11-15% overshoot of a bright
+ * rough base (AttenuationTest +12.9% -> -3.9% against the walk, SheenTestGrid +11.8% -> +1.9%) for 1-3% of megakernel time (wavefront within noise) and +0.8 KB of kernel text.
+ * `'none'` keeps the closed form as it was (the pre-D32 kernel text); `'lut'` is the const-array encoding of the same numbers.
+ */
+export const PT_DEFAULT_ALBEDO_CORRECTION: PtAlbedoCorrection = 'texture';
+
+/** The correction kind a layered options object resolves to (`undefined` = none: the closed form only). Only the albedo layering's internal base has one. */
+export function ptAlbedoCorrectionKind(o: { layering?: 'albedo' | 'stochastic'; albedoBase?: 'openpbr' | 'internal'; albedoCorrection?: PtAlbedoCorrection } | undefined): 'lut' | 'texture' | undefined {
+  if ((o?.layering ?? 'albedo') !== 'albedo' || (o?.albedoBase ?? 'internal') !== 'internal') return undefined;
+  const kind = o?.albedoCorrection ?? PT_DEFAULT_ALBEDO_CORRECTION;
+  return kind === 'none' ? undefined : kind;
+}
+
 /** (a, b, c) per node, index ((ir * NM + im) * 3 + k); the numbers the WGSL const array carries. */
 export function ptLayerCorrLut(): Float32Array {
   return Float32Array.from(PT_LAYER_CORR_DATA);
@@ -75,7 +89,7 @@ export function ptLayerCorrection(kind: 'lut' | 'texture', base: number, ri: num
 
 /** True when a kernel built with these layered options declares the correction texture (`albedoCorrection: 'texture'` on the albedo layering with the internal base). */
 export function ptLayerCorrNeedsTexture(layered: { layering?: 'albedo' | 'stochastic'; albedoBase?: 'openpbr' | 'internal'; albedoCorrection?: PtAlbedoCorrection } | undefined): boolean {
-  return layered?.albedoCorrection === 'texture' && (layered.layering ?? 'albedo') === 'albedo' && (layered.albedoBase ?? 'internal') === 'internal';
+  return ptAlbedoCorrectionKind(layered) === 'texture';
 }
 
 /** The bind group layout entry of the texture (group 2, `PT_LAYER_CORR_BINDING`). */

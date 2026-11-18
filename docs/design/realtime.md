@@ -154,6 +154,7 @@ Checks: `node bench/runner/run.ts --page wf-frame-check --args cases=cornell,spo
 * Blue noise for deeper pairs: 6 pairs = vertex 0 only. More pairs (vertex 1) need a third texture read per pair; A/B `blueNoisePairs` 6 vs 10.
 * Frame planes as a storage buffer (here) vs `rgba16float` storage textures (half the bandwidth, no copy for the filter): needs
   `texture-formats-tier1` / `bgra8unorm-storage` style caps on some devices; P4.5 decides when it knows what the filter reads.
+* D32 (2026-11-18): the recommended scheduler choice is `ptwfAutoPolicy({ width, height, maxDepth, subgroups, frame: true, triangles, kernelBytes })`: wavefront for a big scene on a big film, and for any megakernel over ~50 KB (OpenPBR scenes with every feature: 50.2 KB since the default albedo correction); spread its result into `PtMegakernel.create` / `PtWavefront.create`. Scene copy packing is `packed` and layered materials carry the albedo correction by default; ReSTIR defaults (unbiased, M 8, spatial 2, `sharedHit` in this preset) are in restir-di.md. All provisional until the optional quiet pass.
 * Megakernel vs wavefront for a frame: both exist since P4.1b (TASKS P4.1b has the paired ratios; the P3.9 auto policy's `frame` rule is provisional until the quiet pass).
 
 ## 5. The chain: kernel -> filter -> upscaler (P4.5, P4.6, P4.7)

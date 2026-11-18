@@ -4,7 +4,7 @@ Agreed 2026-11-13 (decisions D1–D21 in [DECISIONS.md](DECISIONS.md)); no longe
 number from the bench. Details and rationale: [spec/SPEC-draft.md](spec/SPEC-draft.md) §11. Task-level progress:
 [TASKS.md](TASKS.md). Phases overlap: a phase starts as soon as what it needs exists, and its gate is checked when the
 numbers are in.
-Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-14._
+Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-18._
 
 ## 🟨 P0 — Foundations: know the number to beat
 
@@ -53,18 +53,19 @@ coverage matrix exists (P2.31). Left: Tier 1 wave 2 (anisotropy, textured models
 Tier 1 gate decision, OIDN on final frames, kernel size on Windows (P2.10; layered kernels are 51–52 KB), and the
 switch-over for the siblings.
 
-## 🟨 P3 — Speed
+## ✅ P3 — Speed (built; gate provisional on the M5, the 3060 half pending Windows)
 
 Wavefront vs megakernel (both kept as settings until measured); wide BVH if it passed; coherence tricks; visibility-
 buffer primaries; NVIDIA/AMD timing on Windows; ray-class material LOD, alpha policy, cache hooks and debug views (R1, R2, R4,
 R10 from research note 12).
-**Progress (2026-11-15):** built — wavefront (P3.1/P3.2), alpha MASK + policy (P3.7, R2), V-buffer primaries (P3.6), material LOD
-(R1), scene-copy packing (P3.11), hooks/counters/AOVs (R10, R4). Left: material sort / subgroup appends (P3.3/P3.4), the auto policy
-(P3.9), a clean quiet rerun, the 3060 numbers and the competitor gate on Tier 2.
+**Progress (2026-11-18):** closed on a provisional basis (D32). Built: wavefront (P3.1/P3.2/P3.10), subgroup appends and sorts (P3.3/P3.4: appends yes, sorts no), alpha MASK + policy (P3.7, R2, D31), V-buffer primaries (P3.6), material LOD
+(R1), scene-copy packing (P3.11, now the default), the auto policy as code (P3.9, now the recommended scheduler entry point, with a kernel-size rule), hooks/counters/AOVs (R10, R4). The library defaults follow the best provisional evidence (D32); the quiet pass is an optional
+confirmation (docs/QUIET-PASS.md). **Gate, provisional on the M5 (best effort, load recorded; `bench/results/P3-GATE.md`): time to equal quality vs three-gpu-pathtracer and mutracer on `sponza-white` (the Tier 2 scene with native references) and Cornell.** The
+3060 half (the same table, and the >= 150 Mrays/s incoherent number: last read 102 bounce / 229 primary Mrays/s on the trace core before any wide BVH, P-W1) is pending Windows, WINDOWS-HANDOFF W13. Still open: the wide BVH integration (waits for the bvh branch merge, maintainer's call, D25), W10 (DXC compile time), P3.5 tile mode, P3.8 per-stage timing.
 **Exit gate:** faster time-to-equal-quality than every web competitor on every Tier 2 scene (M5, 3060L); ≥150 Mrays/s
 incoherent on 3060L.
 
-## 🟨 P4 — Real time
+## ✅ P4 — Real time (built end to end; gate provisional on the M5, P4.5b pending the 3060)
 
 Blue-noise sampler, demodulated AOVs, SVGF-class filter → upscaler, ReSTIR DI, cache hooks with gi's hash cache,
 preview mode; gi moves onto the core. Real-time termination policy, light grid, history confidence and gate scenes
@@ -75,7 +76,7 @@ in motion than preview mode on the Denoiser scorecard metrics.
 Already done early: our own blue-noise textures (P0.17, D16).
 **Progress (2026-11-15):** P4.1 built (megakernel): mode presets, the blue-noise sampler, per-frame denoiser inputs (demodulated diffuse / specular, normal, viewZ, camera motion, roughness), `realtime-check` page
 (`docs/design/realtime.md`). Left: wavefront frame mode (P4.1b), ReSTIR defaults and the unification (P4.2d / P4.2g), R3, R6-R9.
-**Progress (2026-11-18):** P4.5-P4.7 built and measured on the M5 Pro without a cache (`bench/realtime/`, page `realtime-pipeline`, docs/design/realtime.md section 5, bench/results/REALTIME-PIPELINE.md): kernel -> SVGF -> upscaler, one jitter owner (the sampler), reactive mask, preview chain. Provisional frame 19.6 ms (51 fps) at 960 x 540 -> 1080p, maxDepth 2 (31.0 ms with biased ReSTIR); steadier in motion than the preview pipeline's OIDN (boil 2.5x lower, FLIP 20% lower). The 30 fps gate on the 3060L is estimated at 23-32 fps without ReSTIR and waits for the 3060 run (P4.5b).
+**Progress (2026-11-18, closed provisionally, D32):** the real-time path exists on both schedulers (megakernel and wavefront agree per pixel), ReSTIR DI is opt-in with unbiased defaults, and the chain is measured on the M5 Pro; the 30 fps gate on the RTX 3060L waits for P4.5b (Windows). Open: P4.2d (candidates / k / historyCap at equal chain cost), R3, R6-R9, the N / NRC integration. P4.5-P4.7 built and measured on the M5 Pro without a cache (`bench/realtime/`, page `realtime-pipeline`, docs/design/realtime.md section 5, bench/results/REALTIME-PIPELINE.md): kernel -> SVGF -> upscaler, one jitter owner (the sampler), reactive mask, preview chain. Provisional frame 19.6 ms (51 fps) at 960 x 540 -> 1080p, maxDepth 2 (31.0 ms with biased ReSTIR); steadier in motion than the preview pipeline's OIDN (boil 2.5x lower, FLIP 20% lower). The 30 fps gate on the 3060L is estimated at 23-32 fps without ReSTIR and waits for the 3060 run (P4.5b).
 
 ## ⬜ P5 — Breadth
 

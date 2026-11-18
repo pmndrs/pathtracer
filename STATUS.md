@@ -5,11 +5,12 @@ _Last updated 2026-11-18._
 **Phase:** P0 passed its gate on the Mac (the RTX 3060 half waits on Windows). P1 (trace core) met its gate: reflections runs
 on it (P1.5, merged here; the reflections branch waits for reflections' own review). P2 (reference path tracer) passed the
 Tier 1 class A gate (D23, all 7 scenes) and has OIDN on final frames (bench); left are the siblings' switch-over and the
-layering default (D24 fix built, P2.32b, default pending the quiet pass). P3 (speed) is mostly built: a wavefront scheduler
+layering default (D24 + the P2.32b correction, now the library default, D32). **P3 (speed) is closed on a provisional basis (D32; gate on the M5, 3060 half pending Windows):** a wavefront scheduler
 beside the megakernel (per pixel equal; refill, samples in flight, early-out), alpha MASK in both, visibility-buffer
-primaries, ray-class material LOD, scene-copy packing, cache hooks / counters / AOVs. Every new path is a setting; defaults
-wait for a quiet rerun (the 2026-11-15 pass ran loaded after a reboot, ratios held) and the 3060 (W10 compile time, P3 gate).
-P4 (real time) is built end to end on both schedulers (megakernel and wavefront agree per pixel): mode presets (D31 cutouts),
+primaries, ray-class material LOD, scene-copy packing, cache hooks / counters / AOVs. Every new path is a setting; since D32 the library
+defaults follow the best provisional evidence (packed scene copy, albedo correction texture, `ptwfAutoPolicy` as the scheduler entry point, ReSTIR unbiased when on) and the quiet pass is an optional
+confirmation (docs/QUIET-PASS.md). Competitor gate (provisional, `bench/results/P3-GATE.md`): see below. The 3060 (W10 compile time, W13 gate numbers) is the open half.
+**P4 (real time) is closed provisionally too (P4.5b, the 3060 30 fps number, pending Windows):** built end to end on both schedulers (megakernel and wavefront agree per pixel): mode presets (D31 cutouts),
 blue-noise sampler, per-frame denoiser planes incl. an emission plane, ReSTIR DI (unbiased within the seed spread after the
 P4.2b key fix), and the bench chain kernel -> SVGF -> upscaler (P4.5/P4.6) plus an OIDN preview chain (P4.7). M5 numbers
 (provisional): ~19 ms per frame at 960x540 -> 1080p, 2 bounces; the 30 fps 3060L gate is borderline by estimate and needs
@@ -68,9 +69,10 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
 - Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
 - Track N (merged into main 2026-11-18): the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
+- P3 / P4 closed on a provisional basis (D32): defaults flipped (packed scene copy, albedo correction texture, ReSTIR unbiased when on, `ptwfAutoPolicy` as the scheduler entry point with a kernel-size rule); open items in TASKS "Open after closing P3 / P4".
 - Cutouts in the real-time modes (R2b, D31): `preview` / `realtime` now use exact indirect hits plus `alphaShadow: 'transmit'` (beta 0.45) instead of D27's `opaqueSecondary`; max speed is the opt-in `alphaPolicy: 'opaqueShadow'`. Numbers are provisional (shared Mac) until the quiet pass.
 - Wide BVH in the bvh repo: built and correct on its own branch. Quiet M5 timing: 1.3x or better on merged trees, but BVH4 wins on Sponza and CWBVH8 on Bistro; one default still to choose, then the 3060.
 
-**Speed vs the web competitors (quiet M5, 2026-11-14):** our megakernel is fastest on Sponza (about 1.4x mutracer to equal error) and second on Cornell (mutracer 1.5x faster). Report: bench/results/quiet-pass/20261114-1419/REPORT.md.
+**Speed vs the web competitors (M5, provisional P3 gate, 2026-11-18):** with the auto scheduler we are fastest on Sponza (1.64x mutracer, 1.76x tgpt-wavefront, 5.0x tgpt-megakernel to equal error); on Cornell mutracer is about 10% faster to relMSE 1e-2 and we are 1.19x faster to 1e-3. Report: bench/results/P3-GATE.md (the quiet baseline of 2026-11-14 is bench/results/quiet-pass/20261114-1419/REPORT.md). Mrays/s on the 3060L: pending Windows (W13).
 
-**Waiting on the maintainer:** the wide-BVH default; the Tier 1 gate (class A only, or class B too); the default layering (OpenPBR albedo, albedo + internal reflection, or the pbrt walk). Nothing blocks building meanwhile.
+**Waiting on the maintainer:** the wide-BVH integration (waits for the bvh branch merge). The Tier 1 gate (D23), the default layering (D24 + the correction) and the other P3 / P4 defaults are decided (D32, provisional); the quiet pass is an optional confirmation. Open on the 3060: W10, W13, P4.5b. Nothing blocks building meanwhile.

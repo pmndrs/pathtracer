@@ -81,8 +81,9 @@ describe('ReSTIR DI WGSL', () => {
     expect(PT_RESTIR_PARAMS_BYTES).toBe(13 * 16);
     expect(wgsl).toContain(`array<PtRsGeom, ${PT_RESTIR_MAX_SPATIAL + 1}>`);
   });
-  it('defaults: 8 candidates, temporal, 1 spatial neighbour, biased with visibility, random reuse offsets', () => {
-    expect(resolveRestirOptions()).toMatchObject({ candidates: 8, temporal: true, spatial: 1, bias: 'biased', initialVisibility: true, neighbours: 'random', temporalPick: 'random', historyCap: 20 });
+  it('defaults (D32): 8 candidates, temporal, 2 spatial neighbours, unbiased without initial visibility, random reuse offsets', () => {
+    expect(resolveRestirOptions()).toMatchObject({ candidates: 8, temporal: true, spatial: 2, bias: 'unbiased', initialVisibility: false, sharedHit: false, neighbours: 'random', temporalPick: 'random', historyCap: 20 });
+    expect(resolveRestirOptions({ bias: 'biased' }).initialVisibility).toBe(true);
     expect(resolveRestirOptions({ bias: 'unbiased' }).initialVisibility).toBe(false);
     expect(resolveRestirOptions({ spatial: 99 }).spatial).toBe(PT_RESTIR_MAX_SPATIAL);
   });

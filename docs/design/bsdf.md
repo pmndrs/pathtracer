@@ -146,7 +146,7 @@ reflectance at every angle (OpenPBR; glTF scales F0 only), transmission is `1 - 
 
 | `layering` | What | Cost (best effort, M5 Pro, 16.8M evals) | WGSL in the 40.4 KB kernel |
 |---|---|---|---|
-| `albedo` (default) | GGX dielectric reflection lobe on top; Lambert base scaled by `1 - s E(mu_o)` from a 16x16x2 split-sum table (`E = F0 A + B`, sqrt axes in mu and roughness). OpenPBR "layering" by albedo scaling | 0.24 ns/eval | +7.2 KB (3 KB is the table) |
+| `albedo` (default; with the internal base and, since D32, the fitted `texture` correction) | GGX dielectric reflection lobe on top; Lambert base scaled by `1 - s E(mu_o)` from a 16x16x2 split-sum table (`E = F0 A + B`, sqrt axes in mu and roughness). OpenPBR "layering" by albedo scaling | 0.24 ns/eval | +7.2 KB (3 KB is the table) |
 | `albedo` + `albedoBase: 'internal'` | adds the interface's internal reflection: base * keep(mu_o) keep(mu_i) / (eta^2 (1 - rho R_i)); reciprocal; our addition, not OpenPBR | same | same |
 | `stochastic` | pbrt-v4 `LayeredBxDF` random walk, `maxDepth` (10), `nSamples` (1), `exitMis: 'pbrt' \| 'none'`; reference mode | 0.52 ns (`none`) / 0.78 ns (`pbrt`), depth 10, 1 walk | +8.3 KB |
 

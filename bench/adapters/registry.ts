@@ -79,13 +79,13 @@ const PACKED_PRESETS = {
   'pt-wf-packed': { scenePacking: 'packed', scheduler: 'wavefront' },
 } as const;
 
-/** Layered-BSDF presets (P2.32b): the stochastic walk and the albedo layering (internal base) without / with the fitted correction, so `matrix.ts --interleave` can A/B them in one run. */
+/** Layered-BSDF presets (P2.32b): the stochastic walk and the albedo layering (internal base) without (`none`) / with the fitted correction (the library default since D32 is `texture`), so `matrix.ts --interleave` can A/B them in one run. */
 const LAYERING_PRESETS = {
   'pt-mk-lay-stoch': { layering: 'stochastic' },
-  'pt-mk-lay-int': { layering: 'albedo', albedoBase: 'internal' },
+  'pt-mk-lay-int': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'none' },
   'pt-mk-lay-lut': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut' },
   'pt-mk-lay-tex': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' },
-  'pt-wf-lay-int': { layering: 'albedo', albedoBase: 'internal', scheduler: 'wavefront' },
+  'pt-wf-lay-int': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'none', scheduler: 'wavefront' },
   'pt-wf-lay-lut': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'lut', scheduler: 'wavefront' },
   'pt-wf-lay-tex': { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture', scheduler: 'wavefront' },
 } as const;

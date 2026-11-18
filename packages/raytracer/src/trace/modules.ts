@@ -48,7 +48,7 @@ export interface RtModuleOptions extends SceneFormat {
    * Include the scene copy (D4): `rtSurface` (unless `surface: false`), `rtMaterial` and the light functions, over the scene
    * copy's two bindings at `slot` (`rtSceneEntries`). `layout` is `SceneCopy.layout`. Default: no scene, no `rtSurface`.
    */
-  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean; /** Material textures (P1.4c): `SceneCopy.textureLayout`. Adds `rtTexSample`, `rtApplyMaterialTextures`, `rtApplyNormalMap` and the `RT_SURF_TEXFRAME` surface data; needs materials, uvs and positions in the layout. */ textures?: TextureLayout | null; /** `split` (two bindings, default `DEFAULT_SCENE_PACKING`) or `packed` (one: `rtScene`, P3.11); upload with the same `uploadSceneCopy({ packing })`. */ packing?: SceneCopyPacking } | false;
+  scene?: { slot: BindingSlot; layout: SurfaceLayout; surface?: boolean; materials?: boolean; lights?: boolean; sampling?: boolean; /** Material textures (P1.4c): `SceneCopy.textureLayout`. Adds `rtTexSample`, `rtApplyMaterialTextures`, `rtApplyNormalMap` and the `RT_SURF_TEXFRAME` surface data; needs materials, uvs and positions in the layout. */ textures?: TextureLayout | null; /** `split` (two bindings) or `packed` (one: `rtScene`, P3.11; default `DEFAULT_SCENE_PACKING`, D32); upload with the same `uploadSceneCopy({ packing })`. */ packing?: SceneCopyPacking } | false;
   /**
    * Add L2 `rtShade` (P1.3, `shade/`): one-bounce shading with a hook for the indirect term. Needs `scene` with surface, materials and lights;
    * it adds the light point sampling (`rtSampleLightLi`, as `scene.sampling`), so do not append `rtLightSampleWgsl()` yourself. `true` = defaults.

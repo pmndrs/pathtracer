@@ -1,7 +1,9 @@
 # Quiet pass
 
-_All timing that needs a quiet machine, run in one batch. The main sessions keep building and take best-effort
-numbers only; anything that decides a default or passes a gate waits for this pass._
+_Optional confirmation, not a gate. Since D32 (2026-11-18) the library defaults follow the best provisional evidence (best-effort timings
+from the shared machine, paired ratios, per-pixel image checks) and the phase gates P3 / P4 are closed on that provisional basis. Timing
+that needs a quiet machine is batched here: run it when the maintainer has a quiet moment, never wait for one. Every row says which
+default or gate it would confirm; a row that disagrees reopens that one default (the D32 "revisit" clause), nothing else._
 
 ## How to run it (maintainer)
 
@@ -32,7 +34,7 @@ numbers only; anything that decides a default or passes a gate waits for this pa
 
 ## Queue
 
-What the next pass should measure. Add a row when something needs a quiet-machine number; remove it once reported.
+What the next pass should measure. Add a row when something needs a quiet-machine number; remove it once reported. Rows below that say "decides" now mean "confirms the D32 default or reopens it".
 
 | Item | What | Command | Decides |
 |---|---|---|---|

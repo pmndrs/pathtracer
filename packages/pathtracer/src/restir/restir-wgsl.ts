@@ -33,13 +33,13 @@ export interface PtRestirOptions {
   candidates?: number;
   /** Merge the previous frame's final reservoir (reprojected through the previous camera; static scene). Default true. */
   temporal?: boolean;
-  /** Spatial neighbours merged per pixel (0 = off, at most 8). Default 1. */
+  /** Spatial neighbours merged per pixel (0 = off, at most 8). Default 2 (D32; was 1). */
   spatial?: number;
   /** Radius of the spatial disc in pixels. Default 16. */
   spatialRadius?: number;
-  /** `'biased'` (1 / sum M) or `'unbiased'` (balance-heuristic MIS; build both, D11). Default `'biased'`. */
+  /** `'biased'` (1 / sum M) or `'unbiased'` (balance-heuristic MIS; build both, D11). Default `'unbiased'` (D32; was `'biased'`: it darkens 4-17% on the A/B scenes, REALTIME-PIPELINE.md). */
   bias?: 'biased' | 'unbiased';
-  /** Trace a shadow ray for the chosen candidate and zero its weight when occluded (visibility reuse; biased in `unbiased` mode). Default true for `biased`, false for `unbiased`. */
+  /** Trace a shadow ray for the chosen candidate and zero its weight when occluded (visibility reuse; biased in `unbiased` mode). Default true for `biased`, false for `unbiased` (the D32 default). */
   initialVisibility?: boolean;
   /** Cap on the stored confidence M, as a multiple of `candidates` (Bitterli: 20). Default 20. */
   historyCap?: number;
@@ -84,11 +84,11 @@ export const PT_RESTIR_KEY = { shift: 128, temporalSelect: 132, spatialOffset: 1
 export const PT_RESTIR_MAX_SPATIAL = 8;
 
 export function resolveRestirOptions(o: PtRestirOptions = {}): ResolvedRestirOptions {
-  const bias = o.bias ?? 'biased';
+  const bias = o.bias ?? 'unbiased';
   return {
     candidates: Math.max(1, Math.min(PT_RESTIR_MAX_CANDIDATES, Math.floor(o.candidates ?? 8))),
     temporal: o.temporal ?? true,
-    spatial: Math.max(0, Math.min(PT_RESTIR_MAX_SPATIAL, Math.floor(o.spatial ?? 1))),
+    spatial: Math.max(0, Math.min(PT_RESTIR_MAX_SPATIAL, Math.floor(o.spatial ?? 2))),
     spatialRadius: o.spatialRadius ?? 16,
     bias,
     initialVisibility: o.initialVisibility ?? bias === 'biased',

@@ -45,7 +45,7 @@ export interface SceneWgslOptions {
   sampling?: boolean;
   /** Emit the texture arrays and lookups (needs `materials`). Bindings follow the buffers (two, or one packed): textures, then samplers (`rtSceneCopyLayoutEntries`). */
   textures?: TextureLayout | null;
-  /** `split` (default `DEFAULT_SCENE_PACKING`): `rtSceneTable` + `rtSceneData`; `packed`: one `rtScene` binding. */
+  /** `split`: `rtSceneTable` + `rtSceneData`; `packed` (default `DEFAULT_SCENE_PACKING`, D32): one `rtScene` binding. */
   packing?: SceneCopyPacking;
 }
 

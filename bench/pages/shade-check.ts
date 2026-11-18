@@ -27,6 +27,7 @@ import {
   rtSceneCopyBindGroupEntries,
   rtSceneCopyLayoutEntries,
   rtPackSceneAccess,
+  DEFAULT_SCENE_PACKING,
   type SceneCopyPacking,
   rtWalkEntries,
   sceneFormatOf,
@@ -188,8 +189,8 @@ interface HarnessOptions {
   extraWgsl?: string;
 }
 
-/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split): every harness of the page uses it. */
-let PACKING: SceneCopyPacking = 'split';
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default: the library default, packed since D32): every harness of the page uses it. */
+let PACKING: SceneCopyPacking = DEFAULT_SCENE_PACKING;
 
 class Harness {
   readonly device: GPUDevice;
@@ -784,7 +785,7 @@ try {
   const mc = numberArg(args, 'mc', 262144);
   const spp = numberArg(args, 'spp', 1024);
   if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
-  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? DEFAULT_SCENE_PACKING;
   if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');

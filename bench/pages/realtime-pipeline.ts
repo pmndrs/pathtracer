@@ -198,7 +198,7 @@ try {
   const emitThreshold = numberArg(args, 'emitThreshold', 0);
   const adapterExtra = Object.fromEntries((args.ad ?? '').split(',').filter(Boolean).map((kv) => { const [k, v] = kv.split(':'); return [k, v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v]; }));
   const needReactive = [...staticVariants, ...pathVariants, args.timingVariant ?? ''].includes('svgf-reactive');
-  const restirOptions = (): PtRestirOptions => ({ candidates: numberArg(args, 'candidates', 8), spatial: numberArg(args, 'spatial', 1), bias: (args.bias ?? 'biased') as 'biased' | 'unbiased', ...(args.vis !== undefined ? { initialVisibility: args.vis === '1' } : {}) });
+  const restirOptions = (): PtRestirOptions => ({ candidates: numberArg(args, 'candidates', 8), spatial: numberArg(args, 'spatial', 2), bias: (args.bias ?? 'unbiased') as 'biased' | 'unbiased', ...(args.vis !== undefined ? { initialVisibility: args.vis === '1' } : {}) });
   const rows: string[] = [];
   const pathRows: string[] = [];
   let firstConfig = true;

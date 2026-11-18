@@ -113,6 +113,8 @@ normal maps 1e-7 including a rotated instance, emission 3e-3 on the dim blue cha
 
 ## Open choices (defaults hold until measured)
 
+_D32 (2026-11-18): `DEFAULT_SCENE_PACKING` is `packed` (provisional: per-pixel identical to `split`, one binding freed, timing a wash on Sponza and Cornell +2% megakernel). `split` stays a setting and is the fallback for a scene copy over the one-binding cap._
+
 1. **Light selection weights for sun and environment.** Settled (D22): default `pbrt`, pbrt-v4's rule. Each infinite
    light gets 1/(nInfinite+1), and the area lights share the rest by power. `power`, `kind` and `cap:c` stay as settings.
    Numbers: docs/design/integrator.md open choice 3.

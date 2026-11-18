@@ -44,10 +44,11 @@ export const SCENE_COPY_PACKED_STORAGE_BUFFERS = 1;
  */
 export type SceneCopyPacking = 'split' | 'packed';
 /**
- * The library default. Stays `split` (the byte-identical pre-P3.11 kernels) until the quiet-pass A/B (docs/QUIET-PASS.md, `scene-packing` rows) is in; the
- * suggestion is `packed` when timing is a wash, because it frees a binding in every kernel.
+ * The library default (D32, provisional): `packed`, one storage binding for the table + data, which frees a binding in every kernel (hooks / counters / the wavefront's 10-buffer Apple
+ * budget). Images are per-pixel identical to `split` (<= 3.2e-7 relative on two scenes); provisional timing: a wash on Sponza, Cornell +2% on the megakernel. `split` is the setting that
+ * gives the pre-P3.11 kernel text and is needed for a scene copy over the single-binding cap (`uploadSceneCopy` throws and says so). Revisit if the quiet pass disagrees (QUIET-PASS P3.11 row).
  */
-export const DEFAULT_SCENE_PACKING: SceneCopyPacking = 'split';
+export const DEFAULT_SCENE_PACKING: SceneCopyPacking = 'packed';
 export const PACKED_HEADER_VEC4S = 1;
 /** vec4 index of the table inside a packed buffer (a compile-time constant in the generated WGSL). */
 export const PACKED_TABLE_BASE_VEC4S = 1;

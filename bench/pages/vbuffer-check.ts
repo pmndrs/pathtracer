@@ -12,7 +12,7 @@
  * Args: scenes=cornell,MetalRoughSpheres,tex-mask,sponza-white  spp=1024  check=raster,resolve,image  jitters=3  specpp=16
  */
 import { PT_VBUFFER_NO_MATERIAL, ptCameraBasis, ptCameraDirection, ptVbufferPack, ptVbufferResolve, ptVbufferUnpack, ptVbufferWgsl, ptRaytracerModuleOptions } from '@pmndrs/pathtracer';
-import type { SceneCopyPacking } from '@pmndrs/raytracer';
+import { DEFAULT_SCENE_PACKING, type SceneCopyPacking } from '@pmndrs/raytracer';
 import { RtBatchTracer, rtPackSceneAccess, rtModuleWgsl, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtWalkEntries, sceneFormatOf, withBindings } from '@pmndrs/raytracer';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
@@ -20,8 +20,8 @@ import { getScene } from '../scenes/index.ts';
 import { compareImages } from '../metrics/metrics.ts';
 import { PtMegakernelAdapter, type PtAdapterSettings } from '../adapters/pt-megakernel/index.ts';
 
-/** Scene copy binding (P3.11, page arg `packing=split|packed`, default split). */
-let PACKING: SceneCopyPacking = 'split';
+/** Scene copy binding (P3.11, page arg `packing=split|packed`, default: the library default, packed since D32). */
+let PACKING: SceneCopyPacking = DEFAULT_SCENE_PACKING;
 const rtPackIf = (code: string): string => (PACKING === 'packed' ? rtPackSceneAccess(code) : code);
 
 let adapterSummary: AdapterSummary | null = null;
@@ -367,7 +367,7 @@ try {
   void watchDevice;
   const scenes = (args.scenes ?? 'cornell,MetalRoughSpheres,tex-mask,sponza-white').split(',');
   if (args.packing && args.packing !== 'split' && args.packing !== 'packed') throw new Error(`packing must be split or packed, got '${args.packing}'`);
-  PACKING = (args.packing as SceneCopyPacking | undefined) ?? 'split';
+  PACKING = (args.packing as SceneCopyPacking | undefined) ?? DEFAULT_SCENE_PACKING;
   const only = (args.check ?? 'raster,resolve,image').split(',');
   for (const name of scenes) {
     if (only.includes('raster')) await checkRaster(name, jitters);
