@@ -1,0 +1,199 @@
+import { describe, expect, it } from 'vitest';
+import { brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabTransmittance, transmittance } from './volume.ts';
+
+/** Small deterministic generator (mulberry32). */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe('Henyey-Greenstein', () => {
+  for (const g of [0, 0.3, -0.6, 0.9]) {
+    it(`integrates to 1 and its sampler has mean cosine -g (g = ${g})`, () => {
+      let integral = 0;
+      const n = 20000;
+      for (let i = 0; i < n; i++) integral += hgPhase(-1 + ((i + 0.5) / n) * 2, g) * 2 * Math.PI * (2 / n);
+      expect(integral).toBeCloseTo(1, 3);
+      const r = rng(7);
+      let mean = 0;
+      const m = 200000;
+      for (let i = 0; i < m; i++) mean += hgSampleCos(g, r());
+      // cos is measured against wo (pointing back): forward scattering (g > 0) is cos -> -1
+      expect(mean / m).toBeCloseTo(-g, 2);
+    });
+  }
+  it('the sampled density equals the evaluated one (histogram)', () => {
+    const g = 0.7;
+    const r = rng(11);
+    const bins = new Array<number>(10).fill(0);
+    const m = 400000;
+    for (let i = 0; i < m; i++) bins[Math.min(9, Math.floor(((hgSampleCos(g, r()) + 1) / 2) * 10))]!++;
+    for (let b = 0; b < 10; b++) {
+      let expected = 0;
+      const sub = 400;
+      for (let i = 0; i < sub; i++) expected += hgPhase(-1 + (b + (i + 0.5) / sub) * 0.2, g) * 2 * Math.PI * (0.2 / sub);
+      expect(bins[b]! / m).toBeCloseTo(expected, 2);
+    }
+  });
+});
+
+describe('delta tracking', () => {
+  const o = [0, 0, 0] as const;
+  const d = [0, 0, 1] as const;
+
+  it('the pass weight of an absorbing homogeneous medium averages exp(-sigma_t d) per channel, grey and chromatic', () => {
+    for (const sigma of [[1, 1, 1], [0.4, 1, 2.5]] as const) {
+      const m = ptMediumFrom(sigma, [0, 0, 0]);
+      const r = rng(3);
+      const sum = [0, 0, 0];
+      const n = 400000;
+      for (let i = 0; i < n; i++) {
+        const e = deltaTrack(m, o, d, 1.3, r);
+        if (e.kind === 'pass') for (let c = 0; c < 3; c++) sum[c]! += e.weight[c]!;
+      }
+      for (let c = 0; c < 3; c++) expect(sum[c]! / n).toBeCloseTo(Math.exp(-sigma[c]! * 1.3), 2);
+    }
+  });
+
+  it('a non-absorbing medium: every ray either scatters or passes, pass fraction exp(-sigma_t d)', () => {
+    const m = ptMediumFrom([0, 0, 0], [0.8, 0.8, 0.8]);
+    const r = rng(5);
+    let pass = 0, scatter = 0;
+    const n = 200000;
+    for (let i = 0; i < n; i++) {
+      const e = deltaTrack(m, o, d, 2, r);
+      if (e.kind === 'pass') pass++;
+      else if (e.kind === 'scatter') scatter++;
+    }
+    expect(pass / n).toBeCloseTo(Math.exp(-1.6), 2);
+    expect((pass + scatter) / n).toBe(1);
+  });
+
+  it('expected scatter weight density: E[weight at scatter, first scatter before tmax] = integral sigma_s T(t) dt (chromatic albedo)', () => {
+    const m = ptMediumFrom([0.2, 0.5, 0.1], [0.6, 0.3, 0.9]);
+    const r = rng(9);
+    const sum = [0, 0, 0];
+    const n = 600000;
+    for (let i = 0; i < n; i++) {
+      const e = deltaTrack(m, o, d, 1.5, r);
+      if (e.kind === 'scatter') for (let c = 0; c < 3; c++) sum[c]! += e.weight[c]!;
+    }
+    // the weight of a scatter is sigma_s / max sigma_s and the sampling density is mu exp(-mu t) x ..., so E[sum] = ratio of scattered shares: check against the closed form
+    // P_c(first real scatter before tmax) = integral_0^T sigma_s,c exp(-sigma_t,c t) dt = albedo_c (1 - exp(-sigma_t,c T))
+    for (let c = 0; c < 3; c++) {
+      const st = [0.8, 0.8, 1.0][c]!;
+      const ss = [0.6, 0.3, 0.9][c]!;
+      expect(sum[c]! / n).toBeCloseTo((ss / st) * (1 - Math.exp(-st * 1.5)), 2);
+    }
+  });
+
+  it('a grid medium: delta tracking and ratio tracking both estimate the line integral of a trilinear density', () => {
+    const res = [4, 4, 4] as const;
+    const data = new Float32Array(64).map((_, i) => 0.2 + 0.8 * ((i * 37) % 11) / 10);
+    const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: Math.max(...data) };
+    const dens = gridDensity(grid, data);
+    const m = ptMediumFrom([1.5, 2, 1], [0, 0, 0], 0, 1, grid);
+    const o2 = [0.4, 0.3, -0.5] as const;
+    const d2 = [0, 0, 1] as const;
+    // numeric line integral through the density
+    let tau = 0;
+    const sub = 20000;
+    for (let i = 0; i < sub; i++) tau += dens(0.4, 0.3, -0.5 + ((i + 0.5) / sub) * 2) * (2 / sub);
+    const r = rng(21);
+    const n = 300000;
+    const delta = [0, 0, 0], ratio = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const e = deltaTrack(m, o2, d2, 2, r, dens);
+      if (e.kind === 'pass') for (let c = 0; c < 3; c++) delta[c]! += e.weight[c]!;
+      const t = transmittance(m, o2, d2, 2, r, dens);
+      for (let c = 0; c < 3; c++) ratio[c]! += t[c]!;
+    }
+    for (let c = 0; c < 3; c++) {
+      const exact = Math.exp(-m.sigmaT[c]! * tau);
+      expect(delta[c]! / n).toBeCloseTo(exact, 2);
+      expect(ratio[c]! / n).toBeCloseTo(exact, 2);
+    }
+    expect(ptMediumMajorant(m)).toBeCloseTo(2 * grid.densityMax, 6);
+  });
+
+  it('gridWorldToIndex puts the first voxel centre at index 0 and honours the medium transform', () => {
+    const m = gridWorldToIndex([4, 2, 2], [[-1, 0, 0], [1, 1, 1]], [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]);
+    // medium-space point (-1 + 0.25, 0.25, 0.25) is the first voxel centre; in world it is shifted by +5 in x
+    const px = -1 + 0.25 + 5, py = 0.25, pz = 0.25;
+    const idx = [0, 4, 8].map((r) => m[r]! * px + m[r + 1]! * py + m[r + 2]! * pz + m[r + 3]!);
+    expect(idx[0]).toBeCloseTo(0, 6);
+    expect(idx[1]).toBeCloseTo(0, 6);
+    expect(idx[2]).toBeCloseTo(0, 6);
+  });
+});
+
+describe('closed forms', () => {
+  it('slab transmittance and a vanishing slab', () => {
+    expect(slabTransmittance(2, 0.5, 0.5)).toBeCloseTo(Math.exp(-2), 12);
+    // thin slab, albedo 1, uniform sky: all light is scattered or transmitted, so the single scatter total is 1 - O(tau^2) (the rest is multiple scatter)
+    const v = slabSingleScatter(0.02, 1, 0, 1, 1, 1, 100);
+    expect(v).toBeGreaterThan(0.999);
+    expect(v).toBeLessThanOrEqual(1.0001);
+  });
+  it('an absorber slab has no scatter term', () => {
+    expect(slabSingleScatter(1.5, 0, 0.4, 0.7, 0.8, 1, 50)).toBeCloseTo(Math.exp((-1.5 * 0.7) / 0.8), 10);
+  });
+});
+
+describe('brick majorants and the DDA twin', () => {
+  const res = [19, 11, 26] as const;
+  const data = new Float32Array(res[0] * res[1] * res[2]).map((_, i) => ((i * 2654435761) % 1000) / 1000);
+  const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: 1 };
+  const dens = gridDensity(grid, data);
+  const mj = brickMajorants(res, data);
+
+  it('dimensions cover the support box [-1, n) of the trilinear lookup', () => {
+    expect(brickDims(res)).toEqual([3, 2, 4]);
+    expect(mj.resolution).toEqual([3, 2, 4]);
+    expect(mj.values).toHaveLength(24);
+  });
+
+  it('segments tile the clipped ray and every density sample inside a cell is at most that cell majorant', () => {
+    const r = rng(77);
+    for (let n = 0; n < 300; n++) {
+      // a random ray in index space through (and around) the grid
+      const a = [(r() * 1.4 - 0.2) * res[0], (r() * 1.4 - 0.2) * res[1], (r() * 1.4 - 0.2) * res[2]] as const;
+      const dd = [r() - 0.5, r() - 0.5, r() - 0.5];
+      const len = Math.hypot(...dd);
+      const b = dd.map((v) => (v / len) * 3) as unknown as readonly [number, number, number]; // index units per unit t
+      const segs = ddaSegments(mj.resolution, a, b, 40);
+      for (let i = 1; i < segs.length; i++) expect(segs[i]!.t0).toBeCloseTo(segs[i - 1]!.t1, 9);
+      for (const sg of segs) {
+        expect(sg.t1).toBeGreaterThanOrEqual(sg.t0 - 1e-9);
+        for (let k = 0; k < 6; k++) {
+          const t = sg.t0 + ((k + 0.5) / 6) * (sg.t1 - sg.t0);
+          const x = a[0] + b[0] * t, y = a[1] + b[1] * t, z = a[2] + b[2] * t;
+          // density lookup is in world space: invert the unit-cube mapping used by gridWorldToIndex
+          const d = dens((x + 0.5) / res[0], (y + 0.5) / res[1], (z + 0.5) / res[2]);
+          const m = mj.values[sg.cell[0] + mj.resolution[0] * (sg.cell[1] + mj.resolution[1] * sg.cell[2])]!;
+          expect(d).toBeLessThanOrEqual(m + 1e-6);
+        }
+      }
+      // outside the support box nothing is visited: the first segment starts where the ray enters it
+      if (segs.length > 0) {
+        const t = segs[0]!.t0 + 1e-6;
+        const u = [0, 1, 2].map((k) => (a[k]! + b[k]! * t + 1) / 8);
+        for (let k = 0; k < 3; k++) {
+          expect(u[k]!).toBeGreaterThanOrEqual(-1e-4);
+          expect(u[k]!).toBeLessThanOrEqual(mj.resolution[k]! + 1e-4);
+        }
+      }
+    }
+  });
+
+  it('a ray outside the support box has no segments', () => {
+    expect(ddaSegments(mj.resolution, [-50, 5, 5], [0, 1, 0], 100)).toEqual([]);
+    expect(ddaSegments(mj.resolution, [5, 5, 5], [1, 0, 0], 0)).toEqual([]);
+  });
+});

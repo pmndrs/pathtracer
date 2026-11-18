@@ -45,6 +45,12 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   variants['pbr-fuzz-only'] = () => mk(caps, { format: {}, layout, integrator: { materials: { features: { mix: false, thin: false, layered: false, medium: false, fuzz: true }, layered: { layering: 'albedo' } } } } as never);
   variants['pbr-albedo-thinFilm'] = () => mk(caps, { format: {}, layout, ...mat({ layering: 'albedo' }, { thinFilm: true }) } as never);
   variants['pbr-albedo-fuzz-thinFilm'] = () => mk(caps, { format: {}, layout, ...mat({ layering: 'albedo' }, { fuzz: true, thinFilm: true }) } as never);
+  // Participating media (P5): only compiled when `integrator.volumes` is set (the variants above stay byte-identical). One homogeneous medium bounded by an interface material, and the same plus a grid medium.
+  const volHomog = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
+  const volGrid = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3, grid: { resolution: [8, 8, 8], worldToIndex: [8, 0, 0, 3.5, 0, 8, 0, 3.5, 0, 0, 8, 3.5], densityMax: 1 } }], materials: volHomog.materials };
+  variants['vol-homogeneous'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volHomog } } as never);
+  variants['vol-grid'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volGrid } } as never);
+  variants['vol-grid-brick'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } } as never);
   // Optional integrator outputs (R10 hooks, R4 counters, AOVs): only compiled when asked; the variants above stay byte-identical.
   const hookDemo = { wgsl: 'fn ptOnVertex(v: PtPathVertex) -> u32 { return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= 3u); }\nfn ptTerminate(v: PtPathVertex) -> vec3f { return vec3f(0.5); }' };
   for (const [name, integrator] of Object.entries(outputVariantOptions(hookDemo))) variants[`out-${name}`] = () => mk(caps, { format: {}, layout, integrator } as never);

@@ -34,6 +34,10 @@ export interface SceneDesc {
   /** Procedural textures by name (generated in code by `bench/scenes/textures.ts`; nothing is downloaded). Materials reference them by name. */
   textures?: Record<string, TextureDesc>;
   meshes: MeshDesc[];
+  /** Participating media by name (P5). A mesh refers to them through `MeshDesc.medium`; `cameraMedium` fills the space around the camera. */
+  media?: Record<string, MediumDesc>;
+  /** Medium the camera (and every ray that starts outside a medium-bounded mesh) travels in. Default none (vacuum). Homogeneous media only. */
+  cameraMedium?: string;
   lights?: LightDesc[];
   environment?: EnvironmentDesc;
   /** Analytic expectation, when one exists (furnace tests): checked by `bench/metrics`. */
@@ -181,7 +185,33 @@ export type MaterialDesc =
   /** GGX dielectric (smooth when roughness = 0). Interior is vacuum-free: no absorption. */
   | { type: 'dielectric'; ior: number; roughness: number }
   /** Perfectly black, non-scattering (light sources' backing, absorbers). */
-  | { type: 'black' };
+  | { type: 'black' }
+  /**
+   * Medium boundary with no surface scattering (pbrt `interface`, Mitsuba `null` BSDF): rays and shadow rays pass straight through and only
+   * switch the medium (`MeshDesc.medium`). P5. Needs a closed mesh with outward-wound triangles.
+   */
+  | { type: 'interface' };
+
+/**
+ * A participating medium (P5). Coefficients are per metre and linear RGB; `scale` multiplies them (pbrt's `scale`). The phase function is
+ * Henyey-Greenstein with mean cosine `g` (> 0 scatters forward; the same sign in pbrt and Mitsuba). Absorption-only is `sigmaS` = 0.
+ */
+export type MediumDesc = ({ type: 'homogeneous' } | {
+  /**
+   * Density on a dense grid over a box: the coefficients are multiplied by the trilinearly interpolated value (voxel centres at (i + 0.5) / n
+   * across `bounds`, zero outside; pbrt `uniformgrid` / Mitsuba `gridvolume` convention). `density` is x fastest, then y, then z (nx * ny * nz values).
+   * The box is in the coordinate frame of the mesh that bounds the medium (its object space, so the mesh transform moves the grid with it).
+   */
+  type: 'grid'; resolution: readonly [number, number, number]; /** The values, or `densityFile` instead (a raw little-endian float32 file under bench/assets, same order; large grids such as a converted `.vdb`). Exactly one of the two. */ density?: readonly number[] | Float32Array; densityFile?: string; bounds: readonly [Vec3, Vec3];
+}) & {
+  sigmaA: Rgb;
+  sigmaS: Rgb;
+  /** Default 0 (isotropic). */ g?: number;
+  /** Default 1. */ scale?: number;
+};
+
+/** A mesh that is the boundary of media (P5): `interior` on the side its normals point away from, `exterior` on the other (default none). */
+export interface MeshMediumDesc { interior?: string; exterior?: string }
 
 export type GeometryDesc =
   | { type: 'quad'; /** Size in local X and Z; normal is local +Y. */ size: readonly [number, number]; /** Grid cells in X and Z (default 1 x 1: two triangles). A cutout card with finer geometry, R2b. */ segments?: readonly [number, number] }
@@ -202,6 +232,8 @@ export interface MeshDesc {
   geometry: GeometryDesc;
   material: string;
   transform?: Mat4;
+  /** Media on the two sides of this mesh (P5). Usually with an `interface` material (or a dielectric: a scattering glass). */
+  medium?: MeshMediumDesc;
   /** Makes this mesh a diffuse area emitter with this radiance on its front face. */
   emission?: Rgb;
   /** Emit from both faces (default false: front face only, as pbrt `diffuse` area light with twosided false). */
@@ -226,4 +258,4 @@ export type ExpectedDesc =
   /** Every pixel should equal this value (white furnace with an energy-conserving material). */
   | { type: 'uniform'; value: Rgb; tolerance: number }
   /** Mean over the image should equal this value. */
-  | { type: 'mean'; value: Rgb; tolerance: number };
+  | { type: 'mean'; value: Rgb; tolerance: number; /** `false`: judge the image mean only (a stochastic estimator, e.g. media, has noisy pixels: P5). Default: the pixels are checked against `tolerance` too. */ pixelwise?: boolean };
