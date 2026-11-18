@@ -58,18 +58,50 @@ function mediumVec4s(m: PtMedium): string[] {
   ];
 }
 
-/** The volume WGSL: tables, HG phase, delta-tracking free flight, transmittance along a shadow ray through boundary surfaces, NEE at a medium vertex. */
-export function ptVolumeWgsl(v: PtVolumeOptions): string {
+/**
+ * The pieces of the volume WGSL, so a scheduler that runs the stages in different kernels (the wavefront, V270) takes only what a kernel needs:
+ * `seedOf` the per-path stream seed (a pure function of pixel seed and sample index), `bind` the grid textures, `tables` the media / material tables,
+ * the stream state `ptVolState` and `ptVolRand`, `hg` the Henyey-Greenstein phase and its sampling (needs the BSDF frame helpers), `density` the grid lookup and
+ * the brick DDA (needs `bind`), `flight` delta tracking (`ptVolSample`), `tr` shadow-ray transmittance (walk, `ptOffsetOrigin`), `nee` next-event estimation at a
+ * medium vertex (light sampling, MIS). No argument = all of them, in the order the megakernel appends them.
+ */
+export type PtVolumePart = 'seedOf' | 'bind' | 'tables' | 'hg' | 'density' | 'flight' | 'tr' | 'nee';
+export const PT_VOLUME_ALL_PARTS: readonly PtVolumePart[] = ['seedOf', 'bind', 'tables', 'hg', 'density', 'flight', 'tr', 'nee'];
+
+/**
+ * True when a shadow ray's transmittance is ESTIMATED (ratio tracking: a grid medium, or `shadowTracking: 'ratio'`), so it draws random numbers. Such a ray then
+ * runs on its own stream (`ptVolFork`, forked from the path's stream when the shadow ray is built; the path's stream moves on by one step). That is what lets a
+ * scheduler trace the shadow ray later than the path's next free flight and still draw the same numbers as the megakernel (V270). The analytic shadow draws nothing.
+ */
+export const ptVolumeRatioShadows = (v: PtVolumeOptions): boolean => ptVolumeHasGrid(v) || v.shadowTracking === 'ratio';
+
+/** The volume WGSL: tables, HG phase, delta-tracking free flight, transmittance along a shadow ray through boundary surfaces, NEE at a medium vertex. `parts` picks pieces (default all). */
+export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] = PT_VOLUME_ALL_PARTS): string {
   ptVolumeValidate(v);
   const grid = ptVolumeHasGrid(v);
-  const ratio = grid || v.shadowTracking === 'ratio';
+  const ratio = ptVolumeRatioShadows(v);
   const brick = grid && v.majorant === 'brick';
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
   const matRow = (m: (typeof mats)[number]): string => `vec4u(${m.interior}u, ${m.exterior}u, ${m.interior !== 0 || m.exterior !== 0 || m.boundary ? 1 : 0}u, ${m.boundary ? 1 : 0}u)`;
-  return /* wgsl */ `
-${grid ? `@group(2) @binding(${PT_VOLUME_BINDING}) var ptVolGrid: texture_3d<f32>;
+  const chunks: string[] = [];
+  const has = (p: PtVolumePart): boolean => parts.includes(p);
+  if (has('seedOf')) {
+    chunks.push(/* wgsl */ `
+fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
+    var h = pixelSeed ^ (sampleIndex * 2654435761u) ^ 0x68e31da4u;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    return h ^ (h >> 16u);
+}
+`);
+  }
+  if (has('bind')) {
+    chunks.push(`${grid ? `@group(2) @binding(${PT_VOLUME_BINDING}) var ptVolGrid: texture_3d<f32>;
 ` : ''}${brick ? `@group(2) @binding(${PT_VOLUME_MAJORANT_BINDING}) var ptVolMaj: texture_3d<f32>;
-` : ''}var<private> ptVolMedia: array<vec4f, ${v.media.length * 6}> = array<vec4f, ${v.media.length * 6}>(${v.media.flatMap(mediumVec4s).join(', ')});
+` : ''}`);
+  }
+  if (has('tables')) chunks.push(/* wgsl */ `
+var<private> ptVolMedia: array<vec4f, ${v.media.length * 6}> = array<vec4f, ${v.media.length * 6}>(${v.media.flatMap(mediumVec4s).join(', ')});
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
 var<private> ptVolState: u32;
 
@@ -101,10 +133,7 @@ fn ptVolMat(material: u32) -> vec4u {
 }
 
 fn ptVolSeed(pixelSeed: u32, sampleIndex: u32) {
-    var h = pixelSeed ^ (sampleIndex * 2654435761u) ^ 0x68e31da4u;
-    h = (h ^ (h >> 16u)) * 0x7feb352du;
-    h = (h ^ (h >> 15u)) * 0x846ca68bu;
-    ptVolState = h ^ (h >> 16u);
+    ptVolState = ptVolSeedOf(pixelSeed, sampleIndex);
 }
 
 fn ptVolRand() -> f32 {
@@ -112,7 +141,17 @@ fn ptVolRand() -> f32 {
     let w = ((ptVolState >> ((ptVolState >> 28u) + 4u)) ^ ptVolState) * 277803737u;
     return f32(((w >> 22u) ^ w) >> 8u) * 5.9604644775390625e-8;
 }
-
+${ratio ? `
+// Seed of a shadow ray's own random stream (ratio tracking): a hash of the path's stream, which then moves on by one step (V270).
+fn ptVolFork() -> u32 {
+    var h = ptVolState ^ 0x2545f491u;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    ptVolState = ptVolState * 747796405u + 2891336453u;
+    return h ^ (h >> 16u);
+}
+` : ''}`);
+  if (has('hg')) chunks.push(/* wgsl */ `
 fn ptHgPhase(cosTheta: f32, g: f32) -> f32 {
     let d = 1.0 + g * g + 2.0 * g * cosTheta;
     return 0.07957747154594767 * (1.0 - g * g) / (d * sqrt(max(d, 1.0e-12)));
@@ -129,7 +168,8 @@ fn ptHgSample(wo: vec3f, g: f32, u: vec2f) -> vec3f {
     let phi = 6.283185307179586 * u.y;
     return ptFromLocal(ptFrameFromNormal(wo), vec3f(sinT * cos(phi), sinT * sin(phi), cosT));
 }
-
+`);
+  if (has('density')) chunks.push(/* wgsl */ `
 fn ptVolDensity(m: PtVolMedium, p: vec3f) -> f32 {
 ${grid ? `    if (m.info.x == 0.0) {
         return 1.0;
@@ -295,7 +335,8 @@ fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
     }
     return tr;
 }
-` : ''}
+` : ''}`);
+  if (has('flight')) chunks.push(/* wgsl */ `
 // One free-flight segment [0, tmax] of a path in medium 'id' (delta tracking). kind 0: reached tmax (beta carries the weight), 1: real scatter at t, 2: killed.
 fn ptVolSample(id: u32, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f>) -> PtVolEvent {
     let m = ptVolMedium(id);
@@ -326,7 +367,8 @@ ${brick ? `    if (m.info.x != 0.0) {
     }
     return PtVolEvent(tmax, 2u);
 }
-
+`);
+  if (has('tr')) chunks.push(/* wgsl */ `
 // Transmittance estimate over a segment of length len: closed form (homogeneous) or ratio tracking (grid).
 fn ptVolTrSegment(id: u32, o: vec3f, d: vec3f, len: f32) -> vec3f {
     let m = ptVolMedium(id);
@@ -354,8 +396,8 @@ ${brick ? `    if (m.info.x != 0.0) {
 ` : ''}    return exp(-m.sigmaT * len);
 }
 
-// Transmittance of a shadow ray from 'med0': solid surfaces block it, boundary (interface) surfaces pass it and switch the medium.
-fn ptVolTr(ray0: RtRay, med0: u32) -> vec3f {
+// Transmittance of a shadow ray from 'med0': solid surfaces block it, boundary (interface) surfaces pass it and switch the medium.${ratio ? ' Draws from the stream in ptVolState (the caller sets the shadow ray\'s own stream).' : ''}
+fn ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(ray0: RtRay, med0: u32) -> vec3f {
     var ray = ray0;
     var med = med0;
     var tr = vec3f(1.0);
@@ -384,7 +426,18 @@ fn ptVolTr(ray0: RtRay, med0: u32) -> vec3f {
     }
     return vec3f(0.0);
 }
-
+${ratio ? `
+// The megakernel traces the shadow ray where it builds it: on its own forked stream, so the path's stream is the same whenever the ray is traced.
+fn ptVolTr(ray0: RtRay, med0: u32) -> vec3f {
+    let seed = ptVolFork();
+    let keep = ptVolState;
+    ptVolState = seed;
+    let tr = ptVolTrCore(ray0, med0);
+    ptVolState = keep;
+    return tr;
+}
+` : ''}`);
+  if (has('nee')) chunks.push(/* wgsl */ `
 // Next-event estimation at a scattering vertex inside medium 'id' (MIS against phase sampling).
 fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u32, vertex: u32) -> vec3f {
     let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
@@ -422,5 +475,6 @@ fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u
     }
     return li.radiance * ph * tr * (w / pl);
 }
-`;
+`);
+  return chunks.join('');
 }

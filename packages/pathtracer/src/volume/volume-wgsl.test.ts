@@ -1,10 +1,10 @@
-// P5 at the kernel-text level: no media = the default text, media add the volume code only, names are legal WGSL, the wavefront refuses.
+// P5 at the kernel-text level: no media = the default text, media add the volume code only, names are legal WGSL, the wavefront takes the same media (V270).
 import { buildCaps } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
 import { RESERVED, balanced, declaredIdentifiers } from '../../../raytracer/src/wgsl-names.testutil.ts';
 import { ptMegakernelBuild } from '../integrator/megakernel.ts';
 import { ptwfUnsupported } from '../wavefront/wavefront-wgsl.ts';
-import { ptVolumeValidate, ptVolumeWgsl } from './volume-wgsl.ts';
+import { PT_VOLUME_ALL_PARTS, ptVolumeRatioShadows, ptVolumeValidate, ptVolumeWgsl } from './volume-wgsl.ts';
 import type { PtVolumeOptions } from './volume.ts';
 
 const caps = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
@@ -47,6 +47,23 @@ describe('integrator.volumes (P5)', () => {
     expect(build(ratio)).not.toContain('texture_3d');
   });
 
+  it('pieces: every part alone is legal text, the default is all of them; estimated shadows fork their own stream (V270)', () => {
+    expect(ptVolumeWgsl(gridded)).toBe(ptVolumeWgsl(gridded, PT_VOLUME_ALL_PARTS));
+    for (const part of PT_VOLUME_ALL_PARTS) expect(balanced(ptVolumeWgsl(bricked, [part]))).toBe(true);
+    expect(ptVolumeWgsl(homog, ['seedOf'])).not.toContain('ptVolMedia');
+    expect(ptVolumeWgsl(homog, ['seedOf', 'tables', 'hg'])).not.toContain('ptVolSample');
+    expect(ptVolumeWgsl(homog)).not.toContain('ptVolFork');
+    expect(ptVolumeWgsl(homog)).toContain('fn ptVolTr(');
+    for (const v of [ratio, gridded, bricked]) {
+      const text = ptVolumeWgsl(v);
+      expect(text).toContain('fn ptVolFork()');
+      expect(text).toContain('fn ptVolTrCore(');
+      expect(text).toContain('fn ptVolTr(');
+      expect(ptVolumeRatioShadows(v)).toBe(true);
+    }
+    expect(ptVolumeRatioShadows(homog)).toBe(false);
+  });
+
   it('declares no reserved WGSL word', () => {
     for (const volumes of [homog, gridded, bricked, ratio]) {
       const bad = [...declaredIdentifiers(ptVolumeWgsl(volumes))].filter((n) => RESERVED.has(n));
@@ -69,6 +86,6 @@ describe('integrator.volumes (P5)', () => {
     expect(() => build({ ...homog, cameraMedium: 1 })).not.toThrow();
     expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, restir: {} as never } })).toThrow(/cannot be combined/);
     expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, counters: true } })).toThrow(/cannot be combined/);
-    expect(ptwfUnsupported({ volumes: homog })).toMatch(/megakernel only/);
+    expect(ptwfUnsupported({ volumes: homog })).toBeNull();
   });
 });

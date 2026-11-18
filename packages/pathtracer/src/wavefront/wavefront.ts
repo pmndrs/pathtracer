@@ -28,7 +28,10 @@ import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
 import { PT_RESTIR_SHADE_BINDING } from '../restir/restir-wgsl.ts';
 import { PT_RESTIR_GI_SHADE_BINDING } from '../restir/restir-gi-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
-import { createBlueNoiseTexture, ptNeedsRayMasks, ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, validateBlueNoise, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
+import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
+import { defaultRgb2SpecTable } from '../spectral/rgb2spec.ts';
+import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import { createBlueNoiseTexture, createSpectralTexture, createVolumeTexture, ptNeedsRayMasks, ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, validateBlueNoise, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
 import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfPrimaryWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfSortWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
 
@@ -133,6 +136,7 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
   // R1: the shade kernel only ever sees depth < N when a secondary kernel takes over, so it is built as the default ('full') kernel, byte for byte.
   const lod = resolveIntegratorOptions(options.integrator ?? {});
   const lodOn = lod.lod !== 'off';
+  if (lodOn && (lod.volumes || lod.spectral)) throw new Error(`PtWavefront: integrator.materialLod 'secondary' with integrator.${lod.volumes ? 'volumes' : 'spectral'} is not ported (the reduced shade kernel has no medium vertex / wavelength code; V270)`);
   if (lodOn) options = { ...options, integrator: { ...options.integrator, materialLod: 'full' } };
   const { integratorOptions, parts } = ptShadingModulesWgsl(options);
   const why = ptwfUnsupported(integratorOptions);
@@ -191,7 +195,7 @@ interface PtwfLayouts {
 function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean, refill: boolean, vbuffer = false, corr = false, extra: PtwfExtraBindings = {}): number[] {
   // refill: the camera kernel (start pass) also appends to the queue, so it binds the counters (5)
   // P4.1b / P4.2a: the blue-noise texture (camera + shade: both draw sampler pairs), the previous camera (shade: motion of the primary hit) and the ReSTIR reservoirs (shade: the first vertex's light)
-  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : []), ...(kernel === 'intersect' && vbuffer ? [PT_VBUFFER_BINDING] : []), ...(kernel === 'shade' && corr ? [PT_LAYER_CORR_BINDING] : []), ...(kernel === 'shade' && extra.restir ? [PT_RESTIR_SHADE_BINDING] : []), ...(kernel === 'shade' && extra.restirGi ? [PT_RESTIR_GI_SHADE_BINDING] : []), ...((kernel === 'camera' || kernel === 'shade') && extra.blueNoise ? [PT_BLUENOISE_BINDING] : []), ...(kernel === 'shade' && extra.frame ? [PT_FRAME_PARAMS_BINDING] : [])].filter((binding) => binding !== 2 || fuzz);
+  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : []), ...(kernel === 'intersect' && vbuffer ? [PT_VBUFFER_BINDING] : []), ...(kernel === 'shade' && corr ? [PT_LAYER_CORR_BINDING] : []), ...(kernel === 'shade' && extra.restir ? [PT_RESTIR_SHADE_BINDING] : []), ...(kernel === 'shade' && extra.restirGi ? [PT_RESTIR_GI_SHADE_BINDING] : []), ...((kernel === 'camera' || kernel === 'shade') && extra.blueNoise ? [PT_BLUENOISE_BINDING] : []), ...(kernel === 'shade' && extra.frame ? [PT_FRAME_PARAMS_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeMajorant ? [PT_VOLUME_MAJORANT_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeGrid ? [PT_VOLUME_BINDING] : []), ...(kernel === 'shade' && extra.spectral ? [PT_SPEC_BINDING] : [])].filter((binding) => binding !== 2 || fuzz);
 }
 
 /** Group 2 bindings the real-time options add (P4.1b / P4.2a): the blue-noise texture, the per-frame outputs' previous-camera uniform, the ReSTIR reservoirs. */
@@ -201,6 +205,10 @@ interface PtwfExtraBindings {
   restir?: boolean;
   /** ReSTIR GI (P5): the GI reservoirs, read by the shade kernel. */
   restirGi?: boolean;
+  /** P5 media (V270): the density grid (and the brick majorant grid) the intersect and shadow kernels read; the spectral table the shade kernel reads. */
+  volumeGrid?: boolean;
+  volumeMajorant?: boolean;
+  spectral?: boolean;
 }
 
 type TraceScene = Parameters<typeof rtSceneBindGroupEntries>[0];
@@ -232,6 +240,10 @@ export class PtWavefront {
   private blueTexture: GPUTexture | null = null;
   private blueTextureView: GPUTextureView | null = null;
   private corrTextureView: GPUTextureView | null = null;
+  /** P5 (V270): the density grid / brick majorant of grid media (intersect and shadow kernels), the spectral table (shade kernel). */
+  private volumeTexture: GPUTexture | null = null;
+  private majorantTexture: GPUTexture | null = null;
+  private specTexture: GPUTexture | null = null;
   /** Ring of previous-camera records, one slot per params slot (`integrator.frame`, shade kernel binding `PT_FRAME_PARAMS_BINDING`). */
   private frameParamsBuffer: GPUBuffer | null = null;
   private prevCamera: PtLookAtCamera | null = null;
@@ -293,7 +305,11 @@ export class PtWavefront {
     const features = options.integrator?.materials?.features;
     const corrTexture = !!features?.layered && ptLayerCorrNeedsTexture(options.integrator?.materials?.layered);
     const resolved = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
-    const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi };
+    const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi, ...(ptVolumeHasGrid(resolved.volumes) ? { volumeGrid: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.majorant === 'brick' ? { volumeMajorant: true } : {}), ...(resolved.spectral ? { spectral: true } : {}) };
+    if (extra.volumeGrid && !options.volumeGrid) throw new Error('PtWavefront: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
+    if (extra.volumeMajorant && !options.volumeGrid?.majorant) throw new Error("PtWavefront: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
+    const specTable = resolved.spectral ? (options.spectralTable ?? defaultRgb2SpecTable(resolved.spectral.res)) : null;
+    if (resolved.spectral && specTable && specTable.res !== resolved.spectral.res) throw new Error(`PtWavefront: integrator.spectral.res is ${resolved.spectral.res} but the spectral table has res ${specTable.res} (pass \`spectral: { res: ${specTable.res} }\`)`);
     if (extra.blueNoise) validateBlueNoise(options.blueNoise);
     device.pushErrorScope('validation');
     // One layout per kernel with only the buffers it declares: a shared layout would bind 3 (walk) + 2 (scene) + 7 buffers and pass the
@@ -303,7 +319,7 @@ export class PtWavefront {
     const scene = device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) });
     const ioEntries = (kernel: PtwfKernel): GPUBindGroupLayoutEntry[] =>
       ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters, wf.refill, options.integrator?.primary === 'vbuffer', corrTexture, extra).map((binding) =>
-        binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_FRAME_PARAMS_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } } : binding === PT_BLUENOISE_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_LAYER_CORR_BINDING ? ptLayerCorrLayoutEntry() : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : binding === PT_RESTIR_SHADE_BINDING || binding === PT_RESTIR_GI_SHADE_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'read-only-storage' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
+        binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_FRAME_PARAMS_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } } : binding === PT_BLUENOISE_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_LAYER_CORR_BINDING ? ptLayerCorrLayoutEntry() : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : binding === PT_VOLUME_BINDING || binding === PT_VOLUME_MAJORANT_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '3d' } } : binding === PT_SPEC_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_RESTIR_SHADE_BINDING || binding === PT_RESTIR_GI_SHADE_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'read-only-storage' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
       ) as GPUBindGroupLayoutEntry[];
     const io = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
@@ -335,6 +351,12 @@ export class PtWavefront {
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
     if (extra.blueNoise) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     if (extra.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, walk, scene);
+    if (extra.volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>, label);
+    if (extra.volumeMajorant) {
+      const mj = (options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>).majorant as { resolution: readonly [number, number, number]; values: Float32Array };
+      kernel.majorantTexture = createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
+    }
+    if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);
     return kernel;
   }
 
@@ -347,7 +369,7 @@ export class PtWavefront {
 
   /** Bytes of path state per path, and of all per-path buffers, for the current film (the spec budget is 96 B of state). */
   memory(): { stateBytesPerPath: number; totalBytes: number } {
-    const o = { medium: this.medium, textures: !!this.options.textures };
+    const o = { medium: this.medium, textures: !!this.options.textures, ...(this.options.integrator?.volumes ? { volumes: true } : {}) };
     const paths = this.width * this.height * this.wf.layers;
     return { stateBytesPerPath: ptwfStateBytes(o), totalBytes: ptwfBufferBytes(paths, o).total + paths * 16 };
   }
@@ -367,7 +389,7 @@ export class PtWavefront {
   setFilm(width: number, height: number): void {
     if (width === this.width && height === this.height && this.buffers) return;
     const paths = width * height * this.wf.layers;
-    const o = { medium: this.medium, textures: !!this.options.textures };
+    const o = { medium: this.medium, textures: !!this.options.textures, ...(this.options.integrator?.volumes ? { volumes: true } : {}) };
     const bytes = ptwfBufferBytes(paths, o);
     const max = this.device.limits.maxStorageBufferBindingSize;
     if (bytes.state > max || paths * PTWF_HIT_VEC4 * 16 > max) throw new RangeError(`PtWavefront.setFilm: ${width}x${height} needs ${(bytes.state / 2 ** 20).toFixed(0)} MiB of path state, the device binds at most ${(max / 2 ** 20).toFixed(0)} MiB per storage buffer`);
@@ -385,7 +407,7 @@ export class PtWavefront {
       count: make('counters', bytes.counters, STORAGE | COPY_SRC | COPY_DST),
       queue: make('queue', bytes.queue),
       // `ptOnRadiance` adds a 4th section: (vertex, flags, sample, pixel) for the shadow kernel's report.
-      shadow: make('shadow rays', paths * (this.layouts.hooksRadiance ? PTWF_SHADOW_VEC4 + 1 : PTWF_SHADOW_VEC4) * 16),
+      shadow: make('shadow rays', paths * (this.layouts.hooksRadiance || this.options.integrator?.volumes ? PTWF_SHADOW_VEC4 + 1 : PTWF_SHADOW_VEC4) * 16),
     };
     this.counterBuffer = this.options.integrator?.counters ? make('debug counters', paths * PT_COUNTER_WORDS * 4, STORAGE | COPY_SRC | COPY_DST) : null;
     this.restir?.setFilm(width, height);
@@ -780,6 +802,9 @@ export class PtWavefront {
       [PT_RESTIR_GI_SHADE_BINDING]: this.restir?.giReservoirs ? { buffer: this.restir.giReservoirs } : undefined,
       [PT_BLUENOISE_BINDING]: this.blueView() ?? undefined,
       [PT_FRAME_PARAMS_BINDING]: this.frameParamsBuffer ? { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } : undefined,
+      [PT_VOLUME_BINDING]: this.volumeTexture ? this.volumeTexture.createView({ dimension: '3d' }) : undefined,
+      [PT_VOLUME_MAJORANT_BINDING]: this.majorantTexture ? this.majorantTexture.createView({ dimension: '3d' }) : undefined,
+      [PT_SPEC_BINDING]: this.specTexture ? this.specTexture.createView() : undefined,
     };
     return Object.fromEntries(
       [...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, this.device.createBindGroup({ label: `ptwf io ${k}`, layout: this.layouts.io[k], entries: ioBindings(k, !!this.fuzzTable, !!this.counterBuffer, this.wf.refill, this.options.integrator?.primary === 'vbuffer', !!this.corrTexture, this.extra).filter((binding) => resources[binding]).map((binding) => ({ binding, resource: resources[binding] as GPUBindingResource })) })]),
@@ -873,6 +898,9 @@ export class PtWavefront {
     this.fuzzTable?.destroy();
     this.corrTexture?.destroy();
     this.blueTexture?.destroy();
+    this.volumeTexture?.destroy();
+    this.majorantTexture?.destroy();
+    this.specTexture?.destroy();
     this.frameParamsBuffer?.destroy();
     this.restir?.destroy();
     for (const buffer of this.stage) buffer.destroy();

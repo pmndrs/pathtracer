@@ -30,8 +30,8 @@ end:   XYZ = 1/3 sum_k  L_k cmf(l_k) / p(l_k),    RGB = M_norm XYZ
 
 `ptIntegratorWgsl` calls `ptSpecBegin` once per sample (after the pixel seed), wraps `rtMaterial(...)` in `ptSpecMaterial`, `ptEscaped`'s environment / sun
 terms and `ptSampleLd`'s `li.radiance` in `ptSpecIllum`, and returns `ptSpecToRgb(radiance)`. Nothing else in the integrator changes. Not combined with hooks,
-frame, AOVs or ReSTIR (`resolveIntegratorOptions` throws): their planes and callbacks are RGB. The wavefront throws (`ptwfUnsupported`): its path state has no
-room for the wavelengths yet (they are a pure function of (pixel, sample), so they can be recomputed per queue entry; open).
+frame, AOVs or ReSTIR (`resolveIntegratorOptions` throws): their planes and callbacks are RGB. The wavefront runs it too (section 9, V272): the wavelengths are recomputed
+per shaded path instead of stored.
 
 ## 3. Uplift
 
@@ -132,5 +132,17 @@ were). Provisional ms per spp on a loaded machine (RGB -> spectral): Cornell 13.
 
 ## 8. Open
 
-- Wavefront (P5.s7), a fourth lane, exact spectral thin film and dispersive coats (P5.s6), AttenuationTest with spectral sigma vs pbrt, lazy per-lobe uplift (cost), the quiet-pass timing (P5.s8).
+- A fourth lane, exact spectral thin film and dispersive coats (P5.s6), AttenuationTest with spectral sigma vs pbrt, lazy per-lobe uplift (cost), the quiet-pass timing (P5.s8).
 - The uplift treats every colour as an independent sigmoid spectrum: two colours multiplied along a path (red wall x red wall) are the product of spectra, which is what pbrt does and RGB mode cannot (that is the colour shift of the Cornell inter-reflections).
+
+## 9. Wavefront (V272)
+
+The three wavelengths are a pure function of the pixel seed and the sample index (`ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x)`), so the wavefront does not store them (16 B per path of state and of traffic). The shade kernel, the only kernel
+that looks at colours, calls `ptSpecBegin` at the top of `ptwfShadePath` (one Owen-Sobol draw plus three rows of the table: the same work the megakernel does once per sample, here once per vertex) and restores the one piece of state that is not a function of the sample:
+
+- `hero`: a dispersive dielectric kept only the hero lane (`beta *= (3, 0, 0)`, V255). One bit in bit 30 of the depth word (the AOV flag's bit: AOVs are refused with spectral).
+- `ptSpecDisp` is per vertex (set by `ptSpecMaterial`, consumed at once), so it needs no state.
+
+The lane radiance converts to RGB when it is added to the accumulator. `ptSpecToRgb` is linear in the lane radiance, so adding converted pieces is the converted sum (per-pixel differences are float summation order, 1e-7). The shadow ray's contribution is converted by the shade kernel when it builds the ray: the shadow kernel has no spectral code, no table, no extra binding. The table texture (`rgba32float`, 64^2 x 193 texels at res 64) is group 2 binding 18 of the shade kernel (a sampled texture, not a storage buffer: the 10-buffer budget is unaffected). Escaped radiance, `ptwfSampleLd`'s `li.radiance`, `ptSpecMaterial` around the texture lookup (and MaterialX, which runs first) and the dispersion block are the megakernel's text.
+
+Kernel sizes (wavefront, minified, KB): plain shade 34.9 (megakernel 45.5), env 37.6, textured 38.5, OpenPBR albedo 44.5; intersect and shadow are the plain kernels (12.6 / 10.7). `materialLod: 'secondary'` with spectral throws.

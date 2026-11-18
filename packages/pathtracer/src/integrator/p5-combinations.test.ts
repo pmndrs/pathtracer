@@ -18,9 +18,9 @@ describe('P5 feature combinations', () => {
     expect(() => resolveIntegratorOptions({ volumes, restir })).toThrow(/volumes/);
     expect(() => resolveIntegratorOptions({ volumes, restir: { ...(restir as object), gi: {} } as never })).toThrow(/volumes/);
   });
-  it('volumes and spectral are megakernel only; restir.gi runs on the wavefront (P5)', () => {
-    expect(ptwfUnsupported({ volumes })).toMatch(/volumes/);
-    expect(ptwfUnsupported({ spectral: true })).toMatch(/spectral/);
+  it('volumes, spectral (V270, V272) and restir.gi (P5) all run on the wavefront', () => {
+    expect(ptwfUnsupported({ volumes })).toBeNull();
+    expect(ptwfUnsupported({ spectral: true })).toBeNull();
     expect(ptwfUnsupported({ restir: { ...(restir as object), gi: {} } as never })).toBeNull();
   });
   it('materialx composes with spectral (MaterialX first, then the uplift) and with volumes on the options level', () => {
