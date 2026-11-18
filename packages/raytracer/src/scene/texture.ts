@@ -50,7 +50,7 @@ export interface TextureOptions {
   /**
    * Build the mip chain. Default true (on the CPU: 2x2 box in linear light, about 50 ms per megapixel, so 24 textures of 2048x2048
    * take ~5 s); false stores one level (every lookup is the base level); `'gpu'` plans the full chain but builds only level 0 here: the
-   * upload (`uploadSceneCopy({ mipGenerator })`) fills levels 1+ on the GPU (a `@pmndrs/downsampler` `Downsampler`, X2.d). The CPU
+   * upload (`uploadSceneCopy({ mipGenerator })`) fills levels 1+ on the GPU (a `@pmndrs/downsampler` `Downsampler`, X5). The CPU
    * twin then has level 0 only (`sampleSceneTexture` throws above it), and the codes can differ from the CPU chain by a rounding step.
    */
   mips?: boolean | 'gpu';

@@ -68,6 +68,22 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 `pnpm test` (unit, no GPU), `pnpm typecheck`. GPU pages run in headless Chrome via `bench/runner` (port of bvh's
 `tests/gpu` runner).
 
+## Developing against local siblings
+
+`@pmndrs/bvh` (packages/raytracer, bench) and `@pmndrs/downsampler` (bench) are installed from npm. To work against a checkout, add an
+override to `pnpm-workspace.yaml`, run `pnpm install --offline`, and do not commit it:
+
+```
+overrides:
+  "@pmndrs/bvh": link:../bvh
+  "@pmndrs/downsampler": link:../downsampler
+```
+
+(paths are relative to the workspace root; `pnpm build` in the sibling after each change, consumers read its `dist/`). `bench/runner/server.ts`
+allows the linked realpath in `server.fs.allow` and always sets `optimizeDeps.exclude: ['@pmndrs/bvh']`, so build workers load either way.
+To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or online). Verified 2026-11-19: with the override the links point at
+`../../../../bvh` and typecheck / pages see the checkout; without it they point into `node_modules/.pnpm/@pmndrs+bvh@0.1.0_...`.
+
 ## Traps (add to this list)
 
 - Chrome quantizes `timestamp-query` to ~100 µs unless developer features are enabled
@@ -95,7 +111,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Windows DXC compile time blows up with shader size; keep generated kernels under ~50 KB WGSL.
 - Bindless (`chromium-experimental-sampling-resource-table`) is textures-only and not on macOS yet.
 - bvh's per-triangle material id is 16 bits (max 65534). Treat it as an index into our own table.
-- bvh changes are only visible to consumers after `pnpm build` in ~/Developer/bvh (consumers read `dist/`).
+- bvh comes from npm (`^0.1.0`, D33). Only against a LINKED checkout ("Developing against local siblings") are bvh changes visible after `pnpm build` in ~/Developer/bvh (consumers read `dist/`); the npm install is the published build.
 - Mitsuba `rr_depth` = pbrt `rrdepth` + 1 (verified by a one-bounce furnace variance test); Mitsuba rejects `rr_depth` 0.
 - Pick spp as 1024/4096: Mitsuba multijitter rounds to a square, pbrt zsobol to a power of two.
 - Khronos Sponza ships glTF + `.bin` only (no glb). End walls at x = −11.4 / +10.4: a camera at x = −12.5 is outside
@@ -384,7 +400,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - `IridescenceDielectricSpheres` is a 7 x 7 x 7 grid, material index = 49 ix + 7 iy + iz with x = base ior, y = film thickness (0.1-0.7 um), z = film ior (both
   ship only as `.gltf` + `.bin`, pass `'gltf'` to `make`); one z slice (`i % 7 === 2`) is 49 spheres, 88k triangles.
 - A fresh pathtracer worktree has no package links: `pnpm install --offline` needs `.claude/worktrees/bvh` -> `~/Developer/bvh`
-  (packages/raytracer's `link:../../../bvh` resolves there), as reflections' worktrees have. Reflections links
+  (only with the sibling override above; bvh is on npm since D33), as reflections' worktrees have. Reflections links
   `link:../pathtracer/packages/raytracer` (TS source; a reflections worktree needs `.claude/worktrees/pathtracer` too).
 - `reflections-ab` (P1.5) loads reflections' trace seam by path: `REFLECTIONS_REPO=<checkout> node bench/runner/run.ts --page
   reflections-ab --args reflections=<checkout>`. The checkout needs the deleted @pmndrs/bvh wrapper for A: use reflections commit
@@ -529,7 +545,7 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Windows (track N): a cloud session that starts the Windows handoff is Linux with no GPU and no route to the laptop (Desktop Commander runs in the same VM): only code tasks
   (WN6) and SwiftShader correctness run there. SwiftShader in the runner: `CHROME_PATH=/opt/pw-browsers/chromium-*/chrome-linux64/chrome PT_ALLOW_SOFTWARE_ADAPTER=1
   PT_CHROME_FLAGS="--no-sandbox --enable-unsafe-webgpu --use-webgpu-adapter=swiftshader --use-angle=swiftshader --enable-unsafe-swiftshader"`; never timings from it.
-  The bvh sibling clones anonymously (`git clone https://github.com/pmndrs/bvh ../bvh`, then `pnpm install && pnpm build` there); the Denoiser sibling does not, so `pnpm typecheck` keeps one error in `oidn.ts`.
+  bvh and downsampler come from npm (no sibling needed); the Denoiser sibling does not, so `pnpm typecheck` keeps one error in `oidn.ts`.
 - Windows (VkNRC, WN7): its OBJ loader refuses a file without a material (every face needs `usemtl`), reads no normals (flat geometric, two-sided) and rescales the model to [-1, 1];
   its sky (10), path length (8 hits) and BRDF (Cook-Torrance, `Ks 0` = Lambert) are compiled in. Use `node bench/exporters/export-obj.ts` (not a hand-made OBJ) and take the camera pose from
   its `vknrc.json` (normalised position, yaw, pitch); our matching scene is `sponza-white-vknrc` (maxDepth 7, no RR).
@@ -586,8 +602,8 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
   sgm form (`infer=sgm-emu`), which assumes nothing about subgroup size.
 - Vite's dependency scan at the repo root (`mlp:live`) logs an error for `@pmndrs/bvh` when the sibling is missing;
   pages that do not import it still load.
-- Worktrees under `.claude/worktrees/<name>` resolve the `link:../../bvh` and `link:../../Denoiser/...` dependencies to
-  `.claude/worktrees/bvh` and `.claude/worktrees/Denoiser`: those two are symlinks to `~/Developer/*` (re-create them if
+- Worktrees under `.claude/worktrees/<name>` resolve the `link:../../Denoiser/...` dependency (and `link:../../bvh` with the sibling override) to
+  `.claude/worktrees/Denoiser` (and `bvh`): those are symlinks to `~/Developer/*` (re-create them if
   typecheck says `Cannot find module 'denoiser'`).
 - A WGSL loop that contains `workgroupBarrier()` needs a workgroup-uniform bound: a count read from a storage buffer is
   not. Have one lane copy it into a `var<workgroup>` and loop on `workgroupUniformLoad(&v)` (`wgsl-gradient.ts`).
@@ -804,3 +820,16 @@ pnpm workspace, TypeScript (strict, ESM), Node 22 (runs `.ts` directly via type 
 - Media and spectral on the wavefront (V270-V272, `node bench/runner/run.ts --page wf-p5-check [--args cases=... variants=plain,inline,batch,ordered,layers2,subgroup,sorted,refillsg spp=16 timing=1]`: megakernel vs wavefront per pixel in ONE page, one hold of the GPU lock; `matrix.ts` with many cells re-queues for the lock per cell behind other agents' multi-minute holds, so use the page for agreement). Media: free flight and interface skips live in the INTERSECT kernel (a loop around `rtClosest`, like the alpha-MASK loop), `hit.w` = 2 scatter event (distance in `hit.t`, `beta` already scaled), 3 dead path; the scatter vertex is a branch at the top of shade; the path state's section 4 holds `(stream, medium | skips << 16, 0, cone width)`; the shadow-ray record has a 4th vec4 `(start medium, ratio seed)`. The volume random stream protocol is shared by both schedulers and must change in both: a free flight draws from the path stream, an ESTIMATED shadow (grid or `shadowTracking: 'ratio'`) draws from its own stream forked by `ptVolFork()` when the ray is built (the path stream moves one step); the analytic shadow draws nothing. Never trace a shadow ray on the path's stream in either scheduler. `ptVolumeWgsl(v, parts)` hands out pieces: a kernel that includes `tables` must include `seedOf` too (`ptVolSeed` calls it); `ptVolTr` is the wrapper (fork + `ptVolTrCore`) only for estimated shadows, else it is the body, so a kernel names it with `ptVolumeRatioShadows`.
 - Spectral on the wavefront: the shade kernel calls `ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x)` per shaded path (wavelengths are not state) and restores `ptSpecHero` from bit 30 of the depth word (the AOV bit; spectral refuses AOVs); shadow rays carry RGB (`ptSpecToRgb(beta * ld.contrib)`, linear, so per-add conversion equals the megakernel's one conversion); the shadow kernel has no spectral code. `materialLod: 'secondary'` with media or spectral throws on the wavefront (the reduced shade kernel has no scatter vertex / wavelengths).
 - Checking a lock-step RNG protocol: the first run of media on the wavefront agreed with the megakernel to 7e-7 (grid and absorbing scenes bit-identical) in all refill modes. Judge a per-pixel check by the pixel's largest |difference| over its largest component (`relpx`), not per channel: the spectral XYZ -> RGB matrix cancels in a channel near zero (per channel 1.2e-4 where `relpx` is 6e-7). A scene whose paths amplify tiny differences (long dispersive glass: `DispersionTest-notex`, TASKS P5.s9) flips a few hundred pixels while the means agree to 2e-6: sweep the path limit (`dispersion-test-d2..d16`) and add controls (the megakernel built for the other scene packing against itself, `control=1`) before calling it a bug or noise; here the hero IOR differs between the two compiled kernels by more than an ulp (rounding it to 2^-16, 2^-12, 2^-9 or the hero wavelength to 1/16 nm did not absorb it), cause open.
+- Wide BVH (X1.i, bvh 0.1.0 experimental): a scene is assembled with `buildTraceScene({ nodeFormat: 'bvh4' | 'cwbvh8' })` (`SceneTrees.create({ nodeFormat })`) and the kernel must be compiled for the
+  same format (`sceneFormatOf(trace)` / `format` of `PtMegakernel` / `PtWavefront` / `RtBatchTracer`; `setScene` throws on a mismatch). Wide formats default to `wideDecode: 'folded'` here (bvh's own default is `exact`).
+  The wide walk is ~4-5 KB more WGSL than the binary one (plain megakernel 40.7 -> 44.9-46.1 KB) and has six `loop {}`s: `rtBoundWalkLoops` bounds them like the binary walk's four, but only the binary one was ever
+  timed on D3D12. Page args: `pt_bvh`, `pt_bvh_decode`, `pt_bvh_walk` (competitor), `nodeFormat` / `wideDecode` / `wideWalk` (trace-timing), `formats=` / `treesFormat=` (trace-core). A hit on a CWBVH scene may name another
+  one of two duplicate triangles (it reorders triangles), so Sponza images differ in ~0.15% of values from the binary scene's: judge it with trace-core's classification, not `cmp`.
+- bvh 0.1.0's closest-hit walk takes the right child first when two boxes tie unless the ray starts inside both (+24 bytes per walk kernel; 4-12 pixel values change on cornell / sponza-white): a before / after image `cmp` across the
+  bvh bump is not byte-identical, and the kernel texts differ by that one line. `node bench/size-snapshot.ts` writes the `bvh4*` / `cwbvh8*` wide kernels too.
+- `bench/pages/*.html` is needed for every new page (a copy of scene-copy.html with the name changed), or the runner says "No such page".
+- GPU mips (X5): `TextureOptions.mips: 'gpu'` leaves only level 0 on the CPU (`sampleSceneTexture` throws above it; the scene hash covers level 0 only); `uploadSceneCopy` then needs `mipGenerator` (a
+  `Downsampler` from `@pmndrs/downsampler/webgpu`, `encode(encoder, texture)`), and adds RENDER_ATTACHMENT (+ STORAGE_BINDING for unorm) to the texture arrays. The Downsampler's own device wants
+  `requiredFeatures(adapter)` / `requiredLimits(adapter)` for six levels per dispatch; with the default limits it does fewer per dispatch, same result. sRGB chains take its render or buffer path (same bits).
+- `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
+  `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.

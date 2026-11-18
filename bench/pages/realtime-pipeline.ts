@@ -354,7 +354,7 @@ try {
             worst = Math.max(worst, Math.abs((fr.diffuse[j] as number) * (fr.albedo[j] as number) + (fr.specular[j] as number) * (fr.specularFactor[j] as number) + (fr.emission[j] as number) - b) / (Math.abs(b) + 1e-3));
           }
         metrics[`${tag}_plane_identity_max_rel`] = worst;
-        // Auto-exposure (X2.d): the GPU reduction of the `final` stage (@pmndrs/downsampler ScalarReduction) against its CPU twin on the same texels.
+        // Auto-exposure (X5): the GPU reduction of the `final` stage (@pmndrs/downsampler ScalarReduction) against its CPU twin on the same texels.
         if (args.autoExposure === '1') {
           session.arm.tonemap('auto');
           await device.queue.onSubmittedWorkDone();

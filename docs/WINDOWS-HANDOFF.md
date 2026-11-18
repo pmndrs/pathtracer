@@ -40,13 +40,12 @@ produce the first numbers there you can trust.
    cd pathtracer
    git switch windows-testing
    ```
-   `@pmndrs/raytracer` links the bvh package from a sibling checkout (`link:../../../bvh`), so clone and build bvh
-   next to this repo first, then install:
+   `@pmndrs/bvh` (0.1.0) and `@pmndrs/downsampler` come from npm since D33, so no sibling checkout is needed:
    ```
-   git clone https://github.com/pmndrs/bvh.git ..\bvh
-   cd ..\bvh; pnpm install; pnpm build; cd ..\pathtracer
    pnpm install
    ```
+   (To work against a bvh checkout, see CLAUDE.md "Developing against local siblings".) The wide node formats are in bvh 0.1.0 and wired into
+   our kernels (X1.i): W-row in the quiet queue: `trace-timing` on Sponza with `nodeFormat=quantized|f32|bvh4|cwbvh8` and `wideDecode=exact|folded`.
 3. Run the non-GPU checks: `pnpm test`, `pnpm typecheck` and `pnpm lint`. All must pass. Any failure is a Windows
    portability bug to fix here, and most likely a path separator or a line ending.
 4. Generate the assets:

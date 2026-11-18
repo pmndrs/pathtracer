@@ -1,5 +1,5 @@
 /**
- * downsampler-check (X2.d): `@pmndrs/downsampler` against our own code.
+ * downsampler-check (X5): `@pmndrs/downsampler` against our own code.
  *
  *  A. Texture mips. The scene copy builds every mip level of its texture arrays on the CPU (`buildSceneTextures`, 2x2 box in linear
  *     light for colour, on the raw bytes for data). The same textures built with `mips: 'gpu'` (level 0 only) and uploaded with

@@ -88,7 +88,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** Scene copy binding (P3.11): `split` (two storage buffers) or `packed` (one). Default: the library default (`DEFAULT_SCENE_PACKING`, `packed` since D32). Images are per-pixel identical; only the addressing differs. */
   scenePacking?: 'split' | 'packed';
   /** bvh scene options (X1.i, D25; page args `pt_bvh`, `pt_bvh_decode`, `pt_bvh_walk`): `nodeFormat` `quantized` (default) | `f32` | the experimental wide `bvh4` | `cwbvh8` (hits are the same, tie order aside); `decode` `exact` | `folded` (wide only, default folded); `walk` `nested` | `single` (bvh4 only). */
-  /** Texture mip levels (X2.d, page arg `pt_mips`): `cpu` (default: built in `buildSceneTextures`) or `gpu` (level 0 only on the CPU, levels 1+ by `@pmndrs/downsampler`; codes differ from the CPU chain by up to 2). */
+  /** Texture mip levels (X5, page arg `pt_mips`): `cpu` (default: built in `buildSceneTextures`) or `gpu` (level 0 only on the CPU, levels 1+ by `@pmndrs/downsampler`; codes differ from the CPU chain by up to 2). */
   mips?: 'cpu' | 'gpu';
   bvh?: { nodeFormat?: NodeFormat; decode?: 'exact' | 'folded'; walk?: 'nested' | 'single' };
   /** Sample passes per submit. Default 8 (the wavefront clamps it to what its params ring takes at the scene's maxDepth). */

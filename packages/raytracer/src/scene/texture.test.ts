@@ -300,7 +300,7 @@ describe('texture frame and normal maps', () => {
   });
 });
 
-describe("TextureOptions.mips 'gpu' (X2.d)", () => {
+describe("TextureOptions.mips 'gpu' (X5)", () => {
   const input = (w: number, h: number, srgb: boolean) => ({ width: w, height: h, colorSpace: srgb ? ('srgb' as const) : ('linear' as const), data: Uint8Array.from({ length: w * h * 4 }, (_, i) => (i * 37 + (i >> 5)) & 255) });
   it('keeps level 0 only, plans and counts the full chain, and the level-0 twin is unchanged', () => {
     for (const srgb of [true, false]) {
