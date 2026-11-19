@@ -20,9 +20,8 @@
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
 import { layerCorrectionGroup } from './layer-corr-bind.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { ptBsdfEval, ptBsdfSample, type PtVec3 } from '../../packages/pathtracer/src/bsdf/bsdf.ts';
+import type { PtVec3 } from '../../packages/pathtracer/src/bsdf/bsdf.ts';
 import { ptBsdfWgsl } from '../../packages/pathtracer/src/bsdf/bsdf-wgsl.ts';
-import { ptDielectric } from '../../packages/pathtracer/src/bsdf/materials.ts';
 import { ptInternalReflectance, ptLayeredCoatedConductor, ptLayeredEval, ptLayeredSample, type PtLayeredOptions, type PtLayeredParams } from '../../packages/pathtracer/src/bsdf/layered.ts';
 import { ptLayeredWgsl } from '../../packages/pathtracer/src/bsdf/layered-wgsl.ts';
 
