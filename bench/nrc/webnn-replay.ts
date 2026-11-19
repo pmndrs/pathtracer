@@ -14,7 +14,8 @@ interface Context {
 }
 interface Builder {
   input(name: string, d: Descriptor): object;
-  gemm(a: object, b: object, options: { bTranspose: boolean }): object;
+  gemm(a: object, b: object, options: { bTranspose: boolean; c?: object }): object;
+  constant(d: Descriptor, data: ArrayBufferView): object;
   relu(a: object): object;
   slice(a: object, starts: number[], sizes: number[]): object;
   reshape(a: object, shape: number[]): object;
@@ -30,6 +31,10 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
   if (args.weights && !['layers', 'packed'].includes(args.weights)) throw new Error('weights must be layers or packed');
   if (args.publish && !['frame', 'slab'].includes(args.publish)) throw new Error('publish must be frame or slab');
   if (args.device && !['gpu', 'npu'].includes(args.device)) throw new Error('device must be gpu or npu');
+  // Chrome's ONNX Runtime backend on Windows fuses gemm + relu into DirectML's DmlFusedGemm, which requires the bias input C:
+  // without one, build() fails with "Failed to create session" (input size 2 not in range [3, 3]). A zero C is exact.
+  const gemmC = args.gemmC ?? (/Windows/.test(navigator.userAgent) ? 'zero' : 'none');
+  if (!['zero', 'none'].includes(gemmC)) throw new Error('gemmC must be zero or none');
   const packed = (args.weights ?? 'packed') === 'packed';
   const perSlab = args.publish === 'slab';
   const deviceType = args.device ?? 'gpu';
@@ -83,12 +88,14 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
         inputs['w' + i] = await tensor(dims);
         weight = builder.input('w' + i, desc(dims));
       }
-      y = builder.gemm(y, weight, { bTranspose: true });
+      const c = gemmC === 'zero' ? builder.constant(desc([dims[0]!]), new Uint16Array(dims[0]!)) : undefined;
+      y = builder.gemm(y, weight, c ? { bTranspose: true, c } : { bTranspose: true });
       if (i + 1 < layers) y = builder.relu(y);
     }
     const start = performance.now();
     graph = await builder.build({ y });
     metrics.webnn_graph_build_ms = performance.now() - start;
+    metrics.webnn_gemm_zero_c = gemmC === 'zero' ? 1 : 0;
     const output = await tensor([rows, 4]);
     const { STORAGE, COPY_SRC, COPY_DST } = GPUBufferUsage;
     const capacity = Math.ceil(records.queries.size / 80 / rows) * rows;

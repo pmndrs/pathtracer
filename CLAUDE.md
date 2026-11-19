@@ -845,5 +845,12 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   Instance reference no longer exists"; two table megakernels in one page always did: render each binding in its own run with `upload=1` and `cmp` the PFMs). API facts: `device.createResourceTable({ size })`, `table.insert(view | sampler)` returns
   the index, `pass.setResourceTable(table)`, WGSL `enable chromium_experimental_resource_table;` + `getResource<T>(i)` / `hasResource<T>(i)`; an explicit pipeline layout needs `usesResourceTable: true` (validation error otherwise); a 1-layer texture's default view is
   `2d`, and `getResource<texture_2d_array<f32>>` of it silently returns a default (black) texture: insert `createView({ dimension: '2d-array' })`. A wrong type never errors, so test every new `getResource` against a CPU twin.
+- Windows WebNN (Chrome 157, ONNX Runtime + DirectML): a `gemm` without the bias `c` followed by `relu` fails `MLGraphBuilder.build` with only "Failed to create session"; Chrome's log
+  (`--enable-logging --v=1`, `chrome_debug.log` in the profile) says `DmlFusedGemm ... has input size 2 not in range [min=3, max=3]`. Pass a zero `c` (`webnn-replay.ts` `gemmC=zero`, the Windows default).
+  `createContext({ deviceType: 'npu' })` succeeds on a laptop with no NPU and runs the graph: a working NPU context proves nothing about placement.
+- Another project's agents (webgpu-ddgi) time on the same RTX laptop behind `$TEMP\ddgi-gpu-bench.lock`, which our `/tmp/rt-gpu.lock` does not see. Wrap timed runs in
+  `node <webgpu-ddgi>/tools/reference/bench-lock.ts run --what "<job>" -- <command>` (it waits for the lock, cools below 70 °C, logs SM clocks and prints a VALID/INVALID verdict). Check `Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage'`
+  for a foreign process before trusting a run: an open render-loop page in the maintainer's Chrome held 80–96% of the GPU through the first Phase 15 runs (hot, INVALID).
+  The ddgi agents hand the lock to each other back to back, so a queued job can wait 30+ minutes.
 - `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
   `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.
