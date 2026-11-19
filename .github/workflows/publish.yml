@@ -1,0 +1,38 @@
+# Publishes @pmndrs/raytracer and @pmndrs/pathtracer to npm through trusted publishing (OIDC, no token).
+# `pnpm -r publish` only uploads packages whose package.json version is not on the registry yet, so a push
+# to main that does not bump a version is a no-op. To release: bump `version` in packages/<name>/package.json.
+name: Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/raytracer/**'
+      - 'packages/pathtracer/**'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm >= 11.5.1; pnpm publish runs npm under the hood.
+      - run: npm install -g npm@latest
+      # Only the published packages: bench links sibling checkouts (Denoiser, upscaler) that CI does not have.
+      - run: pnpm install --frozen-lockfile --filter ./packages/raytracer --filter ./packages/pathtracer
+      - run: pnpm -r --filter "./packages/*" run build
+      - run: pnpm -r publish --access public --no-git-checks

@@ -1,14 +1,41 @@
 {
   "name": "@pmndrs/raytracer",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "WebGPU ray tracing core: scene copy, BVH trace, light sampling and shading helpers in WGSL.",
   "type": "module",
   "sideEffects": false,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pmndrs/pathtracer.git",
+    "directory": "packages/raytracer"
+  },
   "exports": {
     ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@pmndrs/bvh": "^0.1.0",
     "@pmndrs/downsampler": "^0.1.0"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.64",
+    "typescript": "^5.7.0"
   }
 }

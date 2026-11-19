@@ -847,3 +847,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   `2d`, and `getResource<texture_2d_array<f32>>` of it silently returns a default (black) texture: insert `createView({ dimension: '2d-array' })`. A wrong type never errors, so test every new `getResource` against a CPU twin.
 - `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
   `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.
+- Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
+  `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
+  swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.
+  CI installs only the two packages (`--filter`): bench's `link:` siblings do not exist there. Check a release with `pnpm pack` + a clean consumer install before bumping.

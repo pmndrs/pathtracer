@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "bluenoise:generate": "node packages/raytracer/tools/bluenoise/generate.ts",
-    "bluenoise:report": "node packages/raytracer/tools/bluenoise/report.ts"
+    "bluenoise:report": "node packages/raytracer/tools/bluenoise/report.ts",
+    "build": "pnpm -r --filter \"./packages/*\" run build",
+    "release": "pnpm build && pnpm -r publish --access public"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

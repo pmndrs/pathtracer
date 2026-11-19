@@ -1,13 +1,40 @@
 {
   "name": "@pmndrs/pathtracer",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "WebGPU physically based path tracer (OpenPBR materials, megakernel and wavefront schedulers) built on @pmndrs/raytracer.",
   "type": "module",
   "sideEffects": false,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pmndrs/pathtracer.git",
+    "directory": "packages/pathtracer"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build"
+  },
   "dependencies": {
-    "@pmndrs/raytracer": "workspace:*"
+    "@pmndrs/raytracer": "workspace:^"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.64",
+    "typescript": "^5.7.0"
   }
 }

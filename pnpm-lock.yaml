@@ -84,8 +84,15 @@ importers:
   packages/pathtracer:
     dependencies:
       '@pmndrs/raytracer':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../raytracer
+    devDependencies:
+      '@webgpu/types':
+        specifier: ^0.1.64
+        version: 0.1.74
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
 
   packages/raytracer:
     dependencies:
@@ -95,6 +102,13 @@ importers:
       '@pmndrs/downsampler':
         specifier: ^0.1.0
         version: 0.1.0(three@0.187.0)
+    devDependencies:
+      '@webgpu/types':
+        specifier: ^0.1.64
+        version: 0.1.74
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
 
 packages:
 
