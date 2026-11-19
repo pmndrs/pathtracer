@@ -15,6 +15,8 @@ import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 import { uploadImage } from '../runner/page-client.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { cornell } from '../scenes/tier0/index.ts';
+import { nrcMaterialsShadow } from '../scenes/tier2/nrc-materials.ts';
+import { phase10Settings } from '../nrc/phase10.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
 import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
@@ -28,7 +30,7 @@ const num = (id: string) => Number($<HTMLInputElement>(id).value);
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 const value = (id: string) => $<HTMLSelectElement>(id).value;
 
-const SCENES: Record<string, SceneDesc> = { 'sponza-white': sponzaWhite, cornell };
+const SCENES: Record<string, SceneDesc> = { 'sponza-white': sponzaWhite, [nrcMaterialsShadow.name]: nrcMaterialsShadow, cornell };
 
 const DISPLAY_WGSL = /* wgsl */ `
 struct D { canvas: vec2f, split: f32, exposure: f32, mode: u32, _a: u32, _b: u32, _c: u32 }
@@ -67,7 +69,7 @@ interface Live {
   pipeline: GPURenderPipeline;
   params: GPUBuffer;
   sampler: GPUSampler;
-  groups: Map<string, GPUBindGroup>;
+  groups: Map<PipelineStage, { left: GPUTexture; right: GPUTexture; group: GPUBindGroup }>;
 }
 
 let live: Live | null = null;
@@ -117,33 +119,44 @@ function backendOptions(device: GPUDevice): void {
 async function build(): Promise<void> {
   if (building) return;
   building = true;
+  const rebuildControls = ['scene', 'res', 'backend', 'trainLayout', 'maxDepth', 'displayScale'];
+  for (const id of rebuildControls) $<HTMLInputElement>(id).disabled = true;
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
     const sceneId = value('scene');
     const [w, h] = value('res').split('x').map(Number) as [number, number];
     setStatus(`Loading ${sceneId} at ${w} × ${h}, compiling the kernels…`);
+    const sameScene = live?.scene.name === sceneId;
+    live?.params.destroy();
     live?.session.destroy();
     live = null;
-    const scene = SCENES[sceneId] as SceneDesc;
+    const scene = hero ? await hero.loadHeroScene(sceneId) : SCENES[sceneId] as SceneDesc;
     const backend = value('backend') || 'tiled-f16';
     const [kind, prec] = backend.split('-') as [string, string];
     const session = await NrcPipelineSession.create({
       scene,
       width: w,
       height: h,
-      displayWidth: 2 * w,
-      displayHeight: 2 * h,
+      displayWidth: num('displayScale') * w,
+      displayHeight: num('displayScale') * h,
+      ...(num('maxDepth') ? { maxDepth: Math.max(1, Math.min(32, Math.round(num('maxDepth')))) } : {}),
       infer: kind === 'sgm' ? 'sgm' : kind === 'portable' ? 'portable' : 'tiled',
       precision: prec === 'f32' ? 'f32' : 'f16',
-      cache: { stepsPerFrame: num('steps'), network, ...(backend === 'hash' ? { model: 'hash' as const } : materialArgs(args.get('factorization'), args.get('materialInputs'), args.get('directionInput'))) },
+      cache: {
+        network,
+        ...(backend === 'hash' ? { model: 'hash' as const } : preset ?? materialArgs(args.get('factorization'), args.get('materialInputs'), args.get('directionInput'))),
+        trainSelect: value('trainLayout') === 'pixel' ? 'pixel' : 'tile',
+        stepsPerFrame: num('steps'),
+      },
     });
     const device = session.device;
     device.addEventListener('uncapturederror', (e) => setStatus(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`, true));
     backendOptions(device);
     session.plainSpp = Math.max(1, Math.round(num('plainSpp')));
-    resetView(scene, session.bounds);
-    canvas.width = 2 * w;
-    canvas.height = 2 * h;
+    if (!sameScene) resetView(scene, session.bounds);
+    canvas.width = session.options.displayWidth;
+    canvas.height = session.options.displayHeight;
+    $<HTMLInputElement>('maxDepth').placeholder = String(scene.integrator.maxDepth);
     const context = canvas.getContext('webgpu') as GPUCanvasContext;
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format, alphaMode: 'opaque' });
@@ -153,12 +166,16 @@ async function build(): Promise<void> {
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     live = { session, scene, context, pipeline, params, sampler, groups: new Map() };
     applyDenoiser();
+    applyReconstruction();
+    if (sameScene) hero?.updateDaylight(session);
+    else hero?.setupDaylight(session);
     session.cutNext();
     setStatus('');
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
     console.error(error);
   } finally {
+    for (const id of rebuildControls) $<HTMLInputElement>(id).disabled = false;
     building = false;
   }
 }
@@ -167,13 +184,11 @@ function displayGroup(l: Live, stage: PipelineStage): GPUBindGroup {
   // The upscaler's output and the denoiser-fed colour are fixed textures; the group is rebuilt only if the texture object changes.
   const left = l.session.arms.plain.stage(stage);
   const right = l.session.arms.nrc.stage(stage);
-  const key = `${stage}:${left.label}:${right.label}`;
-  let g = l.groups.get(key);
-  if (!g) {
-    g = l.session.device.createBindGroup({ layout: l.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: l.params } }, { binding: 1, resource: left.createView() }, { binding: 2, resource: right.createView() }, { binding: 3, resource: l.sampler }] });
-    l.groups.set(key, g);
-  }
-  return g;
+  const cached = l.groups.get(stage);
+  if (cached?.left === left && cached.right === right) return cached.group;
+  const group = l.session.device.createBindGroup({ layout: l.pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: l.params } }, { binding: 1, resource: left.createView() }, { binding: 2, resource: right.createView() }, { binding: 3, resource: l.sampler }] });
+  l.groups.set(stage, { left, right, group });
+  return group;
 }
 
 function encodeDisplay(l: Live): void {
@@ -191,9 +206,10 @@ function encodeDisplay(l: Live): void {
   l.session.device.queue.submit([encoder.finish()]);
   $('tagLeft').hidden = mode === 2;
   $('tagRight').hidden = mode === 1;
-  $('tagLeft').textContent = `Path tracing · ${l.session.plainSpp} spp/frame`;
+  const samples = l.session.samples;
+  $('tagLeft').textContent = `Plain PT · ${samples.plain} spp`;
   const c = l.session.cache;
-  $('tagRight').textContent = c.warming ? `NRC warming ${c.trained.frames}/${c.settings.warmupFrames}: path tracing · 1 spp/frame` : 'Path tracing + NRC · 1 spp/frame';
+  $('tagRight').textContent = c.warming ? `NRC warming · plain PT · ${samples.nrc} spp` : `Path tracing + NRC · ${samples.nrc} spp`;
 }
 
 function moveCamera(dt: number): boolean {
@@ -242,6 +258,8 @@ function gateFrames(): number {
 /** Training steps and the warm-up gate from the controls (every frame: rAF loop and `step`). */
 function applyCacheSettings(session: NrcPipelineSession): void {
   session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
+  session.accumulateStill = checked('accumulateStill');
+  session.nrcSpp = Math.max(1, Math.min(16, Math.round(num('nrcSpp')) || 1));
   session.setGate(gateFrames(), num('gateSteps'));
 }
 
@@ -270,7 +288,9 @@ function frame(now: number): void {
       lastFrameEnd = end;
       const den = l.session.arms.nrc.lastDenoiser || l.session.arms.plain.lastDenoiser;
       const gate = l.session.cache.warming ? ` · NRC gate closed: plain while training (${l.session.cache.trained.frames}/${l.session.cache.settings.warmupFrames})` : '';
-      if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps (wait ${lastFrameMs.toFixed(1)} ms) · plain ${l.session.plainSpp} spp · ${l.session.inferDescription} · ${den}${gate}`);
+      if (hero && !statusEl.classList.contains('err')) {
+        setStatus(`${armsOnScreen().includes('nrc') && checked('train') && num('steps') > 0 ? 'Training live' : 'Training idle'} · ${l.session.cache.trained.steps} updates · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps`);
+      } else if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.session.options.width} × ${l.session.options.height} → ${canvas.width} × ${canvas.height} · ${fps.toFixed(0)} fps (wait ${lastFrameMs.toFixed(1)} ms) · plain ${l.session.plainSpp} spp · ${l.session.inferDescription} · ${den}${gate}`);
     })
     .catch((error: unknown) => {
       busy = false;
@@ -357,22 +377,42 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
-for (const id of ['scene', 'res', 'backend']) $(id).addEventListener('change', () => void build());
+$('view').addEventListener('change', () => live?.session.cutNext());
+for (const id of ['scene', 'res', 'backend', 'trainLayout', 'maxDepth', 'displayScale']) $(id).addEventListener('change', () => void build());
 /** The denoiser selector: both arms switch together (same chain). */
 function applyDenoiser(): void {
   const v = value('denoiserSel');
   const stillSamples = Math.max(1, Math.round(num('stillSamples')));
   const aux = value('oidnAux') === 'albedo' ? 'albedo' : 'albedo+normal';
-  if (v === 'oidn') live?.session.setDenoiser('oidn', { aux, stillSamples });
+  if (v === 'oidn') live?.session.setDenoiser('oidn', { aux, stillSamples, hold: !hero });
   else if (v === 'oidn-fast') live?.session.setDenoiser('oidn', { aux, moving: 'fast', stillSamples: Infinity, hold: false });
   else if (v === 'oidn-std') live?.session.setDenoiser('oidn', { aux, moving: 'balanced', stillSamples: Infinity, hold: false });
   else live?.session.setDenoiser(v === 'none' ? 'none' : 'svgf');
 }
 for (const id of ['denoiserSel', 'oidnAux', 'stillSamples']) $(id).addEventListener('change', applyDenoiser);
 $('plainSpp').addEventListener('change', () => {
-  if (live) live.session.plainSpp = Math.max(1, Math.round(num('plainSpp')));
+  if (live) live.session.plainSpp = Math.max(1, Math.min(16, Math.round(num('plainSpp')) || 1));
 });
-$('resetCache').addEventListener('click', () => live?.session.cache.resetNetwork());
+$('resetCache').addEventListener('click', () => { live?.session.cache.resetNetwork(); live?.session.cutNext(); });
+$('fireflyClamp').addEventListener('change', () => live?.session.cutNext());
+for (const id of ['clearImage', 'accumulateStill']) $(id).addEventListener(id === 'clearImage' ? 'click' : 'change', () => live?.session.cutNext());
+function applyReconstruction(): void {
+  const path = value('upscalePath') as 'spatial' | 'bilinear' | 'temporal';
+  for (const id of ['sharpness', 'rcasDenoise']) $<HTMLInputElement>(id).disabled = path === 'bilinear';
+  $<HTMLInputElement>('upHistory').disabled = path !== 'temporal';
+  $<HTMLInputElement>('svgfAlpha').disabled = value('denoiserSel') !== 'svgf';
+  $<HTMLSelectElement>('oidnAux').disabled = !value('denoiserSel').startsWith('oidn');
+  $<HTMLInputElement>('stillSamples').disabled = value('denoiserSel') !== 'oidn';
+  if (!live) return;
+  for (const arm of Object.values(live.session.arms)) {
+    arm.setFireflyClamp(Math.max(0, num('fireflyClamp')));
+    arm.setSvgfAlpha(Math.max(0.01, Math.min(1, num('svgfAlpha') || 0.1)));
+    arm.upscalePath = path;
+    Object.assign(arm.upscaler.settings, { sharpness: Math.min(1, Math.max(0, num('sharpness'))), maxAccumulation: Math.max(1, Math.min(64, num('upHistory'))), rcasDenoise: checked('rcasDenoise') });
+    arm.resetHistory();
+  }
+}
+for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'svgfAlpha', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
 $('resetView').addEventListener('click', () => {
   if (live) resetView(live.scene, live.session.bounds);
   live?.session.cutNext();
@@ -387,8 +427,17 @@ $('pause').addEventListener('click', () => {
 });
 
 const args = new URLSearchParams(location.search);
-const network = networkArg(args.get('network'));
-if (args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
+const hero = args.get('demo') === 'hero' ? await import('../hero/showcase.ts') : undefined;
+hero?.setupHero();
+if (hero) for (const id of ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius']) $(id).addEventListener('input', () => {
+  if (live) hero.updateDaylight(live.session);
+});
+const preset = hero || args.get('phase10') === 'mlp' ? phase10Settings('mlp') : undefined;
+const network = preset?.network ?? networkArg(args.get('network'));
+if (preset) $<HTMLInputElement>('steps').value = String(preset.stepsPerFrame);
+const stage = args.get('stage');
+if (stage === 'denoised' || stage === 'raw' || stage === 'final') $<HTMLSelectElement>('stageSel').value = stage;
+if (!hero && args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
 // ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8
 if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;

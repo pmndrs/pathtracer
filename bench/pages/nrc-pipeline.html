@@ -66,30 +66,46 @@
       <aside>
         <div>
           <h1>NRC → denoiser → upscaler</h1>
+          <a href="?demo=hero">Color interior demo</a>
           <p class="note">Both sides run the same chain: frame planes → denoiser (SVGF, or OIDN: small net while moving, standard net after a few still samples, then held) → pmndrs/upscaler (temporal, 2×). Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>Shift</kbd>-drag the divider.</p>
         </div>
         <fieldset>
           <h2>Scene</h2>
-          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="cornell">Cornell box</option></select></label>
-          <label>Render → display <select id="res"><option value="640x360">640 × 360 → 1280 × 720</option><option value="960x540" selected>960 × 540 → 1920 × 1080</option></select></label>
+          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="nrc-materials-shadow">Red card, upper wall shadow</option><option value="cornell">Cornell box</option></select></label>
+          <label>Render resolution <select id="res"><option value="480x270">480 × 270</option><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
+          <label>Display scale <select id="displayScale"><option value="2">2×</option><option value="1">1× (native)</option></select></label>
         </fieldset>
         <fieldset>
           <h2>View</h2>
           <label>Show <select id="view"><option value="split">Split</option><option value="plain">Path tracing only</option><option value="nrc">With NRC only</option></select></label>
           <label>Stage <select id="stageSel"><option value="final" selected>Final (denoised + upscaled)</option><option value="denoised">Denoised (render res)</option><option value="raw">Raw (render res)</option></select></label>
           <label>Denoiser <select id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still, hold</option><option value="oidn-fast">OIDN small net always (no hold)</option><option value="oidn-std">OIDN standard net always (no hold)</option><option value="none">None (raw to upscaler)</option></select></label>
+          <label>SVGF current-frame weight <input id="svgfAlpha" type="number" min="0.01" max="1" step="0.01" value="0.1" /></label>
           <label>OIDN guides <select id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
           <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once and the frame is held">OIDN still samples <input id="stillSamples" type="number" min="1" max="64" value="8" /></label>
           <label>Exposure <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
           <div class="row"><button id="pause">Pause</button><button id="resetView">Reset view</button></div>
         </fieldset>
         <fieldset>
-          <h2>Time per frame</h2>
+          <h2>Path tracing</h2>
+          <label class="check"><input id="accumulateStill" type="checkbox" /> Accumulate while still</label>
+          <label>Max path depth <input id="maxDepth" type="number" min="1" max="32" placeholder="Scene" /></label>
+          <label title="Limit each sample’s linear luminance before averaging; zero disables the clamp">Firefly clamp (0 = off) <input id="fireflyClamp" type="number" min="0" step="0.1" value="0" /></label>
+          <label>NRC samples / frame <input id="nrcSpp" type="number" min="1" max="16" value="1" /></label>
           <label>Plain samples / frame <input id="plainSpp" type="number" min="1" max="16" value="1" /></label>
+          <div class="row"><button id="clearImage">Clear image</button></div>
           <label class="check"><input id="equalTime" type="checkbox" checked /> Equal time (set by Benchmark)</label>
         </fieldset>
         <fieldset>
+          <h2>Upscaler</h2>
+          <label>Upscaling <select id="upscalePath"><option value="temporal">Temporal</option><option value="spatial">Spatial</option><option value="bilinear">Bilinear</option></select></label>
+          <label>Sharpness <input id="sharpness" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
+          <label>Max history (frames) <input id="upHistory" type="number" min="1" max="64" value="24" /></label>
+          <label class="check"><input id="rcasDenoise" type="checkbox" /> Suppress grain in sharpening</label>
+        </fieldset>
+        <fieldset>
           <h2>Cache</h2>
+          <label>Training layout <select id="trainLayout"><option value="tile">Whole 8 × 8 tiles</option><option value="pixel">Individual pixels</option></select></label>
           <label>Cache <select id="backend"></select></label>
           <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
           <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="4" /></label>

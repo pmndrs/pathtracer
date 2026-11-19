@@ -1,0 +1,30 @@
+body.hero { --bg: #111511; --fg: #eef1e7; --muted: #b1b8a9; --line: #444b41; color-scheme: dark; margin: 0; background: var(--bg); color: var(--fg); height: auto; font: 15px/1.4 "Instrument Sans", system-ui, sans-serif; }
+.hero .app { width: min(100%, 1320px); height: auto; min-height: 100svh; margin: auto; padding: 20px clamp(16px,4vw,64px); display: flex; flex-direction: column; gap: 16px; }
+.hero aside { display: none; }
+.hero-header, .hero-controls { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.hero-project { color: #bdd396; font: 600 11px/1.4 ui-monospace, monospace; letter-spacing: .09em; text-transform: uppercase; margin: 0 0 4px; }
+.hero-header h1 { font: 500 clamp(24px,3vw,42px)/1.1 "Instrument Sans", system-ui, sans-serif; letter-spacing: -.045em; margin: 0; }
+.hero .view { gap: 6px; }
+.hero .stage { border: 1px solid var(--line); border-radius: 3px; flex: none; min-height: 0; }
+.hero canvas { width: 100%; height: auto; max-height: none; object-fit: contain; }
+.hero .status { min-height: 1.4em; font: 12px/1.4 ui-monospace, monospace; }
+.hero .hero-controls { flex-wrap: wrap; justify-content: flex-start; margin-bottom: 12px; }
+.hero label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 3px; }
+.hero input[type=range] { width: 100px; accent-color: #bdd396; }
+.hero select, .hero button { max-width: none; border-color: #535c4e; border-radius: 3px; padding: 6px 10px; background: #21271f; color: var(--fg); font: inherit; }
+.hero .hero-actions { margin-left: auto; align-self: end; }
+.hero .hero-footer { border-top: 1px solid var(--line); padding-top: 12px; }
+.hero-help, .hero-credit { display: inline; color: var(--muted); font-size: 12px; }
+.hero-credit { float: right; }
+@media (max-width: 650px) { .hero .app { gap: 12px; min-height: auto; } .hero-credit { float: none; display: block; } }
+.hero-settings { margin-top: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
+.hero-settings[open] { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px 24px; }
+.hero-settings summary { grid-column: 1 / -1; cursor: pointer; }
+.hero-settings fieldset { min-width: 0; }
+.hero-settings label { display: flex; align-items: center; justify-content: space-between; gap: 5px; }
+.hero-settings label.check { justify-content: flex-start; }
+.hero-settings select { max-width: 64%; font-size: 12px; }
+.hero-settings input[type=number] { width: 66px; }
+.hero-settings output { font-variant-numeric: tabular-nums; min-width: 36px; }
+.hero-actions { display: flex; gap: 6px; }
+.hero .quality-link { color: #bdd396; font-size: 12px; margin-left: 8px; }

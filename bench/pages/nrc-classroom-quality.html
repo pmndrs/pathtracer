@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Classroom quality bench</title>
+<style>
+:root {color-scheme:dark;font:15px/1.5 system-ui,sans-serif;background:#111511;color:#eef1e7}
+body {max-width:1280px;margin:auto;padding:24px} a {color:#bdd396} h1 {font-size:clamp(28px,4vw,46px);margin:12px 0} p {max-width:85ch}
+button {padding:8px 15px;font:inherit;cursor:pointer} table {border-collapse:collapse;font-variant-numeric:tabular-nums;width:100%}
+th,td {padding:6px;text-align:right;border-bottom:1px solid #444b41} th:first-child,td:first-child {text-align:left}
+.scroll {overflow-x:auto} canvas {width:100%;height:auto;display:block} figure {margin:16px 0} figcaption {padding:6px 0;color:#c8cfc1}
+</style></head><body>
+<a href="./nrc-pipeline.html?demo=hero">Interactive Classroom</a> · <a href="./nrc-pipeline.html?demo=hero&amp;preset=classroom-native">Native-scale comparison preset</a>
+<h1>Classroom quality bench</h1>
+<p>Compare whole-tile and individual-pixel NRC training, then accumulate samples before denoising with SVGF or OIDN. Each run starts with the same camera, sun, and network seed. Look at the blind shadows on the right wall, the chalk lettering, and the metal chair legs.</p>
+<button id="run" disabled>Run comparison</button> <span id="progress" role="status"></span>
+<div class="scroll"><table><thead><tr><th>Run / stage</th><th>Samples/pixel at end</th><th>8 × 8 patch flicker (p99)</th><th>Error vs. plain PT</th><th>Frame time (ms)</th></tr></thead><tbody></tbody></table></div>
+<p>Patch flicker is the 99th percentile of absolute changes in mean display luminance across 8 × 8 render-pixel patches and eight successive frame pairs. Error is mean absolute display-luminance error against a separate 256-spp plain path trace at render resolution. Both measures run from 0 to 1. Median frame time covers the whole rendering chain and excludes readback.</p>
+<div id="captures"></div>
+<script type="module" src="./nrc-classroom-quality.ts"></script></body></html>

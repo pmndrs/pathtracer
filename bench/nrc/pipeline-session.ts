@@ -13,6 +13,7 @@ import type { PtLookAtCamera, PtMegakernel } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { inferArmOptions } from '../pages/mlp-common.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
+import { cameraKey } from '../realtime/chain-math.ts';
 import { NrcCache, type NrcSettings } from './cache.ts';
 import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from '../realtime/chain.ts';
 
@@ -48,6 +49,10 @@ export class NrcPipelineSession {
   readonly inferDescription!: string;
   /** Plain samples per pixel per frame. */
   plainSpp = 1;
+  nrcSpp = 1;
+  accumulateStill = false;
+  readonly samples = { plain: 0, nrc: 0 };
+  private stillKey = { plain: '', nrc: '' };
   private camera: PtLookAtCamera | null = null;
   private cut = true;
 
@@ -90,6 +95,7 @@ export class NrcPipelineSession {
   /** A camera cut on the next frame: zero motion, and both arms drop their denoiser and upscaler history. */
   cutNext(): void {
     this.cut = true;
+    this.stillKey = { plain: '', nrc: '' };
   }
 
   private setCamera(camera: PtLookAtCamera): void {
@@ -134,10 +140,11 @@ export class NrcPipelineSession {
     this.setCamera(camera); // first: a cut resets the arms, which releases a held frame
     const arms = (o.arms ?? ['plain', 'nrc']).filter((a) => o.denoise === false || !this.arms[a].heldFor(camera));
     const encoder = this.device.createCommandEncoder({ label: 'nrc pipeline frame' });
-    if (arms.includes('plain')) this.encodePlain(encoder);
-    if (arms.includes('nrc')) this.encodeCache(encoder, o.train !== false);
+    const key = this.accumulateStill ? cameraKey(camera) : '';
+    if (arms.includes('plain')) this.encodePlain(encoder, key);
+    if (arms.includes('nrc')) this.encodeCache(encoder, o.train !== false, key && key + '/' + this.cache.warming);
     this.device.queue.submit([encoder.finish()]);
-    for (const a of arms) await this.arms[a].post(camera, { ...(o.denoise === false ? { denoise: false } : {}) });
+    for (const a of arms) await this.arms[a].post(camera, { progressiveInput: this.accumulateStill, ...(o.denoise === false ? { denoise: false } : {}) });
     return arms;
   }
 
@@ -152,22 +159,34 @@ export class NrcPipelineSession {
     }
   }
 
-  encodePlain(encoder: GPUCommandEncoder): void {
+  private beginSamples(encoder: GPUCommandEncoder, arm: ArmName, count: number, key: string): void {
+    if (!key || key !== this.stillKey[arm]) {
+      this.arms[arm].beginFrame(encoder);
+      this.samples[arm] = 0;
+    }
+    this.stillKey[arm] = key;
+    this.samples[arm] += count;
+  }
+
+  encodePlain(encoder: GPUCommandEncoder, key = ''): void {
     const arm = this.arms.plain;
-    arm.beginFrame(encoder);
+    this.beginSamples(encoder, 'plain', this.plainSpp, key);
     for (let k = 0; k < this.plainSpp; k++) {
       this.plain.encode(encoder, 1);
       arm.accumulate(encoder, this.plain.frameBuffers);
     }
-    arm.pack(encoder, this.plainSpp);
+    arm.pack(encoder, this.samples.plain);
   }
 
-  encodeCache(encoder: GPUCommandEncoder, train: boolean): void {
+  encodeCache(encoder: GPUCommandEncoder, train: boolean, key = ''): void {
     const arm = this.arms.nrc;
-    arm.beginFrame(encoder);
-    this.cache.encodeFrame(encoder, { train: train && this.cache.settings.stepsPerFrame > 0 });
-    arm.accumulate(encoder, this.cache.render.frameBuffers);
-    arm.pack(encoder, 1);
+    this.beginSamples(encoder, 'nrc', this.nrcSpp, key);
+    for (let i = 0; i < this.nrcSpp; i++) {
+      // Update weights once, after the last render sample, including at the warm-up boundary.
+      this.cache.encodeFrame(encoder, { train: i === this.nrcSpp - 1 && train && this.cache.settings.stepsPerFrame > 0 });
+      arm.accumulate(encoder, this.cache.render.frameBuffers);
+    }
+    arm.pack(encoder, this.samples.nrc);
   }
 
   /**

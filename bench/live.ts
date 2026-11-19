@@ -18,7 +18,8 @@ if (!page || page.startsWith('-')) {
 const runId = `live-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, 'Z')}`;
 const server = await startBenchServer(runId);
 server.setSlot(page);
-const url = `${server.origin}/bench/pages/${page}.html`;
+const entry = page === 'nrc-hero' ? 'nrc-pipeline.html?demo=hero' : `${page}.html`;
+const url = `${server.origin}/bench/pages/${entry}`;
 console.log(`${page}: ${url}`);
 console.log(`Saved images go to bench/results/incoming/${runId}/${page}/. Ctrl+C to stop.`);
 if (!process.argv.includes('--no-open')) {

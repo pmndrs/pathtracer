@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NRC visual testing guide</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.55 system-ui, sans-serif; background: #16191d; color: #eef1f2; }
+    * { box-sizing: border-box; }
+    body { max-width: 1060px; margin: auto; padding: 2rem clamp(1rem, 4vw, 3rem) 4rem; }
+    h1, h2, h3 { line-height: 1.15; text-wrap: balance; }
+    h1 { font-size: clamp(2rem, 4vw, 3rem); margin: 0; }
+    h2 { font-size: 1.5rem; margin: 0 0 1rem; }
+    h3 { font-size: 1.1rem; }
+    p { max-width: 75ch; }
+    a { color: #9bd8ff; text-underline-offset: 3px; }
+    header, section { padding: 1.4rem 0; border-bottom: 1px solid #46515b; }
+    header p { margin-bottom: .5rem; }
+    nav, #arms { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+    label[for] { display: block; font-weight: 650; margin-bottom: .35rem; }
+    select, button { font: inherit; color: inherit; background: #23282e; border: 1px solid #65717c; border-radius: .35rem; padding: .4rem .65rem; max-width: 100%; }
+    button { cursor: pointer; }
+    button[aria-pressed=true] { background: #c7e9ff; border-color: #c7e9ff; color: #132433; }
+    :focus-visible { outline: 3px solid #f9c16c; outline-offset: 2px; }
+    figure { margin: 1rem 0; }
+    .frame { display: grid; place-items: center; height: clamp(180px, 40vw, 390px); background: #0c0e11; }
+    .frame img { width: 100%; height: 100%; min-height: 0; object-fit: contain; }
+    figcaption, .muted { color: #b4c0ca; }
+    figcaption { margin-top: .35rem; }
+    ol { padding-left: 1.4rem; max-width: 82ch; }
+    li + li { margin-top: .55rem; }
+    kbd { font: 0.88em ui-monospace, monospace; padding: 0 .25em; border: 1px solid #65717c; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NRC visual testing guide</h1>
+    <p>Start with the red wall seam, then run the live shadow test. For the cache review, the blue reflection, wall grid and still-noise captures are the priorities. Each comparison opens with its controls already set.</p>
+    <nav aria-label="Guide sections"><a href="#captures">Matched captures</a><a href="#shadows">Live shadow flicker</a><a href="#bounce">One traced bounce</a><a href="#motion">Moving highlights</a><a href="#feedback">What to report</a></nav>
+  </header>
+  <main>
+    <section id="captures">
+      <h2>Matched captures</h2>
+      <label for="test">Choose a comparison</label>
+      <select id="test"></select>
+      <p id="protocol"></p>
+      <div id="arms" role="group" aria-label="Displayed capture"></div>
+      <figure>
+        <div class="frame"><img id="capture" alt=""></div>
+        <figcaption id="caption" aria-live="polite"></figcaption>
+      </figure>
+      <p><strong>Look at </strong><span id="look"></span></p>
+      <p class="muted">Use the buttons or press <kbd>A</kbd>, <kbd>B</kbd> and, when available, <kbd>R</kbd> for the traced reference. Flip at the same spot. All saved images use the same ACES display at 0 EV. “No visible difference” is a useful result.</p>
+    </section>
+    <section id="shadows">
+      <h2>Live test · Does the shadow flicker or settle?</h2>
+      <p><a href="nrc-live.html?scene=nrc-materials-card&amp;phase10=mlp&amp;res=640x360&amp;refineStill=0" target="_blank" rel="noopener">Open the blue-card baseline ↗</a>. You can also do this at the red card in your current tab. Keep the camera parked. In <strong>Split</strong>, the left side traces full paths and the right uses NRC. Hold <kbd>Shift</kbd> and drag the divider across the card’s lower edge to see the same pixels on either side.</p>
+      <ol>
+        <li><strong>Watch a cold start.</strong> Keep <em>Accumulate while still</em> and <em>Train every frame</em> on. Leave <em>Trace full paths after 64 still samples</em> and <em>Equal time</em> off. Use one plain sample per frame. Click <em>Reset cache</em> once. Watch the narrow shadow under the card, the adjacent blank wall and the lit wall. Compare near 16, 64 and 256 samples per pixel (spp) on the status line. Note when individual speckles fade and whether a whole patch still pulses or a fixed grid remains.</li>
+        <li><strong>Isolate frame-to-frame change.</strong> After at least 256 spp, turn <em>Accumulate while still</em> off. Watch about five seconds with <em>Train every frame</em> on, then turn only training off and watch again. The camera and learned weights stay in place. Grain on both sides can come from sampling lights and tracing the bounce. A broad patch that pulses mainly with training on is worth flagging. A single saved frame cannot show that change.</li>
+        <li><strong>Check what survives averaging.</strong> Leave training off and turn accumulation back on. At about 256 spp, compare that same edge again. Record any stable dark halo, color shift or grid on the NRC side. Reopen the baseline to restore all settings.</li>
+      </ol>
+      <p><a href="nrc-pipeline.html?scene=nrc-materials-shadow&amp;res=480x270&amp;phase10=mlp&amp;gate=off&amp;stage=denoised" target="_blank" rel="noopener">Open the measured red-wall shadow with SVGF ↗</a>. Keep the camera still and switch <em>Stage</em> between <em>Raw (render res)</em> and <em>Denoised (render res)</em>. Look above the card first, then along its lower edge.</p>
+      <p class="muted">The baseline uses the compact network, raw RGB, reflected view, four position bands, two training updates per frame and one traced bounce. <em>Clear image</em> restarts the sample count with the learned cache intact. <em>Reset cache</em> also restarts learning. Use the spp counters for a quality comparison at equal sample counts.</p>
+    </section>
+    <section id="bounce">
+      <h2>Live test · How much does tracing one bounce buy?</h2>
+      <p>Use the two blue-card presets below. A asks the cache for radiance at the glossy floor. B follows the reflected ray and queries the cache at the next surface. Keep <em>Position bands</em> at four, still refinement off and accumulation on.</p>
+      <nav aria-label="Cache query depth presets">
+        <a target="_blank" rel="noopener" href="nrc-live.html?scene=nrc-materials-card&amp;phase10=mlp&amp;res=640x360&amp;queryDepth=0&amp;refineStill=0">A · First hit ↗</a>
+        <a target="_blank" rel="noopener" href="nrc-live.html?scene=nrc-materials-card&amp;phase10=mlp&amp;res=640x360&amp;queryDepth=1&amp;refineStill=0">B · Second hit, one traced bounce ↗</a>
+      </nav>
+      <p>Start each preset fresh. Around 64 and 256 spp, sweep the divider across the reflected blue rectangle on the floor. Compare its color, width and alignment with the real card. Then check the thin shadow under the card. Report whether the extra bounce restores reflection detail and whether the shadow takes longer to settle. In the live controls this switch is called <em>Cache at</em>.</p>
+    </section>
+    <section id="motion">
+      <h2>Live test · Does the highlight follow the camera?</h2>
+      <p>Open one preset at a time. Both start at the grazing metal ramp with the baseline settings. The direction supplied to the network is the only change.</p>
+      <nav aria-label="Direction input presets">
+        <a target="_blank" rel="noopener" href="nrc-live.html?scene=nrc-materials-grazing&amp;phase10=mlp&amp;res=640x360&amp;directionInput=view&amp;refineStill=0">A · View direction ↗</a>
+        <a target="_blank" rel="noopener" href="nrc-live.html?scene=nrc-materials-grazing&amp;phase10=mlp&amp;res=640x360&amp;directionInput=reflected&amp;refineStill=0">B · Reflected view ↗</a>
+      </nav>
+      <p>Warm each preset to about 256 spp. Give the canvas focus, strafe briefly with <kbd>D</kbd>, then release. Use the plain side and divider to locate the bright streak at each pose. Watch whether its center moves with the floor, dims, widens or leaves a trail. Report what happens <em>while moving</em> separately from how quickly the highlight settles <em>after stopping</em>. For a repeat, use <em>Reset view</em> or reopen the preset for a cold start.</p>
+    </section>
+    <section id="feedback">
+      <h2>What to report</h2>
+      <p>For a saved pair, give the comparison name, the patch you inspected, and which arm looked closer to the reference. For live runs, include the scene, which side, the training and accumulation settings, and the approximate spp. A short recording helps with flicker. A paused screenshot with the status line helps with a persistent pattern.</p>
+      <p class="muted">For example, “Blue-card shadow, camera still. Both sides had grain at 16 spp. At 256 the right side still had a dark band just below the card. With accumulation off, the band pulsed only while training was on.”</p>
+    </section>
+  </main>
+  <script type="module" src="./nrc-review.ts"></script>
+</body>
+</html>

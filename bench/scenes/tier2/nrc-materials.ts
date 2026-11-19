@@ -55,3 +55,9 @@ export const nrcMaterialsCard: SceneDesc = {
   ...nrcMaterials, name: 'nrc-materials-card',
   camera: { ...nrcMaterials.camera, position: [2.5, 1.05, 2], target: [2.5, 0.62, -3.45], yFovDeg: 32 },
 };
+
+/** Camera fitted to the four red-card corners in the shadow-flicker review. */
+export const nrcMaterialsShadow: SceneDesc = {
+  ...nrcMaterials, name: 'nrc-materials-shadow',
+  camera: { ...nrcMaterials.camera, position: [2.51976, 1.00534, 2.04133], target: [1.73957, 1.10366, 1.42356], yFovDeg: 31.7051 },
+};

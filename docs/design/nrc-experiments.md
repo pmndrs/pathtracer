@@ -16,7 +16,11 @@ Startup curves were rerun on Sponza-white, 640 × 360 to 1280 × 720, tiled fp16
 
 The [phase 2–5 Mac results and reproduction commands](../../bench/results/NRC-ADAPTIVE.md) cover path spread, coarse-cell confidence, frozen inference, sparse maintenance and evaluated material inputs. The [phase 6–7 Mac results](../../bench/results/NRC-FACTOR-COMPACT.md) cover reflectance factorization and compact-network speed, glossy quality and light-edit recovery.
 
+The live interior demo runs the compact cache with online training, SVGF and 2× temporal upscaling on color Classroom and Sponza. [Prepare and run the showcase](../../bench/hero/README.md)
+
 ## Mac review
+
+Open the visual A/B testing guide with `node bench/live.ts nrc-review`. It includes the red-wall normal-map control, the eight saved Mac pairs, live shadow and motion protocols, and feedback examples. The saved comparisons use fixed-exposure PNGs included in the checkout. The red-card control uses `nrc-materials` at 480 × 270, eye (−5.6, 1.25, 0.3), target (−2.5, 0.93, −3.47), vertical FOV 38°, seed 778, depth six and 2,048 plain samples per pixel. The second render removes only the metal strips’ normal texture. [Guide source](../../bench/pages/nrc-review.html)
 
 For phases 10–14, the reference configuration is the compact MLP with reflected-direction inputs, raw RGB, four active position bands and one traced bounce before the cache. It accumulates cached samples continuously. Still refinement is off. The live URL query is `?scene=nrc-materials-card&phase10=mlp&res=640x360&refineStill=0`. The eight matched local captures are available at `/bench/results/incoming/nrc-review-20261119/index.html` on the live server. They include first-hit grid detail, wall grain, thin geometry, grazing-angle highlights and hit shading. Each comparison includes its traced reference.
 

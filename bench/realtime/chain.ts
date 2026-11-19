@@ -61,7 +61,7 @@ class UpscalerHost {
     this.backend = { device, get: (o) => this.map.get(o) };
   }
   /** three StorageTexture -> GPUTexture: (format, type) RGBA + HalfFloat = rgba16float, Red + Float = r32float, RGBA + UnsignedByte = rgba8unorm. */
-  initTexture(tex: { image: { width: number; height: number }; format: number; type: number; name?: string }): void {
+  initTexture(tex: { image: { width: number; height: number }; format: number; type: number; name?: string; addEventListener(type: 'dispose', listener: () => void): void }): void {
     if (this.map.has(tex)) return;
     const RGBA = 1023;
     const RED = 1028;
@@ -72,6 +72,7 @@ class UpscalerHost {
     if (!format) throw new Error(`UpscalerHost: no format for three texture "${tex.name}" (format ${tex.format}, type ${tex.type})`);
     const texture = this.device.createTexture({ label: tex.name ?? 'upscaler', size: { width: tex.image.width, height: tex.image.height }, format, usage: TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T | COPY_DST_T });
     this.map.set(tex, { texture });
+    tex.addEventListener('dispose', () => { texture.destroy(); this.map.delete(tex); });
   }
   /** A key object the upscaler accepts as a three texture, backed by `texture`. */
   texture(texture: GPUTexture, name: string): object {
@@ -92,7 +93,7 @@ class UpscalerHost {
 const SUM_VEC4 = 6;
 
 const ACCUM_WGSL = /* wgsl */ `
-struct P { n: u32, _a: u32, _b: u32, _c: u32 }
+struct P { n: u32, clampY: f32, _b: u32, _c: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> accum: array<vec4f>;
 @group(0) @binding(2) var<storage, read> planes: array<vec4f>;
@@ -105,12 +106,15 @@ fn pipeAccumulate(@builtin(global_invocation_id) gid: vec3u) {
   if (i >= n) { return; }
   let aF = planes[4u * n + i];
   let sF = planes[5u * n + i];
-  sums[i] += vec4f(accum[i].xyz, 1.0);
-  sums[n + i] += vec4f(planes[i].xyz * aF.xyz, 0.0);       // diffuse-class radiance (re-modulated)
-  sums[2u * n + i] += vec4f(planes[n + i].xyz * sF.xyz, 0.0); // specular-class radiance
+  let beauty = accum[i].xyz;
+  let y = dot(beauty, vec3f(0.2126, 0.7152, 0.0722));
+  let weight = select(1.0, p.clampY / max(y, 1e-8), p.clampY > 0.0 && y > p.clampY);
+  sums[i] += vec4f(beauty * weight, 1.0);
+  sums[n + i] += vec4f(planes[i].xyz * aF.xyz * weight, 0.0);       // diffuse-class radiance (re-modulated)
+  sums[2u * n + i] += vec4f(planes[n + i].xyz * sF.xyz * weight, 0.0); // specular-class radiance
   sums[3u * n + i] += vec4f(aF.xyz, aF.w);
   sums[4u * n + i] += vec4f(sF.xyz, sF.w);
-  sums[5u * n + i] += vec4f(planes[6u * n + i].xyz, 0.0);      // emission: primary-visible emitters / sky, never demodulated
+  sums[5u * n + i] += vec4f(planes[6u * n + i].xyz * weight, 0.0);      // emission: primary-visible emitters / sky, never demodulated
 }
 `;
 
@@ -377,7 +381,9 @@ export interface PipelineFrameBuffers {
 export class PipelineArm {
   readonly device!: GPUDevice;
   readonly s!: PipelineSettings;
-  readonly denoiser!: DiffuseSpecularDenoiser;
+  denoiser!: DiffuseSpecularDenoiser;
+  upscalePath: 'temporal' | 'spatial' | 'bilinear' = 'temporal';
+  private activePath = this.upscalePath;
   readonly upscaler!: Upscaler;
   private readonly host!: UpscalerHost;
   private readonly upCamera = new UpscalerCamera();
@@ -527,6 +533,18 @@ export class PipelineArm {
     }
   }
 
+  setFireflyClamp(limit: number): void {
+    this.device.queue.writeBuffer(this.accumParams, 4, new Float32Array([limit]));
+  }
+
+  setSvgfAlpha(alpha: number): void {
+    if ('temporalAlpha' in this.denoiser.options.diffuse && this.denoiser.options.diffuse.temporalAlpha === alpha) return;
+    this.denoiser.dispose();
+    this.denoiser = new DiffuseSpecularDenoiser(this.device, { ...this.s.denoiser, temporalAlpha: alpha, remodulate: true });
+    this.denoiser.configure({ width: this.s.width, height: this.s.height });
+    this.resetHistory();
+  }
+
   /** Loads the OIDN networks of the current settings (await before timing). */
   async ready(): Promise<void> {
     if (this.kind !== 'oidn') return;
@@ -601,7 +619,7 @@ export class PipelineArm {
    * Denoise, composite, upscale. Call after the frame's path tracing + `pack` were submitted. `camera` = this frame's (unjittered) camera;
    * the previous one is remembered. Records and submits its own work (the denoiser and the upscaler submit theirs).
    */
-  async post(camera: PtLookAtCamera, options: { denoise?: boolean; deltaTime?: number; tonemap?: boolean } = {}): Promise<void> {
+  async post(camera: PtLookAtCamera, options: { denoise?: boolean; progressiveInput?: boolean; deltaTime?: number; tonemap?: boolean } = {}): Promise<void> {
     const { width: w, height: h } = this.s;
     const aspect = w / h;
     const view = viewMatrix(camera);
@@ -642,12 +660,18 @@ export class PipelineArm {
       this.device.queue.submit([encoder.finish()]);
       this.lastDenoiser = 'svgf';
     } else if (kind === 'oidn') {
-      await this.denoiseOidn(camera, reset);
+      await this.denoiseOidn(camera, reset, options.progressiveInput);
     } else {
       const encoder = this.device.createCommandEncoder({ label: 'pipe raw' });
       encoder.copyTextureToTexture({ texture: t.raw }, { texture: this.color }, { width: w, height: h });
       this.device.queue.submit([encoder.finish()]);
       this.lastDenoiser = 'none';
+    }
+    if (this.activePath !== this.upscalePath) {
+      this.activePath = this.upscalePath;
+      this.upscaler.configure({ displayWidth: this.s.displayWidth, displayHeight: this.s.displayHeight, renderWidth: w, renderHeight: h, path: this.activePath, jitter: false });
+      await this.upscaler.init();
+      this.tonemapGroup = null;
     }
     this.upscale(camera, reset, options.deltaTime ?? 1 / 60, kind === 'svgf' && this.reactiveEnabled);
     if (options.tonemap) this.tonemap();
@@ -722,7 +746,7 @@ export class PipelineArm {
    * frames have accumulated, then the `still` network (and the frame is held with `hold`). Awaits the Denoiser package (it waits for its GPU
    * work; no readback). Writes `color`.
    */
-  async denoiseOidn(camera: PtLookAtCamera, cut: boolean): Promise<void> {
+  async denoiseOidn(camera: PtLookAtCamera, cut: boolean, progressiveInput = false): Promise<void> {
     const { width: w, height: h } = this.s;
     const key = cameraKey(camera);
     const moved = cut || key !== this.oidnCamera;
@@ -734,8 +758,8 @@ export class PipelineArm {
     const r = norm(cross(f, camera.up));
     const u = cross(r, f);
     const p = new ArrayBuffer(64);
-    new Uint32Array(p, 0, 3).set([moved ? 1 : 0, w, h]);
-    new Float32Array(p, 12, 1).set([this.oidnCount]);
+    new Uint32Array(p, 0, 3).set([moved || progressiveInput ? 1 : 0, w, h]);
+    new Float32Array(p, 12, 1).set([progressiveInput ? 1 : this.oidnCount]);
     new Float32Array(p, 16, 12).set([r[0], r[1], r[2], 0, u[0], u[1], u[2], 0, -f[0], -f[1], -f[2], 0]);
     this.device.queue.writeBuffer(this.oidnParams, 0, p);
     this.oidnGroup ??= this.device.createBindGroup({
