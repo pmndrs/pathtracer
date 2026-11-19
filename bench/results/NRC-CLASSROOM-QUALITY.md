@@ -19,3 +19,19 @@ Patch flicker measures the 99th percentile absolute change in mean display lumin
 Individual-pixel training barely changed this patch metric. Pre-denoiser accumulation produced the largest reduction in raw variation. At 41 spp, SVGF reintroduced some local variation and temporal upscaling suppressed much of it. OIDN gave the lowest final error and patch flicker with a higher frame cost. Use the raw/denoised/final selector to inspect the same surfaces. The native screenshot also shows finer blind stripes and sharper board and clock detail. This benchmark does not measure moving-camera ghosting or establish parity with the native renderer.
 
 ![Classroom with 41 accumulated samples per pixel, OIDN, and temporal upscaling](nrc-classroom-oidn.png)
+
+### Stationary grain after the initial settle
+
+On the Mac, a 480 × 270 Classroom render with temporal 2× output, live compact-MLP training and one traced sample per pixel per frame reproduced a rise in spatial grain after the first 32 frames. The raw sample mean continued to improve in both arms. The rise appeared in the SVGF output and carried through to the upscaler. SVGF estimates variance from successive inputs. As the cumulative input changes less each frame, spatial noise can remain even when temporal variance is small.
+
+| Frame | Raw NRC, unlimited | Final NRC, unlimited SVGF input | Final NRC, 16-sample SVGF input |
+| ---: | ---: | ---: | ---: |
+| 32 | .14080 | .00941 | .00936 |
+| 128 | .08164 | .01297 | .00862 |
+| 256 | .06232 | .01461 | .00886 |
+| 512 | .04770 | .01322 | .00832 |
+| 1024 | .03806 | .01136 | .00852 |
+
+The metric averages the absolute difference between a pixel's tone-mapped luminance and its four neighbors over three fixed ceiling and wall patches. It measures local grain and also picks up real texture. Compare each stage at the same resolution. The 16-sample input reduced NRC final grain by 39% at frame 256 and 25% at frame 1024. At frame 1024 it also reduced plain PT final grain from .01232 to .00871. Neither arm reached a nonfinite value at the measured checkpoints. These results cover a stationary camera and the SVGF path.
+
+The interactive bench defaults to a 16-sample effective history for the SVGF signal planes. The raw PT and NRC beauty buffers continue accumulating every sample. The **Test stationary grain** button reruns the unlimited and bounded variants with a fresh cache per case.

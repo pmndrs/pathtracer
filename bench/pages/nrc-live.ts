@@ -11,6 +11,7 @@
  * Scenes: Sponza (sun + sky), Sponza with VkNRC lighting (`scene=sponza-white-vknrc`; export its glb first:
  * `node bench/adapters/export-scenes.ts sponza-white-vknrc`), Cornell.
  */
+import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import { MLP_SHAPES, type Precision } from '@pathtracer/mlp';
 import { PtMegakernel, type PtLookAtCamera } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
@@ -210,16 +211,20 @@ function displayGroup(l: Pick<Live, 'device' | 'plain' | 'cache'>, pipeline: GPU
 async function build(full: boolean): Promise<void> {
   if (building) return;
   building = true;
+  const sceneSelect = $<HTMLSelectElement>('scene');
+  sceneSelect.disabled = true;
   try {
     const sceneId = value('scene');
     const [w, h] = value('res').split('x').map(Number) as [number, number];
     if (full || !live) {
       setStatus(`Loading ${sceneId} at ${w} × ${h}…`);
+      const changedScene = live?.scene.name !== sceneId;
       live?.cache.destroy();
       live?.adapter.dispose();
       live = null;
       // Loaded unchanged (the exported glTF is keyed to the whole scene definition); film and depth are set on the kernels.
-      const scene = SCENES[sceneId] as SceneDesc;
+      const scene = isInterior(sceneId) ? await loadInterior(sceneId) : SCENES[sceneId] as SceneDesc;
+      if (changedScene) $<HTMLInputElement>('maxDepth').value = String(scene.integrator.maxDepth);
       const adapter = new PtMegakernelAdapter();
       await adapter.load(scene);
       const device = adapter.gpuContext!.device;
@@ -256,6 +261,7 @@ async function build(full: boolean): Promise<void> {
     setStatus(error instanceof Error ? `${error.message}` : String(error), true);
     console.error(error);
   } finally {
+    sceneSelect.disabled = false;
     building = false;
   }
 }
@@ -468,11 +474,6 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
-// A scene brings its own path length (sponza-white 8, the VkNRC-lit variant 7); the field can still be changed after.
-const sceneDepth = (): void => {
-  $<HTMLInputElement>('maxDepth').value = String((SCENES[$<HTMLSelectElement>('scene').value] as SceneDesc).integrator.maxDepth);
-};
-$('scene').addEventListener('change', sceneDepth);
 for (const id of ['scene', 'res', 'maxDepth']) $(id).addEventListener('change', () => void build(true));
 for (const id of ['backend', 'directionInput', 'positionBands', 'lr', 'trainDepth', 'training', 'trainSelect']) $(id).addEventListener('change', () => void build(false));
 $('queryDepth').addEventListener('change', () => {
@@ -524,9 +525,8 @@ if (phasePreset) {
   $<HTMLInputElement>('steps').value = String(phasePreset.stepsPerFrame);
   $<HTMLSelectElement>('positionBands').value = '4';
 }
-if (args.get('scene') && SCENES[args.get('scene') as string]) {
+if (args.get('scene') && [...$<HTMLSelectElement>('scene').options].some(option => option.value === args.get('scene'))) {
   $<HTMLSelectElement>('scene').value = args.get('scene') as string;
-  sceneDepth();
 }
 const factorized = args.has('factorization') && args.get('factorization') !== 'off';
 const directionSelect = $<HTMLSelectElement>('directionInput');

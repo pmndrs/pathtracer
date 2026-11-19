@@ -38,6 +38,7 @@
       h1 { font-size: 15px; margin: 0; }
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
       fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+      [hidden] { display: none !important; }
       label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
       label.check { justify-content: flex-start; }
       select, input[type='number'] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; max-width: 160px; }
@@ -71,7 +72,7 @@
         </div>
         <fieldset>
           <h2>Scene</h2>
-          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="nrc-materials-shadow">Red card, upper wall shadow</option><option value="cornell">Cornell box</option></select></label>
+          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="hero-classroom">Classroom (color)</option><option value="hero-sponza">Sponza (color)</option><option value="nrc-materials-shadow">Red card, upper wall shadow</option><option value="cornell">Cornell box</option></select></label>
           <label>Render resolution <select id="res"><option value="480x270">480 × 270</option><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
           <label>Display scale <select id="displayScale"><option value="2">2×</option><option value="1">1× (native)</option></select></label>
         </fieldset>
@@ -80,6 +81,7 @@
           <label>Show <select id="view"><option value="split">Split</option><option value="plain">Path tracing only</option><option value="nrc">With NRC only</option></select></label>
           <label>Stage <select id="stageSel"><option value="final" selected>Final (denoised + upscaled)</option><option value="denoised">Denoised (render res)</option><option value="raw">Raw (render res)</option></select></label>
           <label>Denoiser <select id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still, hold</option><option value="oidn-fast">OIDN small net always (no hold)</option><option value="oidn-std">OIDN standard net always (no hold)</option><option value="none">None (raw to upscaler)</option></select></label>
+          <label title="Effective sample history fed into SVGF while still. Zero uses every sample. Raw radiance always keeps the full mean.">SVGF input history (spp) <input id="svgfHistoryLimit" type="number" min="0" max="4096" step="1" value="16" /></label>
           <label>SVGF current-frame weight <input id="svgfAlpha" type="number" min="0.01" max="1" step="0.01" value="0.1" /></label>
           <label>OIDN guides <select id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
           <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once and the frame is held">OIDN still samples <input id="stillSamples" type="number" min="1" max="64" value="8" /></label>
@@ -95,6 +97,13 @@
           <label>Plain samples / frame <input id="plainSpp" type="number" min="1" max="16" value="1" /></label>
           <div class="row"><button id="clearImage">Clear image</button></div>
           <label class="check"><input id="equalTime" type="checkbox" checked /> Equal time (set by Benchmark)</label>
+        </fieldset>
+        <fieldset id="daylight" hidden>
+          <h2>Daylight</h2>
+    <label>Sun strength <input id="sunStrength" type="range" min="0" max="6" step="0.1" value="1"><output></output></label>
+    <label>Sun azimuth <input id="sunAzimuth" type="range" min="-180" max="180" step="1"><output></output></label>
+    <label>Sun elevation <input id="sunElevation" type="range" min="1" max="89" step="1"><output></output></label>
+    <label>Sun radius <input id="sunRadius" type="range" min="0" max="2" step="0.001"><output></output></label>
         </fieldset>
         <fieldset>
           <h2>Upscaler</h2>

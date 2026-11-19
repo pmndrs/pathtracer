@@ -51,6 +51,7 @@ export class NrcPipelineSession {
   plainSpp = 1;
   nrcSpp = 1;
   accumulateStill = false;
+  svgfHistoryLimit = 0;
   readonly samples = { plain: 0, nrc: 0 };
   private stillKey = { plain: '', nrc: '' };
   private camera: PtLookAtCamera | null = null;
@@ -160,6 +161,8 @@ export class NrcPipelineSession {
   }
 
   private beginSamples(encoder: GPUCommandEncoder, arm: ArmName, count: number, key: string): void {
+    const pipeline = this.arms[arm];
+    pipeline.setSignalHistoryLimit(key && pipeline.kind === 'svgf' ? this.svgfHistoryLimit : 0);
     if (!key || key !== this.stillKey[arm]) {
       this.arms[arm].beginFrame(encoder);
       this.samples[arm] = 0;

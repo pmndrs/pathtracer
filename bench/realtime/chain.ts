@@ -93,7 +93,7 @@ class UpscalerHost {
 const SUM_VEC4 = 6;
 
 const ACCUM_WGSL = /* wgsl */ `
-struct P { n: u32, clampY: f32, _b: u32, _c: u32 }
+struct P { n: u32, clampY: f32, historyLimit: u32, _c: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> accum: array<vec4f>;
 @group(0) @binding(2) var<storage, read> planes: array<vec4f>;
@@ -110,11 +110,21 @@ fn pipeAccumulate(@builtin(global_invocation_id) gid: vec3u) {
   let y = dot(beauty, vec3f(0.2126, 0.7152, 0.0722));
   let weight = select(1.0, p.clampY / max(y, 1e-8), p.clampY > 0.0 && y > p.clampY);
   sums[i] += vec4f(beauty * weight, 1.0);
-  sums[n + i] += vec4f(planes[i].xyz * aF.xyz * weight, 0.0);       // diffuse-class radiance (re-modulated)
-  sums[2u * n + i] += vec4f(planes[n + i].xyz * sF.xyz * weight, 0.0); // specular-class radiance
-  sums[3u * n + i] += vec4f(aF.xyz, aF.w);
-  sums[4u * n + i] += vec4f(sF.xyz, sF.w);
-  sums[5u * n + i] += vec4f(planes[6u * n + i].xyz * weight, 0.0);      // emission: primary-visible emitters / sky, never demodulated
+  // SVGF estimates temporal variance from changes in its input. A cumulative
+  // mean eventually changes very little, even where the image is still grainy.
+  // Bound the signal history while keeping the raw beauty sum above exact.
+  let count = sums[n + i].w;
+  var keep = 1.0;
+  var nextCount = count + 1.0;
+  if (p.historyLimit > 0u && count >= f32(p.historyLimit)) {
+    nextCount = f32(p.historyLimit);
+    keep = (nextCount - 1.0) / count;
+  }
+  sums[n + i] = vec4f(sums[n + i].xyz * keep + planes[i].xyz * aF.xyz * weight, nextCount);
+  sums[2u * n + i] = sums[2u * n + i] * keep + vec4f(planes[n + i].xyz * sF.xyz * weight, 0.0);
+  sums[3u * n + i] = sums[3u * n + i] * keep + aF;
+  sums[4u * n + i] = sums[4u * n + i] * keep + sF;
+  sums[5u * n + i] = sums[5u * n + i] * keep + vec4f(planes[6u * n + i].xyz * weight, 0.0);
 }
 `;
 
@@ -149,6 +159,7 @@ fn pipePack(@builtin(global_invocation_id) gid: vec3u) {
   let i = y * p.w + x;
   let inv = 1.0 / p.spp;
   let beauty = sums[i].xyz * inv;
+  let signalInv = 1.0 / max(1.0, sums[n + i].w);
   let aF = max(sums[3u * n + i].xyz, vec3f(1e-6));
   let sF = max(sums[4u * n + i].xyz, vec3f(1e-6));
   let diffuse = sums[n + i].xyz / aF;   // sum of re-modulated radiance / sum of factors = radiance / mean factor
@@ -158,11 +169,11 @@ fn pipePack(@builtin(global_invocation_id) gid: vec3u) {
   put16(0u, x, y, clampHalf(vec4f(beauty, 1.0)));
   put16(1u, x, y, clampHalf(vec4f(diffuse, 1.0)));
   put16(2u, x, y, clampHalf(vec4f(specular, 1.0)));
-  put16(3u, x, y, vec4f(aF * inv, sums[3u * n + i].w * inv));   // w: share of specular-class samples
-  put16(4u, x, y, vec4f(sF * inv, sums[4u * n + i].w * inv));   // w: share of samples whose primary ray hit
+  put16(3u, x, y, vec4f(aF * signalInv, sums[3u * n + i].w * signalInv));   // w: share of specular-class samples
+  put16(4u, x, y, vec4f(sF * signalInv, sums[4u * n + i].w * signalInv));   // w: share of samples whose primary ray hit
   put16(5u, x, y, vec4f(nz.xyz, 0.0));
   put16(6u, x, y, vec4f(mo.xy, 0.0, 0.0));
-  put16(7u, x, y, clampHalf(vec4f(sums[5u * n + i].xyz * inv, 1.0)));   // emission: mean over the samples, added back after the filter
+  put16(7u, x, y, clampHalf(vec4f(sums[5u * n + i].xyz * signalInv, 1.0)));   // emission: mean over the samples, added back after the filter
   put32(0u, x, y, nz.w);
   put32(1u, x, y, mo.w);
   put32(2u, x, y, mo.z);
@@ -531,6 +542,13 @@ export class PipelineArm {
       void oidnFor(this.device, this.oidn.moving, this.oidn.aux, this.oidn.precision);
       void oidnFor(this.device, this.oidn.still, this.oidn.aux, this.oidn.precision);
     }
+  }
+
+  private signalHistoryLimit = 0;
+  setSignalHistoryLimit(limit: number): void {
+    if (limit === this.signalHistoryLimit) return;
+    this.signalHistoryLimit = limit;
+    this.device.queue.writeBuffer(this.accumParams, 8, new Uint32Array([limit]));
   }
 
   setFireflyClamp(limit: number): void {

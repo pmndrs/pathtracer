@@ -22,3 +22,18 @@ The page opens on Classroom in a WebGPU browser. It trains the compact fp16 MLP 
 Open **Classroom quality bench** from the hero, or run `node bench/live.ts nrc-classroom-quality`. **Run comparison** collects a plain 256-spp reference followed by five cold-start NRC runs at 640 × 360 with SVGF or OIDN and temporal upscaling to 1280 × 720. The table compares coherent 8 × 8 brightness changes and error to plain tracing for each stage. The displayed final captures use the same exposure as the interactive Classroom. The reference measures the web renderer’s own steady image. The supplied native screenshot is a visual target with different lighting, scene conversion, and reconstruction.
 
 The quality page also links to a **native-scale comparison preset**. It traces one sample per frame at 1280 × 720 and presents at 1×, with accumulation enabled, path depth 10, a 102.8 luminance clamp and a 0.048° sun radius. Azimuth and elevation are rounded to 65° and 27° in our scene coordinates. This reproduces selected settings visible in the supplied control panel. Its renderer reported a 1920 × 1009 framebuffer on an RTX 4060 Laptop with NRD and TAA; our preset uses WebGPU, SVGF, and the temporal upscaler at 1×.
+
+### Regular test bench
+
+The scene IDs are `hero-classroom` and `hero-sponza`. Prepare either scene once with `python3 bench/hero/prepare.py classroom` or `python3 bench/hero/prepare.py sponza`. Both use the same scene descriptor, textures, daylight and camera as the hero.
+
+| Entry point | What to tune |
+| --- | --- |
+| `node bench/live.ts nrc-pipeline` | Select **Classroom (color)** or **Sponza (color)** for the plain/NRC split, daylight, accumulation, denoiser and upscaler. |
+| `node bench/live.ts nrc-live` | Select either interior for cache-only experiments with training, direction inputs, position bands and query depth. |
+| `node bench/adapters/matrix.ts --scenes hero-classroom,hero-sponza --renderers pt-megakernel --spp 4` | Run the regular adapter comparison and export its report. |
+| `nrc-pipeline-study` or `realtime-pipeline` in the bench runner | Set `scene=hero-classroom` for the pipeline study or `scenes=hero-classroom,hero-sponza` for the real-time pipeline. The NRC study renders its own reference for these interiors by default. |
+
+For the interactive pages, `?scene=hero-classroom` or `?scene=hero-sponza` opens directly on that interior.
+
+**SVGF input history (spp)** controls how much of the stationary trace feeds the filter. The interactive default is 16 samples. After the first 16 samples, each new sample gets a 1/16 weight. Zero selects the original unlimited mean. This affects SVGF's signal and material-factor averages together. The raw image and OIDN still use the full sample mean, and the sample badges count traced samples. To repeat the 1,024-frame comparison on the same ceiling and wall patches, choose **Test stationary grain** on the Classroom quality page.

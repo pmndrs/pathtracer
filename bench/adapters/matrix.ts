@@ -31,7 +31,8 @@ import { mergeRounds, retargetManifest, roundOrder, type RoundResult } from './i
 import type { ReportManifest } from '../viewer/src/report.ts';
 import { exportScenes } from './export-scenes.ts';
 import { ADAPTER_IDS } from './registry.ts';
-import { allScenes, tier0Scenes } from '../scenes/index.ts';
+import { localSceneNames } from '../scenes/local-scenes.ts';
+import { tier0Scenes } from '../scenes/index.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -74,7 +75,7 @@ function main(): void {
     },
   });
   const renderers = values.renderers!.split(',').filter(Boolean);
-  const sceneNames = values.scenes === 'all' ? allScenes.map((s) => s.name) : values.scenes!.split(',').filter(Boolean);
+  const sceneNames = values.scenes === 'all' ? localSceneNames() : values.scenes!.split(',').filter(Boolean);
   exportScenes(sceneNames);
   const outDir = join(REPO, 'bench', 'results', 'reports', values.name!);
   const parts: Array<{ manifest: ReportManifest; dir: string }> = [];

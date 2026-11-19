@@ -28,6 +28,7 @@ import { readPFM } from '../metrics/pfm.ts';
 import type { Image } from '../src/adapter.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
+import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import { getScene } from '../scenes/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { BoilMeter, tonemappedLuma } from '../realtime/boil.ts';
@@ -210,7 +211,7 @@ try {
   let firstConfig = true;
 
   for (const sceneName of sceneNames) {
-    const scene = getScene(sceneName);
+    const scene = isInterior(sceneName) ? await loadInterior(sceneName) : getScene(sceneName);
     const film = scene.film;
     const wide = Math.abs(film.width / film.height - 16 / 9) < 0.01;
     const [width, height] = wide ? ((args.res ?? '960x540').split('x').map(Number) as [number, number]) : [film.width, film.height];

@@ -18,6 +18,7 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { createAdapter, unsupportedReason } from '../adapters/registry.ts';
 import { parseLightSelection } from '@pmndrs/raytracer';
 import type { NodeFormat } from '@pmndrs/bvh';
+import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import { getScene } from '../scenes/index.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -51,7 +52,7 @@ try {
   snapshots.sort((a, b) => a - b);
   const frameBudget = args['budget'] ? numberArg(args, 'budget', 250000) : undefined;
 
-  const scene = getScene(sceneName);
+  const scene = isInterior(sceneName) ? await loadInterior(sceneName) : getScene(sceneName);
   const emitters = args['emitters'] === 'mesh' ? 'mesh' : 'rect';
   const bounces = args['bounces'] ? numberArg(args, 'bounces', 0) : undefined;
   const mutracer = {

@@ -1,5 +1,5 @@
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
-import { loadHeroScene } from '../hero/showcase.ts';
+import { loadInterior } from '../scenes/interiors.ts';
 import { phase10Settings } from '../nrc/phase10.ts';
 import { NrcPipelineSession } from '../nrc/pipeline-session.ts';
 import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
@@ -59,7 +59,7 @@ function capture(image: Image, caption: string): void {
 }
 
 async function compare(): Promise<void> {
-  const scene = await loadHeroScene('hero-classroom');
+  const scene = await loadInterior('hero-classroom');
   const camera = scene.camera as PtLookAtCamera;
   let reference: Float32Array | undefined;
   const cases = [
@@ -121,14 +121,65 @@ async function compare(): Promise<void> {
   }
 }
 
-run.addEventListener('click', async () => {
-  run.disabled = true;
-  progress.textContent = 'Loading Classroom…';
-  rows.replaceChildren();
-  captures.replaceChildren();
-  try { await compare(); progress.textContent = 'Comparison complete.'; }
-  catch (e) { progress.textContent = 'Failed: ' + (e instanceof Error ? e.message : String(e)); }
-  finally { run.disabled = false; }
-});
+// A stationary spatial metric catches fixed grain even when adjacent frames agree.
+function surfaceGrain({ width: w, height: h, data }: Image): number {
+  function displayY(x: number, y: number): number {
+    const i = 4 * (y * w + x);
+    return tone(0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!);
+  }
+  let sum = 0, count = 0;
+  for (const [left, right, top, bottom] of [[0.39, 0.49, 0.06, 0.105], [0.48, 0.52, 0.22, 0.27], [0.60, 0.67, 0.19, 0.22]] as const) {
+    for (let y = Math.ceil(top * h); y < bottom * h; y++) for (let x = Math.ceil(left * w); x < right * w; x++) {
+      sum += Math.abs(displayY(x, y) - 0.25 * (displayY(x - 1, y) + displayY(x + 1, y) + displayY(x, y - 1) + displayY(x, y + 1)));
+      count++;
+    }
+  }
+  return sum / count;
+}
 
-run.disabled = false;
+async function testSettling(): Promise<void> {
+  const section = document.querySelector<HTMLElement>('#settling')!;
+  const tbody = section.querySelector('tbody')!;
+  section.hidden = false;
+  tbody.replaceChildren();
+  const scene = await loadInterior('hero-classroom');
+  const checkpoints = new Set([8, 32, 64, 128, 256, 512, 1024]);
+  for (const limit of [0, 16]) {
+    const label = limit ? limit + ' spp' : 'Unlimited';
+    const session = await NrcPipelineSession.create({ scene, width: 480, height: 270, displayWidth: 960, displayHeight: 540,
+      cache: phase10Settings('mlp'), upscaler: { rcasDenoise: true } });
+    try {
+      session.setGate(8, 16);
+      session.accumulateStill = true;
+      session.svgfHistoryLimit = limit;
+      for (let frame = 1; frame <= 1024; frame++) {
+        await session.frame(scene.camera as PtLookAtCamera);
+        await session.device.queue.onSubmittedWorkDone();
+        if (frame % 8 === 0) progress.textContent = `${label} · frame ${frame}/1024`;
+        if (!checkpoints.has(frame)) continue;
+        for (const arm of ['plain', 'nrc'] as const) {
+          const values = [label, String(frame), arm];
+          for (const stage of stages) {
+            const image = await readTextureRgba16f(session.device, session.arms[arm].stage(stage));
+            values.push(surfaceGrain(image).toFixed(5));
+          }
+          const row = tbody.insertRow();
+          for (const v of values) row.insertCell().textContent = v;
+        }
+      }
+    } finally { session.destroy(); }
+  }
+}
+
+const hold = document.querySelector<HTMLButtonElement>('#hold')!;
+for (const [button, test] of [[run, compare], [hold, testSettling]] as const) {
+  button.disabled = false;
+  button.addEventListener('click', async () => {
+    run.disabled = hold.disabled = true;
+    progress.textContent = 'Loading Classroom…';
+    if (button === run) { rows.replaceChildren(); captures.replaceChildren(); }
+    try { await test(); progress.textContent = 'Comparison complete.'; }
+    catch (e) { progress.textContent = 'Failed: ' + (e instanceof Error ? e.message : String(e)); }
+    finally { run.disabled = hold.disabled = false; }
+  });
+}

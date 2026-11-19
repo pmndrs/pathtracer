@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { toGltf } from '../exporters/gltf.ts';
 import { ASSETS_DIR, generateAssets } from '../scenes/tier0/generate-assets.ts';
 import { ENV_FILE } from '../scenes/tier0/env-sky.ts';
-import { allScenes, getScene } from '../scenes/index.ts';
+import { getLocalScene, localSceneNames } from '../scenes/local-scenes.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 
 export const WEB_DIR = join(ASSETS_DIR, 'generated', 'web');
@@ -46,8 +46,7 @@ export function exportScene(scene: SceneDesc): string {
 
 export function exportScenes(names: readonly string[] = []): string[] {
   if (!existsSync(join(ASSETS_DIR, ENV_FILE))) generateAssets();
-  const scenes = names.length > 0 ? names.map((n) => getScene(n)) : allScenes;
-  return scenes.map(exportScene);
+  return (names.length ? names : localSceneNames()).map(name => exportScene(getLocalScene(name)));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

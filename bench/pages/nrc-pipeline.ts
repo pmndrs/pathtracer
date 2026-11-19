@@ -11,6 +11,8 @@
  * standard network once after `stillSamples` still frames, then the frame is held), OIDN fast / standard every frame, or none.
  * No readback in the frame loop; one frame in flight. Headless twin: nrc-pipeline-study.
  */
+import { setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
+import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 import { uploadImage } from '../runner/page-client.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
@@ -130,7 +132,7 @@ async function build(): Promise<void> {
     live?.params.destroy();
     live?.session.destroy();
     live = null;
-    const scene = hero ? await hero.loadHeroScene(sceneId) : SCENES[sceneId] as SceneDesc;
+    const scene = isInterior(sceneId) ? await loadInterior(sceneId) : SCENES[sceneId] as SceneDesc;
     const backend = value('backend') || 'tiled-f16';
     const [kind, prec] = backend.split('-') as [string, string];
     const session = await NrcPipelineSession.create({
@@ -167,8 +169,11 @@ async function build(): Promise<void> {
     live = { session, scene, context, pipeline, params, sampler, groups: new Map() };
     applyDenoiser();
     applyReconstruction();
-    if (sameScene) hero?.updateDaylight(session);
-    else hero?.setupDaylight(session);
+    $('daylight').hidden = !isInterior(sceneId);
+    if (isInterior(sceneId)) {
+      if (sameScene) updateDaylight(session);
+      else setupDaylight(session);
+    }
     session.cutNext();
     setStatus('');
   } catch (error) {
@@ -259,6 +264,7 @@ function gateFrames(): number {
 function applyCacheSettings(session: NrcPipelineSession): void {
   session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
   session.accumulateStill = checked('accumulateStill');
+  session.svgfHistoryLimit = Math.max(0, Math.min(4096, Math.round(num('svgfHistoryLimit'))));
   session.nrcSpp = Math.max(1, Math.min(16, Math.round(num('nrcSpp')) || 1));
   session.setGate(gateFrames(), num('gateSteps'));
 }
@@ -395,11 +401,12 @@ $('plainSpp').addEventListener('change', () => {
 });
 $('resetCache').addEventListener('click', () => { live?.session.cache.resetNetwork(); live?.session.cutNext(); });
 $('fireflyClamp').addEventListener('change', () => live?.session.cutNext());
-for (const id of ['clearImage', 'accumulateStill']) $(id).addEventListener(id === 'clearImage' ? 'click' : 'change', () => live?.session.cutNext());
+for (const id of ['clearImage', 'accumulateStill', 'svgfHistoryLimit']) $(id).addEventListener(id === 'clearImage' ? 'click' : 'change', () => live?.session.cutNext());
 function applyReconstruction(): void {
   const path = value('upscalePath') as 'spatial' | 'bilinear' | 'temporal';
   for (const id of ['sharpness', 'rcasDenoise']) $<HTMLInputElement>(id).disabled = path === 'bilinear';
   $<HTMLInputElement>('upHistory').disabled = path !== 'temporal';
+  $<HTMLInputElement>('svgfHistoryLimit').disabled = value('denoiserSel') !== 'svgf';
   $<HTMLInputElement>('svgfAlpha').disabled = value('denoiserSel') !== 'svgf';
   $<HTMLSelectElement>('oidnAux').disabled = !value('denoiserSel').startsWith('oidn');
   $<HTMLInputElement>('stillSamples').disabled = value('denoiserSel') !== 'oidn';
@@ -429,15 +436,16 @@ $('pause').addEventListener('click', () => {
 const args = new URLSearchParams(location.search);
 const hero = args.get('demo') === 'hero' ? await import('../hero/showcase.ts') : undefined;
 hero?.setupHero();
-if (hero) for (const id of ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius']) $(id).addEventListener('input', () => {
-  if (live) hero.updateDaylight(live.session);
+for (const id of ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius']) $(id).addEventListener('input', () => {
+  if (live && isInterior(live.scene.name)) updateDaylight(live.session);
 });
 const preset = hero || args.get('phase10') === 'mlp' ? phase10Settings('mlp') : undefined;
 const network = preset?.network ?? networkArg(args.get('network'));
 if (preset) $<HTMLInputElement>('steps').value = String(preset.stepsPerFrame);
+if (args.has('svgfHistory')) $<HTMLInputElement>('svgfHistoryLimit').value = args.get('svgfHistory')!;
 const stage = args.get('stage');
 if (stage === 'denoised' || stage === 'raw' || stage === 'final') $<HTMLSelectElement>('stageSel').value = stage;
-if (!hero && args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
+if (!hero && args.get('scene') && [...$<HTMLSelectElement>('scene').options].some(option => option.value === args.get('scene'))) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
 // ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8
 if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;

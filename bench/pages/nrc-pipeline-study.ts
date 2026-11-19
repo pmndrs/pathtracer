@@ -41,6 +41,8 @@ import { readPFM } from '../metrics/pfm.ts';
 import type { Image } from '../src/adapter.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
+import { isInterior, loadInterior } from '../scenes/interiors.ts';
+import type { SceneDesc } from '../scenes/schema.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
 import { materialArgs } from '../nrc/cache.ts';
@@ -82,14 +84,14 @@ async function fetchPfmOrNull(path: string): Promise<Img | null> {
 const lum = (d: Float32Array, i: number, c: number) => 0.2126 * (d[i * c] as number) + 0.7152 * (d[i * c + 1] as number) + 0.0722 * (d[i * c + 2] as number);
 
 /** Our own reference: the plain path tracer (accumulating kernel, same scene settings) at `spp`, 1280x720, the reference camera. */
-async function renderOwnReference(spp: number, camera = sponzaWhite.camera as PtLookAtCamera): Promise<Img> {
+async function renderOwnReference(scene: SceneDesc, spp: number, camera = scene.camera as PtLookAtCamera): Promise<Img> {
   const adapter = new PtMegakernelAdapter({ nee: true });
-  await adapter.load(sponzaWhite);
+  await adapter.load(scene);
   const kernel = adapter.renderer as PtMegakernel;
   const device = adapter.gpuContext!.device;
   kernel.setFilm(1280, 720);
   kernel.setCamera(camera);
-  kernel.setLimits({ maxDepth: sponzaWhite.integrator.maxDepth, ...(sponzaWhite.integrator.rrStartDepth ? { rrStartDepth: sponzaWhite.integrator.rrStartDepth } : {}) });
+  kernel.setLimits({ maxDepth: scene.integrator.maxDepth, ...(scene.integrator.rrStartDepth ? { rrStartDepth: scene.integrator.rrStartDepth } : {}) });
   kernel.setSeed(4242);
   {
     const e = device.createCommandEncoder();
@@ -110,6 +112,9 @@ async function renderOwnReference(spp: number, camera = sponzaWhite.camera as Pt
 
 try {
   const args = getArgs();
+  const sceneId = args.scene ?? sponzaWhite.name;
+  if (sceneId !== sponzaWhite.name && !isInterior(sceneId)) throw new Error(`Unknown pipeline-study scene: ${sceneId}`);
+  const scene = isInterior(sceneId) ? await loadInterior(sceneId) : sponzaWhite;
   const [width, height] = (args.res ?? '960x540').split('x').map(Number) as [number, number];
   const displayWidth = 2 * width;
   const displayHeight = 2 * height;
@@ -131,8 +136,8 @@ try {
   // console errors); `refFile=<url>` loads a saved one; `ref=ours` renders our own.
   let ref: Img | null = null;
   let refSource = '';
-  const mitsuba = '/bench/references/sponza-white/mitsuba3-llvm_ad_rgb-4096spp.pfm';
-  const refMode = args.refFile ? 'file' : (args.ref ?? 'mitsuba');
+  const mitsuba = `/bench/references/${scene.name}/mitsuba3-llvm_ad_rgb-4096spp.pfm`;
+  const refMode = args.refFile ? 'file' : (args.ref ?? (isInterior(sceneId) ? 'ours' : 'mitsuba'));
   if (refMode === 'file') {
     ref = await fetchPfmOrNull(args.refFile as string);
     if (!ref) throw new Error(`refFile ${args.refFile}: not found`);
@@ -144,7 +149,7 @@ try {
   } else {
     const spp = numberArg(args, 'refSpp', 4096);
     const t0 = performance.now();
-    ref = await renderOwnReference(spp);
+    ref = await renderOwnReference(scene, spp);
     refSource = `ours: plain megakernel, ${spp} spp, 1280x720`;
     notes.reference_render_s = (performance.now() - t0) / 1000;
     if (doUpload) await uploadImage(`reference-ours-${spp}spp`, ref as never);
@@ -156,7 +161,7 @@ try {
 
   // Session.
   const session = await NrcPipelineSession.create({
-    scene: sponzaWhite,
+    scene,
     width,
     height,
     displayWidth,
@@ -175,7 +180,7 @@ try {
   const device = session.device;
   adapterSummary = session.adapter.gpuContext!.summary;
   deviceErrors = watchDevice(device);
-  const refCam = sponzaWhite.camera as PtLookAtCamera;
+  const refCam = scene.camera as PtLookAtCamera;
   notes.infer = session.inferDescription;
   notes.denoiser = session.arms.plain.kind === 'oidn' ? `oidn ${JSON.stringify(session.arms.plain.oidn)}` : session.arms.plain.kind === 'svgf' ? session.arms.plain.denoiser.name : 'none';
   await session.arms.plain.ready();
@@ -337,7 +342,9 @@ try {
       return { ...refCam, position: pos, target: tgt };
     };
     // Unseen view: our own reference there (the Mitsuba references only cover the scene camera).
-    const viewC: PtLookAtCamera = { ...refCam, position: [-8, 4.95, -4.5], target: [10, 4.95, -4.5] };
+    const viewC: PtLookAtCamera = sceneId === 'hero-classroom'
+      ? { ...refCam, position: [refCam.position[0] - 1, refCam.position[1], refCam.position[2]], target: refCam.target }
+      : { ...refCam, position: [-8, 4.95, -4.5], target: [10, 4.95, -4.5] };
     let refC: Img | null = null;
     if ((args.gateUnseen ?? '1') === '1') {
       if (args.refCFile) {
@@ -347,7 +354,7 @@ try {
       } else {
         const spp = numberArg(args, 'refCSpp', 2048);
         const t0 = performance.now();
-        refC = await renderOwnReference(spp, viewC);
+        refC = await renderOwnReference(scene, spp, viewC);
         notes.reference_unseen = `ours: plain megakernel, ${spp} spp, 1280x720, view C ${JSON.stringify(viewC.position)} -> ${JSON.stringify(viewC.target)}`;
         notes.reference_unseen_render_s = (performance.now() - t0) / 1000;
         if (doUpload) await uploadImage(`reference-ours-corridor-${spp}spp`, refC as never);
@@ -430,7 +437,7 @@ try {
   console.log(notes.stabilityTable);
 
   reportResult(
-    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { model: session.cache.settings.model, materialInputs: session.cache.settings.materialInputs, factorization: session.cache.settings.factorization, directionInput: session.cache.settings.directionInput, ...(session.cache.hash ? { hash: session.cache.hash.settings } : { network: session.cache.settings.network, shape: session.cache.mlp!.shape }), denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
+    { scene: scene.name, renderer: 'nrc-pipeline-study', config: { model: session.cache.settings.model, materialInputs: session.cache.settings.materialInputs, factorization: session.cache.settings.factorization, directionInput: session.cache.settings.directionInput, ...(session.cache.hash ? { hash: session.cache.hash.settings } : { network: session.cache.settings.network, shape: session.cache.mlp!.shape }), denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },
   );
 } catch (error) {
