@@ -196,7 +196,7 @@ export function compareClosest(gpu: Hit, cpu: CpuHit | null, edges: EdgeIndex, t
     // Grazing past a tangent edge onto something behind it, on either side.
     const nearer = gpu.t < cpu.t ? gpuEdge : cpuEdge;
     if (!sameTriangle && nearer === 'tangent' && !strict) return { verdict: 'grazing', tRelative };
-    return { verdict: 'mismatch', why: `t gpu ${gpu.t} cpu ${cpu.t} (rel ${tRelative.toExponential(2)}, cos ${cos.toFixed(3)}, tri gpu ${gpu.instance}/${gpu.triangle} cpu ${cpu.instanceIndex}/${cpu.triangleIndex})`, tRelative };
+    return { verdict: 'mismatch', why: `t gpu ${gpu.t} cpu ${cpu.t} (rel ${tRelative.toExponential(2)}, cos ${cos.toFixed(3)}, tri gpu ${gpu.instance}/${gpu.triangle} bary ${gpu.barycentrics.map((x) => x.toExponential(3))} (${gpuEdge}) cpu ${cpu.instanceIndex}/${cpu.triangleIndex} bary ${cpu.u.toExponential(3)},${cpu.v.toExponential(3)} (${cpuEdge}))`, tRelative };
   }
   if (!sameTriangle && strict) {
     // Primary rays: the instance and triangle must match (the f64 walk names the GPU's on bvh's own Sponza primary rays).
