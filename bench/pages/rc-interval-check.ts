@@ -183,7 +183,9 @@ function sameOrTie(a: Hit, b: Hit, edges: EdgeIndex, direction: readonly number[
   if (a.instance === b.instance && a.triangle === b.triangle) return 'same';
   // Two triangles at one t: on an edge or vertex of either (also across instances: two walls meeting), or coplanar / sharing a corner.
   if (edges.kind(a.instance, a.triangle, a.barycentrics[0], a.barycentrics[1], direction) !== 'interior' || edges.kind(b.instance, b.triangle, b.barycentrics[0], b.barycentrics[1], direction) !== 'interior') return 'tie';
-  if (a.instance !== b.instance) return 'no';
+  // Coincident faces of two instances (a box standing on the floor): both hits interior, same t, one world plane. Which one a walk names depends on its
+  // child order, which the range changes (seen on D3D12 / RTX 3060, Cornell, 2026-11-19).
+  if (a.instance !== b.instance) return edges.coplanarWorld(a.instance, a.triangle, b.instance, b.triangle) ? 'tie' : 'no';
   const r = edges.relation(a.instance, a.triangle, b.triangle);
   return r.sharedCorners > 0 || r.coplanar ? 'tie' : 'no';
 }
@@ -456,7 +458,9 @@ async function checkSet(device: GPUDevice, scene: TraceTestScene, set: RaySet, t
       else ok = hit.t < 0 || hit.t > th;
       if (!ok) {
         tally.exactFail++;
-        note('exact', `${label} ${set.name}#${q.ray} ${q.kind} expects ${q.expect}: t_h ${th} got ${hit.t} (${hit.instance}/${hit.triangle})`);
+        const base = baseHits[q.ray] as Hit;
+        const bary = (h: Hit) => `bary ${h.barycentrics[0].toExponential(3)},${h.barycentrics[1].toExponential(3)}`;
+        note('exact', `${label} ${set.name}#${q.ray} ${q.kind} expects ${q.expect}: t_h ${th} on ${base.instance}/${base.triangle} ${bary(base)}, got ${hit.t} on ${hit.instance}/${hit.triangle} ${bary(hit)}`);
       }
     });
   }

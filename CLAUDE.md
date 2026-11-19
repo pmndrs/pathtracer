@@ -844,3 +844,10 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - Windows: dawn.node ships `dist/<platform>/dawn.node` for every platform: copy `vulkan-1.dll` into `dist/win32-x64/` (a `Get-ChildItem -Filter dawn.node | Select -First 1` finds `darwin-universal`).
 - Windows: no Mitsuba or pbrt reference PFMs on this machine (only their `.json`), and no LLVM, so Mitsuba's `llvm_ad_rgb` (the reference variant) does not run without installing LLVM;
   `baseline.ts` needs `mitsuba3-llvm_ad_rgb-4096spp.pfm` and takes its noise floor from the pbrt one. Copy `bench/references/**` from the Mac before W13's analysis.
+- A check page that compiles layered WGSL with `layout: 'auto'` and binds only its own group 0 breaks under D32's `albedoCorrection: 'texture'` default (the table is
+  `@group(2) @binding(10)`): the dispatch fails ("No bind group set at group index 2") and the read-back is garbage that looks like flag mismatches. Use
+  `layerCorrectionGroup(device, pipeline, code)` from `bench/pages/layer-corr-bind.ts` (resolve it before encoding, it waits on an error scope).
+- A same-t hit on ANOTHER INSTANCE with both hits interior is a legitimate tie when the two faces coincide (Cornell: box bottom on the floor); a walk's child order
+  (range, platform) decides which is named. Interval / walk checks classify it with `EdgeIndex.coplanarWorld` (`bench/pages/trace-compare.ts`).
+- Windows: `bench/scenes/volumes/vdb-grid.ts` imports WebVDB from `~/Developer/WebVDB` (not on the laptop; `WEBVDB_DIR` overrides): copy
+  `bench/assets/generated/volumes/vdb-smoke.{f32,json}` from the Mac for `vol-vdb-smoke`. `node bench/spectral-table.ts` (rgb2spec-64.f32) takes ~60 s here.
