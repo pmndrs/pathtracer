@@ -674,7 +674,7 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
   const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
   const lodS = ptLodSnippets(o, '    ');
   const mixU = mats?.features.mix || (o.lod !== 'off' && mats) ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
-  const hooks = !!o.hooks;
+  const hooks = o.hooks;
   // The optional radiance callback (`ptOnRadiance`): call sites only when the hook text defines it (every other kernel keeps its exact text).
   const onRadiance = ptHookWantsRadiance(o.hooks);
   const addRadiance = (value: string, index: string, indent: string): string =>
@@ -1136,7 +1136,7 @@ ${frameOut ? `        ptFrameBounce(path, n, ptGiDist);
 ` : ''}        ${addOut};
 ${end(7)}        return;
     }
-` : ''}${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' })};
+` : ''}${hooks ? `    let hv = ${ptHookVertexExpr({ x: 'path % dims.x', y: 'path / dims.x', pixel: 'path', sampleIndex: 'sampleIndex' }, hooks)};
     if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
 ${addRadiance('beta * ptTerminate(hv)', 'vertex + 1u', '        ')}        ${addOut};
 ${counters ? `        ptCountEnd(path, depth, 4u);

@@ -35,6 +35,10 @@ export interface PtHooksOptions {
    * to the cache's update buffer). 0 (default) = no update paths.
    */
   updateBlock?: number;
+  /** Expose the evaluated shading frame and BSDF features on each vertex. */
+  evaluatedMaterial?: boolean;
+  /** Expose the incoming segment length and PDF, and the previous and current delta flags. */
+  pathSegment?: boolean;
   /**
    * Wavefront only, with `ptOnRadiance` (`ptHookWantsRadiance`): the `bindings` (by binding number) the radiance callback uses. The wavefront adds
    * next-event light in its shadow kernel, after the visibility test, and calls `ptOnRadiance` there, so that kernel binds these as its own `@group(3)`
@@ -43,6 +47,8 @@ export interface PtHooksOptions {
    * functions the callback does not reach are pruned).
    */
   radianceBindings?: number[];
+  /** Megakernel only. Set `PT_HOOK_RADIANCE_EMISSION` on callbacks for light routed to the frame's emission plane. */
+  radianceEmissionFlag?: boolean;
 }
 
 /** Hook return values and `PtPathVertex.flags` bits (the WGSL constants of the same names). */
@@ -85,6 +91,7 @@ export interface PtOutputsFlags {
   counters: boolean;
   aovs: boolean;
   frame?: boolean;
+  materials?: { features: { layered?: boolean } } | null;
 }
 
 /** `ptHookUpdateFlag` in TypeScript: is the path of pixel (x, y) in sample `sample` an update path? */
@@ -110,14 +117,14 @@ export function ptHookWantsRadiance(hooks: PtHooksOptions | null | undefined): b
 const HAS_TERMINATE = /\bfn\s+ptTerminate\b/;
 
 /** The hook interface: struct, constants, the user's text and defaults for the functions it leaves out. Empty without hooks. */
-export function ptHooksWgsl(hooks: PtHooksOptions | null): string {
+export function ptHooksWgsl(hooks: PtHooksOptions | null, shade?: { layered: boolean }): string {
   if (!hooks) return '';
   const block = Math.max(0, Math.floor(hooks.updateBlock ?? 0));
   return /* wgsl */ `
 const PT_HOOK_CONTINUE: u32 = 0u;
 const PT_HOOK_TERMINATE: u32 = 1u;
 const PT_VERTEX_UPDATE: u32 = 1u;
-const PT_HOOK_UPDATE_BLOCK: u32 = ${block}u;
+${hooks.radianceEmissionFlag ? 'const PT_HOOK_RADIANCE_EMISSION: u32 = 2u;\n' : ''}const PT_HOOK_UPDATE_BLOCK: u32 = ${block}u;
 
 // What a hook sees at a scattering vertex, after emission and next-event estimation, before the BSDF sample.
 struct PtPathVertex {
@@ -133,7 +140,42 @@ struct PtPathVertex {
     sampleIndex: u32,
     albedo: vec3f,
     material: u32,
+${hooks.evaluatedMaterial ? `    shadingNormal: vec3f,
+    roughness: f32,
+    diffuseReflectance: vec3f,
+    specularReflectance: vec3f,
+` : ''}${hooks.pathSegment ? `    segmentLength: f32,
+    previousPdf: f32,
+    previousDelta: bool,
+    delta: bool,
+` : ''}}
+
+${hooks.evaluatedMaterial && shade ? `
+// Perceptual roughness reconstructed from GGX alpha. For anisotropic lobes,
+// use the mean alpha. For layered surfaces, use the outer interface's alpha and F0.
+fn ptHookRoughness(p: PtBsdfParams) -> f32 {
+    return select(sqrt(0.5 * (p.alpha.x + p.alpha.y)), 1.0, p.kind == PT_BSDF_DIFFUSE);
 }
+
+fn ptHookDiffuseReflectance(p: PtBsdfParams) -> vec3f {
+    if (p.kind == PT_BSDF_DIFFUSE${shade.layered ? ' || (p.kind == PT_BSDF_LAYERED && p.k.z < 0.5)' : ''}) {
+        return p.reflectance;
+    }
+    return vec3f(0.0);
+}
+
+fn ptHookSpecularReflectance(p: PtBsdfParams) -> vec3f {
+    if (p.kind == PT_BSDF_CONDUCTOR) {
+        let numerator = (p.eta - vec3f(1.0)) * (p.eta - vec3f(1.0)) + p.k * p.k;
+        let denominator = (p.eta + vec3f(1.0)) * (p.eta + vec3f(1.0)) + p.k * p.k;
+        return numerator / denominator;
+    }
+${shade.layered ? `    if (p.kind == PT_BSDF_LAYERED) {
+        return select(p.eta, vec3f(1.0), p.k.z > 0.5) * ptFrDielectric(1.0, p.ior);
+    }
+` : ''}    return vec3f(ptFrDielectric(1.0, p.ior));
+}
+` : ''}
 
 fn ptHookUpdateFlag(x: u32, y: u32, sampleIndex: u32) -> u32 {
     if (PT_HOOK_UPDATE_BLOCK == 0u) {
@@ -159,8 +201,10 @@ fn ptTerminate(v: PtPathVertex) -> vec3f {
  * The call both schedulers make (the expression builds the vertex from the locals of their loop: `surf`, `hit`, `ray`, `bp`, `mat`, `beta`,
  * `vertex`, `hookEmitted`, pixel x / y, sample index and pixel index).
  */
-export function ptHookVertexExpr(args: { x: string; y: string; pixel: string; sampleIndex: string }): string {
-  return `PtPathVertex(surf.position, vertex, ptSideNormal(hit.normal, -ray.direction), bp.kind, -ray.direction, ${args.pixel}, beta, ptHookUpdateFlag(${args.x}, ${args.y}, ${args.sampleIndex}), hookEmitted, ${args.sampleIndex}, ptAovAlbedo(mat), hit.material)`;
+export function ptHookVertexExpr(args: { x: string; y: string; pixel: string; sampleIndex: string }, hooks: PtHooksOptions): string {
+  const material = hooks.evaluatedMaterial ? ', frame.n, ptHookRoughness(bp), ptHookDiffuseReflectance(bp), ptHookSpecularReflectance(bp)' : '';
+  const segment = hooks.pathSegment ? ', distance(surf.position, prevP), prevPdf, specularBounce, ptBsdfIsDelta(bp)' : '';
+  return `PtPathVertex(surf.position, vertex, ptSideNormal(hit.normal, -ray.direction), bp.kind, -ray.direction, ${args.pixel}, beta, ptHookUpdateFlag(${args.x}, ${args.y}, ${args.sampleIndex}), hookEmitted, ${args.sampleIndex}, ptAovAlbedo(mat), hit.material${material}${segment})`;
 }
 
 /** Albedo estimate used by the AOV and the hook vertex (`ptAovAlbedo`) and the three writers. Needs `ptAccum`. */
@@ -347,7 +391,7 @@ fn ptCountEnd(pixel: u32, depth: u32, reason: u32) {
 
 /** Everything the enabled outputs add after the shading modules, or '' (then nothing at all is appended). */
 export function ptOutputsWgsl(flags: PtOutputsFlags, countersBinding: number | null, frameStore: PtFramePlaneStore = 'buffer'): string {
-  const parts = [ptAovWgsl({ aovs: flags.aovs, hooks: !!flags.hooks, frame: !!flags.frame }), flags.frame ? ptFrameWgsl(frameStore) : '', ptHooksWgsl(flags.hooks), flags.counters && countersBinding !== null ? ptCountersWgsl(countersBinding) : ''].filter((p) => p !== '');
+  const parts = [ptAovWgsl({ aovs: flags.aovs, hooks: !!flags.hooks, frame: !!flags.frame }), flags.frame ? ptFrameWgsl(frameStore) : '', ptHooksWgsl(flags.hooks, { layered: !!flags.materials?.features.layered }), flags.counters && countersBinding !== null ? ptCountersWgsl(countersBinding) : ''].filter((p) => p !== '');
   return parts.join('\n');
 }
 

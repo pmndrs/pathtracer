@@ -548,7 +548,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const sampleFn = fuzz ? 'ptFuzzedSample' : layered ? 'ptSample' : 'ptBsdfSample';
   const lodS = ptLodSnippets(o, '        ');
   const mixU = mats?.features.mix || (o.lod !== 'off' && mats) ? 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(depth, PT_SLOT_RR)).y' : '0.0';
-  const hooks = !!o.hooks;
+  const hooks = o.hooks;
   // The optional radiance callback (`ptOnRadiance`): call sites only when the hook text defines it, so every other kernel keeps its exact text.
   const onRadiance = ptHookWantsRadiance(o.hooks);
   const addRadiance = (value: string, index: string, indent: string): string =>
@@ -566,7 +566,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
     !emit
       ? addRadiance(value, index, indent)
       : onRadiance
-        ? `${indent}{\n${indent}    let ptAdded = ${value};\n${indent}    if (${pureCond}) {\n${indent}        fEmit += ptAdded;\n${indent}    } else {\n${indent}        radiance += ptAdded;\n${indent}    }\n${indent}    ptOnRadiance(pxIndex, sampleIndex, ${index}, ptHookFlags, ptAdded);\n${indent}}\n`
+        ? `${indent}{\n${indent}    let ptAdded = ${value};\n${indent}    if (${pureCond}) {\n${indent}        fEmit += ptAdded;\n${indent}    } else {\n${indent}        radiance += ptAdded;\n${indent}    }\n${indent}    ptOnRadiance(pxIndex, sampleIndex, ${index}, ptHookFlags${o.hooks?.radianceEmissionFlag ? ` | select(0u, PT_HOOK_RADIANCE_EMISSION, ${pureCond})` : ''}, ptAdded);\n${indent}}\n`
         : `${indent}if (${pureCond}) {\n${indent}    fEmit += ${value};\n${indent}} else {\n${indent}    radiance += ${value};\n${indent}}\n`;
   const bn = o.sampler === 'bluenoise';
   const vb = o.primary === 'vbuffer';
@@ -894,7 +894,7 @@ ${frame ? `            fBounce = ptGiDist;
 ` : ''}${term(7)}            break;
         }
 
-` : ''}${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' })};
+` : ''}${hooks ? `        let hv = ${ptHookVertexExpr({ x: 'px.x', y: 'px.y', pixel: 'pxIndex', sampleIndex: 'sampleIndex' }, hooks)};
         if (ptOnVertex(hv) == PT_HOOK_TERMINATE) {
 ${addRadiance('beta * ptTerminate(hv)', 'vertex + 1u', '            ')}${term(4)}            break;
         }

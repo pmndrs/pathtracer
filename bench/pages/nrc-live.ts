@@ -11,15 +11,17 @@
  * Scenes: Sponza (sun + sky), Sponza with VkNRC lighting (`scene=sponza-white-vknrc`; export its glb first:
  * `node bench/adapters/export-scenes.ts sponza-white-vknrc`), Cornell.
  */
-import { DEFAULT_SHAPE, type Precision } from '@pathtracer/mlp';
+import { MLP_SHAPES, type Precision } from '@pathtracer/mlp';
 import { PtMegakernel, type PtLookAtCamera } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { uploadImage } from '../runner/page-client.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
+import { nrcMaterialsCard, nrcMaterials, nrcMaterialsGrazing } from '../scenes/tier2/nrc-materials.ts';
 import { cornell } from '../scenes/tier0/index.ts';
 import { sponzaWhite, sponzaWhiteVknrc } from '../scenes/tier2/sponza-white.ts';
-import { NrcCache } from '../nrc/cache.ts';
-import { hasSubgroupMatrix, inferArmOptions } from './mlp-common.ts';
+import { phase10Settings } from '../nrc/phase10.ts';
+import { NrcCache, materialArgs } from '../nrc/cache.ts';
+import { hasSubgroupMatrix, inferArmOptions, networkArg } from './mlp-common.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('canvas');
@@ -27,9 +29,10 @@ const statusEl = $<HTMLDivElement>('status');
 const num = (id: string) => Number($<HTMLInputElement>(id).value);
 const checked = (id: string) => $<HTMLInputElement>(id).checked;
 const value = (id: string) => $<HTMLSelectElement>(id).value;
+const queryDepth = () => value('queryDepth') === 'diffuse-first' ? 1 : Number(value('queryDepth'));
 
 // sponza-white-vknrc: VkNRC's lighting (sky 10, no sun, 7 scattering vertices), for side-by-side views with the native baseline (N6.2).
-const SCENES: Record<string, SceneDesc> = { 'sponza-white': sponzaWhite, 'sponza-white-vknrc': sponzaWhiteVknrc, cornell };
+const SCENES: Record<string, SceneDesc> = { [nrcMaterials.name]: nrcMaterials, [nrcMaterialsCard.name]: nrcMaterialsCard, [nrcMaterialsGrazing.name]: nrcMaterialsGrazing, 'sponza-white': sponzaWhite, 'sponza-white-vknrc': sponzaWhiteVknrc, cornell };
 
 const DISPLAY_WGSL = /* wgsl */ `
 struct D { size: vec2u, canvas: vec2f, split: f32, exposure: f32, mode: u32, _p: u32 }
@@ -134,7 +137,7 @@ function resetView(scene: SceneDesc, bounds: Live['bounds']): void {
 
 function backendOptions(adapter: GPUAdapter, device: GPUDevice): void {
   const sel = $<HTMLSelectElement>('backend');
-  const keep = sel.value;
+  const keep = sel.value || (phaseArm && phaseArm !== 'mlp' ? `hash-${phaseArm}` : '');
   const options: [string, string][] = [];
   if (device.features.has('shader-f16')) options.push(['tiled-f16', 'Tiled f16 (no flag needed)']);
   options.push(['tiled-f32', 'Tiled f32 (no flag needed)']);
@@ -145,7 +148,8 @@ function backendOptions(adapter: GPUAdapter, device: GPUDevice): void {
     options.push(['sgm-1', 'Subgroup matrix, 1 subgroup']);
   }
   // M7: the non-neural competitor in the network's place (same paths and training records, a world-space hash grid as the store).
-  options.push(['hash', 'Hash grid (no network)']);
+  options.push(['hash', 'Hash grid (standard)'], ['hash-rgb', 'Hash · RGB mean (matched memory)'],
+    ['hash-bins', 'Hash · 4 × 4 directions (matched memory)'], ['hash-sh', 'Hash · first-order SH (matched memory)']);
   sel.replaceChildren(...options.map(([v, t]) => new Option(t, v)));
   sel.value = options.some(([v]) => v === keep) ? keep : (options[0]?.[0] ?? 'portable-f32');
   void adapter;
@@ -153,11 +157,21 @@ function backendOptions(adapter: GPUAdapter, device: GPUDevice): void {
 
 async function buildCache(l: Pick<Live, 'adapter' | 'device' | 'plain' | 'width' | 'height' | 'bounds' | 'scene'>): Promise<NrcCache> {
   const backend = value('backend') || 'portable-f32';
+  const hash = backend.startsWith('hash');
+  const inlineMlp = !hash && value('training') === 'inline';
+  const directionSelect = $<HTMLSelectElement>('directionInput');
+  directionSelect.disabled = !inlineMlp;
+  $<HTMLSelectElement>('positionBands').disabled = hash;
+  const depth = $<HTMLSelectElement>('queryDepth');
+  depth.querySelector<HTMLOptionElement>('[value="diffuse-first"]')!.disabled = value('training') !== 'inline';
+  if (value('training') !== 'inline' && depth.value === 'diffuse-first') depth.value = '1';
+  const material = directionSelect.value === 'legacy' ? 'legacy' : 'evaluated';
+  const direction = directionSelect.value === 'reflected' ? 'reflected' : 'view';
   const gpuAdapter = l.adapter.gpuContext!.adapter;
   let precision: Precision = backend.endsWith('f32') ? 'f32' : 'f16';
   let sgm: ReturnType<typeof inferArmOptions>['sgm'];
   if (backend.startsWith('sgm')) {
-    const arm = inferArmOptions('sgm', gpuAdapter, l.device, DEFAULT_SHAPE, 'f16', { records: 64, subgroups: backend === 'sgm-4' ? 4 : 1 });
+    const arm = inferArmOptions('sgm', gpuAdapter, l.device, MLP_SHAPES[network], 'f16', { records: 64, subgroups: backend === 'sgm-4' ? 4 : 1 });
     precision = arm.precision;
     sgm = arm.sgm;
   }
@@ -166,11 +180,15 @@ async function buildCache(l: Pick<Live, 'adapter' | 'device' | 'plain' | 'width'
   const trainWidth = Math.max(4, Math.round((trainHeight * l.width) / l.height / 4) * 4);
   const { caps, trace, sceneBuffers } = l.adapter.debug;
   const cache = await NrcCache.create(l.device, caps, l.plain, [trace, sceneBuffers], { width: l.width, height: l.height, camera: camera(), ...limits(l.scene) }, l.bounds, {
-    ...(backend === 'hash' ? { model: 'hash' as const } : {}),
-    precision,
+    ...(backend.startsWith('hash-') ? phase10Settings(backend.slice(5)) : hash ? { model: 'hash' as const } : {}),
+    termination: value('queryDepth') === 'diffuse-first' ? 'diffuse-first' : 'fixed',
+    ...(inlineMlp ? materialArgs(args.get('factorization'), material, direction) : {}),
+    frozenDisplayOnly: true,
+    positionBands: hash ? 12 : Number(value('positionBands')),
+    precision, network,
     ...(sgm ? { sgm } : {}),
     infer,
-    queryDepth: Number(value('queryDepth')),
+    queryDepth: queryDepth(),
     trainDepth: num('trainDepth'),
     trainWidth,
     trainHeight,
@@ -286,6 +304,26 @@ function moveCamera(dt: number): boolean {
   return true;
 }
 
+// Accumulated previews can carry a permanent learned bias. After 64 preview samples, use the full integrator for
+// all new samples. The prefix weight falls as 64/N; clearing the film on a camera move immediately restores the cache.
+function prepareCacheFrame(l: Live): boolean {
+  const refine = checked('refineStill') && checked('accumulate') && l.cache.samples >= 64;
+  l.cache.setQueryDepth(refine ? num('maxDepth') + 1 : queryDepth());
+  l.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
+  return !refine && checked('train') && l.cache.settings.stepsPerFrame > 0;
+}
+
+function resetFilms(l: Live, encoder: GPUCommandEncoder): void {
+  l.plain.setCamera(camera());
+  l.cache.setCamera(camera());
+  seed++;
+  l.plain.setSeed(seed);
+  l.cache.render.setSeed(seed);
+  l.plain.reset(encoder);
+  l.cache.reset(encoder);
+  needsReset = false;
+}
+
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const l = live;
@@ -295,19 +333,11 @@ function frame(now: number): void {
   const view = value('view');
   const encoder = l.device.createCommandEncoder({ label: 'nrc live frame' });
   if (needsReset || !checked('accumulate')) {
-    l.plain.setCamera(camera());
-    l.cache.setCamera(camera());
-    seed++;
-    l.plain.setSeed(seed);
-    l.cache.render.setSeed(seed);
-    l.plain.reset(encoder);
-    l.cache.reset(encoder);
-    needsReset = false;
+    resetFilms(l, encoder);
   }
   // Only the side on screen renders, so "With NRC only" and "Path tracing only" show each side's own frame time.
   if (view !== 'plain') {
-    l.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
-    l.cache.encodeFrame(encoder, { train: checked('train') && l.cache.settings.stepsPerFrame > 0 });
+    l.cache.encodeFrame(encoder, { train: prepareCacheFrame(l) });
   }
   if (view !== 'nrc') l.plain.encode(encoder, plainSpp());
   encodeDisplay(l, encoder);
@@ -320,7 +350,7 @@ function frame(now: number): void {
     lastFrameMs = end - t0;
     if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
     lastFrameEnd = end;
-    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.width} × ${l.height} · ${fps.toFixed(0)} fps (GPU ${lastFrameMs.toFixed(1)} ms) · plain ${l.plain.samples} spp · NRC ${l.cache.samples} spp · ${l.cache.description}`);
+    if (!statusEl.classList.contains('err')) setStatus(`${l.scene.name} · ${l.width} × ${l.height} · ${fps.toFixed(0)} fps (GPU ${lastFrameMs.toFixed(1)} ms) · plain ${l.plain.samples} spp · NRC ${l.cache.samples} spp · ${l.cache.settings.queryDepth > num('maxDepth') ? 'full-path refinement' : l.cache.description}`);
   });
 }
 
@@ -335,7 +365,7 @@ async function benchmark(): Promise<void> {
   building = true;
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
-    const train = checked('train') && l.cache.settings.stepsPerFrame > 0;
+    const train = prepareCacheFrame(l);
     const stages = l.cache.stages.filter((st) => train || (st !== 'trainingPaths' && st !== 'trainSteps'));
     const times: Record<string, number[]> = { plain: [] };
     for (const st of stages) times[st] = [];
@@ -350,7 +380,7 @@ async function benchmark(): Promise<void> {
     for (let f = 0; f < 23; f++) {
       l.cache.nextFrame();
       for (const st of stages) {
-        const ms = await run((e) => l.cache.encodeStage(e, st));
+        const ms = await run((e) => l.cache.encodeStage(e, st, train));
         if (f >= 3) times[st]!.push(ms);
       }
       const ms = await run((e) => l.plain.encode(e, plainSpp()));
@@ -444,12 +474,17 @@ const sceneDepth = (): void => {
 };
 $('scene').addEventListener('change', sceneDepth);
 for (const id of ['scene', 'res', 'maxDepth']) $(id).addEventListener('change', () => void build(true));
-for (const id of ['backend', 'lr', 'trainDepth', 'training', 'trainSelect']) $(id).addEventListener('change', () => void build(false));
+for (const id of ['backend', 'directionInput', 'positionBands', 'lr', 'trainDepth', 'training', 'trainSelect']) $(id).addEventListener('change', () => void build(false));
 $('queryDepth').addEventListener('change', () => {
-  live?.cache.setQueryDepth(Number(value('queryDepth')));
+  if ((value('queryDepth') === 'diffuse-first') !== (live?.cache.settings.termination === 'diffuse-first')) {
+    void build(false);
+    return;
+  }
+  live?.cache.setQueryDepth(queryDepth());
   needsReset = true;
 });
 $('plainSpp').addEventListener('change', () => (needsReset = true));
+$('refineStill').addEventListener('change', () => (needsReset = true));
 $('accumulate').addEventListener('change', () => (needsReset = true));
 $('resetImage').addEventListener('click', () => (needsReset = true));
 $('resetCache').addEventListener('click', () => {
@@ -482,10 +517,30 @@ $('realtime').addEventListener('click', () => {
 $('save').addEventListener('click', () => void saveAB());
 
 const args = new URLSearchParams(location.search);
+const phaseArm = args.get('phase10');
+const phasePreset = phaseArm ? phase10Settings(phaseArm) : undefined;
+const network = phasePreset?.network ?? networkArg(args.get('network'));
+if (phasePreset) {
+  $<HTMLInputElement>('steps').value = String(phasePreset.stepsPerFrame);
+  $<HTMLSelectElement>('positionBands').value = '4';
+}
 if (args.get('scene') && SCENES[args.get('scene') as string]) {
   $<HTMLSelectElement>('scene').value = args.get('scene') as string;
   sceneDepth();
 }
+const factorized = args.has('factorization') && args.get('factorization') !== 'off';
+const directionSelect = $<HTMLSelectElement>('directionInput');
+directionSelect.value = args.get('materialInputs') === 'evaluated' || factorized ? 'view' : 'legacy';
+if (phasePreset) directionSelect.value = 'reflected';
+directionSelect.options[0]!.disabled = factorized;
+for (const id of ['directionInput', 'positionBands', 'queryDepth', 'res']) {
+  const select = $<HTMLSelectElement>(id);
+  const value = args.get(id);
+  if (value && [...select.options].some(o => o.value === value && !o.disabled)) select.value = value;
+}
+$<HTMLInputElement>('refineStill').checked = args.get('refineStill') === '1';
+const steps = args.get('steps');
+if (steps && /^([0-9]|1[0-6])$/.test(steps)) $<HTMLInputElement>('steps').value = steps;
 await build(true);
 requestAnimationFrame(frame);
 // Headless checks and the runner: frame count and a benchmark hook.
@@ -500,13 +555,9 @@ async function step(n: number): Promise<void> {
     for (let i = 0; i < n; i++) {
       const encoder = l.device.createCommandEncoder({ label: 'nrc step' });
       if (needsReset || !checked('accumulate')) {
-        l.plain.setCamera(camera());
-        l.cache.setCamera(camera());
-        l.plain.reset(encoder);
-        l.cache.reset(encoder);
-        needsReset = false;
+        resetFilms(l, encoder);
       }
-      if (view !== 'plain') l.cache.encodeFrame(encoder, { train: checked('train') && l.cache.settings.stepsPerFrame > 0 });
+      if (view !== 'plain') l.cache.encodeFrame(encoder, { train: prepareCacheFrame(l) });
       if (view !== 'nrc') l.plain.encode(encoder, plainSpp());
       l.device.queue.submit([encoder.finish()]);
       await l.device.queue.onSubmittedWorkDone();

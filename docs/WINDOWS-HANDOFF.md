@@ -3,6 +3,8 @@
 _Written 2026-11-13 on the Mac, at the end of P0. Read [CLAUDE.md](../CLAUDE.md), [STATUS.md](../STATUS.md),
 [TASKS.md](../TASKS.md) and [DIVERGES.md](../DIVERGES.md) first. This page is the Windows-specific part._
 
+For the November 19 compact NRC and WebNN experiments, use the [phase 15 agent queue](design/nrc-windows-handoff.md#phase-15-agent-queue) for the published NRC baseline and instructions for an existing work branch. The remaining sections cover the general renderer work on `windows-testing`.
+
 ## What this machine is for
 
 The Mac (Apple M5 Pro, Metal) is where the code is written. The Windows laptop (RTX 3060 Laptop, plus an Intel UHD

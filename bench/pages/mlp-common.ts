@@ -1,6 +1,12 @@
 /** Shared helpers for the research-track-N pages (mlp-check, mlp-fit, mlp-timing, mlp-live, mlp-sgm-probe). */
 
-import { pickSubgroupMatrixConfig, type ForwardKind, type GradientKind, type MlpEngineOptions, type MlpShape, type Precision, type SgmScalar } from '@pathtracer/mlp';
+import { pickSubgroupMatrixConfig, type ForwardKind, type GradientKind, type MlpEngineOptions, type MlpNetwork, type MlpShape, type Precision, type SgmScalar } from '@pathtracer/mlp';
+
+export function networkArg(value: string | null | undefined): MlpNetwork {
+  const network = value ?? 'default';
+  if (network === 'default' || network === 'compact') return network;
+  throw new Error(`network must be default or compact, got ${network}`);
+}
 
 /** A device with every adapter feature and the adapter's max limits (the MLP wants 16-32 KiB of workgroup memory). */
 export async function requestMlpDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice }> {

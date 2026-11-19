@@ -18,6 +18,7 @@ unverified and the license register. The decisions drawn from it are in [../spec
 | 10 | Benchmarks | [10-benchmarks.md](notes/10-benchmarks.md) | Compare in linear HDR; time-to-equal-quality is the headline metric; furnace tests gate merges; siblings supply ~70% of the harness |
 | 11 | AMD Capsaicin | [11-capsaicin.md](notes/11-capsaicin.md) | MIT, D3D12 DXR only. Reference PT is opaque glTF-PBR only (no glass, f16 EXR dump), good as a Windows GPU cross-check, not a third reference; GI-1.2 hash-grid cache + world ReSTIR are portable ideas with a permissive licence |
 | 12 | NVIDIA PT performance whitepaper (2026-06) | [12-nvidia-pt-performance.md](notes/12-nvidia-pt-performance.md) | Real-time "PT" is GI + specular with controlled bias: raster primaries, one shallow diffuse bounce + world cache, reduced materials past bounce 1, no naive RR. Qualitative; one measured table (SHaRC 1.17x, force-opaque cache rays 0.69 -> 0.31 ms) |
+| 13 | NRC for diffuse GI and reflections, 2026-11-19 | [13-radiance-cache.md](notes/13-radiance-cache.md) | Warm-up tail bug reproduced. Diffuse hash and traced sharp reflections are the first portable candidates. A WebNN weight-update probe establishes a correct Mac handoff. |
 
 Local material: ~50 shallow clones in `sources/` (5.5 GB, git-ignored, listed in [sources/MANIFEST.md](sources/MANIFEST.md))
 and about 50 open-access PDFs in `papers/<area>/` (git-ignored).

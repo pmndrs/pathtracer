@@ -93,7 +93,8 @@ export class MlpEngine {
   /** Per-record loss of the last training step (f32 × capacity). */
   readonly loss: GPUBuffer;
 
-  private readonly trainState: GPUBuffer;
+  /** Prepared batch length and optimizer step, available to input-gradient consumers before Adam. */
+  readonly trainState: GPUBuffer;
   private readonly inferState: GPUBuffer;
   private readonly trainArgs: GPUBuffer;
   private readonly inferArgs: GPUBuffer;
@@ -336,8 +337,9 @@ export class MlpEngine {
   /**
    * One training step: prepare (count, args, Adam step state) → forward/backward (indirect) → weight gradient →
    * Adam. `counts[countWord]` is the number of records; `hooks` is the caller's group-1 bind group.
+   * An optional input optimizer runs after backpropagation while the forward weights still match the deltas.
    */
-  encodeTrainStep(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites, stages?: TrainStageTimestamps): void {
+  encodeTrainStep(encoder: GPUCommandEncoder, counts: GPUBuffer, countWord: number, hooks: GPUBindGroup, timestampWrites?: GPUComputePassTimestampWrites, stages?: TrainStageTimestamps, updateInputs?: (pass: GPUComputePassEncoder) => void): void {
     this.writeParams(this.trainParams, this.capacity, countWord, true, this.trainGroupRecords);
     const stage = (name: string, n: number): GPUComputePassDescriptor =>
       stages ? { label: `nn train ${name}`, timestampWrites: { querySet: stages.querySet, beginningOfPassWriteIndex: stages.first + 2 * n, endOfPassWriteIndex: stages.first + 2 * n + 1 } } : {};
@@ -368,6 +370,7 @@ export class MlpEngine {
       pass.setBindGroup(0, this.groups.gradientReduce);
     }
     pass.dispatchWorkgroups(Math.ceil(this.weightCount / NN_WORKGROUP));
+    updateInputs?.(pass);
     if (stages) {
       pass.end();
       pass = encoder.beginComputePass(stage('adam', 2));
@@ -398,10 +401,17 @@ export class MlpEngine {
     pass.end();
   }
 
+  private get buffers(): (GPUBuffer | null)[] {
+    return [this.master, this.trainWeights, this.useWeights, this.ema, this.moments, this.gradient, this.activations, this.deltas, this.loss,
+      this.trainState, this.inferState, this.trainArgs, this.inferArgs, this.trainParams, this.inferParams, this.gradientPartials, this.sgmWeights, this.trainSgmWeights];
+  }
+
+  /** Allocated GPU buffer sizes, including optimizer and training workspace. */
+  get bufferBytes(): number {
+    return this.buffers.reduce((sum, buffer) => sum + (buffer?.size ?? 0), 0);
+  }
+
   destroy(): void {
-    for (const b of [this.master, this.trainWeights, this.useWeights, this.ema, this.moments, this.gradient, this.activations, this.deltas, this.loss, this.trainState, this.inferState, this.trainArgs, this.inferArgs, this.trainParams, this.inferParams]) b.destroy();
-    this.gradientPartials?.destroy();
-    this.sgmWeights?.destroy();
-    this.trainSgmWeights?.destroy();
+    for (const buffer of this.buffers) buffer?.destroy();
   }
 }

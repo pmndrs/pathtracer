@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SHAPE, type MlpShape } from './config.ts';
+import { DEFAULT_SHAPE, MLP_SHAPES } from './config.ts';
 import { DEFAULT_FORWARD, forwardWorkgroupBytes, trainTiledWgsl, validateForwardOptions } from './wgsl-forward.ts';
 import { BUFFER_HOOKS_TRAIN, trainWgsl } from './wgsl.ts';
 
@@ -46,11 +46,15 @@ describe('tiled forward-backward generator', () => {
     expect(forwardWorkgroupBytes(f32, { records: 32 })).toBeLessThanOrEqual(32768);
   });
 
-  it('supports a ragged output width and small shapes', () => {
-    const small: MlpShape = { inputs: 8, width: 8, hidden: 2, outputs: 3 };
-    const code = trainTiledWgsl({ shape: small, precision: 'f32' }, BUFFER_HOOKS_TRAIN, { records: 16 });
-    expect(code).toContain('select(0.0, dv0[0], 4u * o4 + 0u < 3u)'); // layer 2 has 3 outputs: guarded
-    expect(code).not.toContain('select(0.0, dv0[0], 4u * o4 + 0u < 8u)'); // 8 outputs: no guard
+  it('stages only real RGB rows with 64 inputs and 32-wide hidden layers', () => {
+    const code = trainTiledWgsl({ shape: MLP_SHAPES.compact, precision: 'f32' }, BUFFER_HOOKS_TRAIN, { records: 16 });
+    expect(code).toContain('// forward layer 0: 32 × 64');
+    const [, finalLayers] = code.split('// forward layer 3: 3 × 32');
+    const [outputForward, backwardLayers] = finalLayers!.split('// backward layer 3');
+    const [outputBackward, hiddenBackward] = backwardLayers!.split('// backward layer 2');
+    expect(outputForward).toContain('let w3 = vec4f(0.0)');
+    expect(outputBackward).not.toContain('4u * o4 + 3u');
+    expect(hiddenBackward).toContain('4u * o4 + 3u');
   });
 
   it('rejects options and shapes the tile cannot cover', () => {

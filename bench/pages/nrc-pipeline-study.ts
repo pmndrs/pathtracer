@@ -19,7 +19,7 @@
  *     are frames after arrival (`pathCheckpoints`). The mid-path frame is uploaded too (no reference).
  *
  * Args: res=960x540 (display = 2x)  warm=300  frames=64  checkpoints=1,4,16,64  stableFrom=16  path=48  pathCheckpoints=1,4,16  plainSpp=auto|n
- *       infer=tiled|portable|sgm  precision=f16  steps=4  ref=mitsuba|ours  refFile=<url>  refSpp=4096  flip=1  upload=1  scenarios=static,path
+ *       network=default|compact  infer=tiled|portable|sgm  precision=f16  steps=4  ref=mitsuba|ours  refFile=<url>  refSpp=4096  flip=1  upload=1  scenarios=static,path
  *       sharpness=<0..1>  autoExposure=0|1  maxAccumulation=<n>  (upscaler A/B)
  *       denoiser=svgf|oidn|oidn-fast|oidn-std|none  oidnAux=albedo+normal|albedo  stillSamples=8  hold=1  oidnStill=balanced|high
  *       model=hash (M7 / N7c: the hash grid in the network's place, `hg*` args as in nrc-study; the "nrc" arm is then the grid)
@@ -43,7 +43,10 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
+import { materialArgs } from '../nrc/cache.ts';
+import { terminationArgs } from '../nrc/termination.ts';
 import { hashGridArgs } from '../nrc/hash-grid.ts';
+import { networkArg } from './mlp-common.ts';
 import { readTextureRgba16f, resample, type DenoiserKind, type OidnArmSettings, type OidnQuality, type PipelineStage } from '../realtime/chain.ts';
 
 let adapterSummary: AdapterSummary | null = null;
@@ -160,7 +163,7 @@ try {
     displayHeight,
     infer: args.infer ?? 'tiled',
     precision: args.precision === 'f32' ? 'f32' : 'f16',
-    cache: { stepsPerFrame: steps, ...(args.model === 'hash' ? { model: 'hash' as const, hash: hashGridArgs(args) } : {}) },
+    cache: { stepsPerFrame: steps, network: networkArg(args.network), ...materialArgs(args.factorization, args.materialInputs, args.directionInput), ...terminationArgs(args), ...(args.model === 'hash' ? { model: 'hash' as const, hash: hashGridArgs(args) } : {}) },
     ...denoiserOptions(args),
     // Upscaler A/B knobs (defaults: the upscaler's own: sharpness 0.8, auto exposure, 24 frames).
     upscaler: {
@@ -240,7 +243,7 @@ try {
       else await device.queue.onSubmittedWorkDone(); // one frame in flight
     }
     if (frames > stableFrom) await stability('static');
-    // The cache's light lands in the right plane (nrc-pipeline.md §2): diffuse x albedo + specular x specFactor = beauty, per pixel.
+    // The cache's light lands in the right plane (nrc-pipeline.md §2): diffuse × albedo + specular × specFactor + emission = beauty, per pixel.
     for (const [name, k] of [['plain', session.plain], ['nrc', session.cache.render]] as const) {
       const fr = await k.readFrame();
       let worst = 0;
@@ -250,7 +253,7 @@ try {
       for (let i = 0; i < n; i++)
         for (let c = 0; c < 3; c++) {
           const j = i * 4 + c;
-          const recomposed = (fr.diffuse[j] as number) * (fr.albedo[j] as number) + (fr.specular[j] as number) * (fr.specularFactor[j] as number);
+          const recomposed = (fr.diffuse[j] as number) * (fr.albedo[j] as number) + (fr.specular[j] as number) * (fr.specularFactor[j] as number) + (fr.emission[j] as number);
           const b = fr.radiance[j] as number;
           beauty += b;
           const e = Math.abs(recomposed - b) / (Math.abs(b) + 1e-3);
@@ -427,7 +430,7 @@ try {
   console.log(notes.stabilityTable);
 
   reportResult(
-    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { model: session.cache.settings.model, ...(session.cache.hash ? { hash: session.cache.hash.settings } : {}), denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
+    { scene: sponzaWhite.name, renderer: 'nrc-pipeline-study', config: { model: session.cache.settings.model, materialInputs: session.cache.settings.materialInputs, factorization: session.cache.settings.factorization, directionInput: session.cache.settings.directionInput, ...(session.cache.hash ? { hash: session.cache.hash.settings } : { network: session.cache.settings.network, shape: session.cache.mlp!.shape }), denoiser: notes.denoiser, width, height, displayWidth, displayHeight, warm, frames, checkpoints, stableFrom, pathFrames, pathCheckpoints, steps, plainSpp: session.plainSpp, infer: session.inferDescription, reference: refSource }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },
   );
 } catch (error) {

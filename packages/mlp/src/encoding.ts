@@ -42,6 +42,12 @@ export function frequency(x: number, out: Float32Array | Float64Array, offset: n
   for (let f = 0; f < FREQUENCIES; f++, scale *= 2) out[offset + f] = triangleWave(x * scale);
 }
 
+function validatePositionBands(positionBands: number): void {
+  if (!Number.isInteger(positionBands) || positionBands < 1 || positionBands > FREQUENCIES) {
+    throw new Error(`positionBands must be an integer from 1 to ${FREQUENCIES}`);
+  }
+}
+
 /** One NRC query, already in the units the encoding wants. */
 export interface NrcInput {
   /** Position normalised to the scene box, each component in [−1, 1]. */
@@ -57,9 +63,13 @@ export interface NrcInput {
 
 export const NRC_ENCODED = 64;
 
-export function encodeNrc(input: NrcInput, out: Float32Array | Float64Array = new Float32Array(NRC_ENCODED)): typeof out {
+export function encodeNrc(input: NrcInput, out: Float32Array | Float64Array = new Float32Array(NRC_ENCODED), positionBands = FREQUENCIES): typeof out {
+  validatePositionBands(positionBands);
   let o = 0;
-  for (let a = 0; a < 3; a++, o += FREQUENCIES) frequency(input.position[a] as number, out, o);
+  for (let a = 0; a < 3; a++, o += FREQUENCIES) {
+    frequency(input.position[a] as number, out, o);
+    if (positionBands < FREQUENCIES) out.fill(0, o + positionBands, o + FREQUENCIES);
+  }
   for (const v of [...input.direction, ...input.normal]) {
     oneBlob(v, out, o);
     o += BLOB_BINS;
@@ -196,15 +206,24 @@ fn nnEncodeImage(uv: vec2f) -> array<f32, NN_IN> {
 /**
  * WGSL twin of `encodeNrc` (VkNRC's 64-input layout): `fn nnEncodeNrc(position, direction, normal, roughness, diffuse,
  * specular) -> array<f32, NN_IN>` with position already normalised to [−1, 1]³ and direction / normal as (θ/π, φ/2π).
- * Needs `encodingWgsl()` (every MLP kernel includes it) and NN_IN = 64.
+ * Needs `encodingWgsl()` (every MLP kernel includes it) and NN_IN = 64. An optional learned position encoder
+ * defines `nnEncodeSpatial(position, &e)` and replaces the frequency inputs.
  */
-export function nrcEncodingWgsl(): string {
+export function nrcEncodingWgsl(positionBands = FREQUENCIES, spatialWgsl?: string): string {
+  validatePositionBands(positionBands);
   return /* wgsl */ `
+${spatialWgsl ?? ''}
 fn nnEncodeNrc(position: vec3f, direction: vec2f, normal: vec2f, roughness: f32, diffuse: vec3f, specular: vec3f) -> array<f32, NN_IN> {
   var e: array<f32, NN_IN>;
-  nnFrequency(position.x, &e, 0u);
+  ${spatialWgsl ? 'nnEncodeSpatial(position, &e);' : positionBands === FREQUENCIES ? `nnFrequency(position.x, &e, 0u);
   nnFrequency(position.y, &e, NN_FREQUENCIES);
-  nnFrequency(position.z, &e, 2u * NN_FREQUENCIES);
+  nnFrequency(position.z, &e, 2u * NN_FREQUENCIES);` : `var scale = 1.0;
+  for (var f = 0u; f < ${positionBands}u; f++) {
+    e[f] = nnTriangle(position.x * scale);
+    e[NN_FREQUENCIES + f] = nnTriangle(position.y * scale);
+    e[2u * NN_FREQUENCIES + f] = nnTriangle(position.z * scale);
+    scale *= 2.0;
+  }`}
   let o = 3u * NN_FREQUENCIES;
   nnOneBlob(direction.x, &e, o);
   nnOneBlob(direction.y, &e, o + NN_BLOB_BINS);

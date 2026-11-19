@@ -42,6 +42,14 @@ export const FORWARD_THREADS = 256;
 const TX = 16;
 const MAX_WIDTH = 64;
 
+function forwardWeightRows(nIn4: number, nOut: number): string {
+  const rows = nOut % 4 || 4;
+  return Array.from({ length: 4 }, (_, j) => {
+    const value = j < rows ? `vec4f(nnLayer[(4u * tx + ${j}u) * ${nIn4}u + k])` : 'vec4f(0.0)';
+    return `      let w${j} = ${value};`;
+  }).join('\n');
+}
+
 export function validateForwardOptions(o: MlpWgslOptions, f: ForwardOptions): void {
   const { shape } = o;
   for (let l = 0; l < layerCount(shape); l++) {
@@ -82,10 +90,7 @@ export function trainTiledWgsl(o: MlpWgslOptions, hooks: string, f: ForwardOptio
 ${each((rb) => `  var acc${rb} = vec4f(0.0);`)}
   if (tx < ${nOut4}u) {
     for (var k = 0u; k < ${nIn4}u; k++) {
-      let w0 = vec4f(nnLayer[(4u * tx + 0u) * ${nIn4}u + k]);
-      let w1 = vec4f(nnLayer[(4u * tx + 1u) * ${nIn4}u + k]);
-      let w2 = vec4f(nnLayer[(4u * tx + 2u) * ${nIn4}u + k]);
-      let w3 = vec4f(nnLayer[(4u * tx + 3u) * ${nIn4}u + k]);
+${forwardWeightRows(nIn4, nOut)}
 ${each((rb) => `      { let av = nnTile[(ty * ${RB}u + ${rb}u) * NN_S4 + k]; acc${rb} += vec4f(dot(av, w0), dot(av, w1), dot(av, w2), dot(av, w3)); }`)}
     }
   }
@@ -131,19 +136,15 @@ ${each(
     const nIn4 = nIn / 4;
     const nOut = layerOut(shape, l);
     const nOut4 = Math.ceil(nOut / 4);
-    const ragged = nOut % 4 !== 0;
-    const wRow = (j: number) => `vec4f(nnLayer[(4u * o4 + ${j}u) * ${nIn4}u + tx])`;
-    const term = (j: number, rb: number) => (ragged ? `select(0.0, dv${rb}[${j}], 4u * o4 + ${j}u < ${nOut}u) * w${j}` : `dv${rb}[${j}] * w${j}`);
+    // The only ragged layer has three outputs, so its fourth row is never staged.
+    const rows = Array.from({ length: nOut % 4 || 4 }, (_, j) => j);
     body.push(`  // backward layer ${l}: δ_${l - 1} = (W_${l}ᵀ δ_${l}) ⊙ [a_${l} > 0]
   nnStageTiled(${layerOffset(shape, l) / 4}u, ${(nIn * nOut) / 4}u, lid);
 ${each((rb) => `  var acc${rb} = vec4f(0.0);`)}
   if (tx < ${nIn4}u) {
     for (var o4 = 0u; o4 < ${nOut4}u; o4++) {
-      let w0 = ${wRow(0)};
-      let w1 = ${wRow(1)};
-      let w2 = ${wRow(2)};
-      let w3 = ${wRow(3)};
-${each((rb) => `      { let dv${rb} = nnTile[(ty * ${RB}u + ${rb}u) * NN_S4 + o4]; acc${rb} += ${[0, 1, 2, 3].map((j) => term(j, rb)).join(' + ')}; }`)}
+${rows.map((j) => `      let w${j} = vec4f(nnLayer[(4u * o4 + ${j}u) * ${nIn4}u + tx]);`).join('\n')}
+${each((rb) => `      { let dv${rb} = nnTile[(ty * ${RB}u + ${rb}u) * NN_S4 + o4]; acc${rb} += ${rows.map((j) => `dv${rb}[${j}] * w${j}`).join(' + ')}; }`)}
     }
 ${each(
   (rb) => `    {
@@ -239,10 +240,7 @@ export function inferTiledWgsl(o: MlpWgslOptions, hooks: string, f: ForwardOptio
 ${each((rb) => `  var acc${rb} = vec4f(0.0);`)}
   if (tx < ${nOut4}u) {
     for (var k = 0u; k < ${nIn4}u; k++) {
-      let w0 = vec4f(nnLayer[(4u * tx + 0u) * ${nIn4}u + k]);
-      let w1 = vec4f(nnLayer[(4u * tx + 1u) * ${nIn4}u + k]);
-      let w2 = vec4f(nnLayer[(4u * tx + 2u) * ${nIn4}u + k]);
-      let w3 = vec4f(nnLayer[(4u * tx + 3u) * ${nIn4}u + k]);
+${forwardWeightRows(nIn4, nOut)}
 ${each((rb) => `      { let av = nnTile[(ty * ${RB}u + ${rb}u) * NN_S4 + k]; acc${rb} += vec4f(dot(av, w0), dot(av, w1), dot(av, w2), dot(av, w3)); }`)}
     }
   }

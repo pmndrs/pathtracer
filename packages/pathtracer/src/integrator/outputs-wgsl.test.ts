@@ -40,6 +40,23 @@ describe('optional integrator outputs (R10 hooks, R4 counters, AOVs)', () => {
     expect(ptHooksWgsl(null)).toBe('');
   });
 
+  it('provides evaluated material and path-segment inputs to both shade schedulers', () => {
+    const hooks = {
+      ...hook,
+      evaluatedMaterial: true,
+      pathSegment: true,
+      wgsl: hook.wgsl + '\nfn ptOnRadiance(pixel: u32, sampleIndex: u32, index: u32, flags: u32, value: vec3f) {}',
+    };
+    const wave = ptWavefrontBuild(caps, { format: {}, layout, integrator: { hooks }, minify: false, shortenNames: false } as never);
+    for (const shader of [mk({ hooks }, false), wave.shade.code]) {
+      expect(shader).toContain('frame.n, ptHookRoughness(bp), ptHookDiffuseReflectance(bp), ptHookSpecularReflectance(bp)');
+      expect(shader).toContain('distance(surf.position, prevP), prevPdf, specularBounce, ptBsdfIsDelta(bp)');
+    }
+    expect(wave.shadow.code).toContain('fn ptOnRadiance');
+    expect(wave.shadow.code).not.toContain('fn ptHookRoughness');
+    expect(mk({ hooks: hook }, false)).not.toContain('fn ptHookRoughness');
+  });
+
   it('counters and AOVs add their bindings only when on; counters live at group 2 binding 3 (fuzz is 2), AOVs use no binding', () => {
     expect(mk({ counters: true })).toMatch(/@group\(2\)\s*@binding\(3\)\s*var<storage,\s*read_write>\s*ptCounters/);
     expect(mk({ aovs: true })).not.toContain('ptCounters');

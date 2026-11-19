@@ -37,6 +37,13 @@ export interface TrainSettings {
 
 export const DEFAULT_SHAPE: MlpShape = { inputs: 64, width: 64, hidden: 5, outputs: 3 };
 
+export const MLP_SHAPES = {
+  default: DEFAULT_SHAPE,
+  compact: { inputs: 64, width: 32, hidden: 3, outputs: 3 },
+} satisfies Record<string, MlpShape>;
+
+export type MlpNetwork = keyof typeof MLP_SHAPES;
+
 export const DEFAULT_TRAIN: TrainSettings = {
   learningRate: 0.002,
   beta1: 0.9,

@@ -328,8 +328,16 @@ async function runScene(device: GPUDevice, caps: Caps, refl: Refl, desc: SceneDe
   env.setLighting(1, { directional: sun ? [{ direction: norm(sun.direction.map((x) => -x)), color: [...sun.irradiance] as unknown as V3 }] : [] });
   const harnessA = await Harness.create(device, refl, providerA, env, env.createBindGroup(skyTexture.createView()));
 
+  // The historical provider binds table and data separately. Keep its shader, layout and upload on the same ABI.
+  const comparisonModule: typeof rt = {
+    ...rt,
+    uploadSceneCopy: (d, copy, options) => rt.uploadSceneCopy(d, copy, { packing: 'split', ...options }),
+    rtSceneEntries: (packing = 'split') => rt.rtSceneEntries(packing),
+    rtModuleWgsl: (caps, options = {}) => rt.rtModuleWgsl(caps, options.scene
+      ? { ...options, scene: { packing: 'split', ...options.scene } } : options),
+  };
   // B: the @pmndrs/raytracer provider + rtShade
-  const providerB = await refl.createRaytracerTraceProvider(device, { ...scene, lights: { sun: input.sun ?? null, environment: input.environment ?? null } }, { module: rt, bvhModule: bvh });
+  const providerB = await refl.createRaytracerTraceProvider(device, { ...scene, lights: { sun: input.sun ?? null, environment: input.environment ?? null } }, { module: comparisonModule, bvhModule: bvh });
   const shadeB = refl.raytracerHitShading(device);
   const harnessB = await Harness.create(device, refl, providerB, shadeB, shadeB.bindGroup);
   metrics[`${name}_wgsl_bytes_A`] = harnessA.wgslBytes;
@@ -372,7 +380,7 @@ async function runScene(device: GPUDevice, caps: Caps, refl: Refl, desc: SceneDe
       layerThickness: 1e-6, transmissionTint: true,
     };
     const pt = await PtMegakernel.create(device, caps, {
-      format: sceneFormatOf(providerB.traceBuffers), layout: providerB.sceneCopy.layout,
+      format: sceneFormatOf(providerB.traceBuffers), layout: providerB.sceneCopy.layout, scenePacking: providerB.sceneCopyBuffers.packing,
       integrator: materials ? { materials } : {}, label: `reflections-ab pt ${name} ${mode}`,
     });
     pt.setScene(providerB.traceBuffers, providerB.sceneCopyBuffers);

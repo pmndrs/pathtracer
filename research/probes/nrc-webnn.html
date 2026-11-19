@@ -1,0 +1,196 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>NRC WebNN weight update probe</title>
+<pre id="result">Checking WebNN weight updates…</pre>
+<script type="module">
+// Open locally or on localhost. Options are documented in research note 13.
+const params = new URLSearchParams(location.search);
+const rows = Number(params.get('rows') ?? 64);
+const channels = Number(params.get('channels') ?? 4);
+const deviceType = params.get('device') ?? 'gpu';
+const handoff = params.get('handoff') ?? 'drain';
+const repeats = Number(params.get('repeats') ?? 0);
+// The standalone file also runs under the bench runner, which collects the same checks and timings.
+const runner = params.has('token') && location.protocol !== 'file:' ? await import('/bench/runner/page-client.ts') : null;
+const report = { rows, channels, deviceType, handoff, browser: navigator.userAgent, checks: [], errors: [] };
+let adapter, device, context, graph;
+const metrics = {};
+const tensors = [];
+
+async function run() {
+  if (!Number.isInteger(repeats) || repeats < 0 || repeats > 200) throw new Error('repeats must be 0..200');
+  if (![64, 4096, 16384].includes(rows) || ![3, 4].includes(channels)
+    || !['gpu', 'npu'].includes(deviceType) || !['queued', 'drain', 'grouped'].includes(handoff)) {
+    throw new Error('Unsupported probe arguments');
+  }
+  if (!navigator.gpu || !navigator.ml) throw new Error('WebGPU and WebNN are required');
+  adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) throw new Error('No WebGPU adapter');
+  report.adapter = adapter.info.description || adapter.info.architecture;
+  device = await adapter.requestDevice({ requiredFeatures: ['shader-f16'] });
+  device.pushErrorScope('validation');
+  report.phase = 'create context';
+  context = await navigator.ml.createContext({ deviceType });
+  const builder = new MLGraphBuilder(context);
+  const desc = shape => ({ dataType: 'float16', shape });
+  async function tensor(shape) {
+    const t = await context.createExportableTensor(desc(shape), device);
+    tensors.push(t);
+    return t;
+  }
+
+  report.phase = 'allocate inputs';
+  const inputs = { x: await tensor([rows, 64]) };
+  let y = builder.input('x', desc([rows, 64]));
+  for (let i = 0; i < 6; i++) {
+    const outputs = i === 5 ? channels : 64;
+    const shape = [outputs, 64];
+    const name = 'w' + i;
+    inputs[name] = await tensor(shape);
+    y = builder.gemm(y, builder.input(name, desc(shape)), { bTranspose: true });
+    if (i < 5) y = builder.relu(y);
+  }
+  report.phase = 'compile graph';
+  const buildStart = performance.now();
+  graph = await builder.build({ y });
+  metrics.compile_ms = performance.now() - buildStart;
+  const output = await tensor([rows, channels]);
+
+  // Encoding and training would supply GPU buffers here. The fixture uses exact fp16 bits.
+  function sourceBuffer(data) {
+    const src = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.COPY_SRC, mappedAtCreation: true });
+    new Uint16Array(src.getMappedRange()).set(data);
+    src.unmap();
+    return src;
+  }
+  async function copyInput(destination, src) {
+    const buffer = await context.exportToGPU(destination);
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(src, 0, buffer, 0, src.size);
+    device.queue.submit([encoder.finish()]);
+    buffer.destroy();
+    if (handoff === 'drain') {
+      device.queue.submit([]);
+      await device.queue.onSubmittedWorkDone();
+    }
+  }
+
+  // Identity hidden layers and an alternating sign exercise ReLU and row order.
+  const x = new Uint16Array(rows * 64);
+  for (let row = 0; row < rows; row++) {
+    for (let c = 0; c < 3; c++) x[row * 64 + c] = (row + c) % 2 ? 0xbc00 : 0x3c00;
+  }
+  report.phase = 'upload features and hidden weights';
+  const features = sourceBuffer(x);
+  await copyInput(inputs.x, features);
+  const identity = new Uint16Array(64 * 64);
+  for (let i = 0; i < 64; i++) identity[i * 65] = 0x3c00;
+  const hidden = sourceBuffer(identity);
+  for (let i = 0; i < 5; i++) await copyInput(inputs['w' + i], hidden);
+
+  const snapshots = [0x3c00, 0x4000, 0x4200, 0x4400]; // exact fp16 1, 2, 3, 4
+  const outputs = snapshots.map(bits => {
+    const weights = new Uint16Array(channels * 64);
+    for (let i = 0; i < 3; i++) weights[i * 65] = bits;
+    return sourceBuffer(weights);
+  });
+  const bytes = rows * channels * 2;
+  const predictions = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+  async function infer(index) {
+    report.phase = 'publish output weights';
+    await copyInput(inputs.w5, outputs[index]);
+    if (handoff === 'grouped') {
+      // Release all updated tensors first, then synchronize the group once before WebNN reads this snapshot.
+      device.queue.submit([]);
+      await device.queue.onSubmittedWorkDone();
+    }
+    report.phase = 'dispatch and export predictions';
+    context.dispatch(graph, inputs, { y: output });
+    const exported = await context.exportToGPU(output);
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(exported, 0, predictions, 0, bytes);
+    device.queue.submit([encoder.finish()]);
+    exported.destroy();
+  }
+  async function verify(bits) {
+    const staging = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(predictions, 0, staging, 0, bytes);
+    device.queue.submit([encoder.finish()]);
+    report.phase = 'read predictions';
+    await staging.mapAsync(GPUMapMode.READ);
+    const actual = new Uint16Array(staging.getMappedRange());
+    let mismatches = 0;
+    for (let i = 0; i < actual.length; i++) {
+      const c = i % channels;
+      const expected = c < 3 && (Math.floor(i / channels) + c) % 2 === 0 ? bits : 0;
+      if (actual[i] !== expected) mismatches++;
+    }
+    const check = { expectedFirstBits: bits, actualFirstBits: actual[0], mismatches };
+    staging.unmap();
+    staging.destroy();
+    return check;
+  }
+  for (const [index, bits] of snapshots.entries()) {
+    await infer(index);
+    report.checks.push(await verify(bits));
+  }
+  if (repeats && report.checks.every(c => !c.mismatches)) {
+    // Encoded queries and all six weight matrices start on the GPU. Each sample ends with GPU-visible predictions.
+    const times = [];
+    for (let i = 0; i < repeats + 3; i++) {
+      const start = performance.now();
+      await copyInput(inputs.x, features);
+      for (let layer = 0; layer < 5; layer++) await copyInput(inputs['w' + layer], hidden);
+      await infer(i % snapshots.length);
+      await device.queue.onSubmittedWorkDone();
+      if (i >= 3) times.push(performance.now() - start);
+    }
+    const final = await verify(snapshots[(repeats + 2) % snapshots.length]);
+    if (final.mismatches) throw new Error(`Timed replay ended with ${final.mismatches} incorrect outputs`);
+    times.sort((a, b) => a - b);
+    metrics.batch_ms_p50 = times[Math.ceil(times.length * 0.50) - 1];
+    metrics.batch_ms_p95 = times[Math.ceil(times.length * 0.95) - 1];
+  }
+  for (const buffer of [features, hidden, ...outputs, predictions]) buffer.destroy();
+}
+
+function publish() {
+  report.pass = !report.errors.length && report.checks.length === 4 && report.checks.every(c => c.mismatches === 0);
+  report.metrics = metrics;
+  document.getElementById('result').textContent = JSON.stringify(report, null, 2);
+  if (runner) {
+    const extras = { adapter: adapter ? runner.summarizeAdapter(adapter) : null };
+    if (!report.pass) runner.reportError(new Error(JSON.stringify(report)), extras);
+    else runner.reportResult({ scene: 'nrc-webnn', renderer: 'webnn', config: { rows, channels, deviceType, handoff, repeats }, metrics,
+      notes: { checks: report.checks, requestedDevice: deviceType } }, extras);
+  }
+}
+
+// Some export sizes can stall the browser backend. Record the last stage even if cleanup stalls.
+const deadlineSeconds = repeats ? 120 : 15;
+const deadline = setTimeout(() => {
+  report.errors.push(`Probe did not finish within ${deadlineSeconds} seconds`);
+  publish();
+}, deadlineSeconds * 1000);
+try {
+  await run();
+} catch (error) {
+  report.errors.push(String(error));
+} finally {
+  try {
+    if (device) {
+      const error = await device.popErrorScope();
+      if (error) report.errors.push(error.message);
+    }
+    for (const t of tensors) t.destroy();
+    graph?.destroy();
+    context?.destroy();
+    device?.destroy();
+  } catch (error) {
+    report.errors.push(String(error));
+  }
+  clearTimeout(deadline);
+  publish();
+}
+</script>

@@ -1,4 +1,46 @@
-# Track N on Windows: handoff to the RTX 3060 agent (2026-11-16)
+# NRC on Windows
+
+## Phase 15 agent queue
+
+The NRC renderer improvements are available independently of the WebNN experiment. From the existing Windows work branch, integrate the published main revision using the team's normal merge workflow. The following commands keep that branch checked out. Start the merge from a clean working tree so local changes are preserved.
+
+```powershell
+git fetch origin
+git merge origin/main
+git rev-parse HEAD
+pnpm install --frozen-lockfile
+```
+
+For a separate benchmark checkout, `git switch codex/nrc-windows-handoff` selects the published handoff branch. WN8 is the first task for the renderer agent. WN9–WN11 can run afterward on the same laptop. [Phases 0–15](nrc-experiments.md#phase-table) · [Task tracker](../../TASKS.md) · [Mac compact WebNN results](../../bench/results/NRC-WEBNN-COMPACT.md)
+
+Use Node 22.18 or later in the Node 22 line and pnpm 10.23.0. The bench workspace links the Denoiser and upscaler checkouts at `../Denoiser` and `../upscaler` relative to the pathtracer root. The blue-card fixture builds its geometry procedurally and renders its reference locally. The committed Mac reports and figures are in `bench/results/`. The eight-pair viewer in the Mac review uses captures stored locally on that machine.
+
+| Task | Agent | Deliverable |
+|---|---|---|
+| WN8 · Portable baseline | Windows WebGPU | Run the compact tiled and per-record fp16 controls. Record the faster verified kernel, frame time, reflection contrast, adapter, driver and browser version. |
+| WN9 · WebNN GPU | Windows WebNN | On the RTX laptop, request a GPU WebNN context. Check four successive weight snapshots against WGSL and the CPU oracle. Report p50/p95 for GPU-visible predictions at 4,096 and 8,192 rows per slab. |
+| WN10 · WebNN NPU | Windows WebNN | Repeat the GPU protocol with the NPU context if available. Record the exact capability error if context creation, tensor export or a shape fails. |
+| WN11 · Backend decision | Windows results | Add the run IDs, query/padding counts, parity errors, timing and thermal status to the compact WebNN report and update N12.12. Compare with the fastest same-browser WGSL control. If replay beats that control, measure the integrated frame before recommending a backend switch. |
+
+Run the timed jobs sequentially on the laptop so agents share the same GPU budget. WN8 and WN9/WN10 use the same geometry, seed, camera, compact MLP, one traced bounce, four position bands and raw RGB. Still refinement is off. Use the same browser and display mode across the comparison.
+
+```powershell
+$study = @('phase10=mlp', 'scene=nrc-materials-card', 'res=320x180', 'scenario=static', 'frames=16,64', 'warm=0', 'flip=0', 'refSpp=512', 'upload=0')
+node bench/runner/run.ts --page nrc-study --gpu nvidia --headed --repeat 2 --no-csv --ab infer=tiled,portable --args @study
+
+$env:PT_CHROME_FLAGS = '--enable-features=WebMachineLearningNeuralNetwork'
+# Change to portable if WN8 selects the per-record kernel.
+$infer = 'tiled'
+foreach ($device in @('gpu', 'npu')) {
+  node bench/runner/run.ts --page nrc-study --gpu nvidia --headed --repeat 2 --no-csv --ab rows=4096,8192 --args @study "infer=$infer" webnnReplay=1 "device=$device" repeats=20 weights=packed publish=frame
+}
+```
+
+Each run writes `bench/results/incoming/<run-id>/run.json`. The WebNN replay includes feature packing, weight publication, graph dispatch, synchronization and returning predictions to WebGPU. Its paired WGSL timer uses the same records and weights. Record requested WebNN device type separately from the renderer adapter. Use the earlier Dawn/Vulkan matrix results as a separate comparison. [Replay implementation](../../bench/nrc/webnn-replay.ts) · [Windows matrix measurements](../../bench/results/NRC.md)
+
+## Historical M6 handoff for WN1–WN7
+
+The instructions below document the November 16 experiment. Its completed Windows results are in [the NRC report](../../bench/results/NRC.md).
 
 _Written on the Mac at the end of M5. This is milestone **M6** of [nrc-plan.md](nrc-plan.md): the neural radiance cache
 (NRC) on NVIDIA. Read [CLAUDE.md](../../CLAUDE.md) first (rules, licences, Traps), then

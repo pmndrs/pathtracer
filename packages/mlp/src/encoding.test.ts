@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLOB_BINS, DEFAULT_IMAGE_ENCODING, FREQUENCIES, NRC_ENCODED, encodeImage, frequency, imageEncodingWgsl, imageEncodingWidth, nrcEncodingWgsl, oneBlob, triangleWave } from './encoding.ts';
+import { BLOB_BINS, DEFAULT_IMAGE_ENCODING, FREQUENCIES, NRC_ENCODED, type NrcInput, encodeNrc, encodeImage, frequency, imageEncodingWgsl, imageEncodingWidth, nrcEncodingWgsl, oneBlob, triangleWave } from './encoding.ts';
 
 describe('image encoding layouts (N1.3)', () => {
   it('the default layout is the original one', () => {
@@ -47,4 +47,15 @@ describe('NRC encoding WGSL twin', () => {
     expect(w).toContain('nnOneBlob(1.0 - exp(-roughness), &e, o + 4u * NN_BLOB_BINS);');
     expect(w).toContain('e[c + 6u] = 1.0; e[c + 7u] = 1.0;');
   });
+});
+
+it('reduces position bandwidth without shifting any material or angular features', () => {
+  const input: NrcInput = { position: [0.1, -0.39, 0.62], direction: [0.2, 0.8], normal: [0.4, 0.7], roughness: 0.2, diffuse: [0.1, 0.2, 0.3], specular: [0.4, 0.3, 0.2] };
+  const full = encodeNrc(input);
+  const reduced = encodeNrc(input, new Float32Array(64).fill(1), 4);
+  for (let i = 0; i < 64; i++) expect(reduced[i]).toBe(i < 36 && i % 12 >= 4 ? 0 : full[i]);
+  for (const bands of [0, 4.5, 13]) {
+    expect(() => nrcEncodingWgsl(bands)).toThrow(/positionBands/);
+    expect(() => encodeNrc(input, undefined, bands)).toThrow(/positionBands/);
+  }
 });

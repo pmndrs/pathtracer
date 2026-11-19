@@ -86,6 +86,10 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 
 ## Traps (add to this list)
 
+- For single-frame NRC texture comparisons, set the same seed and sample index on the plain and cache kernels. The plain bench adapter defaults to seed 0 and the cache defaults to 1. Misaligned primary jitter can look like light leaking into a black texel. Compare the primary albedo planes before scoring. [Checker regression](bench/nrc/factor-check.ts)
+
+- The Chrome/Metal NRC frame kernel can reach a ten-storage-buffer device limit before adding hash queries. Bind the grid checksums and resolved RGB/count as one snapshot. Bind training vertices and per-path sums as one allocation in the hook, with aligned subranges in the later passes. Check both beauty-only and frame-plane kernels. [Phase 1](docs/design/nrc-experiments.md#phase-1-results-on-the-mac)
+
 - Chrome quantizes `timestamp-query` to ~100 µs unless developer features are enabled
   (`--enable-webgpu-developer-features`; the runner sets it). On Chrome 157 / Apple it measured 1 ns steps even
   without the flag. Run `--page timer-calibration` once per session anyway. In-page `performance.now()` is 100 µs.

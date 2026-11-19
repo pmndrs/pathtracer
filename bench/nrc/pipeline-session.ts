@@ -8,7 +8,7 @@
  * Russian roulette, so both arms estimate the same image as the 4096 spp references. Used by `nrc-pipeline` (demo) and
  * `nrc-pipeline-study` (headless twin). No readback in `frame()`.
  */
-import { DEFAULT_SHAPE, type Precision } from '@pathtracer/mlp';
+import { MLP_SHAPES, type Precision } from '@pathtracer/mlp';
 import type { PtLookAtCamera, PtMegakernel } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import { inferArmOptions } from '../pages/mlp-common.ts';
@@ -68,7 +68,7 @@ export class NrcPipelineSession {
     const bounds = sceneBounds(adapter);
     let precision: Precision = o.precision ?? 'f16';
     if (precision === 'f16' && !device.features.has('shader-f16')) precision = 'f32';
-    const arm = inferArmOptions(o.infer ?? 'tiled', gpu.adapter, device, DEFAULT_SHAPE, precision, { records: 64, subgroups: o.subgroups ?? 4 });
+    const arm = inferArmOptions(o.infer ?? 'tiled', gpu.adapter, device, MLP_SHAPES[o.cache?.network ?? 'default'], precision, { records: 64, subgroups: o.subgroups ?? 4 });
     const { caps, trace, sceneBuffers } = adapter.debug;
     const cache = await NrcCache.create(device, caps, plain, [trace, sceneBuffers], { width: o.width, height: o.height, camera: o.scene.camera as PtLookAtCamera, ...limits }, bounds, {
       precision: arm.precision,

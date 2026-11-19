@@ -70,16 +70,17 @@
         </div>
         <fieldset>
           <h2>Scene</h2>
-          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="sponza-white-vknrc">Sponza, VkNRC lighting</option><option value="cornell">Cornell box</option></select></label>
+          <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="sponza-white-vknrc">Sponza, VkNRC lighting</option><option value="nrc-materials">Glossy roughness ramp</option><option value="nrc-materials-card">Blue card, shadow and reflection</option><option value="nrc-materials-grazing">Glossy ramp, grazing view</option><option value="cornell">Cornell box</option></select></label>
           <label>Resolution <select id="res"><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
           <label>Max depth <input id="maxDepth" type="number" min="1" max="16" value="8" /></label>
         </fieldset>
         <fieldset>
           <h2>View</h2>
           <label>Show <select id="view"><option value="split">Split</option><option value="plain">Path tracing only</option><option value="nrc">With NRC only</option><option value="diff">Difference ×4</option></select></label>
-          <label>Cache at <select id="queryDepth"><option value="0">first hit (cache only)</option><option value="1" selected>second hit</option><option value="2">third hit</option><option value="3">fourth hit</option></select></label>
+          <label>Cache at <select id="queryDepth"><option value="0">first hit (predict the reflection)</option><option value="1" selected>second hit (trace one bounce)</option><option value="diffuse-first">first hit on diffuse, second on glossy</option><option value="2">third hit</option><option value="3">fourth hit</option></select></label>
           <label>Exposure <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
           <label class="check"><input id="accumulate" type="checkbox" checked /> Accumulate while still</label>
+          <label class="check"><input id="refineStill" type="checkbox" /> Trace full paths after 64 still samples</label>
           <div class="row"><button id="pause">Pause</button><button id="realtime">Real-time setup</button></div>
           <p class="note">Only the side on screen renders: "With NRC only" shows the cache's own frame rate.</p>
         </fieldset>
@@ -91,6 +92,8 @@
         <fieldset>
           <h2>Cache</h2>
           <label>Cache <select id="backend"></select></label>
+          <label>Position bands <select id="positionBands"><option value="12">12 (full detail)</option><option value="4">4 (smoother)</option></select></label>
+          <label>Direction input <select id="directionInput"><option value="legacy">View, legacy material</option><option value="view">View, evaluated material</option><option value="reflected">Reflected view, evaluated material</option></select></label>
           <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
           <label>Training paths <select id="training"><option value="inline" selected>in the render pass</option><option value="replay">replayed (extra passes)</option></select></label>
           <label>Training layout <select id="trainSelect"><option value="tile" selected>whole 8 × 8 tiles</option><option value="pixel">single pixels</option></select></label>

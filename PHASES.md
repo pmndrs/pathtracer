@@ -6,6 +6,8 @@ number from the bench. Details and rationale: [spec/SPEC-draft.md](spec/SPEC-dra
 numbers are in.
 Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-19._
 
+The NRC research track has its own [phase overview and Mac results](docs/design/nrc-experiments.md#phase-table) and [Windows agent queue](docs/design/nrc-windows-handoff.md#phase-15-agent-queue).
+
 ## 🟨 P0 — Foundations: know the number to beat
 
 - Monorepo scaffold, `detectCaps()`, shared contract types.

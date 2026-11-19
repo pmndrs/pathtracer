@@ -53,14 +53,13 @@ summarised in [research/notes/08-realtime-gi.md](../../research/notes/08-realtim
 
 Recorded in [nrc-diverges.md](nrc-diverges.md) §D (N-H1..N-H6).
 
-- **Miss → 0, not "continue the path".** SHaRC terminates only where the cell has enough samples and traces on
-  otherwise. Ours terminates at `queryDepth` like the network arm. Continue-on-miss needs the lookup inside the render
-  hook (the grid bound in the megakernel's hook group: one more storage buffer there).
+- **Miss handling.** The fixed-depth control adds zero on a miss. With `hgContinue=1`, the display hook checks the
+  resolved grid at that same vertex, traces the remaining suffix on a miss and terminates on a valid hit. The training
+  tail retains its original fixed depth. See the [Mac comparison](nrc-experiments.md#phase-1-results-on-the-mac).
 - **Update from the network's training records**, not from SHaRC's own update paths (every vertex of ~4% of paths,
   radiance propagated back over a few bounces). Ours: every 16th tile (6.25% of pixels), 4 vertices, cache as tail. Close
   in spirit; the ratio and depth are the network arm's.
-- **No termination heuristic** (SHaRC: segment longer than the voxel, cone spread for glossy lobes). Fixed depth, like
-  the network arm.
+- **Termination** uses fixed depth by default. Both representations can opt into path spread, and the hash can reject coarse or high-variance display hits. [Phase 2 comparison](../../bench/results/NRC-ADAPTIVE.md)
 - **View-independent radiance per cell**, no material demodulation; the network conditions on direction and albedo. On
   sponza-white (one white diffuse material) this costs nothing; on a glossy or textured scene it would.
 

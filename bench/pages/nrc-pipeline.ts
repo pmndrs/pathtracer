@@ -18,7 +18,8 @@ import { cornell } from '../scenes/tier0/index.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
 import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
-import { hasSubgroupMatrix } from './mlp-common.ts';
+import { materialArgs } from '../nrc/cache.ts';
+import { hasSubgroupMatrix, networkArg } from './mlp-common.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('canvas');
@@ -134,7 +135,7 @@ async function build(): Promise<void> {
       displayHeight: 2 * h,
       infer: kind === 'sgm' ? 'sgm' : kind === 'portable' ? 'portable' : 'tiled',
       precision: prec === 'f32' ? 'f32' : 'f16',
-      cache: { stepsPerFrame: num('steps'), ...(backend === 'hash' ? { model: 'hash' as const } : {}) },
+      cache: { stepsPerFrame: num('steps'), network, ...(backend === 'hash' ? { model: 'hash' as const } : materialArgs(args.get('factorization'), args.get('materialInputs'), args.get('directionInput'))) },
     });
     const device = session.device;
     device.addEventListener('uncapturederror', (e) => setStatus(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`, true));
@@ -386,6 +387,7 @@ $('pause').addEventListener('click', () => {
 });
 
 const args = new URLSearchParams(location.search);
+const network = networkArg(args.get('network'));
 if (args.get('scene') && SCENES[args.get('scene') as string]) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
 // ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8

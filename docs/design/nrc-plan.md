@@ -8,6 +8,8 @@ one stands. Update the **Progress** column and the log at the bottom at the end 
 Shareable progress page (private until shared from its Share menu): https://claude.ai/artifact/DLEmXfvC7ChP8481rioCAx.
 Its milestones and log are uploaded copies of §4 and §7: update both at the end of a session.
 
+The follow-up [GI, reflections and WebNN execution plan](nrc-experiments.md) tracks the post-M9 experiments and startup regression.
+
 ## 1. The questions
 
 The experiment exists to answer four questions, each with a measured answer:
