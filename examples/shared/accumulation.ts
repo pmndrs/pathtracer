@@ -4,6 +4,7 @@
  */
 import type { ExampleContext } from './example.ts';
 import { AccumulationView } from './present.ts';
+import { samplingFor, type Sampling } from './sampling.ts';
 
 export class Accumulation {
   readonly view: AccumulationView;
@@ -16,9 +17,14 @@ export class Accumulation {
   private dirty = true;
   private drawn = '';
   private readonly ctx: ExampleContext;
+  private readonly sampling: Sampling;
+  private samplingVersion = 0;
 
   constructor(ctx: ExampleContext) {
     this.ctx = ctx;
+    this.sampling = samplingFor(ctx, { perFrame: false });
+    this.samplingVersion = this.sampling.version;
+    ctx.stats.set('image', 'ray traced in a compute shader, accumulated · no raster · no denoiser');
     this.view = new AccumulationView(ctx.device, ctx.format);
     ctx.onResize(() => (this.dirty = true));
   }
@@ -41,20 +47,25 @@ export class Accumulation {
       this.height = h;
       this.dirty = true;
     }
+    const maxFrames = this.sampling.stopAt || this.maxFrames;
+    if (this.sampling.version !== this.samplingVersion) {
+      this.samplingVersion = this.sampling.version;
+      this.dirty = true;
+    }
     const look = `${this.view.exposure}|${this.view.toneMapping}`;
-    if (!this.dirty && this.frame >= this.maxFrames && look === this.drawn) return false;
+    if (!this.dirty && this.frame >= maxFrames && look === this.drawn) return false;
     this.drawn = look;
     if (this.dirty) {
       encoder.clearBuffer(this.buffer);
       this.frame = 0;
       this.dirty = false;
     }
-    if (this.frame < this.maxFrames) {
+    if (this.frame < maxFrames) {
       record(encoder, this.frame);
       this.frame++;
     }
     this.view.encode(encoder, this.buffer, w, h, this.ctx.target());
-    this.ctx.stats.set('samples', `${this.frame} / ${this.maxFrames}`);
+    this.ctx.stats.set('samples', `${this.frame} / ${maxFrames} frames`);
     this.ctx.stats.set('film', `${w} × ${h}`);
     return true;
   }

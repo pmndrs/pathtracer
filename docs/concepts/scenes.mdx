@@ -97,7 +97,7 @@ A triangle with normals and positions costs about 84 bytes in the copy, so one 1
 
 A kernel compiles one BVH walk for one node format. `scene.format` (from `sceneFormatOf(traceBuffers)`) holds the node format, the leaf layout and the position layout. Pass it as `format` to `PtMegakernel`, `PtWavefront`, `RtBatchTracer` or `rtModuleWgsl`; `ptSceneOptions` does this for you. `setScene` throws when the scene's node format is not the one the kernel was built for.
 
-**Experimental:** the wide node formats `'bvh4'` and `'cwbvh8'` give a shallower tree with 4 or 8 children per node. The scene must be built with the same `nodeFormat` as the kernel, and the walk is a few KB more WGSL. A CWBVH scene reorders triangles, so where two triangles coincide a hit may name the other one.
+**Experimental:** the wide node formats `'bvh4'` and `'cwbvh8'` give a shallower tree with 4 or 8 children per node. The scene must be built with the same `nodeFormat` as the kernel, and the walk is a few KB more WGSL. A CWBVH scene reorders triangles, so where two triangles coincide a hit may name the other one. The [BVH formats example](https://pmndrs.github.io/pathtracer/examples/pathtracer/bvh/) builds one scene in each format and times them on your GPU.
 
 ## Changing a scene
 

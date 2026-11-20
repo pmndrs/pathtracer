@@ -1,0 +1,44 @@
+# Smoke run of every example in headless Chromium on SwiftShader (WebGPU on the CPU, no GPU on the runner): each page must load, reach
+# its sample count with no NaN / Inf pixel, draw something and log no error. Correctness only: SwiftShader is never a timing.
+# Locally: `node scripts/examples-smoke.mjs` (see its header).
+name: Examples smoke test
+
+on:
+  pull_request:
+    paths:
+      - 'examples/**'
+      - 'packages/**'
+      - 'scripts/examples-smoke.mjs'
+      - '.github/workflows/examples.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: examples-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # Only the examples and the two packages: the bench's link: siblings do not exist here.
+      - run: pnpm install --frozen-lockfile --filter @pathtracer/examples...
+      - name: Install Playwright's Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save playwright@1.63.0
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Smoke-test every example
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
+        run: node scripts/examples-smoke.mjs --timeout 300

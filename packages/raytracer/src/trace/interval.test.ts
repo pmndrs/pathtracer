@@ -221,6 +221,12 @@ describe('generated WGSL', () => {
     return list;
   };
 
+  it('never evaluates a looping helper inside select() (WGSL evaluates both arms: rtCascadeStart(0) once ran 2^32 iterations)', () => {
+    const code = rtIntervalKernelWgsl(allFeatures, { source: 'probes', output: 'distance', workgroupSize: 64 });
+    expect(code).toContain('fn rtCascadeStart(');
+    expect(code).not.toMatch(/select\([^;]*rtCascade(End|Start)\(/);
+  });
+
   it('every combination preprocesses cleanly, stays under the size cap and keeps balanced brackets', () => {
     let largest = 0;
     for (const combo of combos()) {

@@ -9,6 +9,9 @@ const gpuBox = document.getElementById('gpu')!;
 // Docs live next to the gallery in the deployed site; in dev they are not served, so link the deployed ones.
 if (import.meta.env.DEV) (document.getElementById('docs-link') as HTMLAnchorElement).href = SITE_URL;
 
+// Card images: `examples/<category>/<slug>/thumb.webp` (written by `node scripts/examples-smoke.mjs --thumbs`), bundled with hashed URLs.
+const THUMBS = import.meta.glob<string>('./*/*/thumb.webp', { eager: true, query: '?url', import: 'default' });
+
 let selected: CategoryId | 'all' = 'all';
 let features: ReadonlySet<string> | null = null;
 
@@ -52,9 +55,10 @@ function card(entry: ExampleEntry): HTMLElement {
 
   const thumb = document.createElement('div');
   thumb.className = 'thumb';
-  if (entry.thumbnail) {
+  const thumbUrl = THUMBS[`./${entry.path}thumb.webp`] ?? (entry.thumbnail ? THUMBS[`./${entry.thumbnail}`] : undefined);
+  if (thumbUrl) {
     const img = document.createElement('img');
-    img.src = entry.thumbnail;
+    img.src = thumbUrl;
     img.alt = '';
     img.loading = 'lazy';
     thumb.append(img);

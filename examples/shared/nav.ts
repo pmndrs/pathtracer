@@ -95,7 +95,7 @@ function mount(): void {
   const h = el('h2');
   h.textContent = entry.title;
   const p = el('p');
-  p.textContent = entry.description;
+  p.innerHTML = inlineMarkdown(entry.description);
   info.append(h, p);
   if (entry.status !== 'stable') {
     const note = el('p', { className: 'note' });
@@ -122,3 +122,9 @@ function mount(): void {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
 else mount();
+
+/** The catalog's descriptions use `code` and **bold**: escape the text, then render those two. */
+function inlineMarkdown(text: string): string {
+  const escaped = text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return escaped.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}

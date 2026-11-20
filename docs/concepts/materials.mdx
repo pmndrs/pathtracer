@@ -93,7 +93,7 @@ Each lobe costs WGSL, and a big kernel compiles slowly (on Windows in particular
 | `fuzz` | sheen |
 | `thinFilm` | a thin film |
 
-Every material in the table counts, even one no ray ever hits.
+Every material in the table counts, even one no ray ever hits. To edit materials live without recompiling, compile once with `materialProbes` (records that switch lobes on) and rewrite the scene copy on each change, as the [material explorer](https://pmndrs.github.io/pathtracer/examples/pathtracer/materials/) does.
 
 > [!NOTE]
 > If you write kernel options by hand, pass `integrator.materials` (`{ features: ptMaterialFeatures(records) }`) as `ptSceneOptions` does. Without it the kernel uses its legacy material adapter, which renders every non-metal as pure Lambert. See [Integrator options](/pathtracer/integrator-options).

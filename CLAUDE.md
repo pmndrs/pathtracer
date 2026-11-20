@@ -864,6 +864,13 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   (`Cannot access 'v' before initialization` in the built bundle). Headless checks of an example: serve `examples/dist`, open `<page>/?offscreen=1&scene=Cornell%20box`
   (the Cornell box needs no network), wait for `globalThis.__progressive.samples`, then `readImage()`; the Ray tracer examples expose the same through `exposeForChecks`.
   The `rtOffsetOrigin` / `rtSideNormal` helpers exist only in a module built with `shade`: a kernel without it declares its own.
+- WGSL `select(a, b, cond)` evaluates BOTH arms: `select(0.0, rtCascadeEnd(n - 1u, ..), n > 0u)` called the loop with `n - 1u` = 2^32 - 1 at n = 0 and hung the GPU (found by the
+  intervals example, 2026-11-20; `interval.test.ts` now forbids a looping helper inside `select`). Guard any call that loops, divides or indexes with an `if`, never with `select`.
+- Example smoke / thumbnails (S7): `node scripts/examples-smoke.mjs [--only a,b] [--thumbs] [--gpu] [--url <server>]` opens every catalog example with `?offscreen=1` and the entry's
+  `check.query` on its DEFAULT scene (AO once passed on the Cornell box and failed on every textured model: `materials: false` with a texture layout throws), waits for `__progressive.samples` / `__realtime.frames` (`check.samples`), and reads the
+  canvas back through `__exampleTarget` (the offscreen texture the template exposes). A new example passes only if it publishes one of those globals (`ProgressiveRenderer` and `exposeForChecks` do;
+  a page that draws nothing sets `check: { image: false }`). The gallery finds `examples/<path>/thumb.webp` through `import.meta.glob` (a plain `src` path would not be copied by Vite). The script's
+  stdout is per example: do not pipe it through `tail` in a background run (nothing shows until the end).
 - Built-in blue noise (S10): `loadBlueNoise()` reads `packages/raytracer/src/noise/builtin/<name>.ts` (base64 of the committed PNG, `png: string` so the .d.ts stays 200 B, not 105 KB). After regenerating the PNGs run `node scripts/embed-bluenoise.mjs`; `bluenoise-builtin.test.ts` fails on drift. `mode: 'realtime'` now always selects the `bluenoise` sampler and `create` loads the default texture, so a test that wants Owen-Sobol in real-time mode sets `integrator.sampler` explicitly.
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the

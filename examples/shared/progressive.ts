@@ -7,6 +7,7 @@ import { PtMegakernel, PtWavefront, ptSceneOptions, type PtLookAtCamera, type Pt
 import type { GpuScene } from '@pmndrs/raytracer';
 import type { ExampleContext } from './example.ts';
 import { AccumulationView } from './present.ts';
+import { samplingFor, type Sampling } from './sampling.ts';
 
 export interface ProgressiveSettings {
   /** Sample passes per frame (more converges faster, but the page reacts slower). */
@@ -34,9 +35,15 @@ export class ProgressiveRenderer {
   private drawn = '';
 
   private readonly ctx: ExampleContext;
+  /** The page's "Samples" controls (stop and samples per frame override `settings` when set). */
+  private readonly sampling: Sampling;
+  private samplingVersion = 0;
 
   private constructor(ctx: ExampleContext, pt: PtMegakernel | PtWavefront, scene: GpuScene, camera: PtLookAtCamera) {
     this.ctx = ctx;
+    this.sampling = samplingFor(ctx, { perFrame: true });
+    this.samplingVersion = this.sampling.version;
+    ctx.stats.set('image', 'path traced, accumulated · no raster · no denoiser · no upscaler');
     this.pt = pt;
     this.scene = scene;
     this.camera = camera;
@@ -92,8 +99,14 @@ export class ProgressiveRenderer {
   /** Records one frame: restart if needed, a few sample passes, then the accumulator to the canvas. */
   frame(encoder: GPUCommandEncoder): boolean {
     const [w, h] = this.ctx.filmSize();
+    const maxSamples = this.sampling.stopAt || this.settings.maxSamples;
+    const perFrame = this.sampling.perFrame || this.settings.samplesPerFrame;
+    if (this.sampling.version !== this.samplingVersion) {
+      this.samplingVersion = this.sampling.version;
+      this.dirty = true;
+    }
     const look = `${this.view.exposure}|${this.view.toneMapping}`;
-    const done = !this.dirty && w === this.width && h === this.height && this.pt.samples >= this.settings.maxSamples && look === this.drawn;
+    const done = !this.dirty && w === this.width && h === this.height && this.pt.samples >= maxSamples && look === this.drawn;
     if (done) return false;
     this.drawn = look;
     if (w !== this.width || h !== this.height) {
@@ -110,11 +123,11 @@ export class ProgressiveRenderer {
       this.started = performance.now();
     }
     const perEncode = this.pt instanceof PtWavefront ? this.pt.maxPassesPerEncode() : 256;
-    const n = Math.min(this.settings.samplesPerFrame, this.settings.maxSamples - this.pt.samples, perEncode);
+    const n = Math.min(perFrame, maxSamples - this.pt.samples, perEncode);
     if (n > 0) this.pt.encode(encoder, n);
     this.view.encode(encoder, this.pt.accumulator!, w, h, this.ctx.target());
     const seconds = (performance.now() - this.started) / 1000;
-    this.ctx.stats.set('samples', `${this.pt.samples} / ${this.settings.maxSamples}`);
+    this.ctx.stats.set('samples', `${this.pt.samples} / ${maxSamples} spp`);
     this.ctx.stats.set('film', `${w} × ${h}`);
     this.ctx.stats.set('time', `${seconds.toFixed(1)} s`);
     return true;

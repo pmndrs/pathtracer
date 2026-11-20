@@ -113,4 +113,4 @@ The previous camera is the kernel's: the one `nextFrame` or `setPrevCamera` set,
 > [!NOTE]
 > GI reservoirs take 128 bytes per pixel and are bound as one buffer: at 1280x720 that is close to the 128 MiB storage binding limit. Render GI at a reduced size and upscale.
 
-ReSTIR DI pays off on scenes with many lights, like the [lights example](https://pmndrs.github.io/pathtracer/examples/pathtracer/lights/). A scene lit by one sun and a sky gains little.
+ReSTIR DI pays off on scenes with many lights, like the [lights example](https://pmndrs.github.io/pathtracer/examples/pathtracer/lights/). The [ReSTIR DI in real time](https://pmndrs.github.io/pathtracer/examples/realtime/restir/) example compares single frames with and without it on 64 lamps. A scene lit by one sun and a sky gains little.

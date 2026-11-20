@@ -6,7 +6,7 @@ nav: 34
 
 A progressive path tracer converges over hundreds of samples. A real-time renderer gets one sample per pixel per frame and leaves the rest to a temporal denoiser and an upscaler. For that, the kernel writes more than radiance: the diffuse and specular light separated from the surface colour, normals, depth and motion.
 
-`mode: 'realtime'` sets this up. Both schedulers support it (the wavefront without `refill` or `layers`).
+`mode: 'realtime'` sets this up. Both schedulers support it (the wavefront without `refill` or `layers`). The [real-time frames example](https://pmndrs.github.io/pathtracer/examples/realtime/frame/) shows every plane of a live frame.
 
 ## Setup
 
