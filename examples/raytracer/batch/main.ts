@@ -102,7 +102,7 @@ defineExample(async (ctx) => {
 
   const sceneFolder = pane.addFolder({ title: 'Scene' });
   const picker = await scenePicker(ctx, sceneFolder, 'Damaged Helmet', async (scene) => {
-    const kernel = await TraceKernel.create(device, caps, scene, { label: 'batch', wgsl: wgsl(!!scene.copy.textureLayout), entryPoints: ['primary', 'shadow', 'compose'], io: ioEntries(['uniform', 'uniform', 'write', 'read', 'write', 'read', 'write']), module: { scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, textures: scene.copy.textureLayout, packing: scene.packing, lights: false } } });
+    const kernel = await TraceKernel.create(device, caps, scene, { label: 'batch', wgsl: wgsl(!!scene.copy.textureLayout), entryPoints: ['primary', 'shadow', 'compose'], walk: false, io: ioEntries(['uniform', 'uniform', 'write', 'read', 'write', 'read', 'write']), module: { scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, textures: scene.copy.textureLayout, packing: scene.packing, lights: false } } });
     // The tracers are compiled for the scene's BVH format, like the module.
     const closest = await RtBatchTracer.create(device, caps, { ...scene.format, mode: 'closest', hitRecord: 'full', label: 'closest' });
     const visible = await RtBatchTracer.create(device, caps, { ...scene.format, mode: 'visible', label: 'visible' });

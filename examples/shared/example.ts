@@ -104,7 +104,15 @@ export function defineExample(setup: (ctx: ExampleContext) => Promise<void> | vo
     device.lost.then((info) => {
       if (info.reason !== 'destroyed') showError('The GPU device was lost', info.message);
     });
-    device.addEventListener('uncapturederror', (event) => showError('WebGPU error', (event as GPUUncapturedErrorEvent).error.message));
+    // The FIRST error is the cause; later ones ("Invalid CommandBuffer ... due to a previous error") only follow from it, so keep the first.
+    let firstGpuError: string | null = null;
+    device.addEventListener('uncapturederror', (event) => {
+      const message = (event as GPUUncapturedErrorEvent).error.message;
+      console.error(message);
+      if (firstGpuError) return;
+      firstGpuError = message;
+      showError('WebGPU error', message);
+    });
 
     const canvas = document.createElement('canvas');
     canvas.id = 'view';
