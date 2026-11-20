@@ -14,6 +14,7 @@ export * from './integrator/dimensions.ts';
 export * from './integrator/integrator-wgsl.ts';
 export * from './integrator/megakernel.ts';
 export * from './integrator/modes.ts';
+export * from './integrator/scene-options.ts';
 export * from './integrator/outputs-wgsl.ts';
 export * from './integrator/vbuffer.ts';
 export * from './bsdf/thinfilm.ts';

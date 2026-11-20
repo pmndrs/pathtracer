@@ -1,108 +1,12 @@
 /**
- * The `openpbr` bench material: OpenPBR 1.1.2 defaults, default resolution, anisotropy conversion and the reference-class
- * helper of docs/internal/design/tier1.md sections 0 and 2. Pure functions, no I/O.
+ * The `openpbr` bench material: the reference-class helper of docs/internal/design/tier1.md sections 0 and 2. The OpenPBR defaults, default
+ * resolution and anisotropy conversion moved to `@pmndrs/raytracer` (gltf/openpbr.ts) and are re-exported here. Pure functions, no I/O.
  */
-import type { OpenPbrParams, Rgb } from './schema.ts';
+import type { OpenPbrParams } from './schema.ts';
 
-/** Every parameter with its OpenPBR 1.1.2 default (`coatIor` is OpenPBR's own 1.6; the glTF mapping overrides it with 1.5). */
-export const OPENPBR_DEFAULTS = {
-  baseWeight: 1,
-  baseColor: [0.8, 0.8, 0.8] as Rgb,
-  baseMetalness: 0,
-  baseDiffuseRoughness: 0,
-  specularWeight: 1,
-  specularColor: [1, 1, 1] as Rgb,
-  specularRoughness: 0.3,
-  specularRoughnessAnisotropy: 0,
-  specularIor: 1.5,
-  transmissionWeight: 0,
-  transmissionColor: [1, 1, 1] as Rgb,
-  transmissionDepth: 0,
-  transmissionDispersionScale: 0,
-  transmissionDispersionAbbeNumber: 20,
-  subsurfaceWeight: 0,
-  subsurfaceColor: [1, 1, 1] as Rgb,
-  coatWeight: 0,
-  coatColor: [1, 1, 1] as Rgb,
-  coatRoughness: 0,
-  coatIor: 1.6,
-  fuzzWeight: 0,
-  fuzzColor: [1, 1, 1] as Rgb,
-  fuzzRoughness: 0.5,
-  thinFilmWeight: 0,
-  thinFilmThickness: 0.5,
-  thinFilmIor: 1.4,
-  emissionLuminance: 0,
-  emissionColor: [1, 1, 1] as Rgb,
-  geometryThinWalled: false,
-  geometryOpacity: 1,
-  anisotropyRotation: 0,
-  alphaMode: 'opaque' as 'opaque' | 'mask' | 'blend',
-  alphaCutoff: 0.5,
-  doubleSided: false,
-  emissionTwoSided: false,
-} as const;
-
-/** The numeric / colour / boolean fields that have defaults (the texture names have none). */
-export type OpenPbrResolved = { [K in keyof typeof OPENPBR_DEFAULTS]: (typeof OPENPBR_DEFAULTS)[K] extends readonly number[] ? Rgb : K extends 'alphaMode' ? 'opaque' | 'mask' | 'blend' : (typeof OPENPBR_DEFAULTS)[K] extends boolean ? boolean : number } & Pick<OpenPbrParams, 'baseColorTexture' | 'metallicRoughnessTexture' | 'normalTexture' | 'emissiveTexture'>;
-
-/** Fills every missing field with its OpenPBR default (colours are copied). */
-export function resolveOpenPbr(p: OpenPbrParams): OpenPbrResolved {
-  const out: Record<string, unknown> = { ...OPENPBR_DEFAULTS };
-  for (const [k, v] of Object.entries(p)) {
-    if (v === undefined || k === 'type') continue;
-    out[k] = Array.isArray(v) ? [...v] : v;
-  }
-  return out as unknown as OpenPbrResolved;
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// Anisotropy: glTF KHR_materials_anisotropy <-> OpenPBR specular_roughness_anisotropy
-// ---------------------------------------------------------------------------------------------------------------
-
-/** GGX alphas along the tangent (t) and bitangent (b) as glTF defines them: alpha = roughness^2, alpha_t = mix(alpha, 1, strength^2), alpha_b = alpha. */
-export function gltfAnisotropyAlphas(roughness: number, strength: number): { alphaT: number; alphaB: number } {
-  const alpha = roughness * roughness;
-  return { alphaT: alpha + (1 - alpha) * strength * strength, alphaB: alpha };
-}
-
-/** GGX alphas as OpenPBR defines them: alpha_x = r^2 sqrt(2 / (1 + (1 - a)^2)), alpha_y = (1 - a) alpha_x. */
-export function openPbrAnisotropyAlphas(roughness: number, anisotropy: number): { alphaT: number; alphaB: number } {
-  const alphaT = roughness * roughness * Math.sqrt(2 / (1 + (1 - anisotropy) * (1 - anisotropy)));
-  return { alphaT, alphaB: (1 - anisotropy) * alphaT };
-}
-
-/**
- * glTF (perceptual roughness, anisotropy strength) -> OpenPBR (roughness r, anisotropy a) with identical (alpha_t, alpha_b):
- * a = 1 - alpha_b / alpha_t and r = sqrt(alpha_t sqrt((1 + (1 - a)^2) / 2)). Strength 0 gives r = roughness, a = 0; roughness 0
- * with strength > 0 gives alpha_b = 0, a = 1.
- */
-export function gltfAnisotropyToOpenPbr(roughness: number, strength: number): { roughness: number; anisotropy: number } {
-  const { alphaT, alphaB } = gltfAnisotropyAlphas(roughness, strength);
-  if (alphaT <= 0) return { roughness: 0, anisotropy: 0 };
-  const anisotropy = 1 - alphaB / alphaT;
-  const r2 = alphaT * Math.sqrt((1 + (1 - anisotropy) * (1 - anisotropy)) / 2);
-  return { roughness: Math.sqrt(r2), anisotropy };
-}
-
-/** Inverse of `gltfAnisotropyToOpenPbr`: strength = sqrt((alpha_t - alpha_b) / (1 - alpha_b)), roughness = sqrt(alpha_b). */
-export function openPbrAnisotropyToGltf(roughness: number, anisotropy: number): { roughness: number; strength: number } {
-  const { alphaT, alphaB } = openPbrAnisotropyAlphas(roughness, anisotropy);
-  const strength = alphaB >= 1 ? 0 : Math.sqrt(Math.max(0, (alphaT - alphaB) / (1 - alphaB)));
-  return { roughness: Math.sqrt(alphaB), strength };
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// Lengths
-// ---------------------------------------------------------------------------------------------------------------
-
-/** OpenPBR's default length unit is the centimetre; our scenes (and glTF) are in metres. */
-export const OPENPBR_CM_PER_METRE = 100;
-export const metresToOpenPbrCm = (metres: number): number => metres * OPENPBR_CM_PER_METRE;
-export const openPbrCmToMetres = (cm: number): number => cm / OPENPBR_CM_PER_METRE;
-
-/** Thin-film thickness: glTF iridescence is in nanometres, OpenPBR in micrometres. */
-export const nmToMicrometres = (nm: number): number => nm / 1000;
+export { OPENPBR_DEFAULTS, resolveOpenPbr, gltfAnisotropyAlphas, openPbrAnisotropyAlphas, gltfAnisotropyToOpenPbr, openPbrAnisotropyToGltf, OPENPBR_CM_PER_METRE, metresToOpenPbrCm, openPbrCmToMetres, nmToMicrometres } from '@pmndrs/raytracer';
+export type { OpenPbrResolved } from '@pmndrs/raytracer';
+import { resolveOpenPbr } from '@pmndrs/raytracer';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Reference classes (docs/internal/design/tier1.md sections 0 and 2)

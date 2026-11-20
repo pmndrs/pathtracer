@@ -15,6 +15,8 @@
  * - Radiometric units: emission/env values are radiance in W·sr⁻¹·m⁻² (linear RGB, Rec.709 primaries).
  */
 
+import type { OpenPbrParams as RtOpenPbrParams } from '@pmndrs/raytracer';
+
 export type Vec3 = readonly [number, number, number];
 export type Rgb = readonly [number, number, number];
 /** Column-major 4×4 object-to-world transform. */
@@ -103,60 +105,13 @@ export type TextureDesc = (
   filter?: 'linear' | 'nearest';
 };
 
-/**
- * Parameters of the `openpbr` material. Names are OpenPBR 1.1.2's (`base_color` -> `baseColor`, `specular_roughness_anisotropy` ->
- * `specularRoughnessAnisotropy`, ...); every field is optional and absent ones take the OpenPBR default (listed per field, applied by
- * `resolveOpenPbr`). Colours are linear Rec.709. Units: lengths are **metres** (our scene unit; OpenPBR's own default is
- * centimetres, so a literal OpenPBR/MaterialX export multiplies by 100), thin-film thickness is **micrometres** (OpenPBR's unit),
- * emission is radiance `emissionLuminance * emissionColor` in W/sr/m^2 (OpenPBR: nits).
- */
-export interface OpenPbrParams {
-  /** Default 1. */ baseWeight?: number;
-  /** Default 0.8 grey. */ baseColor?: Rgb;
-  /** Default 0. */ baseMetalness?: number;
-  /** Default 0 (Lambert). */ baseDiffuseRoughness?: number;
-  /** Default 1. Scales the dielectric specular lobe (F at both ends, unlike glTF's F0-only scale). */ specularWeight?: number;
-  /** Default white. */ specularColor?: Rgb;
-  /** Perceptual; GGX alpha = roughness^2 (before anisotropy). Default 0.3. */ specularRoughness?: number;
-  /** Default 0. 1 gives alpha_y = 0 (OpenPBR: alpha_x = r^2 sqrt(2 / (1 + (1 - a)^2)), alpha_y = (1 - a) alpha_x). */ specularRoughnessAnisotropy?: number;
-  /** Default 1.5. */ specularIor?: number;
-  /** Default 0. */ transmissionWeight?: number;
-  /** Default white. At `transmissionDepth` 0 a non-physical tint of the refraction; otherwise the Beer-Lambert colour at that depth. */ transmissionColor?: Rgb;
-  /** Metres. Default 0 = no medium. */ transmissionDepth?: number;
-  /** Default 0 (no dispersion). */ transmissionDispersionScale?: number;
-  /** Default 20. */ transmissionDispersionAbbeNumber?: number;
-  /** Default 0. glTF `KHR_materials_diffuse_transmission` maps here (thin-walled). */ subsurfaceWeight?: number;
-  /** Default white. */ subsurfaceColor?: Rgb;
-  /** Default 0. */ coatWeight?: number;
-  /** Default white. */ coatColor?: Rgb;
-  /** Default 0. */ coatRoughness?: number;
-  /** OpenPBR's default is 1.6; the glTF mapping sets 1.5 (`KHR_materials_clearcoat` is fixed at 1.5). */ coatIor?: number;
-  /** Default 0. */ fuzzWeight?: number;
-  /** Default white. */ fuzzColor?: Rgb;
-  /** Default 0.5. */ fuzzRoughness?: number;
-  /** Default 0. */ thinFilmWeight?: number;
-  /** Micrometres. Default 0.5. */ thinFilmThickness?: number;
-  /** Default 1.4. */ thinFilmIor?: number;
-  /** Default 0. */ emissionLuminance?: number;
-  /** Default white. */ emissionColor?: Rgb;
-  /** Default false. */ geometryThinWalled?: boolean;
-  /** Default 1. */ geometryOpacity?: number;
-  // --- bench extras (not OpenPBR parameters; the scene copy has fields for them) ---
-  /** Radians, rotation of the anisotropy axis about the normal (glTF `anisotropyRotation`); OpenPBR takes the axis from the tangent field. Default 0. */ anisotropyRotation?: number;
-  /** Default 'opaque'. 'mask' tests `geometryOpacity` (times the base colour alpha texture) against `alphaCutoff`; 'blend' is stochastic. */ alphaMode?: 'opaque' | 'mask' | 'blend';
-  /** Default 0.5. */ alphaCutoff?: number;
-  /** Default false. */ doubleSided?: boolean;
-  /** Emit from both faces (default false: authored front face). */ emissionTwoSided?: boolean;
+/** The package's OpenPBR parameter set (`@pmndrs/raytracer` gltf/openpbr.ts) plus the bench-only MaterialX key. */
+export interface OpenPbrParams extends RtOpenPbrParams {
   /**
    * MaterialX (P5): key of a registered MaterialX material (`bench/scenes/materialx.ts`) whose graph the codegen path (`integrator.materialx`)
    * evaluates at the hit; the fields above are the record's fallback values. Needs a mesh `uv` and, in the scene, the textures the graph reads.
    */
   materialx?: string;
-  /** `textures` keys (as for `pbr`); the factors above multiply them. */
-  baseColorTexture?: string;
-  metallicRoughnessTexture?: string;
-  normalTexture?: string;
-  emissiveTexture?: string;
 }
 
 export type MaterialDesc =
