@@ -103,7 +103,7 @@ fn compose(@builtin(global_invocation_id) id: vec3u) {
 
 defineExample(async (ctx) => {
   const { device, caps, pane, stats } = ctx;
-  const params = { elevation: 45, azimuth: 35, sun: 3, sky: 0.25, sunSize: 4, jitter: true };
+  const params = { elevation: 45, azimuth: 35, sun: 3, sky: 0.25, sunSize: 0.25, jitter: true }; // sunSize: the real sun's angular radius
   const accumulation = new Accumulation(ctx);
   accumulation.maxFrames = 512;
   exposeForChecks(accumulation);
@@ -130,7 +130,7 @@ defineExample(async (ctx) => {
   }
   // A point sun and a constant sky leave nothing random but the pixel jitter: the image is clean after a few frames and can look rasterised.
   // A sun disc makes every shadow ray a random sample: watch the penumbrae start grainy and converge (stop at 1 sample to see one frame).
-  lightFolder.addBinding(params, 'sunSize', { label: 'sun size (deg)', min: 0, max: 15, step: 0.5 }).on('change', () => accumulation.reset());
+  lightFolder.addBinding(params, 'sunSize', { label: 'sun radius (deg)', min: 0, max: 15, step: 0.25 }).on('change', () => accumulation.reset());
   lightFolder.addBinding(params, 'jitter', { label: 'pixel jitter (AA)' }).on('change', () => accumulation.reset());
   const view = pane.addFolder({ title: 'View' });
   view.addBinding(accumulation.view, 'exposure', { min: 0, max: 4, step: 0.01 });
