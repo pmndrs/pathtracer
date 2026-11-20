@@ -1,5 +1,5 @@
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
-import { loadInterior } from '../scenes/interiors.ts';
+import { isInterior, loadInterior, type InteriorName } from '../scenes/interiors.ts';
 import { phase10Settings } from '../nrc/phase10.ts';
 import { NrcPipelineSession } from '../nrc/pipeline-session.ts';
 import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
@@ -121,14 +121,24 @@ async function compare(): Promise<void> {
   }
 }
 
+const holdScene = document.querySelector<HTMLSelectElement>('#hold-scene')!;
+const requestedScene = new URLSearchParams(location.search).get('scene');
+if (requestedScene && isInterior(requestedScene)) holdScene.value = requestedScene;
+
+const grainPatches = {
+  'hero-classroom': [[0.39, 0.49, 0.06, 0.105], [0.48, 0.52, 0.22, 0.27], [0.60, 0.67, 0.19, 0.22]],
+  // Left foreground column, rear masonry above the arch, and center aisle floor.
+  'hero-sponza': [[0.116, 0.164, 0.74, 0.81], [0.451, 0.531, 0.418, 0.445], [0.465, 0.522, 0.765, 0.824]],
+} as const;
+
 // A stationary spatial metric catches fixed grain even when adjacent frames agree.
-function surfaceGrain({ width: w, height: h, data }: Image): number {
+function surfaceGrain({ width: w, height: h, data }: Image, scene: InteriorName): number {
   function displayY(x: number, y: number): number {
     const i = 4 * (y * w + x);
     return tone(0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!);
   }
   let sum = 0, count = 0;
-  for (const [left, right, top, bottom] of [[0.39, 0.49, 0.06, 0.105], [0.48, 0.52, 0.22, 0.27], [0.60, 0.67, 0.19, 0.22]] as const) {
+  for (const [left, right, top, bottom] of grainPatches[scene]) {
     for (let y = Math.ceil(top * h); y < bottom * h; y++) for (let x = Math.ceil(left * w); x < right * w; x++) {
       sum += Math.abs(displayY(x, y) - 0.25 * (displayY(x - 1, y) + displayY(x + 1, y) + displayY(x, y - 1) + displayY(x, y + 1)));
       count++;
@@ -142,7 +152,10 @@ async function testSettling(): Promise<void> {
   const tbody = section.querySelector('tbody')!;
   section.hidden = false;
   tbody.replaceChildren();
-  const scene = await loadInterior('hero-classroom');
+  const sceneId = holdScene.value;
+  if (!isInterior(sceneId)) throw new Error('Unknown interior ' + sceneId);
+  section.querySelector('caption')!.textContent = holdScene.selectedOptions[0]!.text;
+  const scene = await loadInterior(sceneId);
   const checkpoints = new Set([8, 32, 64, 128, 256, 512, 1024]);
   for (const limit of [0, 16]) {
     const label = limit ? limit + ' spp' : 'Unlimited';
@@ -161,7 +174,7 @@ async function testSettling(): Promise<void> {
           const values = [label, String(frame), arm];
           for (const stage of stages) {
             const image = await readTextureRgba16f(session.device, session.arms[arm].stage(stage));
-            values.push(surfaceGrain(image).toFixed(5));
+            values.push(surfaceGrain(image, sceneId).toFixed(5));
           }
           const row = tbody.insertRow();
           for (const v of values) row.insertCell().textContent = v;
@@ -175,11 +188,12 @@ const hold = document.querySelector<HTMLButtonElement>('#hold')!;
 for (const [button, test] of [[run, compare], [hold, testSettling]] as const) {
   button.disabled = false;
   button.addEventListener('click', async () => {
-    run.disabled = hold.disabled = true;
-    progress.textContent = 'Loading Classroom…';
+    run.disabled = hold.disabled = holdScene.disabled = true;
+    button.after(progress);
+    progress.textContent = button === run ? 'Loading Classroom…' : 'Loading ' + holdScene.selectedOptions[0]!.text + '…';
     if (button === run) { rows.replaceChildren(); captures.replaceChildren(); }
     try { await test(); progress.textContent = 'Comparison complete.'; }
     catch (e) { progress.textContent = 'Failed: ' + (e instanceof Error ? e.message : String(e)); }
-    finally { run.disabled = hold.disabled = false; }
+    finally { run.disabled = hold.disabled = holdScene.disabled = false; }
   });
 }

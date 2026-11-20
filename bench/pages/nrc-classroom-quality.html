@@ -11,11 +11,14 @@ th,td {padding:6px;text-align:right;border-bottom:1px solid #444b41} th:first-ch
 <a href="./nrc-pipeline.html?scene=hero-classroom">Regular tuning bench</a> · <a href="./nrc-pipeline.html?demo=hero">Interactive Classroom</a> · <a href="./nrc-pipeline.html?demo=hero&amp;preset=classroom-native">Native-scale comparison preset</a>
 <h1>Classroom quality bench</h1>
 <p>Compare whole-tile and individual-pixel NRC training, then accumulate samples before denoising with SVGF or OIDN. Each run starts with the same camera, sun, and network seed. Look at the blind shadows on the right wall, the chalk lettering, and the metal chair legs.</p>
-<button id="run" disabled>Run comparison</button> <button id="hold" disabled>Test stationary grain</button> <span id="progress" role="status"></span>
+<button id="run" disabled>Run Classroom comparison</button>
 <div class="scroll"><table><thead><tr><th>Run / stage</th><th>Samples/pixel at end</th><th>8 × 8 patch flicker (p99)</th><th>Error vs. plain PT</th><th>Frame time (ms)</th></tr></thead><tbody></tbody></table></div>
 <p>Patch flicker is the 99th percentile of absolute changes in mean display luminance across 8 × 8 render-pixel patches and eight successive frame pairs. Error is mean absolute display-luminance error against a separate 256-spp plain path trace at render resolution. Both measures run from 0 to 1. Median frame time covers the whole rendering chain and excludes readback.</p>
-<section id="settling" hidden><h2>Stationary grain</h2>
-<p>With training on, both arms trace one sample per frame for 1,024 frames. The raw mean keeps all samples. The two runs change only the history fed into SVGF. Values measure local contrast against four neighboring pixels on three fixed ceiling and wall patches. Lower values mean smoother patches.</p>
-<div class="scroll"><table><thead><tr><th>SVGF input history</th><th>Frame</th><th>Arm</th><th>Raw grain</th><th>Denoised grain</th><th>Final grain</th></tr></thead><tbody></tbody></table></div></section>
 <div id="captures"></div>
+<h2>Stationary grain</h2>
+<label>Scene <select id="hold-scene"><option value="hero-classroom">Classroom (color)</option><option value="hero-sponza">Sponza (color)</option></select></label>
+<button id="hold" disabled>Test stationary grain</button>
+<p>With training on, both arms trace one sample per frame for 1,024 frames. The raw mean keeps all samples. The two runs change only the history fed into SVGF. Values measure local contrast against four neighboring pixels on three fixed surface patches in the selected scene. Lower values mean smoother patches.</p>
+<span id="progress" role="status"></span>
+<section id="settling" hidden><div class="scroll"><table><caption></caption><thead><tr><th>SVGF input history</th><th>Frame</th><th>Arm</th><th>Raw grain</th><th>Denoised grain</th><th>Final grain</th></tr></thead><tbody></tbody></table></div></section>
 <script type="module" src="./nrc-classroom-quality.ts"></script></body></html>
