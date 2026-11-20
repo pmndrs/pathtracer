@@ -1,0 +1,33 @@
+---
+title: Browser and GPU support
+description: Where it runs, what it uses when present, and what we test on.
+nav: 5
+---
+
+The packages need WebGPU and nothing else. Optional features make them faster when the device has them. `detectCaps(adapter)` reports what a device offers, and every kernel compiles against that report.
+
+## What we test on
+
+| | |
+| --- | --- |
+| **Tested** | Chrome (stable and Canary) on an Apple M5 Pro (Metal) and on an NVIDIA RTX 3060 laptop (Windows, D3D12). |
+| **Should work, untested** | Edge (same engine as Chrome); Safari 26 and Firefox 141+ on Windows ship WebGPU. Tell us what you find. |
+| **Correctness only** | SwiftShader (Chrome's CPU WebGPU) in CI-like containers: right images, slow. |
+
+## Optional features
+
+| Feature | Used for |
+| --- | --- |
+| `subgroups` | Faster queue appends in the wavefront scheduler; parts of the research code. |
+| `shader-f16` | Half-precision storage in the real-time planes and the neural cache. |
+| `timestamp-query` | Timing in the bench and the examples' stats. |
+| `chromium-experimental-sampling-resource-table` | Bindless textures (experimental; not usable in compute passes on Metal yet). |
+
+`caps.tier` is a summary label for reports: 0 is WebGPU baseline, 1 adds f16, timestamps, compressed textures and larger limits, 2 adds subgroups, 3 adds the resource table. Code never branches on the tier, only on the individual flags.
+
+## Things to know
+
+- **Kernel size.** A path tracer kernel with every material feature is about 50 KB of WGSL. Large kernels compile slowly in the Windows shader compiler (DXC). `ptSceneOptions` only compiles what the scene's materials use. `ptwfAutoPolicy` moves very large kernels to the wavefront scheduler, whose kernels are smaller.
+- **Storage buffers.** Chrome on Apple GPUs allows 10 storage buffers per shader stage whatever the device requests. The default scene-copy packing (`packed`) keeps one binding for the whole scene.
+- **Binding size.** A packed scene copy must fit one storage binding (128 MiB on most devices). That is about 1.5 million triangles with normals and positions; above that, upload with `packing: 'split'`.
+- **Hidden tabs.** Browsers throttle `requestAnimationFrame` in hidden tabs. A progressive render pauses there, which is usually what you want.

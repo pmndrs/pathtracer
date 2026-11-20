@@ -3,7 +3,11 @@
 A WebGPU ray and path tracing library: a fast, GPU-driven trace core shared by our rendering tools (reflections,
 GI, radiance cascades, baking) and a full PBR path tracer built on it.
 
-Status: **research phase.** No code yet.
+Packages: [`@pmndrs/raytracer`](packages/raytracer) and [`@pmndrs/pathtracer`](packages/pathtracer) (0.1, on npm).
+Docs: <https://pmndrs.github.io/pathtracer/> ([source](docs/)) · Examples: <https://pmndrs.github.io/pathtracer/examples/>
+([source](examples/), `pnpm examples` runs them locally). Where the project stands: [STATUS.md](STATUS.md).
+
+Research and design records:
 
 - [research/BRIEF.md](research/BRIEF.md) — goals, rules and the brief every research pass works from
 - [research/notes/](research/notes/) — one notes file per research area

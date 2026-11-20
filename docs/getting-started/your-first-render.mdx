@@ -1,0 +1,105 @@
+---
+title: Your first render
+description: A complete program, from triangles to a converged image.
+nav: 2
+---
+
+A path tracer needs four things:
+
+1. A scene: triangles, instances and materials.
+2. The scene's GPU form: a BVH to walk and a *scene copy* of the materials and lights.
+3. A kernel compiled for that scene.
+4. A loop that adds samples and shows their mean.
+
+This page builds all four with no helpers. [The live version](https://pmndrs.github.io/pathtracer/examples/start/hello/) of the same idea is a Cornell box.
+
+## The program
+
+```ts title="main.ts"
+import { buildGpuScene, detectCaps, requestDeviceForCaps, type SceneCopyInput } from '@pmndrs/raytracer';
+import { PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
+
+// A device with the features the library can use (subgroups, f16, timestamps when present).
+const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+if (!adapter) throw new Error('no WebGPU adapter');
+const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter));
+
+// 1. A floor and a lamp above it. Quads are counter-clockwise seen from their front face; the lamp faces down.
+const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+const input: SceneCopyInput = {
+  meshes: [
+    { positions: new Float32Array([-3, 0, 3, 3, 0, 3, 3, 0, -3, -3, 0, -3]), indices: [0, 1, 2, 0, 2, 3] },
+    { positions: new Float32Array([-0.5, 2, -0.5, 0.5, 2, -0.5, 0.5, 2, 0.5, -0.5, 2, 0.5]), indices: [0, 1, 2, 0, 2, 3] },
+  ],
+  instances: [
+    { meshIndex: 0, instanceIndex: 0, objectToWorld: identity, material: 0 },
+    { meshIndex: 1, instanceIndex: 1, objectToWorld: identity, material: 1 },
+  ],
+  // OpenPBR parameters; anything left out takes its OpenPBR default.
+  materials: [
+    { baseColor: [0.8, 0.8, 0.8], specularRoughness: 0.4 },
+    { baseColor: [0, 0, 0], specularWeight: 0, emissionColor: [20, 18, 15] },
+  ],
+  environment: { radiance: [0.15, 0.2, 0.3] },
+};
+
+// 2. The BVH and the scene copy, built on the CPU and uploaded.
+const scene = await buildGpuScene(device, input);
+
+// 3. A kernel for exactly this scene (its materials, textures and BVH format decide the WGSL).
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene));
+pt.setScene(scene.trace, scene.buffers);
+pt.setFilm(640, 360);
+pt.setCamera({ position: [0, 1.5, 5], target: [0, 0.5, 0], up: [0, 1, 0], yFovDeg: 45 });
+pt.setLimits({ maxDepth: 8, rrStartDepth: 3 });
+
+// 4. 256 samples per pixel, 16 per submit. Each pass adds one sample to every pixel.
+for (let done = 0; done < 256; done += 16) {
+  const encoder = device.createCommandEncoder();
+  pt.encode(encoder, 16);
+  device.queue.submit([encoder.finish()]);
+  await device.queue.onSubmittedWorkDone();
+}
+
+// The mean radiance: RGBA float32, linear, row 0 = top.
+const image = await pt.readImage();
+
+// Show it: exposure, a simple tone curve, sRGB.
+const canvas = document.querySelector('canvas')!;
+canvas.width = image.width;
+canvas.height = image.height;
+const pixels = new ImageData(image.width, image.height);
+const encode = (v: number) => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
+for (let i = 0; i < image.width * image.height; i++) {
+  for (let c = 0; c < 3; c++) {
+    const v = image.data[i * 4 + c]!;
+    pixels.data[i * 4 + c] = encode(v / (1 + v));
+  }
+  pixels.data[i * 4 + 3] = 255;
+}
+canvas.getContext('2d')!.putImageData(pixels, 0, 0);
+```
+
+## What each step does
+
+**`requestDeviceForCaps`** asks for the optional features the library can use (subgroups, `shader-f16`, timestamps) and returns `caps`, which the kernels compile against.
+
+**`buildGpuScene`** builds one BVH per mesh and merges the static instances into one tree. It uploads the tree, then builds the scene copy: materials packed into records, a light table with every emissive triangle, the sun and the environment, and the texture arrays. Its `format` and `packing` are what a kernel must be compiled for.
+
+**`ptSceneOptions`** reads the scene and returns the kernel options. These cover which OpenPBR lobes the materials use, whether there are textures, alpha cutouts or an environment map, and the BVH format. The kernel text only contains code the scene needs. Add your own settings as overrides:
+
+```ts
+ptSceneOptions(scene, { integrator: { nee: true, sampler: 'owen-sobol' } });
+```
+
+**`encode`** records sample passes into your encoder. It reads nothing back, so it can go in a frame loop. `readImage` maps a buffer: call it outside timed code, never every frame.
+
+## Showing it every frame
+
+For a live view, draw the accumulator directly instead of reading it back:
+
+- `pt.accumulator` is an `array<vec4f>` with the radiance sum in `rgb` and the sample count in `w`.
+- A fullscreen pass divides, tone maps and writes the canvas.
+- When the camera moves, call `setCamera` and `pt.reset(encoder)` before the next `encode`.
+
+The examples' [`present.ts`](https://github.com/pmndrs/pathtracer/blob/main/examples/shared/present.ts) and [`progressive.ts`](https://github.com/pmndrs/pathtracer/blob/main/examples/shared/progressive.ts) are about 150 lines together. Copy them freely.

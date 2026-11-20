@@ -32,7 +32,9 @@ const STYLE = `
 .ex-info .note { color: #a3a194; font-size: 12px; }
 .ex-info code { font: 12px ui-monospace, Menlo, monospace; color: #caf543; }
 .ex-info[hidden] { display: none; }
-@media (max-width: 720px) { .ex-nav .crumb .cat, .ex-nav .label { display: none; } }
+@media (max-width: 1100px) { .ex-nav .label { display: none; } }
+@media (max-width: 900px) { .ex-nav .crumb .cat { display: none; } }
+@media (max-width: 520px) { .ex-nav .crumb { display: none; } }
 `;
 
 const icon = (path: string): string => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;

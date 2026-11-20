@@ -123,6 +123,8 @@ export function defineExample(setup: (ctx: ExampleContext) => Promise<void> | vo
       if (!offscreenTexture || offscreenTexture.width !== canvas.width || offscreenTexture.height !== canvas.height) {
         offscreenTexture?.destroy();
         offscreenTexture = device.createTexture({ label: 'offscreen target', size: [canvas.width, canvas.height], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+        // Headless checks copy the displayed pixels from here.
+        (globalThis as { __exampleTarget?: { device: GPUDevice; texture: GPUTexture } }).__exampleTarget = { device, texture: offscreenTexture };
       }
       return offscreenTexture.createView();
     };

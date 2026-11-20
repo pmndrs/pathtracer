@@ -1,0 +1,38 @@
+---
+title: Choosing a package
+description: When the trace core is enough, and when you want the path tracer.
+nav: 4
+---
+
+## `@pmndrs/raytracer`: you write the shading
+
+Use it when you have a renderer and need rays, such as for reflections, shadows, ambient occlusion, GI probes or baking. It gives you:
+
+- **Inline WGSL.** `rtModuleWgsl` returns functions to paste into your compute shader: `rtVisible` (anything in the way?), `rtClosest` (first hit), `rtSurface` (position, normals, uvs and material of a hit). Only what you ask for is decoded.
+- **Batch tracing.** `RtBatchTracer` traces a GPU buffer of rays into a buffer of hits, direct or indirect, with no CPU work per frame.
+- **The scene copy.** Materials, textures and lights on the GPU, with light sampling (`rtSampleLightLi`) and a one-bounce OpenPBR shade (`rtShade`) for hit lighting.
+- **Interval queries.** Closest hit and visibility inside a `(t0, t1]` range, for radiance cascades and probe tracing.
+- **Loading.** `loadGltf` and `buildGpuScene`.
+
+## `@pmndrs/pathtracer`: images out
+
+Use it when you want a rendered image: a converged reference, a preview, or real-time frames for a denoiser.
+
+- **Two schedulers.** `PtMegakernel` (one kernel per sample) and `PtWavefront` (queues and indirect dispatch). They give the same image per pixel. `ptwfAutoPolicy` picks one for a film size and path length.
+- **Materials.** OpenPBR: metal, glass (thick or thin-walled), coats, sheen, thin film, anisotropy and absorbing media, with textures and alpha cutouts.
+- **Modes.** `reference` (default), `preview` and `realtime`. Real time writes the planes a denoiser and an upscaler read: diffuse and specular radiance with their demodulation factors, emission, normals, depth and motion.
+
+### Experimental in `@pmndrs/pathtracer`
+
+These are built, checked against references, and off by default. Their options can still change:
+
+| Feature | Option |
+| --- | --- |
+| ReSTIR DI and GI | `integrator.restir` |
+| Participating media (homogeneous and OpenVDB grids) | `integrator.volumes` |
+| Spectral transport and dispersion | `integrator.spectral` |
+| MaterialX graphs compiled to WGSL | `integrator.materialx` |
+| Wide BVHs (`bvh4`, `cwbvh8`) | `nodeFormat` |
+| Bindless textures (resource table) | `textures.binding: 'table'` |
+
+Pages for them carry **Experimental** in the title.

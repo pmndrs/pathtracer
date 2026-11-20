@@ -16,7 +16,7 @@ struct View { width: u32, height: u32, toneMapping: u32, pad: u32, exposure: f32
   return vec4f(p * 2.0 - 1.0, 0.0, 1.0);
 }
 
-// Krzysztof Narkowicz's 2015 fit of the ACES RRT + ODT ("ACES Filmic Tone Mapping Curve", THIRD_PARTY.md).
+// Krzysztof Narkowicz's 2016 fit of the ACES RRT + ODT ("ACES Filmic Tone Mapping Curve", THIRD_PARTY.md).
 fn aces(x: vec3f) -> vec3f {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
 }

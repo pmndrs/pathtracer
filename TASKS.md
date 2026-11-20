@@ -337,6 +337,23 @@ ORT-Web, WebNN.
 | R1.v | R1's reduced base ignores `albedoCorrection` (V214): fit the reduced base weight or A/B `materialLod` vs `full` on the Tier 1 layered scenes | — | ⬜ | up to +6% on a bright rough base at secondary vertices |
 | Q.opt | Optional quiet pass (docs/internal/QUIET-PASS.md): confirms D32's packing, correction cost, auto-policy constants and ReSTIR frame cost; add `pt-auto` to the baseline step's renderers | maintainer | optional | a disagreement reopens only that default |
 
+## Docs and examples site (S, 2026-11-20)
+
+Plan reviewed by the maintainer 2026-11-20: pmndrs/docs MDX in `docs/` (internal notes moved to `docs/internal/`), a Vite examples gallery in
+`examples/` with categories, an injected nav (pmndrs logo, breadcrumb, status badge, Docs / Source) and a template, Tweakpane for controls, the
+glTF loader made public, hand-written API tables, experimental and research features included and labelled on the index and in the nav.
+
+| ID | Task | Owner | Status | Notes |
+|---|---|---|---|---|
+| S1 | Move internal notes to `docs/internal/` and rewrite every reference | agent | ✅ | 102 files; markdown link check: the same 5 pre-existing broken links before and after |
+| S2 | Public glTF loader: `loadGltf`, `buildGpuScene` (`@pmndrs/raytracer`), `ptSceneOptions` (`@pmndrs/pathtracer`) | agent | ✅ | The reader, OpenPBR mapping and scene grouping moved from bench/scenes into `packages/raytracer/src/gltf` (bench files wrap them): one copy, Tier 1 goldens unchanged (all scene tests pass with the models downloaded). New unit tests: `gltf/load.test.ts`, `integrator/scene-options.test.ts` |
+| S3 | Examples gallery (Phase 1): `examples/` workspace, `catalog.ts`, index, nav, `defineExample` template, Hello (Cornell) and glTF examples, the Classroom hero as showcase S1 | agent | ✅ | SwiftShader: both examples render (Cornell walls red / green in the accumulator and in the displayed pixels read back with `?offscreen=1`, glTF sky exact, no non-finite pixels), the injected nav links resolve under `/pathtracer/examples/`. Not seen on a real GPU yet (headless SwiftShader does not composite a WebGPU canvas into screenshots) |
+| S4 | Docs Phase 1 (Getting started: introduction, installation, your first render, loading glTF, choosing a package, browser support, examples) + `scripts/build-site.mjs` + `site.yml` (replaces `pages.yml`) | agent | ✅ | The first-render code block runs as written on SwiftShader (sky pixel = the environment radiance). The pmndrs/docs CLI build was run locally. The deployed URL layout changes: the Classroom demo moves from `/pathtracer/` to `/pathtracer/examples/showcase/classroom/`, the root becomes the docs |
+| S5 | First run of `site.yml` on main (docs CLI on Node 24, Classroom prep, examples) and a look at the deployed site on a real GPU | maintainer | ⬜ | `workflow_dispatch` after merge; the Classroom path is only built in CI (Blender + the denoiser checkout) |
+| S6 | Phase 2: Concepts, Ray tracer and Path tracer pages (API tables per package) with the R* and P* examples from the outline | — | ⬜ | Experimental pages carry "(experimental)" in their title and an alert at the top |
+| S7 | Phase 3: Real time (T*), the remaining showcases, Lab (A/B viewer, caps, convergence), thumbnails captured on the Mac (Playwright, 16:9 webp in `examples/<path>/thumb.webp`), a SwiftShader smoke run of every example in CI (`?offscreen=1`) | — | ⬜ | |
+| S8 | Loader follow-ups: KHR_texture_basisu / Draco / meshopt (refused today), point and spot lights (listed in `notes`), occlusion and extension texture slots, an exact PNG decoder option for the browser (canvas premultiplies), keeping glTF instancing instead of baking | — | ⬜ | |
+
 ## Open questions for the maintainer
 
 - ~~Tier 1 gate~~: settled 2026-11-15, D23 (class A only). ~~Default layering~~: D24. ~~Wide BVH default~~: D25 (per scene until the 3060). ~~Kernel size~~: D26 (measure W10 first).

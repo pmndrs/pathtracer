@@ -847,6 +847,17 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   `2d`, and `getResource<texture_2d_array<f32>>` of it silently returns a default (black) texture: insert `createView({ dimension: '2d-array' })`. A wrong type never errors, so test every new `getResource` against a CPU twin.
 - `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
   `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.
+- Docs and examples site (S, 2026-11-20): `docs/*.mdx` is the public pmndrs/docs site; internal notes live in `docs/internal/`. The docs CLI builds plain
+  `.md` too (as pages and `/md/` exports; `nrc-diverges.md` even fails to compile as MDX), so `scripts/build-site.mjs --docs` builds a copy of `docs/` without
+  `internal/` (`dist/.docs-src`): never point the CLI or pmndrs' reusable workflow at `docs/` itself. `examples/catalog.ts` is the one list the gallery, the injected nav, the Vite inputs and `docs/getting-started/examples.mdx` read: after
+  editing it run `node scripts/build-site.mjs` (CI runs `--check` and fails on a stale page). Example pages never import the nav: `examples/vite.config.ts`
+  injects it (and `bench/hero/build-pages.mjs` for the Classroom, `HERO_OUT`). `?offscreen=1` draws to a texture: use it for headless checks
+  (`globalThis.__progressive.readImage()` reads the image). SwiftShader needs minutes for 256 spp at 640x360; check images at 320x200.
+- The glTF reader, OpenPBR mapping and scene grouping live in `packages/raytracer/src/gltf/` (public `loadGltf`); `bench/scenes/gltf-*.ts` and `openpbr.ts`
+  wrap them (file I/O, reference class, `SceneDesc` shapes). A mapping change goes in the package, and the Tier 1 goldens test it (download the models with
+  `node bench/assets/fetch.ts` or 18 golden tests skip). Never pass a texture field as `undefined` to `createMaterial` (`roughnessMetalTexture: undefined`
+  throws): spread it in conditionally. `bench/scenes/tangents.test.ts` fails without `bench/assets/generated/env-sky-512x256.pfm` (`node bench/scenes/tier0/generate-assets.ts`).
+- Tweakpane 4 needs `@tweakpane/core` installed next to it for its types (`Pane` has no `addFolder` otherwise).
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.

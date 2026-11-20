@@ -1,0 +1,87 @@
+---
+title: Loading glTF
+description: loadGltf turns a .glb or .gltf into a scene with OpenPBR materials.
+nav: 3
+---
+
+```ts
+import { buildGpuScene, loadGltf } from '@pmndrs/raytracer';
+import { PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
+
+const input = await loadGltf('/models/helmet.glb');
+input.environment = { radiance: [0.8, 0.9, 1] }; // glTF has no sky: add one
+const scene = await buildGpuScene(device, input);
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene));
+pt.setScene(scene.trace, scene.buffers);
+pt.setCamera(input.cameras[0]?.camera ?? { position: [0, 0, 3], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 40 });
+```
+
+[Live example](https://pmndrs.github.io/pathtracer/examples/start/gltf/): Khronos sample models, or drop your own `.glb` onto the page.
+
+## Sources
+
+`loadGltf(source, options)` takes:
+
+- a URL (string or `URL`): external buffers and images resolve next to it.
+- bytes (`ArrayBuffer` or `Uint8Array`): a dropped file or an upload. Pass `baseUrl` if a `.gltf` names external files.
+
+GLB, `.gltf` with external files and `data:` URIs are all read. Files that require `KHR_draco_mesh_compression`, `EXT_meshopt_compression` or `KHR_mesh_quantization` are refused with an error. Decompress them first, for example with `gltf-transform`.
+
+## What it returns
+
+A complete input for `buildSceneCopy` / `buildGpuScene`, plus:
+
+| Field | What |
+| --- | --- |
+| `meshes`, `instances` | One mesh and one instance per glTF material: the triangles of every node that uses it, baked to world space. |
+| `materials`, `materialNames` | One scene-copy material per glTF material, plus the glTF default material when a primitive has none. |
+| `textures` | Base colour, metallic-roughness, normal and emissive images, decoded to RGBA8. |
+| `sun` | The first `KHR_lights_punctual` directional light (lux taken as W/m²), or `null`. |
+| `environment` | Always `null`: set it yourself. |
+| `cameras` | Perspective cameras in look-at form, ready for `setCamera`. |
+| `bounds` | World-space box of the triangles: frame the camera with it. |
+| `notes` | Everything dropped or approximated, one line each. Read them once for a new model. |
+
+## Materials
+
+Each glTF material becomes a set of [OpenPBR](https://academysoftwarefoundation.github.io/OpenPBR/) parameters, then a scene-copy material. Unknown extensions and unmapped texture slots are listed in `notes`, never silently dropped.
+
+| glTF | OpenPBR |
+| --- | --- |
+| `baseColorFactor` / texture, `metallicFactor`, `roughnessFactor` / texture | base colour, base metalness, specular roughness |
+| `normalTexture` | the shading normal |
+| `emissiveFactor` / texture × `KHR_materials_emissive_strength` | emission |
+| `alphaMode` `MASK` / `BLEND` | alpha cutout / stochastic opacity |
+| `KHR_materials_ior`, `KHR_materials_specular` | specular IOR, weight and colour |
+| `KHR_materials_transmission` + `KHR_materials_volume` | transmission; thin-walled without a volume, Beer absorption with `attenuationDistance` |
+| `KHR_materials_clearcoat` | coat (IOR 1.5) |
+| `KHR_materials_sheen` | fuzz |
+| `KHR_materials_iridescence` | thin film (thickness = the maximum) |
+| `KHR_materials_anisotropy` | specular anisotropy and rotation (uses `TANGENT`) |
+| `KHR_materials_dispersion` | dispersion (rendered only in spectral mode) |
+| `KHR_materials_unlit` | a non-scattering emitter of the base colour |
+
+Textures other than the four slots are factors only: occlusion, clearcoat, sheen and transmission textures. A material reads one uv set. If its textures use different sets or transforms, the first one wins and a note says so.
+
+## Options
+
+| Option | Default | |
+| --- | --- | --- |
+| `normals` | `'shading'` | The file's `NORMAL`, or `'geometric'` for flat triangle normals (what our reference scenes use). |
+| `textures` | `true` | `false` keeps factors only and skips image decoding. |
+| `tangents` | when the file uses anisotropy | Carry `TANGENT`. |
+| `decodeImage` | `createImageBitmap` + `OffscreenCanvas` | Your own decoder: required in Node, and exact where a 2D canvas is not (see below). |
+| `baseUrl` | the source URL | Base of relative URIs when `source` is bytes. |
+| `fetch` | global `fetch` | Add credentials, caching or progress reporting. |
+
+> [!NOTE]
+> The default decoder draws each image into a 2D canvas, and browsers may premultiply alpha there. The colour of nearly transparent texels can lose precision. Pass an exact PNG decoder if that matters (for example in a reference comparison).
+
+## In Node
+
+There is no default image decoder in Node: pass `decodeImage`, or `textures: false`. Everything else works with Node's own `fetch`. File URLs need `fetch` replaced, or pass the bytes.
+
+```ts
+import { readFile } from 'node:fs/promises';
+const input = await loadGltf(await readFile('model.glb'), { textures: false });
+```
