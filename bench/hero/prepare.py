@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -37,8 +38,18 @@ def fetch(entry):
     with tempfile.NamedTemporaryFile(dir=dest.parent, delete=False) as output:
         tmp = Path(output.name)
     try:
-        with urllib.request.urlopen(entry["url"], timeout=120) as response, tmp.open("wb") as output:
-            shutil.copyfileobj(response, output)
+        # A browser user agent and a few retries: download.blender.org has answered CI runners with 403 (site.yml caches the result).
+        request = urllib.request.Request(entry["url"], headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"})
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
+                    shutil.copyfileobj(response, output)
+                break
+            except OSError as error:
+                if attempt == 3:
+                    raise
+                print(f"  retry {attempt + 1} after {error}", flush=True)
+                time.sleep(5 * (attempt + 1))
         if not verify(tmp, entry):
             raise ValueError(f"Size or SHA-256 mismatch for {dest}")
         tmp.replace(dest)

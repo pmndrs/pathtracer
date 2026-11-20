@@ -75,6 +75,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/blender-5.1.1-linux-x64.tar.xz
           key: blender-5.1.1-linux-x64
+      - name: Cache the Classroom download
+        if: steps.denoiser.outcome == 'success'
+        uses: actions/cache@v4
+        with:
+          path: pathtracer/bench/assets/downloads/classroom/classroom.zip
+          key: classroom-${{ hashFiles('pathtracer/bench/hero/*.json') }}
       - name: Prepare the Classroom scene
         id: classroom-prep
         if: steps.denoiser.outcome == 'success'
