@@ -19,7 +19,7 @@ import { VIEW_BYTES, VIEW_WGSL, writeView } from '../../shared/view.ts';
 const wgsl = (textured: boolean) => /* wgsl */ `
 ${VIEW_WGSL}
 struct ExRayRecord { origin: vec3f, tMin: f32, direction: vec3f, tMax: f32 }
-struct ExLight { toSun: vec3f, sun: f32, sky: vec3f, pad: f32 }
+struct ExLight { toSun: vec3f, sun: f32, sky: vec3f, sunRadius: f32 }  // sunRadius: the sun disc's angular radius (radians); 0 = a point sun, hard shadows
 
 @group(2) @binding(0) var<uniform> view: ExView;
 @group(2) @binding(1) var<uniform> light: ExLight;
@@ -50,7 +50,9 @@ fn exOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
 fn primary(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= view.width || id.y >= view.height) { return; }
   var seed = exHash(id.x + id.y * view.width) ^ exHash(view.frame * 9781u + 41u);
-  let r = exRay(view, id.x, id.y, vec2f(exRand(&seed), exRand(&seed)));
+  // A random point inside the pixel each frame (anti-aliasing by accumulation); mode bit 0 = the pixel centre every frame (jagged edges).
+  let jitter = select(vec2f(exRand(&seed), exRand(&seed)), vec2f(0.5), (view.mode & 1u) != 0u);
+  let r = exRay(view, id.x, id.y, jitter);
   rays[id.y * view.width + id.x] = ExRayRecord(r.origin, r.tMin, r.direction, r.tMax);
 }
 
@@ -66,7 +68,17 @@ fn shadow(@builtin(global_invocation_id) id: vec3u) {
   let ray = exRecordToRay(rays[i]);
   let n = select(-hit.normal, hit.normal, dot(hit.normal, ray.direction) < 0.0);
   let p = ray.origin + hit.t * ray.direction;
-  shadowRays[i] = ExRayRecord(exOffsetOrigin(p, n), 0.0, light.toSun, select(0.0, 1e30, dot(n, light.toSun) > 0.0));
+  // A random direction inside the sun's disc (uniform in the cone): partly blocked discs give soft shadows, which is where the noise is.
+  var seed = exHash(i * 7919u + 3u) ^ exHash(view.frame * 6151u + 17u);
+  let cosMax = cos(light.sunRadius);
+  let ct = 1.0 - exRand(&seed) * (1.0 - cosMax);
+  let st = sqrt(max(0.0, 1.0 - ct * ct));
+  let phi = 6.283185307 * exRand(&seed);
+  let a = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), abs(light.toSun.x) > 0.9);
+  let tx = normalize(cross(a, light.toSun));
+  let ty = cross(light.toSun, tx);
+  let d = normalize(ct * light.toSun + st * (cos(phi) * tx + sin(phi) * ty));
+  shadowRays[i] = ExRayRecord(exOffsetOrigin(p, n), 0.0, d, select(0.0, 1e30, dot(n, d) > 0.0));
 }
 
 @compute @workgroup_size(64)
@@ -91,7 +103,7 @@ fn compose(@builtin(global_invocation_id) id: vec3u) {
 
 defineExample(async (ctx) => {
   const { device, caps, pane, stats } = ctx;
-  const params = { elevation: 45, azimuth: 35, sun: 3, sky: 0.25 };
+  const params = { elevation: 45, azimuth: 35, sun: 3, sky: 0.25, sunSize: 4, jitter: true };
   const accumulation = new Accumulation(ctx);
   accumulation.maxFrames = 512;
   exposeForChecks(accumulation);
@@ -116,6 +128,10 @@ defineExample(async (ctx) => {
   for (const [key, opts] of [['elevation', { min: 1, max: 90, step: 1 }], ['azimuth', { min: -180, max: 180, step: 1 }], ['sun', { min: 0, max: 10, step: 0.1 }], ['sky', { min: 0, max: 2, step: 0.01 }]] as const) {
     lightFolder.addBinding(params, key, opts).on('change', () => accumulation.reset());
   }
+  // A point sun and a constant sky leave nothing random but the pixel jitter: the image is clean after a few frames and can look rasterised.
+  // A sun disc makes every shadow ray a random sample: watch the penumbrae start grainy and converge (stop at 1 sample to see one frame).
+  lightFolder.addBinding(params, 'sunSize', { label: 'sun size (deg)', min: 0, max: 15, step: 0.5 }).on('change', () => accumulation.reset());
+  lightFolder.addBinding(params, 'jitter', { label: 'pixel jitter (AA)' }).on('change', () => accumulation.reset());
   const view = pane.addFolder({ title: 'View' });
   view.addBinding(accumulation.view, 'exposure', { min: 0, max: 4, step: 0.01 });
 
@@ -136,8 +152,8 @@ defineExample(async (ctx) => {
         stats.set('rays / frame', (2 * pixels).toLocaleString());
       }
       const el = (params.elevation * Math.PI) / 180, az = (params.azimuth * Math.PI) / 180;
-      device.queue.writeBuffer(lightBuffer, 0, new Float32Array([Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az), params.sun, params.sky * 0.8, params.sky * 0.9, params.sky, 0]));
-      writeView(device, viewBuffer, picker.orbit.camera, accumulation.width, accumulation.height, frame);
+      device.queue.writeBuffer(lightBuffer, 0, new Float32Array([Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az), params.sun, params.sky * 0.8, params.sky * 0.9, params.sky, (params.sunSize * Math.PI) / 180]));
+      writeView(device, viewBuffer, picker.orbit.camera, accumulation.width, accumulation.height, frame, params.jitter ? 0 : 1);
       const b = buffers;
       kernel.dispatch(enc, 'primary', b.group, Math.ceil(accumulation.width / 8), Math.ceil(accumulation.height / 8));
       closest.encode(enc, scene.trace, { rays: b.rays, results: b.hits, count: pixels });

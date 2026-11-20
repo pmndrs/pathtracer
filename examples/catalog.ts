@@ -174,7 +174,7 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     summary: 'RtBatchTracer: camera rays and shadow rays from GPU buffers, hits and visibility back into GPU buffers, five passes and no readback.',
     description:
       'Every pixel is ray traced, nothing is rasterised: per frame, one camera ray (`RtBatchTracer` closest hit) and one shadow ray toward the sun (`RtBatchTracer` visible), each a buffer of rays in and a buffer of results out. ' +
-      'There is no denoiser. It looks clean almost at once because a hard sun shadow under a constant sky has little to sample: only the anti-aliasing jitter accumulates. Set **stop at** to 1 to see a single frame.',
+      'There is no denoiser. With a point sun and a constant sky only the anti-aliasing jitter is random, so the image is clean within a second; the **sun size** turns every shadow ray into a random sample of the sun disc (soft, grainy penumbrae that converge), and **stop at** 1 or **pixel jitter** off shows the jagged single-ray edges.',
     category: 'raytracer',
     status: 'stable',
     tags: ['RtBatchTracer', 'shadow rays', 'GPU buffers'],
