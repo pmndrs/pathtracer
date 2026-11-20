@@ -66,6 +66,15 @@ jobs:
           ln -s "$PWD/pages-deps/node_modules/@pmndrs/upscaler" upscaler
           cd pathtracer
           corepack pnpm install --frozen-lockfile
+      # Blender: cached by version (download.blender.org has answered GitHub runners with 403), else the first of
+      # download.blender.org and its official mirrors that serves it. The sha256 check holds whatever the source.
+      - name: Cache Blender
+        id: blender-cache
+        if: steps.denoiser.outcome == 'success'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-5.1.1-linux-x64.tar.xz
+          key: blender-5.1.1-linux-x64
       - name: Prepare the Classroom scene
         id: classroom-prep
         if: steps.denoiser.outcome == 'success'
@@ -74,8 +83,21 @@ jobs:
         run: |
           cd "$RUNNER_TEMP"
           archive=blender-5.1.1-linux-x64.tar.xz
-          curl --fail --location --retry 3 -O "https://download.blender.org/release/Blender5.1/$archive"
-          echo "6f9fff89fef154ef7974d1a1c4b916ab4bc1f5618bcb48d5befee1bd0a7c7f2a  $archive" | sha256sum --check
+          sum=6f9fff89fef154ef7974d1a1c4b916ab4bc1f5618bcb48d5befee1bd0a7c7f2a
+          if ! echo "$sum  $archive" | sha256sum --check --status 2>/dev/null; then
+            rm -f "$archive"
+            for base in https://download.blender.org/release \
+                        https://mirrors.ocf.berkeley.edu/blender/release \
+                        https://ftp.nluug.nl/pub/graphics/blender/release \
+                        https://ftp.halifax.rwth-aachen.de/blender/release \
+                        https://mirror.clarkson.edu/blender/release; do
+              echo "trying $base"
+              if curl --fail --location --retry 2 --retry-all-errors --user-agent "Mozilla/5.0 (X11; Linux x86_64)" -o "$archive" "$base/Blender5.1/$archive" \
+                && echo "$sum  $archive" | sha256sum --check; then break; fi
+              rm -f "$archive"
+            done
+            test -f "$archive"
+          fi
           tar -xf "$archive"
           cd "$GITHUB_WORKSPACE/pathtracer"
           python3 bench/hero/prepare.py classroom --blender "$RUNNER_TEMP/blender-5.1.1-linux-x64/blender"
