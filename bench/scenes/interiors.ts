@@ -1,3 +1,4 @@
+import { benchAssets } from '../site-paths.ts';
 import type { SceneDesc } from './schema.ts';
 
 /** IDs match the prepared GLB, texture sidecars and scene hash used by the hero. */
@@ -22,7 +23,7 @@ export function parseInterior(name: InteriorName, json: string): SceneDesc {
 }
 
 export async function loadInterior(name: InteriorName): Promise<SceneDesc> {
-  const response = await fetch('/bench/assets/' + interiorPath(name));
+  const response = await fetch(benchAssets + '/' + interiorPath(name));
   if (!response.ok) throw new Error(missingInterior(name));
   return parseInterior(name, await response.text());
 }

@@ -37,3 +37,9 @@ The scene IDs are `hero-classroom` and `hero-sponza`. Prepare either scene once 
 For the interactive pages, `?scene=hero-classroom` or `?scene=hero-sponza` opens directly on that interior.
 
 **SVGF input history (spp)** controls how much of the stationary trace feeds the filter. The interactive default is 16 samples. After the first 16 samples, each new sample gets a 1/16 weight. Zero selects the original unlimited mean. This affects SVGF's signal and material-factor averages together. The raw image and OIDN still use the full sample mean, and the sample badges count traced samples. On the quality page, select **Classroom (color)** or **Sponza (color)** and choose **Test stationary grain** to compare the two history settings over 1,024 stationary frames. [Measurements for both interiors](../results/NRC-CLASSROOM-QUALITY.md)
+
+### GitHub Pages
+
+**Deploy Classroom to GitHub Pages** builds a standalone Classroom presentation on relevant pushes to `main` or a manual workflow run. Set the repository’s **Settings → Pages → Source** to **GitHub Actions**. The deploy job reports the live URL. With the default project domain it is <https://pmndrs.github.io/pathtracer/>. The Pages jobs build the site from source and upload the generated scene, blue-noise texture, and OIDN weights as static files.
+
+To reproduce the artifact locally after preparing Classroom, run `node bench/hero/build-pages.mjs`. The default base path is `/pathtracer/`. To serve the artifact at the origin root instead, run `PAGES_BASE=/ node bench/hero/build-pages.mjs` and `python3 -m http.server --directory dist/pages`. Classroom by Christophe Seux is listed under [CC0 on Blender’s demo files page](https://www.blender.org/download/demo-files/).

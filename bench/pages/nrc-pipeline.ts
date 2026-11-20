@@ -11,6 +11,7 @@
  * standard network once after `stillSamples` still frames, then the frame is held), OIDN fast / standard every frame, or none.
  * No readback in the frame loop; one frame in flight. Headless twin: nrc-pipeline-study.
  */
+import { pagesBase } from '../site-paths.ts';
 import { setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
 import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
@@ -434,7 +435,7 @@ $('pause').addEventListener('click', () => {
 });
 
 const args = new URLSearchParams(location.search);
-const hero = args.get('demo') === 'hero' ? await import('../hero/showcase.ts') : undefined;
+const hero = pagesBase || args.get('demo') === 'hero' ? await import('../hero/showcase.ts') : undefined;
 hero?.setupHero();
 for (const id of ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius']) $(id).addEventListener('input', () => {
   if (live && isInterior(live.scene.name)) updateDaylight(live.session);

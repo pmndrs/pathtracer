@@ -6,7 +6,9 @@
  */
 import type { SceneDesc } from '../../scenes/schema.ts';
 
-export const WEB_EXPORT_DIR = '/bench/assets/generated/web';
+import { benchAssets } from '../../site-paths.ts';
+
+export const WEB_EXPORT_DIR = benchAssets + '/generated/web';
 
 /** A texture of the scene as written beside the glb: raw RGBA8 (`<scene>.tex<N>.rgba`, row 0 = top), already decoded by the Node loader so no browser decoder can change a texel. */
 export interface WebTexture { key: string; file: string; width: number; height: number }

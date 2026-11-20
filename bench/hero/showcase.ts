@@ -1,4 +1,5 @@
 import './showcase.css';
+import { pagesBase } from '../site-paths.ts';
 
 const scenes = {
   'hero-classroom': { name: 'Classroom', exposure: 2.5, credit: 'Christophe Seux · Blender Classroom' },
@@ -25,8 +26,14 @@ export function setupHero() {
     return el;
   }
   const scene = select('scene', Object.entries(scenes).map(([id, info]) => [id, info.name]), header.querySelector('.hero-selector')!);
+  if (pagesBase) {
+    scene.querySelector('option[value="hero-sponza"]')!.remove();
+    header.querySelector<HTMLElement>('.hero-selector')!.hidden = true;
+    footer.querySelector<HTMLAnchorElement>('.quality-link')!.hidden = true;
+    document.getElementById('save')!.hidden = true; // Uses the local bench upload endpoint.
+  }
   const requested = new URLSearchParams(location.search).get('scene') ?? '';
-  scene.value = Object.hasOwn(scenes, requested) ? requested : 'hero-classroom';
+  scene.value = !pagesBase && Object.hasOwn(scenes, requested) ? requested : 'hero-classroom';
   select('stageSel', [['final', 'Final output'], ['denoised', 'Denoiser output'], ['raw', 'Raw radiance']], footer.querySelector('label[for=stageSel]')!.parentElement!);
   select('view', [['nrc', 'NRC'], ['plain', 'Plain path tracing'], ['split', 'Plain PT / NRC']], footer.querySelector('label[for=view]')!.parentElement!);
   const exposure = document.querySelector<HTMLInputElement>('#exposure')!;

@@ -11,6 +11,7 @@
  * Timing: wall clock around the dispatches, `onSubmittedWorkDone` at the end of the timed region, readback excluded (snapshot
  * readbacks are subtracted from later times). Best effort: this adapter is for correctness; precision timing is the quiet pass.
  */
+import { benchAssets, blueNoiseAssets } from '../../site-paths.ts';
 import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type NodeFormat, type TraceSceneBuffers } from '@pmndrs/bvh';
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
 import { sceneDensityFiles, sceneVolumes } from '../../scenes/volumes.ts';
@@ -116,7 +117,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
  */
 async function fetchSpectralTable(res: number): Promise<Rgb2SpecTable | undefined> {
   try {
-    const r = await fetch(`/bench/assets/generated/rgb2spec-${res}.f32`);
+    const r = await fetch(`${benchAssets}/generated/rgb2spec-${res}.f32`);
     if (!r.ok) return undefined;
     const data = new Float32Array(await r.arrayBuffer());
     return data.length === 3 * res * res * res * 3 ? { res, data } : undefined;
@@ -214,7 +215,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const base = this.lastKernelOptions;
     if (!base || !this.trace || !this.sceneBuffers || !this.gpuContext || !this.scene || !this.lastLoad) throw new Error('pt-megakernel: load() first');
     const integrator = { ...base.integrator, ...override.integrator } as PtIntegratorOptions;
-    const blueNoise = integrator.sampler === 'bluenoise' && !base.blueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', override.blueNoise ?? 'gf-vec2-64') : base.blueNoise;
+    const blueNoise = integrator.sampler === 'bluenoise' && !base.blueNoise ? await fetchBlueNoise(blueNoiseAssets, override.blueNoise ?? 'gf-vec2-64') : base.blueNoise;
     const kernel = await PtMegakernel.create(this.gpuContext.device, this.lastLoad.caps, { ...base, ...(blueNoise ? { blueNoise } : {}), integrator });
     kernel.setScene(this.trace, this.sceneBuffers);
     kernel.setFilm(this.scene.film.width, this.scene.film.height);
@@ -231,7 +232,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const base = this.lastKernelOptions;
     if (!base || !this.trace || !this.sceneBuffers || !this.gpuContext || !this.scene || !this.lastLoad) throw new Error('pt-megakernel: load() first');
     const integrator = { ...base.integrator, ...override.integrator } as PtIntegratorOptions;
-    const blueNoise = integrator.sampler === 'bluenoise' && !base.blueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', override.blueNoise ?? 'gf-vec2-64') : base.blueNoise;
+    const blueNoise = integrator.sampler === 'bluenoise' && !base.blueNoise ? await fetchBlueNoise(blueNoiseAssets, override.blueNoise ?? 'gf-vec2-64') : base.blueNoise;
     const kernel = await PtWavefront.create(this.gpuContext.device, this.lastLoad.caps, { ...base, ...(blueNoise ? { blueNoise } : {}), integrator, ...(override.wavefront ?? {}) });
     kernel.setScene(this.trace, this.sceneBuffers);
     kernel.setFilm(this.scene.film.width, this.scene.film.height);
@@ -348,7 +349,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     let hdriMap: Image | undefined;
     if (scene.environment?.type === 'hdri') {
-      const url = `/bench/assets/${scene.environment.path}`;
+      const url = `${benchAssets}/${scene.environment.path}`;
       const response = await fetch(url);
       if (!response.ok) throw new Error(`environment ${scene.environment.path}: HTTP ${response.status}. Run: node bench/scenes/tier0/generate-assets.ts`);
       hdriMap = readPFM(await response.arrayBuffer());
@@ -421,7 +422,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _mode;
     void _bnName;
     const needsBlueNoise = integratorSettings.sampler === 'bluenoise' || this.settings.mode === 'realtime'; // P4.1b: the wavefront runs blue noise too
-    const blueNoise = needsBlueNoise ? await fetchBlueNoise('/packages/raytracer/assets/bluenoise', this.settings.blueNoise ?? 'gf-vec2-64') : undefined;
+    const blueNoise = needsBlueNoise ? await fetchBlueNoise(blueNoiseAssets, this.settings.blueNoise ?? 'gf-vec2-64') : undefined;
     void _denoise;
     void _tza;
     void _refill;
@@ -431,7 +432,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     void _sort;
     const densityFiles = new Map<string, Float32Array>();
     for (const file of sceneDensityFiles(scene)) {
-      const response = await fetch(`/bench/assets/${file}`);
+      const response = await fetch(`${benchAssets}/${file}`);
       if (!response.ok) throw new Error(`density file ${file}: HTTP ${response.status}. Run: node bench/scenes/volumes/vdb-grid.ts`);
       densityFiles.set(file, new Float32Array(await response.arrayBuffer()));
     }

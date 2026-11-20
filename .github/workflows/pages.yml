@@ -1,0 +1,88 @@
+name: Deploy Classroom to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bench/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      pages: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pathtracer
+          persist-credentials: false
+      # Match the sibling links in the bench lockfile. The denoiser build bundles
+      # its workspaces, and its optional OIDN mode loads its weights from Git LFS.
+      - uses: actions/checkout@v4
+        with:
+          repository: pmndrs/denoiser
+          ref: 7014384c8117df48622d27a4cb52a4d4a5bf9a54
+          path: Denoiser
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: Build denoiser
+        working-directory: Denoiser
+        run: |
+          git lfs pull --include='packages/denoiser/tzas/rt_hdr_alb*.tza,packages/denoiser/tzas/rt_hdr_calb_cnrm*.tza,packages/denoiser/tzas/rt_ldr.tza,packages/denoiser/tzas/rt_ldr_small.tza'
+          corepack yarn install --immutable
+          corepack yarn build:lib
+      - name: Install upscaler and bench dependencies
+        run: |
+          npm install --prefix pages-deps --no-save --ignore-scripts @pmndrs/upscaler@0.5.0 three@0.187.0
+          ln -s "$PWD/pages-deps/node_modules/@pmndrs/upscaler" upscaler
+          cd pathtracer
+          corepack pnpm install --frozen-lockfile
+      - name: Prepare the Classroom scene
+        working-directory: pathtracer
+        run: |
+          cd "$RUNNER_TEMP"
+          archive=blender-5.1.1-linux-x64.tar.xz
+          curl --fail --location --retry 3 -O "https://download.blender.org/release/Blender5.1/$archive"
+          echo "6f9fff89fef154ef7974d1a1c4b916ab4bc1f5618bcb48d5befee1bd0a7c7f2a  $archive" | sha256sum --check
+          tar -xf "$archive"
+          cd "$GITHUB_WORKSPACE/pathtracer"
+          python3 bench/hero/prepare.py classroom --blender "$RUNNER_TEMP/blender-5.1.1-linux-x64/blender"
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Build the static site
+        working-directory: pathtracer
+        env:
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+        run: node bench/hero/build-pages.mjs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pathtracer/dist/pages
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
