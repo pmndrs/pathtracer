@@ -41,7 +41,27 @@ export function setupHero() {
   updateCredit();
   const pauseButton = document.getElementById('pause')!;
   const panel = document.querySelector('aside')!;
-  const trigger = header.querySelector('button')!;
+  const trigger = header.querySelector<HTMLButtonElement>('[aria-controls="hero-settings"]')!;
+  if (document.fullscreenEnabled) {
+    const fullscreen = document.createElement('button');
+    fullscreen.type = 'button';
+    fullscreen.textContent = 'Fullscreen';
+    const message = document.createElement('span');
+    message.setAttribute('role', 'status');
+    header.querySelector('.hero-toolbar')!.append(fullscreen, message);
+    document.addEventListener('fullscreenchange', () => {
+      fullscreen.textContent = document.fullscreenElement === app ? 'Exit fullscreen' : 'Fullscreen';
+      message.textContent = '';
+    });
+    fullscreen.addEventListener('click', async () => {
+      try {
+        if (document.fullscreenElement === app) await document.exitFullscreen();
+        else await app.requestFullscreen();
+      } catch {
+        message.textContent = 'The browser could not switch fullscreen mode.';
+      }
+    });
+  }
   const controls = document.createElement('dialog');
   controls.id = 'hero-settings';
   controls.className = 'hero-settings';
