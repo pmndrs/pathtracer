@@ -1,0 +1,82 @@
+---
+title: Spectral rendering (experimental)
+description: Paths that carry wavelengths instead of RGB channels, for spectral references and dispersion.
+nav: 37
+---
+
+> [!WARNING]
+> Experimental. It works and is checked against pbrt-v4, but the API can still change.
+
+By default the path tracer carries three colour channels, red, green and blue. In spectral mode a path carries three wavelengths instead. Every colour a path meets is turned into a smooth spectrum and read at those wavelengths, and at the end of the path the three values are converted back to RGB through the CIE 1931 colour matching functions. The image you read back is ordinary linear RGB.
+
+Use it for two things:
+
+- **Dispersion.** Glass whose index of refraction depends on wavelength splits white light into colours. Only spectral mode can render it.
+- **Matching a spectral renderer.** pbrt-v4 is spectral. Saturated colours under many bounces come out a few percent different in RGB and in spectral transport; spectral mode matches pbrt there.
+
+For everything else RGB is the better default: spectral mode adds colour noise, because the three wavelengths of one path see a coloured surface differently.
+
+## Turning it on
+
+```ts
+import { defaultRgb2SpecTable, PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
+
+const spectralTable = defaultRgb2SpecTable(64); // fitted once, then cached
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, {
+  integrator: { spectral: true },
+  spectralTable,
+}));
+```
+
+| `integrator.spectral` field | Default | What it does |
+| --- | --- | --- |
+| `res` | `64` | Resolution of the RGB-to-spectrum table per axis (10 to 128). Must match the table you pass. |
+| `dispersion` | `true` | Compile the wavelength-dependent IOR. `false` leaves it out of the kernel. |
+
+`spectral: true` means `{ res: 64, dispersion: true }`. Both schedulers support it.
+
+## Wavelengths
+
+A path's first wavelength (the *hero*) is drawn from a density that favours the visible middle of the 360 to 830 nm range (pbrt-v4's `SampleVisibleWavelengths`). The other two are the same random number rotated by a third and by two thirds, so each wavelength alone has the right distribution and together they cover the spectrum evenly. pbrt uses four wavelengths per path; three fit the existing RGB path state.
+
+## RGB to spectrum
+
+Every RGB value in the scene becomes a spectrum when a path reads it:
+
+| Value | Spectrum |
+| --- | --- |
+| Reflectances: base, specular, coat, sheen and transmission colours | A smooth sigmoid-polynomial spectrum (Jakob and Hanika 2019), looked up in the table. |
+| Conductor `eta` and `k` | The same, scaled for values above 1. |
+| Emission, environment, sun | The same, times the D65 illuminant, so white `(1, 1, 1)` is D65 white. |
+| Greys | A constant spectrum, with no table lookup. |
+
+The conversion back to RGB uses linear Rec.709 primaries, scaled so the table's D65 white is exactly `(1, 1, 1)`. A grey stays the same grey and a white furnace stays a furnace.
+
+The table is an `Rgb2SpecTable` (`{ res, data }`):
+
+| Function | What |
+| --- | --- |
+| `buildRgb2SpecTable(res, onProgress)` | Fits a new table. It is a few seconds of CPU work at res 64; `onProgress` reports progress from 0 to 1. |
+| `defaultRgb2SpecTable(res)` | Fits on first use and caches the table per resolution. |
+| `rgb2SpecTexture(table)` | The texture layout the kernel uploads. |
+| `rgbToCoeffs(table, rgb)`, `sigmoidSpectrum(c, lambda)` | CPU lookups, for tests and tools. |
+
+Without the `spectralTable` option, `create` fits the default table itself. Fit it once, ideally off the main thread or ahead of time, and pass it to every kernel. `create` throws if its `res` differs from `integrator.spectral.res`.
+
+## Dispersion
+
+A dielectric with `dispersion > 0` in its material has an IOR that follows a Cauchy law through its `ior` at 587.56 nm. `dispersion` is the `KHR_materials_dispersion` value, 20 divided by the Abbe number: ordinary glass is 0.3 to 1, dense flint about 2. `loadGltf` reads it from the extension; scene materials take it as `dispersion` (stored up to 8). Outside spectral mode it is ignored.
+
+At a dispersive refraction the path keeps only its hero wavelength: the other two are dropped and the hero's weight is tripled. Dispersive glass is therefore noisier than plain glass.
+
+| Helper | What |
+| --- | --- |
+| `iorAt(ior, dispersion, lambdaNm)` | The IOR at a wavelength. |
+| `cauchyCoefficients(ior, dispersion)` | The Cauchy `A` and `B` (B in square micrometres). |
+| `dispersionFromAbbe(abbe)`, `abbeFromDispersion(dispersion)` | Convert between the two conventions. |
+
+## Limits
+
+`integrator.spectral` cannot be combined with `hooks`, `frame`, `aovs`, `restir` or `volumes`: their planes, callbacks and media are RGB. On the wavefront it also refuses `materialLod: 'secondary'`.
+
+Spectral mode is not a real-time setting. Compare it against a spectral reference, never against an RGB render: a saturated colour can differ from RGB mode by a couple of percent, and that difference is the point.

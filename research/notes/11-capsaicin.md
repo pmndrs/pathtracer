@@ -232,7 +232,7 @@ Cons: no transmission, f16 dump, env is a render-size cubemap, default light sam
 The A/B that settles it: run W9 on Cornell and `sponza-white` at 1024-4096 spp, compute relMSE and relative bias against pbrt and Mitsuba (`references:compare`). Promote to a listed reference if mean relative bias is below ~0.3% on both scenes and the pbrt-Mitsuba floor (4e-3) is not exceeded;
 otherwise keep it as a timing baseline only.
 
-## 9. Draft Windows task W9 (for `docs/WINDOWS-HANDOFF.md`; not merged there)
+## 9. Draft Windows task W9 (for `docs/internal/WINDOWS-HANDOFF.md`; not merged there)
 
 > | W9 | **Capsaicin as a native GPU cross-check and timing baseline (P0.31)** | see below | `bench/references/<scene>/capsaicin-<spp>spp.pfm` + `.json` for the opaque scenes, a comparison table, and a timing CSV on the 3060 |
 

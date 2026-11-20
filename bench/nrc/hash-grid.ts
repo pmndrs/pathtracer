@@ -1,5 +1,5 @@
 /**
- * World-space hash-grid radiance cache (track N, M7 / N7, docs/design/nrc-hash-cache.md): the non-neural competitor to the NRC
+ * World-space hash-grid radiance cache (track N, M7 / N7, docs/internal/design/nrc-hash-cache.md): the non-neural competitor to the NRC
  * network, in the network's place inside `NrcCache` (`model: 'hash'`). Same paths, same training records, same termination: only the
  * store differs, so the A/B isolates "network vs hash grid".
  *

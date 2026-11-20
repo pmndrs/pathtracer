@@ -15,13 +15,13 @@
  * The params uniform is a ring of dynamic-offset slots like the megakernel's, with one record per depth iteration
  * (`PTWF_PARAM_SLOTS`; `maxPassesPerEncode()` says how many sample passes fit in one `encode`).
  */
-import { rtCreateComputePipelineAsync, rtModuleWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, rtSceneBindGroupEntries, sceneFormatOf, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtTransformWgsl, rtWalkEntries, withBindings } from '@pmndrs/raytracer';
+import { loadBlueNoise, rtCreateComputePipelineAsync, rtModuleWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, rtSceneBindGroupEntries, sceneFormatOf, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtTransformWgsl, rtWalkEntries, withBindings } from '@pmndrs/raytracer';
 import type { BlueNoiseTexture, Caps, RtWgslBuild, SceneCopyBuffers } from '@pmndrs/raytracer';
 import { ptFuzzTableF32 } from '../bsdf/fuzz.ts';
 import { PT_LAYER_CORR_BINDING, ptLayerCorrCreateTexture, ptLayerCorrLayoutEntry, ptLayerCorrNeedsTexture } from '../bsdf/layered-correction.ts';
 import { ptCameraBasis, type PtLookAtCamera } from '../integrator/camera.ts';
 import { PT_BLUENOISE_BINDING } from '../integrator/dimensions.ts';
-import { ptApplyMode } from '../integrator/modes.ts';
+import { ptApplyMode, ptModePreset } from '../integrator/modes.ts';
 import { PT_PARAMS_BYTES, ptMaskShadow, ptShadowNeedsScene, resolveIntegratorOptions, type PtIntegratorOptions } from '../integrator/integrator-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER_WORDS, PT_FRAME_PARAMS_BINDING, PT_FRAME_PARAMS_BYTES, PT_FRAME_PLANES, ptDecodeAovs, ptDecodeFrame, ptFrameBase, ptFrameTailBytes, ptHookWantsRadiance, ptOutputsWgsl, ptSummarizeCounters, type PtAovs, type PtCounters, type PtFrame } from '../integrator/outputs-wgsl.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
@@ -285,6 +285,9 @@ export class PtWavefront {
     this.lodDepth = lodDepth;
     this.wf = wf;
     this.options = options;
+    // Same as the megakernel: a mode starts the path limits from its preset (`setLimits` replaces them).
+    const lim = options.mode ? ptModePreset(options.mode).limits : null;
+    if (lim) this.limits = { maxDepth: lim.maxDepth, ...(lim.rrStartDepth ? { rrStartDepth: lim.rrStartDepth } : {}), ...(lim.textureConeScale !== undefined ? { textureConeScale: lim.textureConeScale } : {}) };
     this.pipelines = pipelines;
     this.layouts = layouts;
     this.kernelBytes = bytes;
@@ -298,7 +301,9 @@ export class PtWavefront {
   }
 
   static async create(device: GPUDevice, caps: Caps, requested: PtWavefrontOptions): Promise<PtWavefront> {
-    const options = ptApplyMode(requested, 'wavefront');
+    const moded = ptApplyMode(requested, 'wavefront');
+    // The `bluenoise` sampler (real-time mode) defaults to the texture shipped in the package.
+    const options = moded.integrator?.sampler === 'bluenoise' && !moded.blueNoise ? { ...moded, blueNoise: await loadBlueNoise() } : moded;
     const label = options.label ?? 'pt wavefront';
     const build = ptWavefrontBuild(caps, options);
     const wf = scheduling(options, caps);

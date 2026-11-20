@@ -2,12 +2,12 @@
 
 The library's real-time path through the same chain track N built (`bench/realtime/chain.ts`): `PtMegakernel` in `mode: 'realtime'` (frame planes, blue-noise
 sampler, maxDepth 2, optional ReSTIR DI) at 960 x 540 -> Denoiser `DiffuseSpecularDenoiser` (SVGF + anti-lag, remodulated) -> pmndrs/upscaler temporal
-path 2x (jitter: false) -> tonemap. Design and wiring: [docs/design/realtime.md section 5](../../docs/design/realtime.md). Page: `realtime-pipeline`
+path 2x (jitter: false) -> tonemap. Design and wiring: [docs/internal/design/realtime.md section 5](../../docs/internal/design/realtime.md). Page: `realtime-pipeline`
 (`node bench/runner/run.ts --page realtime-pipeline --timeout 3600000 --args scenes=... scenarios=static,control,path,timing ...`).
 
 **Machine and conditions.** Apple M5 Pro, Chrome 157 headless, Metal 3, 2026-11-18, runner load average 3-17 at the start of each run (other sessions' Chrome jobs on this
 Mac; every run is `--load-wait 0`, so the runner did not wait for quiet). Quality numbers do not depend on load. **Timing is PROVISIONAL** (batched wall clock, no GPU
-timestamps, queued for the quiet pass: docs/QUIET-PASS.md "P4.5 / P4.6").
+timestamps, queued for the quiet pass: docs/internal/QUIET-PASS.md "P4.5 / P4.6").
 
 **References** are our own plain path tracer at the chain's path length (NEE, maxDepth 2, no Russian roulette), rendered at the display size (1920 x 1080, 1024 spp
 static; 512 x 512, 2048 spp for many-lights-64; 256 spp per pose on the path) and tent-resampled to the render size for the raw / denoised stages. The scene's own pbrt /

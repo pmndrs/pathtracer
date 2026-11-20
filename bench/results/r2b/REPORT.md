@@ -1,6 +1,6 @@
 # R2b cutout shadow A/B (provisional timings: shared Mac, see load1)
 
-Quality: against our exact 16384 spp render of the same scene (the sampler is deterministic: every mode uses the same random numbers). Timing: ms/spp at 1024 spp from ONE page that holds every variant (rounds alternate order, first round untimed); `ratio of mins` = best round / best round of the same scheduler's exact policy. NOT a quiet-machine result: see docs/QUIET-PASS.md R2b row.
+Quality: against our exact 16384 spp render of the same scene (the sampler is deterministic: every mode uses the same random numbers). Timing: ms/spp at 1024 spp from ONE page that holds every variant (rounds alternate order, first round untimed); `ratio of mins` = best round / best round of the same scheduler's exact policy. NOT a quiet-machine result: see docs/internal/QUIET-PASS.md R2b row.
 
 
 ## final (ab4: 10 renderers, 7 rounds)

@@ -1,0 +1,113 @@
+---
+title: Interval queries (experimental)
+description: Closest hit and visibility inside a half-open distance range, for radiance cascades and probe tracing.
+nav: 23
+---
+
+> [!WARNING]
+> Interval queries are experimental: they work and are checked, but the API can still change.
+
+An interval query traces only one segment of a ray: the closest hit with `t` in `(t0, t1]`, or whether anything lies in that range. The bounds are exact in f32, so consecutive intervals `(a, b]` and `(b, c]` split `(a, c]` with no gap and no overlap: every hit lands in exactly one of them.
+
+That is what radiance cascades need. Cascade `n` owns the distances `(t_{n-1}, t_n]`, and a hit must belong to exactly one cascade. The same holds for any probe scheme that splits a ray into near and far parts.
+
+## Inline
+
+`rtModuleWgsl(caps, { intervals: true, ... })` adds:
+
+```wgsl
+fn rtClosestInterval(origin: vec3f, direction: vec3f, t0: f32, t1: f32, mask: u32) -> RtHit    // (t0, t1]
+fn rtClosestIntervalLo(origin: vec3f, direction: vec3f, t0: f32, t1: f32, mask: u32) -> RtHit  // [t0, t1)
+fn rtVisibleInterval(origin: vec3f, direction: vec3f, t0: f32, t1: f32, mask: u32) -> bool     // (t0, t1], any-hit
+fn rtVisibleIntervalLo(origin: vec3f, direction: vec3f, t0: f32, t1: f32, mask: u32) -> bool   // [t0, t1), any-hit
+
+fn rtCascadeEnd(n: u32, t0: f32, growth: f32) -> f32      // t0 * growth^n
+fn rtCascadeStart(n: u32, t0: f32, growth: f32) -> f32    // 0 for n = 0, else the end of n - 1
+fn rtCascadeIndex(t: f32, t0: f32, growth: f32, count: u32) -> u32   // the cascade holding t, or count
+fn rtOctEqualAreaDecode(uv: vec2f) -> vec3f               // unit square to unit sphere, equal area
+```
+
+A miss returns `t == RT_MISS_T`. Without `intervals` the module text is unchanged.
+
+```wgsl
+// Which cascade does this probe ray's first hit belong to?
+let hit = rtClosestInterval(probe, dir, 0.0, rtCascadeEnd(count - 1u, t0, 4.0), RT_MASK_ALL);
+let cascade = select(count, rtCascadeIndex(hit.t, t0, 4.0, count), rtIsHit(hit));
+```
+
+## Boundary rules
+
+| Convention | Range | A hit at exactly `t0` | A hit at exactly `t1` |
+| --- | --- | --- | --- |
+| `open-low` (default, `rtClosestInterval`) | `(t0, t1]` | belongs to the range below | belongs here |
+| `closed-low` (`rtClosestIntervalLo`) | `[t0, t1)` | belongs here | belongs to the range above |
+
+"Exactly" means the f32 `t` the walk computes for the hit, compared with the f32 bounds you pass. That `t` depends only on the ray and the triangle, not on the interval.
+
+- With `open-low` and `t0 = 0`, a ray that starts on a surface never reports that surface at `t = 0`.
+- `t0` must be 0 or more. `t1` is clamped to the largest finite f32 (`RT_T_INF`); pass that for "to infinity".
+- An empty interval (`t1 <= t0`) is answered without walking. NaN bounds are not supported.
+
+> [!NOTE]
+> The closest-hit forms are exact at both ends. The any-hit forms (`rtVisibleInterval*` and the `visible` output) are not: a blocker within about 1e-6 (relative) of an interval end can be missed. Where a boundary hit matters, use a closest form and test `t`.
+
+Two triangles at the same `t` (a ray through a shared edge) may swap with the range. That is a tie, not an error.
+
+## RtIntervalTracer
+
+The batched form: one compiled kernel, many dispatches per frame (one per cascade, or per probe batch), each with its own interval and seed. Parameters go into a ring of uniform slots, so a dispatch costs one small `writeBuffer` and nothing is read back.
+
+```ts
+import { RtIntervalTracer, intervalResultBytes, intervalRayCount } from '@pmndrs/raytracer';
+
+const tracer = await RtIntervalTracer.create(device, caps, { ...scene.format, source: 'probes', output: 'distance' });
+
+tracer.beginFrame(); // once per frame, before the first job
+const encoder = device.createCommandEncoder();
+const pass = encoder.beginComputePass();
+for (const c of cascades) {
+  tracer.dispatch(pass, scene.trace, {
+    source: probeBuffer,                  // vec4f per probe: xyz position, w = interval scale (0 skips the probe)
+    results: c.results,                   // intervalRayCount('probes', probeCount, c.directions) * tracer.resultBytes bytes
+    count: probeCount,
+    interval: { t0: c.start, t1: c.end }, // scaled per probe by w
+    directions: c.directions,             // cells per axis: directions^2 rays per probe
+    jitter: [Math.random(), Math.random()],
+  });
+}
+pass.end();
+device.queue.submit([encoder.finish()]);
+```
+
+### Options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `source` | required | `'rays'`: a buffer of 32-byte rays whose `tMin` / `tMax` are the interval. `'probes'`: a buffer of `vec4f` probe positions and a bundle of directions per probe. |
+| `output` | required | `'hit'`: the [hit record](/raytracer/batch-tracer#record-layouts). `'distance'`: one `f32` per ray, -1 for nothing in the interval. `'visible'`: one `u32`, 1 = nothing in the interval. `'shaded'`: one `vec4f`, radiance at the hit from `rtShade` in `rgb` and `t` in `w` (`w = -1` and black for no hit). |
+| `convention` | `'open-low'` | `'open-low'` `(t0, t1]` or `'closed-low'` `[t0, t1)`. |
+| `workgroupSize` | `64` | `32`, `64`, `128` or `256`. |
+| `indirect` | `false` | The item count comes from a GPU buffer (`{ buffer, word, capacity }`). |
+| `hitRecord` | `'full'` | `'compact'` for the 24-byte record (`hit` output). |
+| `scene` | none | `shaded` only, required there: `{ layout, textures, packing }` of the scene copy. |
+| `shadeMode`, `shade`, `hooksWgsl` | `'lambert'` | `shaded` only: the [`rtShade`](/raytracer/shading) mode, its options, and WGSL for its hooks. |
+| `minify` | `true` for `shaded` | Minify the kernel text. |
+
+### Jobs
+
+| Field | What |
+| --- | --- |
+| `source`, `results`, `count` | The input buffer, the output buffer and the item count (rays or probes). |
+| `mask` | One ray mask for the job. Default all ones. |
+| `interval`, `directions`, `jitter` | `probes` only. `jitter` is the position inside each direction cell, `[0.5, 0.5]` (the centre) by default; change it per frame for coverage. |
+| `seed` | `shaded` only: seed of the light samples. |
+| `sceneCopy` | `shaded` only: `scene.buffers`. |
+| `reuseParams` | Repeat the previous job's parameters without using a new slot. |
+
+For `probes`, ray `i` belongs to probe `i / D` and direction cell `i % D`, with `D = directions^2`. Cells come from the equal-area octahedral map, so each covers the same solid angle and the 2 x 2 cells of cascade `n + 1` subdivide a cell of cascade `n` exactly. Results come out probe-major, so a probe's cells are contiguous. `bundleDirection(x, y, directions, jitter)` is the CPU twin of a cell's direction.
+
+The ring holds 256 jobs (`INTERVAL_RING_SLOTS`); more between two `beginFrame` calls throws. The `shaded` output does not support the resource-table texture binding.
+
+## CPU twins
+
+`intervalBounds(t0, t1, convention)` and `inInterval(t, t0, t1, convention)` reproduce the GPU's membership test. `cascadeEnd`, `cascadeStart`, `cascadeIndex`, `octEqualAreaDecode` and `bundleDirection` match their WGSL versions; `nextUpF32` and `nextDownF32` step one f32. The cascade functions multiply in the same f32 order as the shader, so their boundaries agree bit for bit. GPU `sin` and `cos` are about 3e-5 off, so `rtOctEqualAreaDecode` matches its twin to that tolerance, not exactly.

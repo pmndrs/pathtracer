@@ -4,7 +4,7 @@ import { SPONZA_GLTF, sponzaWhite } from './sponza-white.ts';
 /**
  * sponza-glossy (track N, N7b): sponza-white with its floor and ground-floor columns turned into grey rough metal, so the radiance a
  * cache has to store at those vertices depends on the direction it is seen from. The question it answers is whether the network's
- * direction and roughness inputs beat a view-independent hash grid there (M7 / Q4, docs/design/nrc-hash-cache.md).
+ * direction and roughness inputs beat a view-independent hash grid there (M7 / Q4, docs/internal/design/nrc-hash-cache.md).
  *
  * Sponza's glTF materials have no names; picked by geometry (bench analysis 2026-11-18): material 9 is the floor of both storeys
  * (360 m², all faces horizontal, y = 0 and 3.3), 17-19 are the ground-floor column shafts (vertical, y 0..2.27). Everything else

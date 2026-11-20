@@ -1,0 +1,135 @@
+---
+title: Integrator options
+description: Every setting of PtIntegratorOptions, with its default and what it changes.
+nav: 32
+---
+
+`integrator` in the options of `PtMegakernel.create` and `PtWavefront.create` decides what the kernel computes. Each option is compiled into the kernel text, so changing one means creating a new kernel. An option left at its default adds no code: a kernel without cutouts, AOVs or hooks has none of their WGSL.
+
+```ts
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, {
+  integrator: { sampler: 'owen-sobol', sunVisible: true, textureLod: 'cone' },
+  layered: { layering: 'stochastic' },
+}));
+```
+
+`ptSceneOptions` sets the scene-derived options for you (`materials`, `envMap`, `envSampling`, `alphaMask`, `textures`). A [mode](/concepts/modes) fills the options you leave undefined; an option you set always wins. `resolveIntegratorOptions(options)` returns the options with every default filled in, and throws on invalid combinations.
+
+## Sampling
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `sampler` | `'owen-sobol'` | `'owen-sobol'`: scrambled Sobol points, the reference setting. `'pcg'`: independent random numbers, for debugging. `'bluenoise'`: blue-noise texture for 1-spp real-time frames; needs the `blueNoise` create option. |
+| `blueNoisePairs` | `6` | `'bluenoise'` only: how many leading sample pairs read the texture (at most 15). The rest use Owen-Sobol. |
+| `blueNoiseShift` | `'owen'` | `'bluenoise'` only: how the texture is shifted per frame, `'owen'` or `'kronecker'`. |
+
+See [Sampling](/concepts/sampling) for how sample dimensions are assigned.
+
+## Lights
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `nee` | `true` | Next-event estimation with multiple importance sampling. `false`: BSDF sampling only (debugging; a delta sun then contributes nothing). |
+| `envMap` | `false` | Compile the equirect environment map lookup and sampling. Set by `ptSceneOptions` when the scene has a map. |
+| `envSampling` | `'uniform'` | `'uniform'` (sphere), `'importance'` (by the map's luminance; needs `envMap`) or `'none'` (BSDF sampling only for the sky). |
+| `sunVisible` | `false` | A sun with an angular radius is visible to camera rays and specular paths. Off, the sun lights the scene but is not seen, like the delta sun of the reference renderers. |
+
+See [Lights](/concepts/lights).
+
+## BSDF
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `vndf` | `'standard'` | GGX visible-normal sampler: `'standard'` (Heitz 2018, pbrt-v4) or `'cap'` (spherical caps). Same density, different warp. |
+| `transport` | `'radiance'` | `'radiance'` divides transmission by the squared relative IOR, as pbrt does. `'importance'` does not (for energy checks). |
+
+## Materials
+
+`materials` selects OpenPBR mode. `ptSceneOptions` sets it from the scene; set it to `null` for the legacy adapter, where a non-metal is plain Lambert. Its fields:
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `features` | from the scene | Which lobes to compile: `mix`, `thin`, `layered`, `medium`, and optionally `coatedMetal`, `aniso`, `fuzz`, `thinFilm`. `ptMaterialFeatures(records)` computes it. |
+| `layered` | see below | The layered BSDF settings, for coats and dielectric-over-diffuse. |
+| `layerThickness` | `1e-6` | Layer thickness for the stochastic walk (pbrt's own default is 0.01, which absorbs). |
+| `transmissionTint` | `true` | Tint thin-walled transmission by the transmission colour. |
+
+`layered` (also the `layered` override of `ptSceneOptions`):
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `layering` | `'albedo'` | `'albedo'`: a closed-form approximation, fast and noise-free. `'stochastic'`: a random walk between the layers, the reference setting (pbrt's `coateddiffuse`), noisier. |
+| `albedoBase` | `'internal'` with `'albedo'` | `'internal'` adds the light the interface reflects back down. `'openpbr'` is the specification's plain albedo scaling. |
+| `albedoCorrection` | `'texture'` | `'internal'` base only: a fitted correction toward the stochastic walk's energy, as an 8x8 texture. `'lut'` keeps it in the WGSL; `'none'` turns it off. |
+| `maxDepth` | `10` | `'stochastic'` only: walk length. |
+| `nSamples` | `1` | `'stochastic'` only: walks per evaluation. |
+| `exitMis` | `'pbrt'` | `'stochastic'` only: `'pbrt'` matches pbrt; `'none'` makes `f` agree with the sampler. |
+
+Thin film needs `layering: 'albedo'`. See [Materials](/concepts/materials).
+
+## Textures
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `textures` | from the scene | Compile texture lookups and ray cones. Set by `create` when the `textures` create option is given. |
+| `textureLod` | `0` | `0`: always the base mip level, the reference setting. `'cone'`: ray cones pick the mip level. |
+
+With `textureLod: 'cone'`, `PtLimits.textureConeScale` (default 1) scales the starting cone. At many samples per pixel a smaller value avoids blurring the texture twice.
+
+## Alpha cutouts
+
+Cutouts need a textured material with `alphaMode` mask; `ptSceneOptions` then sets `alphaMask: true`. A hit below the material's `alphaCutoff` is passed through without costing a bounce. The [cutouts example](https://pmndrs.github.io/pathtracer/examples/pathtracer/cutouts/) shows the policies side by side.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `alphaMask` | `false` | Compile the cutout test. Needs textures. |
+| `alphaPolicy` | `'exact'` | Which rays treat cutouts as solid: `'exact'` (none), `'opaqueShadow'` (shadow rays), `'opaqueIndirect'` (rays after the first bounce), `'opaqueSecondary'` (both). Everything but `'exact'` is biased. |
+| `alphaShadow` | `'policy'` | Replaces the shadow side of the policy. See below. |
+| `alphaTransmit` | `0.5` | `'transmit'`: the visibility of a shadow ray blocked only by cutout cards. |
+| `alphaMixedMask` | `0x04` | `'transmit'` and `'classified'`: the instance mask bit of the cutout cards. |
+| `alphaRoulette` | `0.25` | `'roulette'`: the chance a blocked shadow ray is re-tested exactly. |
+| `alphaFirstK` | `1` | `'firstK'`: how many cutout hits are tested exactly. |
+| `alphaCoverage` | none | `'coverage'` and `'stochastic'`: the solid fraction of each material, indexed by material id. Required by those two. |
+
+`alphaShadow` values: `'policy'` follows `alphaPolicy`. `'roulette'` is unbiased, and `'stochastic'` is too when the holes of different cards are independent. `'classified'` is exact for cards split into mixed and solid instances. `'coverage'`, `'firstK'` and `'transmit'` are biased.
+
+> [!WARNING]
+> The `preview` and `realtime` modes use `alphaShadow: 'transmit'` with `alphaTransmit` 0.45. It only works when the cutout cards are in instances whose `mask` has the `alphaMixedMask` bit. Without that, the kernel compiles and the shadows are those of solid cards.
+
+## Outputs
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `accumulate` | `true` (`false` with `frame`) | `false` overwrites the accumulator with each pass's sample. |
+| `aovs` | `false` | Albedo, normal, view depth and coverage. See [Outputs](/pathtracer/outputs). |
+| `counters` | `false` | Per-pixel debug counters. Never time a kernel with them. |
+| `frame` | `false` | Real-time frame planes. See [Real time](/pathtracer/realtime). |
+| `frameEmission` | `'mirror'` with `frame` | Which light skips the demodulated planes: `'none'`, `'primary'` or `'mirror'`. |
+
+## Experimental
+
+These work and are checked, but their options can still change.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `materialLod` | `'full'` | `'secondary'`: vertices at depth `materialLodDepth` and beyond use a reduced material with one lobe picked at random. Noisier, cheaper, for real time. Needs OpenPBR mode to change a BSDF. |
+| `materialLodDepth` | `1` | First depth that uses the reduced material. |
+| `primary` | `'trace'` | `'vbuffer'`: the primary hit comes from a visibility buffer your rasteriser wrote (`setVbuffer`, `setVbufferJitter`). One `encode(encoder, 1)` per frame; needs `layout.positions`. |
+| `hooks` | `null` | Your WGSL called at every path vertex: `ptOnVertex` can end a path, `ptTerminate` adds radiance when it does. |
+| `restir` | `null` | ReSTIR DI and GI. See [ReSTIR](/pathtracer/restir). |
+| `volumes` | `null` | Participating media. See [Volumes](/pathtracer/volumes). |
+| `spectral` | off | Spectral transport. See [Spectral rendering](/pathtracer/spectral). |
+| `materialx` | `null` | Generated MaterialX WGSL. See [MaterialX](/pathtracer/materialx). |
+
+## Combinations that throw
+
+`resolveIntegratorOptions` (called by `create`) refuses these:
+
+| Option | Cannot be combined with |
+| --- | --- |
+| `volumes` | `restir`, `frame`, `primary: 'vbuffer'`, alpha mask, `hooks`, `counters`, `aovs`, `spectral`, the Beer-law absorber (`materials.features.medium`) |
+| `spectral` | `hooks`, `frame`, `aovs`, `restir`, `volumes` |
+| `materialx` | a scene without textures (`create` throws) |
+| `restir` | see [ReSTIR](/pathtracer/restir#what-it-refuses) |
+
+The wavefront has its own list: see [Wavefront](/pathtracer/wavefront#what-the-wavefront-cannot-do).

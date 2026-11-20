@@ -1,0 +1,36 @@
+---
+title: Installation
+description: Add the packages to a WebGPU project.
+nav: 1
+---
+
+```sh
+npm install @pmndrs/pathtracer @pmndrs/raytracer
+```
+
+`@pmndrs/pathtracer` depends on `@pmndrs/raytracer`, which depends on [`@pmndrs/bvh`](https://www.npmjs.com/package/@pmndrs/bvh) and [`@pmndrs/downsampler`](https://www.npmjs.com/package/@pmndrs/downsampler) (texture mips on the GPU). Install `@pmndrs/raytracer` on its own if you only trace rays from your own shaders.
+
+## Requirements
+
+- A browser with WebGPU (see [Browser and GPU support](/getting-started/browser-support)).
+- An ES module bundler: Vite, webpack 5, esbuild or Rollup. The packages are ESM only and ship modern JavaScript (ES2022).
+- TypeScript users: add [`@webgpu/types`](https://www.npmjs.com/package/@webgpu/types) to `compilerOptions.types`.
+
+## Bundler notes
+
+`@pmndrs/bvh` builds its trees in web workers. Vite pre-bundles dependencies by default, which breaks the worker URLs, so exclude it:
+
+```ts title="vite.config.ts"
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  optimizeDeps: { exclude: ['@pmndrs/bvh'] },
+  build: { target: 'esnext' },
+});
+```
+
+If the workers cannot load, the trees are still built on the main thread, only slower.
+
+## Versions
+
+Both packages are released together from [the repository](https://github.com/pmndrs/pathtracer). Keep them on the same version.

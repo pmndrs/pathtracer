@@ -88,7 +88,7 @@ const bitmap = (name: string, file: string, wrap: string, raw: boolean, filter: 
   `<texture type="bitmap" name="${name}"><string name="filename" value="${file}"/><string name="filter_type" value="${filter}"/><string name="wrap_mode" value="${wrap}"/><boolean name="raw" value="${raw}"/></texture>`;
 
 /**
- * `openpbr` -> Mitsuba 3 BSDF XML (docs/design/tier1.md section 2):
+ * `openpbr` -> Mitsuba 3 BSDF XML (docs/internal/design/tier1.md section 2):
  *  - metalness 1: `conductor` / `roughconductor` (eta 1, k from the reflectance; anisotropic `alpha_u`/`alpha_v`);
  *  - metalness 0: transmission 1 -> `dielectric` / `roughdielectric`, thin-walled smooth -> `thindielectric`; transmission 0 and a base
  *    colour -> `plastic` / `roughplastic` with `nonlinear true` (approximate: Mitsuba's closed-form layering, not pbrt's stochastic one);

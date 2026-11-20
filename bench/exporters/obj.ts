@@ -1,5 +1,5 @@
 /**
- * Scene -> Wavefront OBJ + MTL for VkNRC (track N, N6.2 / WN6), the native NRC baseline (docs/design/nrc.md §9).
+ * Scene -> Wavefront OBJ + MTL for VkNRC (track N, N6.2 / WN6), the native NRC baseline (docs/internal/design/nrc.md §9).
  *
  * Our own code. What VkNRC's loader needs was read from its source at `a667859` (no licence, D28/D29: read, never copied) and
  * is restated here in words:

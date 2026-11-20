@@ -1,5 +1,5 @@
 /**
- * The spectral mode's WGSL (P5, `docs/design/spectral.md`). Compiled only with `integrator.spectral`; every other kernel is byte-identical.
+ * The spectral mode's WGSL (P5, `docs/internal/design/spectral.md`). Compiled only with `integrator.spectral`; every other kernel is byte-identical.
  *
  * A path carries `PT_SPEC_LANES` = 3 wavelengths (`ptLam`, the lanes of the existing vec3 throughput / radiance), drawn once per sample by `ptSpecBegin(u)`.
  * Every RGB parameter a vertex reads becomes the value of its sigmoid-polynomial spectrum at the three wavelengths (`ptSpecMaterial`, `ptSpecIllum`), so the BSDF, MIS,

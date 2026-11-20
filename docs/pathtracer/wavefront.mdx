@@ -1,0 +1,120 @@
+---
+title: Wavefront
+description: PtWavefront splits a path into small kernels connected by GPU queues and indirect dispatch.
+nav: 31
+---
+
+`PtWavefront` is the second scheduler. Instead of one big kernel per sample, it runs five small ones per bounce, connected by queues in GPU memory:
+
+| Kernel | What it does |
+| --- | --- |
+| `camera` | Starts one path per pixel (or per slot with refill). |
+| `intersect` | Traces the queued rays to their closest hit. |
+| `shade` | Evaluates emission, light sampling and the BSDF; queues the next ray and a shadow ray. |
+| `shadow` | Traces the shadow rays and adds their light. |
+| `args` | Writes the indirect dispatch sizes of the next bounce from the queue counters. |
+
+Dispatch sizes come from the GPU, so the CPU makes no decision and reads nothing back inside a frame. Each kernel is smaller than the megakernel, so a scene with every material feature stays under the shader size where Windows compile times grow.
+
+It has the same API and gives the same image per pixel as the [megakernel](/pathtracer/megakernel). It pays off on big films and big scenes. See [Schedulers](/concepts/schedulers) for the trade-off, and the [schedulers example](https://pmndrs.github.io/pathtracer/examples/pathtracer/schedulers/) to compare them on one scene.
+
+## Creating one
+
+```ts
+import { PtWavefront, ptSceneOptions } from '@pmndrs/pathtracer';
+
+const pt = await PtWavefront.create(device, caps, { ...ptSceneOptions(scene), refill: 'inline' });
+pt.setScene(scene.trace, scene.buffers);
+pt.setFilm(1280, 720);
+pt.setCamera(camera);
+pt.setLimits({ maxDepth: 8, rrStartDepth: 3 });
+```
+
+`PtWavefront.create(device, caps, options)` takes the megakernel's options plus these scheduling settings:
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `refill` | `false` | `false`: one path per pixel per sample pass. `true` or `'inline'`: when a path ends, its slot starts the pixel's next sample at once. `'batch'`: finished slots wait until the live queue is small, then start together. `'ordered'`: inline, but restarted slots are queued in pixel order. |
+| `refillThreshold` | `0.25` | `'batch'` only: start the idle slots when the live queue falls below this fraction of the slots. |
+| `layers` | `1` | Path slots per pixel (1 to 64). Needs `refill`. For films too small to fill the GPU. |
+| `appends` | `'atomic'` | How the shade kernel appends to the queues. `'subgroup'`: one atomic per subgroup (needs the `subgroups` feature, throws without it). `'auto'`: subgroup when the device has it. |
+| `sort` | `'none'` | Block-wise coherence sorting of each 64-entry queue block: `'material'` (by hit material, before shade), `'octant'` (by ray direction, before intersect) or `'both'`. Each adds a dispatch per bounce. |
+
+## Lifecycle and differences
+
+The calls are the megakernel's: `setScene`, `setFilm`, `setCamera`, `setLimits`, `setSeed`, `reset`, `encode`, `readImage`, `accumulator`, `destroy`, plus the [real-time](/pathtracer/realtime) and [output](/pathtracer/outputs) calls. The differences:
+
+**`encode(encoder, passes)` without refill** records every kernel of every bounce of `passes` samples into one compute pass. The number of passes per call is limited by a ring of uniform records, one per bounce. `maxPassesPerEncode()` returns the limit for the current `maxDepth`; `encode` throws above it.
+
+**`encode(encoder, passes)` with refill** asks for `passes` more samples per pixel but does not wait for them. Paths of different samples are in flight at once. `maxPassesPerEncode()` returns `Infinity`.
+
+**`finish()`** (async) runs the remaining bounces until every requested sample has ended. With refill, call it before `readImage`:
+
+```ts
+const encoder = device.createCommandEncoder();
+pt.encode(encoder, 64);
+device.queue.submit([encoder.finish()]);
+await pt.finish(); // drains the queues; no-op without refill
+const image = await pt.readImage();
+```
+
+`finish` submits chunks of iterations and reads an 8-byte queue counter after each one, while the next chunk already runs. It is the one readback of the refill scheduler, so keep it out of per-frame code. Without refill it returns at once. `pt.lastFinish` reports the chunks, iterations and milliseconds of the last call.
+
+## Memory and kernel size
+
+`memory()` returns `{ stateBytesPerPath, totalBytes }` for the current film: the path state per slot and the size of every per-path buffer (state, hits, queues, shadow rays). Slots are `width * height * layers`.
+
+`kernelBytes` is the WGSL size of each kernel: `camera`, `intersect`, `shade`, `shadow`, `args`, plus `shadeSecondary`, `sortHit`, `sortRay` and `primary` when a setting builds them. `wgslBytes` is the largest of them. `ptWavefrontBuild(caps, options)` returns every kernel's source and source map without a device.
+
+## What the wavefront cannot do
+
+`create` throws with the reason for these combinations:
+
+| Refused | Why |
+| --- | --- |
+| `integrator.frame` or `integrator.restir` with `refill` or `layers` | A real-time frame is one sample per pixel, aligned with the ReSTIR G-buffer. Use the plain scheduler. |
+| `integrator.primary: 'vbuffer'` with `refill` or `layers` | A V-buffer is one frame. |
+| `layers > 1` with `aovs`, `counters` or `hooks` | Those buffers are indexed per pixel, not per slot. |
+| `integrator.frame` with `integrator.aovs` | Both live in the tail of the accumulation buffer. |
+| `integrator.restir` with alpha mask, with `hooks`, or with `restir.sharedHit` | Not ported yet. |
+| `integrator.counters` with alpha mask | The cutout loop runs in the intersect kernel, which has no counter buffer. |
+| `integrator.materialLod: 'secondary'` with `volumes` or `spectral` | The reduced shade kernel has no medium or wavelength code. |
+| `textures.binding: 'table'` | Bindless textures run on the megakernel only. |
+
+`ptwfUnsupported(integratorOptions)` returns the integrator part of this check as a string, or `null`.
+
+Volumes, spectral rendering, ReSTIR GI, alpha cutouts, `materialLod`, hooks and the real-time frame planes all run on the wavefront within those limits.
+
+## Choosing a scheduler
+
+`ptwfAutoPolicy(input)` picks a scheduler and its settings from facts known before the first frame:
+
+```ts
+import { PtMegakernel, PtWavefront, ptMegakernelWgsl, ptSceneOptions, ptwfAutoPolicy } from '@pmndrs/pathtracer';
+
+const options = ptSceneOptions(scene);
+const { scheduler, reason, ...settings } = ptwfAutoPolicy({
+  width: 1280,
+  height: 720,
+  maxDepth: 8,
+  subgroups: caps.subgroups,
+  kernelBytes: ptMegakernelWgsl(caps, options).length,
+});
+const pt = scheduler === 'wavefront'
+  ? await PtWavefront.create(device, caps, { ...options, ...settings })
+  : await PtMegakernel.create(device, caps, options);
+```
+
+| Input | |
+| --- | --- |
+| `width`, `height` | The film. |
+| `maxDepth` | The path length limit. |
+| `subgroups` | `caps.subgroups`. |
+| `frame` | `true` for real-time frames (one sample per pixel per encode): the choice is then the megakernel or the plain wavefront. |
+| `triangles` | Scene size, used with `frame`. |
+| `kernelBytes` | The megakernel's WGSL size. Above about 50 KB the policy picks the wavefront whatever the other rules say. |
+
+The result has `scheduler`, `refill`, `layers`, `appends`, `sort` and a one-line `reason`. In short: short paths (`maxDepth` 2 or less) and small real-time scenes go to the megakernel; big films go to the plain wavefront; mid and small films to the wavefront with inline refill, with layers on small films. Sorting and ordered refill are never picked. Spread the result, then your own overrides.
+
+> [!NOTE]
+> The rules come from measurements on one machine and are provisional. Every field stays an explicit setting: override any of them.

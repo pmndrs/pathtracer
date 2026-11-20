@@ -1,0 +1,170 @@
+# The GitHub Pages site: the pmndrs/docs site at the root (docs/*.mdx), the examples gallery under /examples/ (examples/), and the
+# Classroom showcase under /examples/showcase/classroom/ (bench/hero). scripts/build-site.mjs does the building; this workflow
+# provides what it needs (the denoiser sibling, the upscaler, the prepared Classroom scene) and deploys the result.
+# The Classroom steps may fail (Blender download, the denoiser build) without blocking the docs and examples: the site then deploys
+# without the showcase and the run summary says so.
+name: Deploy docs and examples to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'examples/**'
+      - 'bench/**'
+      - 'packages/**'
+      - 'scripts/build-site.mjs'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: read
+      pages: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pathtracer
+          persist-credentials: false
+          # The docs' version label reads `git describe --tags`: full history, no old file contents.
+          fetch-depth: 0
+          filter: blob:none
+      # Match the sibling links in the bench lockfile. The denoiser build bundles
+      # its workspaces, and its optional OIDN mode loads its weights from Git LFS.
+      - uses: actions/checkout@v4
+        with:
+          repository: pmndrs/denoiser
+          ref: 7014384c8117df48622d27a4cb52a4d4a5bf9a54
+          path: Denoiser
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: Build denoiser
+        id: denoiser
+        continue-on-error: true
+        working-directory: Denoiser
+        run: |
+          git lfs pull --include='packages/denoiser/tzas/rt_hdr_alb*.tza,packages/denoiser/tzas/rt_hdr_calb_cnrm*.tza,packages/denoiser/tzas/rt_ldr.tza,packages/denoiser/tzas/rt_ldr_small.tza'
+          corepack yarn install --immutable
+          corepack yarn build:lib
+      - name: Install upscaler and bench dependencies
+        run: |
+          npm install --prefix pages-deps --no-save --ignore-scripts @pmndrs/upscaler@0.5.0 three@0.187.0
+          ln -s "$PWD/pages-deps/node_modules/@pmndrs/upscaler" upscaler
+          cd pathtracer
+          corepack pnpm install --frozen-lockfile
+      # Blender: cached by version (download.blender.org has answered GitHub runners with 403), else the first of
+      # download.blender.org and its official mirrors that serves it. The sha256 check holds whatever the source.
+      - name: Cache Blender
+        id: blender-cache
+        if: steps.denoiser.outcome == 'success'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-5.1.1-linux-x64.tar.xz
+          key: blender-5.1.1-linux-x64
+      - name: Cache the Classroom download
+        if: steps.denoiser.outcome == 'success'
+        uses: actions/cache@v4
+        with:
+          path: pathtracer/bench/assets/downloads/classroom/classroom.zip
+          key: classroom-${{ hashFiles('pathtracer/bench/hero/*.json') }}
+      - name: Prepare the Classroom scene
+        id: classroom-prep
+        if: steps.denoiser.outcome == 'success'
+        continue-on-error: true
+        working-directory: pathtracer
+        run: |
+          cd "$RUNNER_TEMP"
+          archive=blender-5.1.1-linux-x64.tar.xz
+          sum=6f9fff89fef154ef7974d1a1c4b916ab4bc1f5618bcb48d5befee1bd0a7c7f2a
+          if ! echo "$sum  $archive" | sha256sum --check --status 2>/dev/null; then
+            rm -f "$archive"
+            for base in https://download.blender.org/release \
+                        https://mirrors.ocf.berkeley.edu/blender/release \
+                        https://ftp.nluug.nl/pub/graphics/blender/release \
+                        https://ftp.halifax.rwth-aachen.de/blender/release \
+                        https://mirror.clarkson.edu/blender/release; do
+              echo "trying $base"
+              if curl --fail --location --retry 2 --retry-all-errors --user-agent "Mozilla/5.0 (X11; Linux x86_64)" -o "$archive" "$base/Blender5.1/$archive" \
+                && echo "$sum  $archive" | sha256sum --check; then break; fi
+              rm -f "$archive"
+            done
+            test -f "$archive"
+          fi
+          tar -xf "$archive"
+          cd "$GITHUB_WORKSPACE/pathtracer"
+          python3 bench/hero/prepare.py classroom --blender "$RUNNER_TEMP/blender-5.1.1-linux-x64/blender"
+      - id: pages
+        uses: actions/configure-pages@v5
+      # The Classroom builds on Node 22 (the bench's version) into its own folder, copied into the site after the docs build.
+      - name: Build the Classroom
+        id: classroom
+        if: steps.classroom-prep.outcome == 'success'
+        continue-on-error: true
+        working-directory: pathtracer
+        env:
+          HERO_OUT: ${{ github.workspace }}/pathtracer/dist/classroom
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}/examples/showcase/classroom
+        run: node bench/hero/build-pages.mjs
+      # The pmndrs/docs CLI runs on Node 24, as in its reusable workflow; the bench steps above need 22.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build docs and examples
+        working-directory: pathtracer
+        env:
+          # pmndrs/docs settings (the inputs of pmndrs/docs/.github/workflows/build.yml, which we cannot call: it uploads its own Pages artifact).
+          NEXT_PUBLIC_LIBNAME: pathtracer
+          HOME_REDIRECT: /getting-started/introduction
+          ICON: /logo.svg
+          LOGO: /logo.svg
+          GITHUB: https://github.com/${{ github.repository }}
+          MDX_BASEURL: https://github.com/${{ github.repository }}/raw/${{ github.ref_name }}/docs
+          SOURCECODE_BASEURL: https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}
+          EDIT_BASEURL: https://github.com/${{ github.repository }}/edit/${{ github.ref_name }}/docs
+          NEXT_PUBLIC_URL: ${{ steps.pages.outputs.base_url }}
+          CONTRIBUTORS_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          corepack enable
+          node scripts/build-site.mjs --check
+          node scripts/build-site.mjs --docs --out dist/site --base "${{ steps.pages.outputs.base_path }}/"
+      - name: Add the Classroom
+        working-directory: pathtracer
+        run: |
+          if [ "${{ steps.classroom.outcome }}" = success ] && [ -d dist/classroom ]; then
+            mkdir -p dist/site/examples/showcase
+            cp -R dist/classroom dist/site/examples/showcase/classroom
+            echo "Classroom showcase included." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Classroom showcase not built (denoiser: ${{ steps.denoiser.outcome }}, prepare: ${{ steps.classroom-prep.outcome }}, build: ${{ steps.classroom.outcome }}); deploying docs and examples without it."
+            echo "Classroom showcase NOT included: see the warnings." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pathtracer/dist/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

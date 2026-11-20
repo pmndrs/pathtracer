@@ -1,5 +1,5 @@
 /**
- * Real-time pipeline session (P4.5 / P4.6 / P4.7, docs/design/realtime.md section 5): the library's real-time path through the shared chain
+ * Real-time pipeline session (P4.5 / P4.6 / P4.7, docs/internal/design/realtime.md section 5): the library's real-time path through the shared chain
  * (`chain.ts`), with NO cache. The plain path tracer is the input:
  *
  *   PtMegakernel { mode: 'realtime', frame planes, maxDepth 2, optional ReSTIR DI }   half resolution (960 x 540)

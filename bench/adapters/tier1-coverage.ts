@@ -1,5 +1,5 @@
 /**
- * Tier 1 feature-coverage matrix, the pure part (P2.31, docs/design/tier1.md section 3): row definitions, the cell rules and the Markdown page.
+ * Tier 1 feature-coverage matrix, the pure part (P2.31, docs/internal/design/tier1.md section 3): row definitions, the cell rules and the Markdown page.
  * No I/O and no page imports, so `tier1-coverage.test.ts` runs without a GPU; `tier1-matrix.ts` feeds it the measured numbers.
  *
  * Cell rules (columns ours, three-gpu-pathtracer, mutracer, measured by ablation; pbrt-v4 and Mitsuba 3, read from the exporters' notes):
@@ -209,7 +209,7 @@ export function renderMarkdown(j: CoverageJson): string {
   const L: string[] = [];
   L.push('# Tier 1 feature-coverage matrix');
   L.push('');
-  L.push(`Generated ${j.generated} by \`node bench/adapters/tier1-matrix.ts --report ${j.report}\` (P2.31, docs/design/tier1.md section 3). Data: \`bench/results/reports/tier1/coverage.json\`; the viewer's Coverage tab links each cell to its side-by-side comparison.`);
+  L.push(`Generated ${j.generated} by \`node bench/adapters/tier1-matrix.ts --report ${j.report}\` (P2.31, docs/internal/design/tier1.md section 3). Data: \`bench/results/reports/tier1/coverage.json\`; the viewer's Coverage tab links each cell to its side-by-side comparison.`);
   L.push('');
   L.push(`Columns ours, three-gpu-pathtracer and mutracer are **measured by ablation** at ${j.spp} spp (noise from the ${j.halfSpp} spp snapshot): each renders the full wave-1 scene and the same scene with the feature stripped from every material. The number after the symbol is ablation relMSE / own noise; "ffN" = N firefly pixels (above 4x the reference maximum) left out of the relMSEs. pbrt-v4 and Mitsuba 3 are **read from the exporters**: what the exporter did with a probe material of that row.`);
   L.push('');

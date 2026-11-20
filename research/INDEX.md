@@ -120,7 +120,7 @@ and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
 - **Gaps in the siblings:** nothing has ever run on AMD, and the Denoiser and upscaler are validated only on Apple.
   Every sibling's pending Windows runbook (bvh defaults, downsampler parity, upscaler audit) feeds the same machine.
 
-## 7. Tier 1 sources (2026-11-14, for docs/design/tier1.md)
+## 7. Tier 1 sources (2026-11-14, for docs/internal/design/tier1.md)
 
 | Source | Link | Used for |
 |---|---|---|

@@ -1,0 +1,129 @@
+---
+title: Scene copy
+description: Materials, lights, light sampling and textures, as your shader reads them.
+nav: 24
+---
+
+The BVH knows triangles and instance ids. Everything else a shader needs at a hit is in the *scene copy*: instance transforms, vertex attributes, materials, the light table and textures. `buildGpuScene` (or `buildSceneCopy` + `uploadSceneCopy`) builds and uploads it; [Scenes](/concepts/scenes), [Materials](/concepts/materials) and [Lights](/concepts/lights) describe the input. This page is the shader's side.
+
+Add it to the inline module with the `scene` option:
+
+```ts
+const module = rtModuleWgsl(caps, {
+  ...scene.format,
+  scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, textures: scene.copy.textureLayout, packing: scene.packing },
+});
+const layout = device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, scene.copy.textureLayout, scene.packing) });
+const group = device.createBindGroup({ layout, entries: rtSceneCopyBindGroupEntries(scene.buffers) });
+```
+
+## Bindings and packing
+
+The copy is one storage buffer (`packing: 'packed'`, the default) or two (`'split'`: a table and a data buffer). Packed saves a storage binding in every kernel, which matters on Chrome on Apple GPUs (10 per stage). It must fit one storage binding, about 1.5 million triangles with normals and positions; above that, upload with `packing: 'split'`.
+
+The kernel, its layout and the upload must agree on the packing. `buildGpuScene` reports it as `scene.packing`. In WGSL the copy is `rtScene` (packed) or `rtSceneTable` and `rtSceneData` (split). The generated functions are written against the split names; `rtPackSceneAccess(source)` rewrites any WGSL that reads them directly so it works packed. `rtModuleWgsl` does that for its own text. You need it only for WGSL of your own that reads the buffers by name.
+
+`writeSceneCopy(device, buffers, copy)` rewrites a rebuilt copy into existing buffers when it fits (for example after lights changed), and returns `false` when you need to upload again.
+
+## Materials
+
+```wgsl
+fn rtMaterial(id: u32) -> RtMaterial
+fn rtMaterialAlpha(m: RtMaterial) -> f32     // GGX alpha = specularRoughness^2
+```
+
+`id` is `hit.material`. An id past the end of the table, including `RT_NO_MATERIAL`, returns the default material (OpenPBR's defaults: 0.8 grey dielectric, roughness 0.3).
+
+Each material is a 128-byte record of OpenPBR parameters. `RtMaterial` decodes it:
+
+| Group | Fields |
+| --- | --- |
+| Base | `baseColor`, `baseWeight`, `metalness` |
+| Specular | `specularColor`, `specularWeight`, `specularRoughness`, `specularAnisotropy`, `anisotropyRotation`, `ior` |
+| Conductor | `conductorEta`, `conductorK`, `conductorEtaK` (use eta and k instead of the base colour) |
+| Transmission | `transmissionWeight`, `transmissionColor`, `transmissionDepth`, `thinWalled` |
+| Coat | `coatWeight`, `coatColor`, `coatRoughness`, `coatIor` |
+| Sheen | `sheenWeight`, `sheenColor`, `sheenRoughness` |
+| Emission | `emissionColor`, `emissionLuminance`, `emissionTwoSided` |
+| Alpha | `opacity`, `alphaCutoff`, `alphaMode` (`RT_ALPHA_OPAQUE`, `RT_ALPHA_MASK`, `RT_ALPHA_BLEND`), `doubleSided` |
+| Textures | `baseColorTexture`, `roughnessMetalTexture`, `normalTexture`, `emissionTexture` (`RT_TEXTURE_NONE` when unused) |
+
+`baseColor` and `emissionColor` are stored as f32; most other weights and colours are 16-bit unorm. `readMaterial(copy, id)` and `unpackMaterial(words)` are the CPU twins. How the parameters combine into a BSDF is up to you; `rtShade` has a simple one, and `@pmndrs/pathtracer` has the full OpenPBR model.
+
+## Lights
+
+The light table lists every emissive triangle (each triangle with an emissive material is its own light), then the sun, then the environment. A material whose emission comes from a texture is not in the table: it is still visible when a ray hits it, but it is never sampled as a light. An alias table over it picks a light in constant time.
+
+| Function | What it does |
+| --- | --- |
+| `rtLightCount()` | Number of lights. |
+| `rtSampleLight(u)` | Picks a light: `RtLightSample { index, pmf, u }`. `u` is the leftover of the random number, rescaled to `[0, 1)`. `index` is `RT_NONE` when there are no lights. |
+| `rtLightPmf(index)` | The probability that `rtSampleLight` picks `index`. |
+| `rtLight(index)` | An emissive triangle: `RtLight { position, edge1, edge2, normal, area, radiance, twoSided, instance, triangle, ... }`. |
+| `rtSun()`, `rtHasSun()` | `RtSun { direction, angularRadius, solidAngle, irradiance, pmf, ... }`. `direction` points toward the sun. |
+| `rtEnvironment()`, `rtHasEnvironment()` | `RtEnvironment { radiance, scale, rotationY, ... }`. |
+| `rtLightIndexOfHit(instance, triangle)` | The light index of an emissive triangle you hit, `RT_NONE` otherwise. |
+| `rtLightPmfOfHit(instance, triangle)` | Its pick probability (0 for a plain triangle): the light side of an MIS weight at a BSDF-sampled hit. |
+| `rtSceneInfo()` | Counts, total power and scene radius. |
+
+The table's weights follow `options.lightSelection` of the scene copy input (`'pbrt'` by default; also `'power'`, `'kind'`, `{ capped: share }`). The choice changes noise, never the mean.
+
+### Light sampling
+
+With `scene.sampling: true` the module also has point sampling, the second half of next-event estimation:
+
+```wgsl
+fn rtSampleLightLi(index: u32, p: vec3f, u: vec2f) -> RtLightLi
+struct RtLightLi { wi: vec3f, distance: f32, point: vec3f, pdf: f32, normal: vec3f, delta: bool, radiance: vec3f, valid: bool }
+```
+
+```wgsl
+let pick = rtSampleLight(u.x);
+if (pick.index != RT_NONE) {
+  let li = rtSampleLightLi(pick.index, position, u.yz);
+  if (li.valid && rtVisibleSegment(position, position + li.wi * min(li.distance, 1e30), RT_MASK_ALL, 1e-4)) {
+    direct = li.radiance * myBsdf(li.wi) * max(dot(n, li.wi), 0.0) / (pick.pmf * li.pdf);
+  }
+}
+```
+
+`pdf` is a solid-angle density and does not include `pick.pmf`; multiply them yourself. Emissive triangles are sampled uniformly by area (one-sided ones give nothing from behind), the sun uniformly inside its cone (a sun of radius 0 is a delta direction, `delta = true`, `pdf = 1`), and the environment uniformly over the sphere.
+
+> [!NOTE]
+> `scene.sampling` compiles the environment as a constant radiance (for a map, its mean). To sample an environment map by its luminance, leave `sampling` off and append `rtLightSampleWgsl({ envMap: true })` to the module, through `rtPackSceneAccess` when the copy is packed. That is what the path tracer does.
+
+## Textures
+
+Textures are grouped into *buckets*: one `texture_2d_array` and one trilinear sampler per (size, colour space, wrap mode). Each texture is resized to a power of two and stored as one layer. A scene uses at most 8 buckets by default (`textures.maxBuckets`), whatever the number of textures; more are merged.
+
+```wgsl
+fn rtTexSample(slot: u32, uv: vec2f, lod: f32) -> vec4f
+fn rtApplyMaterialTextures(m: RtMaterial, uv: vec2f, uvFootprint: f32) -> RtMaterial
+fn rtApplyNormalMap(n: vec3f, tangent: vec4f, texel: vec3f) -> vec3f
+```
+
+- `rtTexSample` returns linear values. Colour textures (`colorSpace: 'srgb'`: base colour, emission) are stored as `rgba8unorm-srgb`, so the hardware decodes them before filtering. Data textures (`'linear'`: metallic-roughness, normal maps) are `rgba8unorm`. The scene copy checks that each material field gets the right kind. Alpha is always linear.
+- `rtApplyMaterialTextures` applies glTF semantics: base colour times `rgb`, opacity times `a`, roughness times `g`, metalness times `b`, emission times `rgb`. `uvFootprint` is the filter width in uv units; 0 reads the full-resolution level.
+- `rtApplyNormalMap` takes the shading normal, the tangent from `rtSurface(..., RT_SURF_TEXFRAME)` and the normal map texel (`rgb`), and returns the perturbed normal.
+- Texture coordinates follow glTF: `(0, 0)` is the top-left texel, `v` points down.
+
+For mip selection, `rtSurface` with `RT_SURF_TEXFRAME` gives `uvDensity` (uv units per metre). With a ray cone, the footprint is `hit.coneWidth * uvDensity / abs(cosTheta)`; `coneUvFootprint` is the CPU twin, and `textureLod(width, height, footprint)` the level it selects. The path tracer does this with `textureLod: 'cone'`.
+
+### Mips
+
+Mip levels 1 and up are made on the GPU by default (`textures.mips: 'gpu'`). `buildSceneCopy` keeps level 0 and `uploadSceneCopy` fills the rest with [`@pmndrs/downsampler`](https://github.com/pmndrs/downsampler), one `Downsampler` per device (`rtMipGenerator(device)`). Pass `uploadSceneCopy(device, copy, { mipGenerator })` to use your own (anything with `encode(encoder, texture)`).
+
+`mips: 'cpu'` builds every level on the CPU instead, which is slower. Use it when there is no device, or when the CPU twin `sampleSceneTexture` must read levels above 0. `mips: false` stores one level.
+
+### Bindless textures (experimental)
+
+> [!WARNING]
+> The resource-table binding is experimental: it works and is checked, but the API can still change, and browser support is thin.
+
+With `textures.binding: 'table'`, the buckets go into one resource table instead of one binding pair each, so buckets are never merged. It needs a device with `caps.resourceTable !== 'none'` (`chromium-experimental-sampling-resource-table`).
+
+- `rtModuleWgsl` adds the `enable` line itself, and `rtSceneCopyLayoutEntries` adds no texture bindings.
+- The pipeline layout needs `usesResourceTable: true` (`rtUsesResourceTable(scene.copy.textureLayout)` tells you).
+- Bind the table on each pass: `rtSetResourceTable(pass, scene.buffers.textures!.table!)`.
+
+In Chrome Canary on Metal, a compute pass that sets a resource table fails today; render passes work. Use the default `'arrays'` binding unless you are testing this.

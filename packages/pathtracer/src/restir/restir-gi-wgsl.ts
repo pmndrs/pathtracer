@@ -2,7 +2,7 @@
  * ReSTIR GI (P5, real-time mode, megakernel): WGSL of the three extra passes (`ptRestirGiInit`, `ptRestirGiTemporal`, `ptRestirGiSpatial`) that run after the ReSTIR DI
  * passes (they share the DI module, the G-buffer and the params record) and the shade-side read (`ptRestirGiLi`). Written from Ouyang et al. 2021 "ReSTIR GI: Path Resampling for
  * Real-Time Path Tracing" (the secondary vertex as the resampled sample, the reconnection shift) and Lin et al. 2022 "Generalized resampled importance sampling" (the
- * contribution-weight form and the balance-heuristic MIS of the unbiased combine); no code from RTXGI or any other renderer. Design: docs/design/restir-gi.md.
+ * contribution-weight form and the balance-heuristic MIS of the unbiased combine); no code from RTXGI or any other renderer. Design: docs/internal/design/restir-gi.md.
  *
  * **Sample.** A visible point x1 (the primary hit) shoots one BSDF-sampled ray to x2; the sample is the reconnection vertex `(x2, n2, Lo)` with `Lo` the radiance x2 reflects
  * back toward x1: next-event estimation at x2 (light sampling, no MIS), so the sample stands for the 2-bounce path x1 -> x2 -> light. Emission seen directly from x1

@@ -1,0 +1,101 @@
+---
+title: Lights
+description: Emissive triangles, the sun and the environment, and how the path tracer samples them.
+nav: 13
+---
+
+A scene has three kinds of light:
+
+- **Emissive triangles**: every triangle whose material emits. These are area lights.
+- **One sun**: a directional light, optionally with an angular size.
+- **One environment**: light from every direction that misses the scene, constant or from an HDR map.
+
+All three go into the scene copy's light table. There are no point or spot lights: model a small emissive shape instead. `loadGltf` turns the first `KHR_lights_punctual` directional light into the sun and lists point and spot lights in its `notes`.
+
+## Emissive triangles
+
+A material with a non-black `emissionColor` makes every triangle that uses it a light. `emissionColor` is radiance in W/sr/m². The triangle emits from its front face (counter-clockwise), or from both faces with `emissionTwoSided`.
+
+```ts
+import type { RtMaterialInput } from '@pmndrs/raytracer';
+
+const lamp: RtMaterialInput = { baseColor: [0, 0, 0], specularWeight: 0, emissionColor: [20, 18, 15] };
+```
+
+The light table stores each emitter in world space with its area and power. A large mesh lamp is many lights, one per triangle.
+
+> [!NOTE]
+> A material with an `emissionTexture` is not in the light table, because next-event estimation needs a constant radiance per triangle. Rays that hit it by BSDF sampling still see it, so it is correct but noisier as a light source.
+
+## The sun
+
+```ts
+import type { SunInput } from '@pmndrs/raytracer';
+
+const sun: SunInput = { direction: [-0.3, -1, -0.2], irradiance: [3, 2.9, 2.7], angularRadius: 0.00465 };
+```
+
+| Field | What |
+| --- | --- |
+| `direction` | The way the light **travels**: down for a sun overhead. It is normalised for you. |
+| `irradiance` | W/m² on a surface facing the sun. |
+| `angularRadius` | Radians. 0 (the default) is a delta light: perfectly sharp shadows. The real sun is about 0.00465. |
+
+A delta sun is invisible to camera rays and in mirrors, as in pbrt-v4 and Mitsuba. With an angular radius, set `integrator.sunVisible: true` to see its disk in the image and in reflections.
+
+> [!WARNING]
+> `SunInput.direction` points the way light travels. The decoded `RtSunLight.direction` in the scene copy points toward the sun. A sign error gives a scene lit only by the sky, not an error message.
+
+## The environment
+
+```ts
+import type { EnvironmentInput } from '@pmndrs/raytracer';
+
+const sky: EnvironmentInput = { radiance: [0.2, 0.25, 0.3] };
+// data: width * height * 3 floats, linear radiance, row 0 = +Y
+const hdri: EnvironmentInput = { map: { width, height, channels: 3, data }, rotationY: Math.PI / 2 };
+```
+
+| Field | What |
+| --- | --- |
+| `radiance` | Constant radiance, W/sr/m². With a `map` it defaults to the map's mean. |
+| `map` | An equirectangular image: `width`, `height`, `channels` (1, 3 or 4; alpha is ignored), `data` as linear float radiance, row 0 = +Y. |
+| `scale` | Multiplies the map. Default 1. |
+| `rotationY` | Radians about +Y, counter-clockwise seen from above. |
+
+The library has no HDR or EXR file reader: decode the file yourself into a float array. With no rotation, u = 0 of the map looks toward −Z and u = 0.25 toward +X. Lookups are bilinear.
+
+The kernel compiles the map code only when it is told there is a map (`integrator.envMap: true`). `ptSceneOptions` sets it from the scene.
+
+## Next-event estimation and MIS
+
+At every scattering vertex that is not a perfect mirror or glass, the path tracer:
+
+1. Picks one light from the light table.
+2. Samples a point on it (or a direction for the sun and the environment) and traces one shadow ray.
+3. Weights that sample against BSDF sampling with the power heuristic (multiple importance sampling).
+
+When a BSDF-sampled ray later hits an emitter or escapes to the sky, its contribution gets the matching MIS weight. A delta sun can only be reached by next-event estimation, so its sample is unweighted. `integrator.nee: false` turns next-event estimation off (BSDF sampling only, a debug setting); delta suns then contribute nothing.
+
+### Sampling the environment
+
+| `integrator.envSampling` | What it does |
+| --- | --- |
+| `'importance'` | Samples the map in proportion to its luminance (a row distribution, then a column distribution in the row). Needs `envMap`. `ptSceneOptions` picks it when the scene has a map. |
+| `'uniform'` | Uniform directions on the sphere. The integrator's own default, and `ptSceneOptions`' choice for a constant sky. |
+| `'none'` | No next-event estimation for the environment: BSDF sampling only. |
+
+### Light selection
+
+Step 1 uses an alias table, so picking a light costs the same for one light or a million. The weights in the table only change the noise, never the mean. Set them with `SceneCopyInput.options.lightSelection`:
+
+| Value | Weights |
+| --- | --- |
+| `'pbrt'` (default) | pbrt-v4's rule: each infinite light (sun, environment) gets an equal share, and the emissive triangles together get one more share, split by power. |
+| `'power'` | Proportional to power. |
+| `'kind'` | Each kind of light gets an equal share; within a kind, by power. |
+| `{ capped: c }` | Proportional to power, but the sun and the environment together get at most share `c`. |
+
+`options.sunPowerScale` and `options.envPowerScale` multiply the power the sun and the environment are given in these weights (default 1).
+
+Large numbers of emitters still cost noise: each vertex samples one light. For scenes with many lights, ReSTIR DI (**Experimental**, real-time only) reuses light samples across pixels and frames. See [Real time](/pathtracer/realtime).

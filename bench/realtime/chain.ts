@@ -1,5 +1,5 @@
 /**
- * NRC pipeline (track N, M9; docs/design/nrc-pipeline.md): the real-time chain both demo arms go through, identically.
+ * NRC pipeline (track N, M9; docs/internal/design/nrc-pipeline.md): the real-time chain both demo arms go through, identically.
  *
  *   path tracer (integrator.frame, N samples)  ->  pack (planes -> denoiser / upscaler textures)  ->  Denoiser `DiffuseSpecularDenoiser`
  *   (SVGF, demodulated diffuse + specular, remodulated)  ->  composite (+ sky)  ->  pmndrs/upscaler temporal path (render res -> display res)

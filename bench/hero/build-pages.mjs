@@ -4,14 +4,31 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const outDir = join(root, 'dist/pages');
+// The site build (scripts/build-site.mjs) places the page in the examples gallery: HERO_OUT = <site>/examples/showcase/classroom,
+// PAGES_BASE = its URL path. Alone it builds dist/pages for the root of the Pages site, as before.
+const outDir = process.env.HERO_OUT ? resolve(process.env.HERO_OUT) : join(root, 'dist/pages');
 const base = (process.env.PAGES_BASE ?? '/pathtracer').replace(/\/$/, '') + '/';
+const nav = join(root, 'examples/shared/nav.ts');
+
+/** The examples gallery's frame (logo, breadcrumb, docs and source links), at the bottom: the page's own header and panel are at the top. */
+const exampleFrame = {
+  name: 'example-frame',
+  transformIndexHtml: {
+    order: 'pre',
+    handler: () => [
+      { tag: 'meta', attrs: { name: 'example', content: 'classroom' }, injectTo: 'head' },
+      { tag: 'meta', attrs: { name: 'example-nav-placement', content: 'bottom' }, injectTo: 'head' },
+      { tag: 'script', attrs: { type: 'module' }, children: `import ${JSON.stringify(nav)};`, injectTo: 'body' },
+    ],
+  },
+};
 
 await build({
   root: join(root, 'bench/pages'),
   configFile: false,
   publicDir: false,
   base,
+  plugins: process.env.HERO_OUT ? [exampleFrame] : [],
   define: {
     __BENCH_SITE_BASE__: JSON.stringify(base),
     __BENCH_DENOISER_TZAS__: JSON.stringify(base + 'weights'),

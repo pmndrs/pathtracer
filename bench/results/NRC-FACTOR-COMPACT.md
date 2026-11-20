@@ -1,6 +1,6 @@
 # NRC reflectance factorization and compact networks on the Mac
 
-November 19, 2026. Apple M5 Pro, Metal, headless Chrome 157. Both experiments use the phase 5 evaluated material inputs. Phase 6 holds the five-layer network fixed and changes the training target. Phase 7 holds the raw RGB target fixed and changes the hidden layers. All performance and quality comparisons use portable fp16 kernels. [Execution plan and references](../../docs/design/nrc-experiments.md)
+November 19, 2026. Apple M5 Pro, Metal, headless Chrome 157. Both experiments use the phase 5 evaluated material inputs. Phase 6 holds the five-layer network fixed and changes the training target. Phase 7 holds the raw RGB target fixed and changes the hidden layers. All performance and quality comparisons use portable fp16 kernels. [Execution plan and references](../../docs/internal/design/nrc-experiments.md)
 
 ## Phase 6 · Reflectance factorization
 

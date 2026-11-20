@@ -1,6 +1,6 @@
 /**
  * `SceneDesc` of a glTF model: one `file` mesh per glTF material (`select.material`), the model's material table as `openpbr`
- * materials, and the sidecar's camera, lights, film, integrator and overrides (docs/design/tier1.md section 4).
+ * materials, and the sidecar's camera, lights, film, integrator and overrides (docs/internal/design/tier1.md section 4).
  *
  * Browser-safe on purpose (no node imports): the bench pages import every scene through `scenes/index.ts`. The material table comes
  * either from the committed golden tables (`tier1/golden/*.json`, static scenes) or from `loadGltfScene` (`gltfSceneDescFromFile` in

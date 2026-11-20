@@ -1,0 +1,101 @@
+---
+title: Shading
+description: rtShade gives the light leaving a hit toward the viewer, with one shadow ray.
+nav: 25
+---
+
+Tracing finds a surface; something still has to light it. `rtShade` is a small, complete answer for one bounce: the radiance leaving a hit toward the ray's origin, made of the surface's emission, one light sample with one shadow ray, and an optional term from your own cache.
+
+Use it to shade reflection hits, GI probe rays or radiance-cache updates when you do not want to write light sampling yourself. For converged images use `@pmndrs/pathtracer`; it has the full OpenPBR BSDF and multiple importance sampling.
+
+[Live example](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/): one-bounce lighting of camera hits.
+
+## Setup
+
+`shade` needs the scene copy with its surface, materials and lights (the defaults):
+
+```ts
+const module = rtModuleWgsl(caps, {
+  ...scene.format,
+  scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, textures: scene.copy.textureLayout, packing: scene.packing },
+  shade: true,     // or RtShadeOptions
+  minify: true,    // the module with shade is close to the ~50 KB kernel size limit
+});
+```
+
+```wgsl
+let hit = rtClosest(ray, RT_MASK_ALL);
+let s = rtShade(hit, ray, RT_SHADE_LAMBERT, vec3f(u0, u1, u2), RT_MASK_ALL);
+let radiance = rtShadeTotal(s);   // emission + direct + indirect
+```
+
+`shade` adds light point sampling by itself. Do not also set `scene.sampling` or append `rtLightSampleWgsl()`, or the functions are declared twice.
+
+## Functions
+
+| Function | What it does |
+| --- | --- |
+| `rtShade(hit, ray, mode, u, mask) -> RtShaded` | Radiance at the hit toward `-ray.direction`. A miss returns the environment in `emission`. |
+| `rtShadePoint(hit, ray) -> RtShadePoint` | The surface decode `rtShade` does: position, shading and geometric normals on the viewer's side, `wo`, the material, the diffuse albedo. |
+| `rtShadeAt(p, mode, u, mask) -> RtShaded` | Shade a point you already decoded, for example with several light samples. |
+| `rtShadeTotal(s) -> vec3f` | `emission + direct + indirect`. |
+| `rtShadeMiss(direction) -> vec3f` | Environment radiance, plus the sun disc with `sunVisible`. |
+| `rtShadeDiffuseFromIrradiance(p, E) -> vec3f` | `albedo * E / pi`, for caches that store irradiance. |
+| `rtOffsetOrigin(p, n) -> vec3f`, `rtSideNormal(n, w) -> vec3f` | A ray origin that does not hit its own surface, and a normal flipped to the side of `w`. |
+
+`RtShaded` keeps the terms apart, for denoisers and cache writers: `{ emission, direct, indirect: vec3f, light: u32, occluded: bool }`. `light` is the sampled light (`RT_NONE` if none contributed) and `occluded` says a shadow ray was traced and blocked.
+
+`u` is three independent random numbers in `[0, 1)` from your sampler: `u.x` picks the light, `u.yz` the point on it. The module has no random state of its own. `mask` is the shadow ray's ray mask.
+
+## Modes
+
+The mode is a runtime argument, so one pipeline serves all three:
+
+| Mode | Shadow rays | Result |
+| --- | --- | --- |
+| `RT_SHADE_FLAT` | 0 | `emission + indirect`. With `flat: 'albedo'`, also the unlit base colour in `direct`. |
+| `RT_SHADE_LAMBERT` | at most 1 | Adds direct light with a Lambert BSDF of the diffuse albedo, `baseColor * baseWeight * (1 - metalness) * (1 - transmissionWeight)`. A pure metal is black here. |
+| `RT_SHADE_FULL` | at most 1 | As Lambert, but the BSDF is diffuse plus GGX specular (built in), or yours. |
+
+The direct term is `Le * f * cos / (pmf * pdf)` for one light chosen by the light table and one point on it. There is no BSDF sample inside `rtShade`, so there is no MIS: your continuation ray is the BSDF sample. The estimate is unbiased, with the noise of one light sample.
+
+## Options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `bsdf` | `'builtin'` | `'builtin'`: Lambert diffuse plus GGX specular (height-correlated Smith, Schlick Fresnel). `'external'`: you declare `fn rtShadeBsdf(p: RtShadePoint, wi: vec3f) -> vec3f`, the BSDF value without the cosine. Used by `RT_SHADE_FULL` only. |
+| `cache` | `'none'` | `'none'`: the indirect term is black. `'external'`: you declare `fn rtShadeIndirect(p: RtShadePoint) -> vec3f`, the outgoing radiance toward `p.wo`, already weighted by the BSDF. |
+| `envSampling` | `'uniform'` | How the environment is sampled when the light table picks it: `'uniform'` over the sphere, or `'cosine'` over the shading hemisphere. |
+| `flat` | `'cache'` | What `RT_SHADE_FLAT` returns: `'cache'` (emission + indirect) or `'albedo'` (also the unlit base colour). |
+| `sunVisible` | `false` | `rtShadeMiss` adds the sun's radiance inside its disc. |
+| `minAlpha` | `0.01` | GGX alpha floor of the built-in BSDF. A near-mirror lobe is hard to hit with one light sample. |
+
+## Hooks
+
+WGSL has no virtual functions. A hook is a function the module either defines, or leaves for you to define anywhere in the final shader:
+
+```ts
+shade: { cache: 'external' }
+```
+
+```wgsl
+// Read your own radiance cache at the shading point.
+fn rtShadeIndirect(p: RtShadePoint) -> vec3f {
+  let irradiance = myProbeLookup(p.position, p.normal);
+  return rtShadeDiffuseFromIrradiance(p, irradiance);
+}
+```
+
+`RtShadePoint` is `{ position, normal, geometricNormal, wo: vec3f, frontFace: bool, material: RtMaterial, albedo: vec3f }`, all in world space with the normals on the viewer's side. Your hooks bring their own bindings by declaring them in your part of the shader.
+
+## What it does and does not do
+
+- Emission counts on the authored front face only, unless the material is `emissionTwoSided`. Back faces are otherwise shaded like front faces, with the normals flipped toward the viewer.
+- Shadow rays start and end at offset points (`rtOffsetOrigin`), so they do not hit their own surface or the light.
+- Textures are not sampled: base colour and roughness are the material's constants.
+- An environment map counts as its mean radiance. Its directions are not importance sampled.
+- It needs the full 40-byte hit (material and normal). The batch tracer's compact record does not carry them.
+
+## CPU twin
+
+`shade(lights, point, mode, u, visible, hooks, options)` in TypeScript computes the same estimate in f64. `lights` can be the CPU `SceneCopy`, `mode` is `'flat'`, `'lambert'` or `'full'`, and `visible` (a `ShadeVisible` function) stands in for the shadow ray. It is what the GPU code is tested against, and it works for CPU-side probes and baking. The other helpers (`makeShadePoint`, `builtinBsdf`, `shadeMiss`, `shadeTotal`, ...) are its parts.

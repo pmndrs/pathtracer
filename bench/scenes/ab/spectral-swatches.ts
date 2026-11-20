@@ -6,7 +6,7 @@ import type { Rgb, SceneDesc } from '../schema.ts';
  * its colour and `bench/adapters/spectral-swatches.ts` can read it back per cell.
  *
  *  - `spectral-swatches-refl`: a diffuse (reflectance) swatch per cell under a uniform white sky, one bounce: pixel = the swatch RGB in the mean (RGB mode exactly;
- *    spectral mode through the sigmoid uplift, the D65 white light and the CMF estimator: within the table's error, `docs/design/spectral.md`).
+ *    spectral mode through the sigmoid uplift, the D65 white light and the CMF estimator: within the table's error, `docs/internal/design/spectral.md`).
  *  - `spectral-swatches-emit`: an emitter per cell (radiance = 4 x the swatch RGB, unbounded: RGBIlluminantSpectrum) on a black sky: pixel = the emitter RGB.
  *  - `spectral-swatches-env`: no geometry, a uniform coloured sky: every pixel = the sky RGB (the environment's uplift).
  */

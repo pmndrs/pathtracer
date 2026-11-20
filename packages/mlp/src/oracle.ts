@@ -1,6 +1,6 @@
 /**
  * CPU oracle (f64) for the WGSL MLP: forward, backward, loss, Adam, EMA. Slow and obvious on purpose; every GPU arm
- * is checked against it (docs/design/nrc.md §4).
+ * is checked against it (docs/internal/design/nrc.md §4).
  *
  * Network: a_0 = x; a_{l+1} = relu(W_l a_l) for l < hidden; y = W_hidden a_hidden (linear). No bias (the encoding
  * carries constant-one inputs instead).

@@ -4,7 +4,7 @@ import type { MediumDesc, MeshDesc, SceneDesc } from '../schema.ts';
 import { cornell } from '../tier0/cornell.ts';
 
 /**
- * Participating-media scenes (P5, docs/design/volumes.md).
+ * Participating-media scenes (P5, docs/internal/design/volumes.md).
  *
  * Analytic checks (`volumeCheckScenes`, no reference renderer needed, closed forms; look through a 1 degree field of view so a pixel is one ray direction):
  *  - `vol-absorb-slab`: a 1 m slab of absorbing medium (interface boundary) under a unit sky, camera along the normal: pixel = exp(-sigma_a d) per channel (delta tracking

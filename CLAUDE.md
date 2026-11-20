@@ -28,7 +28,7 @@ simplification.
 - **No timings from a loaded machine.** Check load (`sysctl vm.loadavg`, GPU Chrome processes) before any timed
   run; numbers taken under high load are not reported as results, only as provisional with the load recorded.
 - **Don't get trapped on timing.** Build first. Timing that decides a default or passes a gate goes in the
-  [quiet pass](docs/QUIET-PASS.md) queue, which the maintainer runs from a CLI session with every app closed; until
+  [quiet pass](docs/internal/QUIET-PASS.md) queue, which the maintainer runs from a CLI session with every app closed; until
   then defaults stay on the current suggestion and best-effort numbers are labelled as such.
 - **Correctness before timing.** CPU oracle or analytic expectation first; timing numbers name the device, browser and
   run conditions, and are compared as paired ratios on one machine, never across machines.
@@ -88,7 +88,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 
 - For single-frame NRC texture comparisons, set the same seed and sample index on the plain and cache kernels. The plain bench adapter defaults to seed 0 and the cache defaults to 1. Misaligned primary jitter can look like light leaking into a black texel. Compare the primary albedo planes before scoring. [Checker regression](bench/nrc/factor-check.ts)
 
-- The Chrome/Metal NRC frame kernel can reach a ten-storage-buffer device limit before adding hash queries. Bind the grid checksums and resolved RGB/count as one snapshot. Bind training vertices and per-path sums as one allocation in the hook, with aligned subranges in the later passes. Check both beauty-only and frame-plane kernels. [Phase 1](docs/design/nrc-experiments.md#phase-1-results-on-the-mac)
+- The Chrome/Metal NRC frame kernel can reach a ten-storage-buffer device limit before adding hash queries. Bind the grid checksums and resolved RGB/count as one snapshot. Bind training vertices and per-path sums as one allocation in the hook, with aligned subranges in the later passes. Check both beauty-only and frame-plane kernels. [Phase 1](docs/internal/design/nrc-experiments.md#phase-1-results-on-the-mac)
 
 - Chrome quantizes `timestamp-query` to ~100 µs unless developer features are enabled
   (`--enable-webgpu-developer-features`; the runner sets it). On Chrome 157 / Apple it measured 1 ns steps even
@@ -504,7 +504,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - A stochastic lobe pick that mixes a rough-GGX lobe with a Fresnel-1 conductor must use the lobe's OWN albedo (the layered LUT at f0 = 1, `A + B`), not 1: the smooth Fresnel `F(mu)` as the pick probability read 25-70% too bright
   at rough 0.3-0.6 and grazing angles. A coat over a metal needs the conductor refitted AT the view angle (`ptRedFitK`, bisection): a conductor with the stack's NORMAL reflectance rises too fast toward grazing (+13% on a low-reflectance channel).
 - Dropping the fuzz of a reduced vertex reads 10-20% dark on a sheen material; the fuzz albedo has to come back as a Lambert lobe plus a base weight of `1 - w E_f` (a 9 x 9 copy of the LTC table's R is enough; `bsdf/reduced-fuzz.ts`).
-- ReSTIR DI (P4, `packages/pathtracer/src/restir/`, docs/design/restir-di.md): a reservoir sample is `(light index, u quantised to unorm16)`, re-evaluated at any pixel through `rtSampleLightLi`; target and source density are both per unit of `u`
+- ReSTIR DI (P4, `packages/pathtracer/src/restir/`, docs/internal/design/restir-di.md): a reservoir sample is `(light index, u quantised to unorm16)`, re-evaluated at any pixel through `rtSampleLightLi`; target and source density are both per unit of `u`
   (no area-measure Jacobian). The passes are ONE module with four entry points (`ptRestirGbuf/Init/Temporal/Spatial`, groups 0/1 shared with the megakernel, group 2 = params ring + G-buffer + reservoirs); the shade side is the megakernel
   (`integrator.restir`, binding 11, final region base in `ptParams.limits.w`). One `encode` pass = one frame; `readImage` is the mean of frames. Not on `PtWavefront` (throws).
 - Judging ReSTIR by the accumulated mean of a static camera hides the point of it: temporal reuse correlates the frames, so 1024 accumulated frames are worth far fewer independent samples. Look at the PER-FRAME image (`restir-check noise`: frame t =
@@ -520,7 +520,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   `restir.sharedHit`: with `sampler: 'bluenoise'` (Owen shift) the shade's own jittered ray did NOT reproduce the G-buffer pass's hit (15% of Cornell read black, kronecker shift and the other samplers were fine; root cause not found), so the shade continues along the ray through the shared hit point: never assume two kernels' sampler rays agree, test shared-vs-traced images with `restir-check shareddiff` (same seed: a few hundred edge pixels differ, not thousands). It needs `layout.positions` and binding 15 in the shade io group (3 in the passes). `ptRestirUnsupported` runs in `PtMegakernel.create`. Check pages: `adapter.createKernel({ integrator })` builds a kernel with the adapter's own materials / textures / env and the override merged; use `layering: 'albedo'` for any ReSTIR check on OpenPBR
   (the adapter default is the stochastic walk). OPEN: OpenPBR scenes read -0.1..-0.8% dark in `unbiased` mode with reuse (legacy scenes < 4e-4), TASKS P4.2b.
 - ReSTIR + layered / OpenPBR kernels exceed the 50 KB class (`restir-shade-pbr` 50.2 KB, textured + mask 51.8 KB, with frame planes and blue noise 57 KB, see `node bench/size-snapshot.ts`); the passes module stays under (49.4 KB textured + OpenPBR + mask).
-- Real-time mode (P4.1, `docs/design/realtime.md`): `integrator.frame` and `sampler: 'bluenoise'` are MEGAKERNEL only (the wavefront throws `ptwfUnsupported`; `mode: 'realtime'` on the wavefront
+- Real-time mode (P4.1, `docs/internal/design/realtime.md`): `integrator.frame` and `sampler: 'bluenoise'` are MEGAKERNEL only (the wavefront throws `ptwfUnsupported`; `mode: 'realtime'` on the wavefront
   silently drops them). A frame is ONE `encode(encoder, 1)`: `setCamera` for frame 0, then `nextFrame(camera)` (the old camera becomes the previous one, which motion reprojects through);
   the sampler's sample index is the FRAME index (`setFrameIndex`; `reset` zeroes it). The kernel needs bindings 12 (blue-noise texture, `rg32float` `unfilterable-float`), 13 (previous camera, dynamic
   offset in step with binding 0) and 14 (planes) in group 2 (11 is ReSTIR's); a page that builds its own layout must add them. `readImage` does NOT divide by the sample count in frame mode.
@@ -558,7 +558,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - `subgroup-matrix` (gpuweb proposal) has no element-wise ops besides scalar add/sub/mul: activations such as ReLU need a
   store to workgroup memory and a reload. Operands and control flow must be subgroup-uniform, and workgroup x size must
   be a multiple of the max subgroup size. WGSL has no float atomics, so batched gradient sums need partials plus a
-  reduction dispatch (docs/design/nrc.md §2).
+  reduction dispatch (docs/internal/design/nrc.md §2).
 - tiny-cuda-nn is BSD-3 (portable with attribution); the NRC SDK and RTXGI are RTX SDK licence (no code); instant-ngp is
   non-commercial (ideas only). VkNRC (the NRC reference we follow) has no licence: follow its design, never paste its code (D29).
 - VkNRC's MLP leans on three things WGSL lacks: per-element access to matrix tiles (ReLU), NaN as a mask (ReLU
@@ -687,7 +687,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - Windows: `nrc-live`'s own requestAnimationFrame loop keeps the RTX 3060 at full load (80-88 °C within seconds); pause it (`__nrcLive.pause(true)`) and cool the card
   before timing. `node bench/live-bench.ts` does that and presses Benchmark over CDP; the page's idle status is the fps line, not empty. A 404 in a page's console fails a runner
   run even when the page handles it: `nrc-study ref=ours` does not ask for the (git-ignored, absent on Windows) Mitsuba PFMs.
-- NRC pipeline (M9, docs/design/nrc-pipeline.md): `active` is a reserved WGSL word too (a uniform field named `active` fails only on the GPU). In frame mode the cache's
+- NRC pipeline (M9, docs/internal/design/nrc-pipeline.md): `active` is a reserved WGSL word too (a uniform field named `active` fails only on the GPU). In frame mode the cache's
   resolve must also write the demodulated planes (`resolveWgsl(frame)` in `bench/nrc/cache.ts`), or `diffuse x albedo + specular x specFactor` falls short of the beauty by
   exactly the cache's light; `nrc-pipeline-study` checks the identity (`plane_identity_*`). rg16float / r16float are not storage formats in core WebGPU: the pipeline packs
   into one buffer and `copyBufferToTexture`s (rows 256-byte aligned) instead of writing 12 storage textures (also past the 4-8 storage-texture limit).
@@ -771,7 +771,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - D32 default flips (2026-11-18): scene copy `packed` and `albedoCorrection: 'texture'` are the library defaults, so a test or page that wants the old text passes `packing: 'split'` / `albedoCorrection: 'none'` explicitly
   (the size-snapshot `split` set is byte-identical to before except the layered-albedo kernels, which carry the correction texture: `node bench/size-snapshot.ts <dir> split`). The full-feature albedo megakernel is 50.2 KB: `ptwfAutoPolicy({ kernelBytes })` sends it to the wavefront.
   The bench `pt-megakernel` adapter still defaults to `layering: 'stochastic'`; the `pt-mk-lay-int` / `pt-wf-lay-int` presets now say `albedoCorrection: 'none'` to stay the uncorrected baseline. zsh does not split an unquoted `$VAR` of options: write the `matrix.ts` flags out.
-- Media (P5, `docs/design/volumes.md`): `integrator.volumes` runs on both schedulers (the wavefront since V270) and refuses restir / frame / vbuffer / alpha MASK / hooks / counters / AOVs / the P2.22 Beer absorber; the default kernels stay byte-identical (`node bench/size-snapshot.ts`, 224 variants).
+- Media (P5, `docs/internal/design/volumes.md`): `integrator.volumes` runs on both schedulers (the wavefront since V270) and refuses restir / frame / vbuffer / alpha MASK / hooks / counters / AOVs / the P2.22 Beer absorber; the default kernels stay byte-identical (`node bench/size-snapshot.ts`, 224 variants).
   A medium boundary is a CLOSED, OUTWARD-wound mesh with `MaterialDesc { type: 'interface' }` (or any material for a glass boundary): `MeshDesc.medium.interior` is the side the normals point away from. A scene with media gets one scene-copy material per
   (material, medium pair); `DescSceneCopyInput.materialVolumes` is indexed like `materials`. Boundary surfaces are skipped by camera, bounce and shadow rays (`ptVolTr` is a closest-hit loop); any other surface blocks a shadow ray, so glass shadows its inside.
 - Media references: use GREY `sigma_a` / `sigma_s` (pbrt uplifts RGB spectrally: a chromatic absorber reads 0.718 vs the closed form 0.7408 on `vol-absorb-slab`, Mitsuba is exact; V62). pbrt keeps `MediumInterface` set before `Camera` as the default of every later
@@ -781,14 +781,14 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   sampler pairs of the vertex. `ptSampleLd` gains `medIn` / `medOut` when volumes are on (the medium on each side of the surface, equal for a surface without a boundary). The grid is a `texture_3d<f32>` (`r32float`, binding 16; brick majorants binding 17).
 - OpenVDB leaves (WebVDB `parseVdb`): value index = `x * 64 + y * 8 + z` (x slowest) within the 8^3 leaf, `valueMask` word `i >> 5` bit `i & 31`; checked against `readValue` on 39,936 voxels of `smoke.vdb`. `bench/scenes/volumes/vdb-grid.ts` is Node only; `vol-vdb-smoke` needs its output (git-ignored).
 - A matrix cell of `pt-megakernel` waits on `/tmp/rt-gpu.lock` behind every other agent's page (a 1.3 s render took 4-30 minutes of wall time on a day with 6 agents): queue the cells in one background `matrix.ts` call, wait with an `until` loop on its log, and keep working on CPU-side code meanwhile.
-- Spectral mode (P5, `integrator.spectral`, docs/design/spectral.md): a path carries THREE wavelengths in the vec3 lanes; the uplift happens in `ptSpecMaterial` (a copy of the decoded `RtMaterial`), `ptSpecIllum` (emission, NEE `li.radiance`,
+- Spectral mode (P5, `integrator.spectral`, docs/internal/design/spectral.md): a path carries THREE wavelengths in the vec3 lanes; the uplift happens in `ptSpecMaterial` (a copy of the decoded `RtMaterial`), `ptSpecIllum` (emission, NEE `li.radiance`,
   sky, sun) and `ptSpecToRgb` (return). A new place that reads an RGB colour or radiance in the integrator must go through one of them, or it is added in RGB to wavelength lanes (silently wrong colour, grey scenes still pass). The table
   texture is group 2 binding 18 (`PT_SPEC_BINDING`; see the P5 group-2 binding table below); a page that builds its own layout needs it. `defaultRgb2SpecTable(64)` fits in ~4 s: `node bench/spectral-table.ts` writes `bench/assets/generated/rgb2spec-64.f32` (git-ignored; copy it into a
   worktree with the other generated assets). `RtMaterial.dispersion` is in the high half of record word 28 and NOT in the WGSL struct (`ptMaterialDispersion` reads it). Dispersive scenes are skipped by the adapter unless `pt_spectral=1`.
   Greys must stay exact (furnaces 0.5000 / 1.0000); a saturated colour differs from the RGB render by up to ~2% (that is the point: pbrt's spectral uplift), so judge it against pbrt, never against RGB mode.
 - `bench/references/render.ts` skips a scene whose PFM exists, even if you changed the SceneDesc (`(cached)`): pass `--force` after editing a scene. Worktree: `ln -s <main>/.cache .cache` gives it the native pbrt / Mitsuba builds (do not commit the link).
 - Several agents queue on the one GPU lock: a `matrix.ts` cell took 2-3 minutes of wall time for 1-20 s of render, so a 20-cell batch is an hour. Put every cell of a study in ONE queued script and do not poll.
-- ReSTIR GI (P5, `integrator.restir.gi`, docs/design/restir-gi.md): a sample is a SURFACE point x2 (+ n2, the radiance Lo it reflects toward x1), so its contribution weight is in the AREA measure and the reconnection Jacobian is just the ratio of
+- ReSTIR GI (P5, `integrator.restir.gi`, docs/internal/design/restir-gi.md): a sample is a SURFACE point x2 (+ n2, the radiance Lo it reflects toward x1), so its contribution weight is in the AREA measure and the reconnection Jacobian is just the ratio of
   `G = cos(phi2) / r^2` between two pixels (no separate factor: do not multiply it in twice). Its target is SHADOWED (a reused sample must be visible from its new pixel; there is no shade-time shadow ray, unlike DI's unshadowed target); `Lo` is
   fixed, so only a Lambert x2 can be shifted (the `diffuse` flag), every other sample has `phat = 0` away from its own pixel. GI + DI is a depth-2 estimator: compare against OUR plain path tracer with `setLimits({ maxDepth: 2 })`, never against the scene's
   own depth (Cornell +11.8%, Sponza-white +39%), and against `sampler: 'pcg'` for noise (the DI trap again). `lights-mix-lamps` is a flat plane under lamps: GI is a no-op there; use Cornell, Sponza-white, env-sphere.
@@ -796,7 +796,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   reachable only if a GI entry calls it; the `restir-gipasses-*` rows of `size-snapshot.ts` are the sizes. The G-buffer word of the geometric normal (`gl.ng`) exists only with GI (the other layouts and kernels are unchanged: `diff -r` the snapshots).
 - A GI sample's `Lo` is stored as f16 / max(Lo) plus an f32 scale (2 words); W stays f32. Do not widen the reservoir past 2 vec4u per pixel per region without checking the 128 MiB binding limit (1280 x 720 x 4 regions x 32 B = 118 MB).
 - `restir-check check=gi` args: `modes=gi_off,gi_ts_unb,...` (one mode per run is much faster), `diag=1` (bias by octave of the reference luminance: it is noisy at the dark end, binning on a noisy reference is biased), `seeds`, `k`.
-- MaterialX (P5, `packages/pathtracer/src/materialx/`, `docs/design/materialx.md`): `integrator.materialx` (generated `ptMtlxApply` / `ptMtlxNormal`, approach b) needs `textures` (the kernel only decodes uv, position and tangent
+- MaterialX (P5, `packages/pathtracer/src/materialx/`, `docs/internal/design/materialx.md`): `integrator.materialx` (generated `ptMtlxApply` / `ptMtlxNormal`, approach b) needs `textures` (the kernel only decodes uv, position and tangent
   with them): a graph that reads no image still gets a 1x1 placeholder texture from `buildMaterialX`. The text goes into `ptShadingModulesWgsl`'s parts BEFORE the sampler (the wavefront takes `parts.slice(-1)` as the sampler). Every kernel without it is
   byte-identical (`node bench/size-snapshot.ts`; the `mtlx-*` / `wf-mtlx-*` files are new). A generated helper that is called but not declared (a missing `ctx.need`) only fails on the GPU: `bench/scenes/materialx.test.ts` checks it.
 - MaterialX values are four lanes everywhere (TS `MtlxValue`, WGSL `vec4f`): a one-number nodedef default fills all lanes (`clamp.high` = 1 must be (1, 1, 1) for a colour), a scalar feeding a vector input is splatted, and only the lanes the type has are meaningful. Compare `dim(type)` lanes, never all four.
@@ -813,7 +813,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - zsh does not word-split an unquoted `$a` (`--args $a` arrives as ONE argument and the page silently ignores the second key): use `${=a}` or write the args out.
 
 - Hash cache insert (pmndrs/pathtracer#1): a slot that reads non-zero is final during an update pass (eviction is its own dispatch), so a thread must take it if it holds its own key and never move past a slot that still reads empty after a failed `atomicCompareExchangeWeak`: refuse instead (`hashGridInsertWgsl`). SwiftShader does not expose this race (the pre-fix control in `--page hash-insert-check` reads 0 duplicates there); judge a change with the interleaving model in `bench/nrc/hash-grid.test.ts` and a run on a real GPU.
-- Interval queries (P5.rc1, `interval.ts`, `interval-batch.ts`, docs/design/split-rc-tracing.md): `rtClosestInterval` is `(t0, t1]` (the Split RC convention; `rtClosestIntervalLo` is `[t0, t1)`), exact on the f32 `t` the walk computes.
+- Interval queries (P5.rc1, `interval.ts`, `interval-batch.ts`, docs/internal/design/split-rc-tracing.md): `rtClosestInterval` is `(t0, t1]` (the Split RC convention; `rtClosestIntervalLo` is `[t0, t1)`), exact on the f32 `t` the walk computes.
   bvh's slab test culls a hit at exactly `tMax` (12.9% of rays whose tMax is their own hit t on the plain walk, 0.4% at tMin), so the closest forms walk a widened range and cut back (V290); the any-hit forms
   (`rtVisibleInterval*`, output `visible`) are NOT boundary exact: use `distance` where a boundary hit matters. A bit-equality test between an interval's answer and the unbounded walk's needs the tie rule (two triangles at one
   `t` swap with the range): `sameOrTie` in `rc-interval-check`. The edge classification of V27 now lives in `bench/pages/trace-compare.ts` (trace-core imports it).
@@ -848,6 +848,24 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   `2d`, and `getResource<texture_2d_array<f32>>` of it silently returns a default (black) texture: insert `createView({ dimension: '2d-array' })`. A wrong type never errors, so test every new `getResource` against a CPU twin.
 - `ScalarReduction` (downsampler) with `load` / `finish` hooks: group 1 is the tool's (`reduction.bindGroupLayouts[1]`), `encode(encoder, { width, height, bindGroup })` records both dispatches in their own passes; the
   `finish` output buffer may be the tonemap uniform when it has STORAGE | UNIFORM usage (separate passes). The texel count (`weight`) is exact at odd sizes.
+- Docs and examples site (S, 2026-11-20): `docs/*.mdx` is the public pmndrs/docs site; internal notes live in `docs/internal/`. The docs CLI builds plain
+  `.md` too (as pages and `/md/` exports; `nrc-diverges.md` even fails to compile as MDX), so `scripts/build-site.mjs --docs` builds a copy of `docs/` without
+  `internal/` (`dist/.docs-src`): never point the CLI or pmndrs' reusable workflow at `docs/` itself. `examples/catalog.ts` is the one list the gallery, the injected nav, the Vite inputs and `docs/getting-started/examples.mdx` read: after
+  editing it run `node scripts/build-site.mjs` (CI runs `--check` and fails on a stale page). Example pages never import the nav: `examples/vite.config.ts`
+  injects it (and `bench/hero/build-pages.mjs` for the Classroom, `HERO_OUT`). `?offscreen=1` draws to a texture: use it for headless checks
+  (`globalThis.__progressive.readImage()` reads the image). SwiftShader needs minutes for 256 spp at 640x360; check images at 320x200.
+- The glTF reader, OpenPBR mapping and scene grouping live in `packages/raytracer/src/gltf/` (public `loadGltf`); `bench/scenes/gltf-*.ts` and `openpbr.ts`
+  wrap them (file I/O, reference class, `SceneDesc` shapes). A mapping change goes in the package, and the Tier 1 goldens test it (download the models with
+  `node bench/assets/fetch.ts` or 18 golden tests skip). Never pass a texture field as `undefined` to `createMaterial` (`roughnessMetalTexture: undefined`
+  throws): spread it in conditionally. `bench/scenes/tangents.test.ts` fails without `bench/assets/generated/env-sky-512x256.pfm` (`node bench/scenes/tier0/generate-assets.ts`).
+- pmndrs/docs sorts every page by its frontmatter `nav` across the whole site and groups the sidebar in that order (ties: folder order, alphabetical): each section keeps its own range
+  (getting-started 0-9, concepts 10-19, raytracer 20-29, pathtracer 30-39). The sidebar label is the folder name.
+- Tweakpane 4 needs `@tweakpane/core` installed next to it for its types (`Pane` has no `addFolder` otherwise).
+- Examples that call `scenePicker` must not read the returned `picker` inside the callbacks they pass to it: it calls `onScene` and `onCamera` before it returns
+  (`Cannot access 'v' before initialization` in the built bundle). Headless checks of an example: serve `examples/dist`, open `<page>/?offscreen=1&scene=Cornell%20box`
+  (the Cornell box needs no network), wait for `globalThis.__progressive.samples`, then `readImage()`; the Ray tracer examples expose the same through `exposeForChecks`.
+  The `rtOffsetOrigin` / `rtSideNormal` helpers exist only in a module built with `shade`: a kernel without it declares its own.
+- Built-in blue noise (S10): `loadBlueNoise()` reads `packages/raytracer/src/noise/builtin/<name>.ts` (base64 of the committed PNG, `png: string` so the .d.ts stays 200 B, not 105 KB). After regenerating the PNGs run `node scripts/embed-bluenoise.mjs`; `bluenoise-builtin.test.ts` fails on drift. `mode: 'realtime'` now always selects the `bluenoise` sampler and `create` loads the default texture, so a test that wants Owen-Sobol in real-time mode sets `integrator.sampler` explicitly.
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.

@@ -1,0 +1,94 @@
+---
+title: Schedulers
+description: The megakernel and the wavefront scheduler, what each is good at, and how to choose with ptwfAutoPolicy.
+nav: 15
+---
+
+The path tracer runs the same integrator in two ways. Both take the same options, have the same methods (`setScene`, `setFilm`, `setCamera`, `setLimits`, `setSeed`, `reset`, `encode`, `readImage`, `destroy`) and produce the same image **per pixel**: they draw the same random numbers for the same pixel and vertex, so they differ only by float rounding. Choosing between them is a speed decision, not a quality one.
+
+## Megakernel
+
+`PtMegakernel` runs one thread per pixel. One compute dispatch is one sample pass, and each thread traces its whole path: camera ray, every bounce, every shadow ray.
+
+- Few dispatches, no queues, nothing in memory between bounces.
+- All material, light and walk code is in one kernel. Its size grows with the scene's features, and a large kernel compiles slowly, on Windows in particular.
+- Threads of one workgroup wait for the longest path among them.
+
+`encode(encoder, passes)` records up to 256 passes per call. See [Megakernel](/pathtracer/megakernel).
+
+## Wavefront
+
+`PtWavefront` splits a sample pass into small kernels connected by queues of paths in GPU memory. A pass is a camera kernel, then for each depth: **intersect** (closest hits), **shade** (materials, next-event estimation, the next ray), **args** (writes the next dispatch sizes) and **shadow** (shadow rays). Dispatch sizes are written by the GPU itself (indirect dispatch), so there is no readback and no CPU decision inside a frame.
+
+- Each kernel is small: the shade kernel has no BVH walk, and the walk kernels have no material code. Every kernel stays under about 50 KB of WGSL even with every material feature.
+- Only live paths are queued, so finished paths cost nothing in later bounces.
+- It costs about four dispatches per bounce. On short paths and small films that overhead dominates.
+
+See [Wavefront](/pathtracer/wavefront).
+
+### Wavefront options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `refill` | `false` | When a path ends, its slot starts the pixel's next sample, so the queues stay full. `true` or `'inline'`: the shade kernel restarts it at once. `'batch'`: idle slots wait until the live queue drops below `refillThreshold` of the slots, then restart together in pixel order. `'ordered'`: inline restart, appended in slot order. |
+| `refillThreshold` | 0.25 | The `'batch'` trigger, as a fraction of the slots. |
+| `layers` | 1 | Path slots per pixel (samples in flight), 1 to 64. Needs `refill`. For films too small to fill the GPU. |
+| `appends` | `'atomic'` | Queue appends: one atomic per thread, or `'subgroup'`: one per subgroup (needs the `subgroups` feature). `'auto'` uses subgroups when the device has them. |
+| `sort` | `'none'` | Sorts each 64-entry block of a queue: `'material'` (by material before shading), `'octant'` (by ray direction before intersecting), `'both'`. One extra dispatch per bounce each. |
+
+With `refill`, `encode(encoder, n)` asks for `n` samples per pixel but does not wait for them. Call `await pt.finish()` before `readImage`. `maxPassesPerEncode()` says how many passes one `encode` can take at the current `maxDepth`.
+
+## Choosing: `ptwfAutoPolicy`
+
+`ptwfAutoPolicy` is the recommended way to pick a scheduler and its settings. It is a pure function of facts you know before the first frame:
+
+```ts
+import { PtMegakernel, PtWavefront, ptMegakernelWgsl, ptSceneOptions, ptwfAutoPolicy } from '@pmndrs/pathtracer';
+
+const options = ptSceneOptions(scene);
+const choice = ptwfAutoPolicy({
+  width: 1280,
+  height: 720,
+  maxDepth: 8,
+  subgroups: caps.subgroups,
+  kernelBytes: ptMegakernelWgsl(caps, options).length,
+});
+const { scheduler, reason, ...settings } = choice;
+const pt = scheduler === 'megakernel'
+  ? await PtMegakernel.create(device, caps, options)
+  : await PtWavefront.create(device, caps, { ...options, ...settings });
+console.log(reason); // which rule fired
+```
+
+The rules, in order:
+
+| Situation | Choice |
+| --- | --- |
+| Real-time frames (`frame: true`): at least 100,000 `triangles` and 2^17 pixels | Plain wavefront |
+| Real-time frames, smaller scene or film | Megakernel |
+| `maxDepth` ≤ 2 | Megakernel: too little work per dispatch |
+| A big film (≥ 2^19 pixels, for example 1280 × 720) | Plain wavefront: one path per pixel fills the GPU |
+| A mid film (≥ 2^18 pixels) | Wavefront, inline refill, one layer |
+| A small film | Wavefront, inline refill, enough layers for about 1-2 million slots |
+| Then: the megakernel is over 50,000 bytes of WGSL (`kernelBytes`) | Plain wavefront instead |
+
+Subgroup appends are picked whenever the device has the feature. Sorting and `'ordered'` refill are never picked: on the scenes measured they cost more than they saved. The rules come from paired timings on one Apple M5 Pro and are provisional; anything the policy cannot know (many divergent materials, say) is yours to override. Spread the result, then your own fields.
+
+The kernel-size rule exists because shader compile time on Windows (DXC) grows quickly past about 50 KB. A scene with every material feature (layered, fuzz, thin film, coated metal) can push the megakernel over it; pass `kernelBytes` and such a scene goes to the wavefront.
+
+## What runs where
+
+Most options work on both schedulers. The exceptions:
+
+| Feature | Megakernel | Wavefront |
+| --- | --- | --- |
+| Refill, `layers`, `appends`, `sort` | n/a | yes |
+| Real-time frames (`integrator.frame`) | yes | plain scheduler only (no refill) |
+| V-buffer primaries (**Experimental**) | yes | plain scheduler only |
+| ReSTIR DI / GI (**Experimental**) | yes | plain scheduler only |
+| ReSTIR `sharedHit` | yes | no |
+| AOVs, counters or hooks with `layers` > 1 | n/a | no |
+| Debug counters with alpha MASK | yes | no |
+| Reduced secondary materials (`materialLod: 'secondary'`) | one kernel, branch per vertex | a second, smaller shade kernel |
+
+An unsupported combination throws when the kernel is created, with the reason in the message.

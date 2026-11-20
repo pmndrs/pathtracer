@@ -1,0 +1,116 @@
+---
+title: ReSTIR DI and GI (experimental)
+description: Reservoir resampling of light samples and of indirect bounces, reused across pixels and frames.
+nav: 35
+---
+
+> [!WARNING]
+> Experimental. It works and is checked against our own plain path tracer, but the API can still change.
+
+At one sample per pixel, plain next-event estimation picks one light at random. With many lights, most pixels pick a light that contributes little. ReSTIR (reservoir-based spatiotemporal importance resampling) draws several candidates per pixel, keeps one in proportion to its contribution, and then reuses the kept samples of neighbouring pixels and of the previous frame. The result is far less noise per frame, at the cost of a few extra passes.
+
+- **ReSTIR DI** resamples the direct light at the first surface hit.
+- **ReSTIR GI** resamples the first indirect bounce: a point on another surface and the light it reflects. It runs on top of DI.
+
+Use it for real-time frames with many lights or strong indirect light. Reference renders stay on plain next-event estimation.
+
+## Turning it on
+
+```ts
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, {
+  mode: 'realtime',
+  blueNoise,
+  integrator: { restir: { bias: 'unbiased', spatial: 2 } },
+}));
+```
+
+`integrator.restir` adds four passes before every sample dispatch: a G-buffer of the primary hits, the initial candidates, the temporal merge and the spatial merge. The shade kernel then reads the final reservoir at the first vertex and traces one shadow ray for it; deeper vertices use plain next-event estimation. One `encode` pass is one frame. It works in the frame loop of [Real time](/pathtracer/realtime) and in progressive accumulation, where `readImage` is the mean of the frames.
+
+Both schedulers run it. The wavefront needs the plain scheduler (no `refill`, no `layers`).
+
+## DI options
+
+`resolveRestirOptions(options)` fills these defaults:
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `candidates` | `8` | Light candidates per pixel and frame (1 to 64). |
+| `temporal` | `true` | Merge the previous frame's reservoir, reprojected through the previous camera. |
+| `spatial` | `2` | Neighbours merged per pixel (0 to 8). |
+| `spatialRadius` | `16` | Radius of the neighbour disc, in pixels. |
+| `bias` | `'unbiased'` | How merged reservoirs are weighted. See below. |
+| `initialVisibility` | `true` for `'biased'`, `false` for `'unbiased'` | Trace a shadow ray for the kept candidate and drop it when occluded. |
+| `historyCap` | `20` | Cap on the stored history, as a multiple of `candidates`. |
+| `neighbours` | `'random'` | Neighbour offsets: `'random'` per pixel and frame, or one `'fixed'` spiral. |
+| `temporalPick` | `'random'` | The reprojected pixel: a random sub-pixel shift, or `'nearest'`. |
+| `normalCos` | `0.9` | A neighbour's normal must be within this cosine of the pixel's. |
+| `depthRel` | `0.1` | A neighbour's view depth must be within this fraction of the pixel's. |
+| `sharedHit` | `false` | The G-buffer pass's camera-ray hit is reused by the shade kernel: one camera ray per frame instead of two. Needs `layout.positions`; megakernel only. The `realtime` mode turns it on when it can. |
+| `gi` | `null` | ReSTIR GI options. See below. |
+
+### Biased and unbiased
+
+| `bias` | How | Trade-off |
+| --- | --- | --- |
+| `'unbiased'` | Balance-heuristic weights over every merged reservoir, each evaluated at its own pixel. | Converges to the right answer with `initialVisibility: false`. More target evaluations, more noise in shadowed regions. |
+| `'biased'` | Each reservoir weighted by its sample count only. | Cheaper and less noisy, but darker where neighbours disagree, and the darkening grows under temporal reuse. |
+
+`initialVisibility: true` lowers noise in shadow but makes either mode biased. For a reference-grade result use `'unbiased'` with `initialVisibility: false` (the defaults).
+
+## GI options
+
+```ts
+integrator: { restir: { gi: { bias: 'biased', spatial: 1 } } }
+```
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `temporal` | `true` | Merge the previous frame's GI reservoir. |
+| `spatial` | `1` | Neighbours merged per pixel (0 to 4). |
+| `spatialRadius` | `16` | Radius of the neighbour disc, in pixels. |
+| `bias` | `'biased'` | `'unbiased'` traces one shadow ray per pair of merged reservoirs; `'biased'` one per reused sample, and darkens where neighbours disagree. |
+| `historyCap` | `20` | Cap on the stored history. |
+| `normalCos`, `depthRel` | `0.9`, `0.1` | Neighbour tests, as for DI. |
+| `minDistance` | `0.05` | A sample closer than this (metres) to its own pixel's hit is not reused elsewhere. |
+| `neighbours`, `temporalPick` | `'random'` | As for DI. |
+
+With GI on, the path ends at its first non-mirror vertex: DI gives the direct light there and the GI sample gives one more bounce. **DI plus GI is a two-bounce estimate**, like the real-time mode's `maxDepth` 2. Compare it against a plain render with `maxDepth: 2`, not the scene's full depth. Only a sample on a Lambert surface can be reused at another pixel; glossy secondary hits stay with their own pixel.
+
+## What it refuses
+
+`create` throws with the reason (`ptRestirUnsupported(options)` returns it) for:
+
+| Refused | Applies to |
+| --- | --- |
+| `nee: false` | DI and GI |
+| `hooks` | DI and GI |
+| `volumes`, `spectral` | DI and GI (`resolveIntegratorOptions`) |
+| OpenPBR anisotropy, fuzz, thin film, or `layering: 'stochastic'` | DI and GI. Use `layering: 'albedo'`. |
+| `materialLodDepth: 0` with OpenPBR materials | DI and GI |
+| `sharedHit` without `layout.positions` | DI |
+| Textured scenes, alpha cutouts | GI |
+| `materialLod: 'secondary'` with OpenPBR materials | GI |
+| `envSampling: 'none'` | GI |
+| Alpha cutouts, `hooks`, `sharedHit`, `refill`, `layers` | DI and GI on the wavefront |
+
+Lights must not change between frames (reservoirs store light indices), and the temporal merge assumes a static scene with a moving camera.
+
+## At run time
+
+`pt.restir` is the `PtRestirPasses` object, or `null`:
+
+| Member | What |
+| --- | --- |
+| `settings`, `gi` | The resolved DI and GI options. |
+| `stats` | `{ bytes, gbufBytes }`: the G-buffer, reservoir and hit buffer memory at the current film. |
+| `dropHistory()` | After a camera cut: the next frame has no temporal neighbour. |
+| `reset(encoder)` | Empties the reservoirs. `pt.reset(encoder)` calls it. |
+| `giOverrides` | `{ temporal?, spatial? }`: switch GI reuse at run time without a new kernel. |
+| `wgslBytes`, `giWgslBytes` | Sizes of the DI and GI pass modules. |
+
+The previous camera is the kernel's: the one `nextFrame` or `setPrevCamera` set, else the camera of the last encoded frame.
+
+> [!NOTE]
+> GI reservoirs take 128 bytes per pixel and are bound as one buffer: at 1280x720 that is close to the 128 MiB storage binding limit. Render GI at a reduced size and upscale.
+
+ReSTIR DI pays off on scenes with many lights, like the [lights example](https://pmndrs.github.io/pathtracer/examples/pathtracer/lights/). A scene lit by one sun and a sky gains little.

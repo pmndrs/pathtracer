@@ -1,5 +1,5 @@
 /**
- * WGSL generator for the portable MLP arms (`wgsl-f32`, `wgsl-f16`), docs/design/nrc.md §3.
+ * WGSL generator for the portable MLP arms (`wgsl-f32`, `wgsl-f16`), docs/internal/design/nrc.md §3.
  *
  * Kernels (all @workgroup_size(64), WGSL prefix `nn`):
  *  - `nnPrepare`        one thread: clamps the GPU record count to capacity, writes indirect args, and (train only)

@@ -3,7 +3,7 @@ import { buildMaterialX, type MaterialXMode } from '../materialx.ts';
 import type { MaterialDesc, SceneDesc, TextureDesc } from '../schema.ts';
 
 /**
- * MaterialX scenes (P5, docs/design/materialx.md). Experiment scenes without pbrt / Mitsuba references (neither reads MaterialX graphs):
+ * MaterialX scenes (P5, docs/internal/design/materialx.md). Experiment scenes without pbrt / Mitsuba references (neither reads MaterialX graphs):
  * the checks compare our own two approaches and the equivalent native `openpbr` description.
  *
  *  - `mtlx-const-open-pbr` / `mtlx-const-open-pbr-ref`: an `open_pbr_surface` of constants, and the `openpbr` MaterialDesc with the same numbers. Same record, same image.

@@ -284,8 +284,9 @@ describe('mode presets (P4.1)', () => {
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: { frame: false } }).integrator.frame).toBe(false);
   });
 
-  it('realtime uses the blue-noise sampler only when the texture is given, on both schedulers (P4.1b)', () => {
-    expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }).integrator.sampler).toBe('owen-sobol');
+  it('realtime uses the blue-noise sampler (the shipped texture when none is given, S10), on both schedulers (P4.1b)', () => {
+    expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }).integrator.sampler).toBe('bluenoise');
+    expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }, 'wavefront').integrator.sampler).toBe('bluenoise');
     expect(ptApplyMode({ mode: 'realtime' as const, blueNoise: {}, integrator: {} }).integrator.sampler).toBe('bluenoise');
     expect(ptApplyMode({ mode: 'realtime' as const, blueNoise: {}, integrator: {} }, 'wavefront').integrator.sampler).toBe('bluenoise');
     expect(ptApplyMode({ mode: 'realtime' as const, integrator: {} }, 'wavefront').integrator.frame).toBe(true);

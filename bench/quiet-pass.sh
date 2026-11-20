@@ -1,5 +1,5 @@
 #!/bin/bash
-# Quiet pass: every timing that needs a quiet machine, in one run (docs/QUIET-PASS.md).
+# Quiet pass: every timing that needs a quiet machine, in one run (docs/internal/QUIET-PASS.md).
 #
 #   bash bench/quiet-pass.sh [--only trace|baseline] [--gpu apple|nvidia]
 #
@@ -55,7 +55,7 @@ if [ -z "$ONLY" ] || [ "$ONLY" = "baseline" ]; then
 fi
 
 if [ "$ONLY" = "p3" ]; then
-  # P3 queue items (docs/QUIET-PASS.md rows P3.1/P3.2, R2/P3.7, P3.6). Not in the default run: --only p3.
+  # P3 queue items (docs/internal/QUIET-PASS.md rows P3.1/P3.2, R2/P3.7, P3.6). Not in the default run: --only p3.
   # P3.2's renderer set includes the megakernel and the slice-1 wavefront, so it also answers P3.1.
   R=pt-megakernel,pt-wavefront,pt-wf-refill,pt-wf-batch,pt-wf-refill-l2,pt-wf-refill-l4
   note "p3 1/6 schedulers: cornell + furnace-dielectric"
@@ -80,7 +80,7 @@ if [ "$ONLY" = "p3" ]; then
   node bench/adapters/matrix.ts --renderers $RV --scenes cornell,tex-mask --spp 256 --repeat 5 --interleave --extra pt_maxdepth=2 --name "p36-d2-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 d2"
   node bench/adapters/matrix.ts --renderers $RV --scenes sponza-white --spp 64 --repeat 5 --interleave --extra pt_maxdepth=2 --append --name "p36-d2-$STAMP" >> "$LOG" 2>&1 || note "FAILED p36 d2 sponza"
 
-  # P3.3 / P3.4 / P3.10 / R1b / P3.9 (docs/QUIET-PASS.md rows of the same names): subgroup appends, block sorts, ordered restart, LOD with refill.
+  # P3.3 / P3.4 / P3.10 / R1b / P3.9 (docs/internal/QUIET-PASS.md rows of the same names): subgroup appends, block sorts, ordered restart, LOD with refill.
   # Paired ratios: node bench/adapters/paired-ratios.ts --report <name> [--base pt-megakernel | pt-wavefront]
   note "p3 7/10 P3.3 + P3.4 + P3.10: appends, sorts, refill flavours (one page per scene, all variants interleaved ABBA inside it; each also checks its image against the first id)"
   RA=pt-megakernel,pt-wavefront,pt-wf-sg,pt-wf-sort-mat,pt-wf-sort-oct,pt-wf-sort-both

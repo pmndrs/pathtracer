@@ -1,5 +1,5 @@
 /**
- * Tier 1 wave 2 scenes (docs/design/tier1.md section 4, P2.24): the unmodified textured Khronos models. Wave 1 dropped the labels and
+ * Tier 1 wave 2 scenes (docs/internal/design/tier1.md section 4, P2.24): the unmodified textured Khronos models. Wave 1 dropped the labels and
  * replaced every textured backdrop by a grey Lambertian (`<model>-notex`); here the textures stay: `IORTestGrid` and `SheenTestGrid`
  * (a checker backdrop; the IOR one is a rough metal), `AttenuationTest` (label sheet, plain grid backdrop) and `MetalRoughSpheres`
  * (the textured sibling of `MetalRoughSpheresNoTextures`: base colour + metallic-roughness maps on one mesh of spheres).

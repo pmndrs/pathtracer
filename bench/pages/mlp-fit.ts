@@ -1,5 +1,5 @@
 /**
- * Research track N, N1 "learn an image" (docs/design/nrc.md §4): the MLP fits a procedural HDR image from (u, v).
+ * Research track N, N1 "learn an image" (docs/internal/design/nrc.md §4): the MLP fits a procedural HDR image from (u, v).
  * Every arm trains from the same seed on the same random samples; the page uploads the target and the fitted image
  * at each snapshot as PFM (viewer A/B), and reports relMSE / PSNR per snapshot plus GPU ms per training step and per
  * million inferences.

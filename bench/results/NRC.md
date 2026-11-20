@@ -2,8 +2,8 @@
 
 Research track N asked whether NRC (Müller et al. 2021: a small network that learns the light in a scene while it renders, so paths can
 stop after one or two bounces) can run in the browser, and whether it is worth it. This is the summary; the detail is in the pages it
-links. The plan and its four questions: [nrc-plan.md](../../docs/design/nrc-plan.md). Every departure from the paper and from VkNRC (the
-native implementation we follow): [nrc-diverges.md](../../docs/design/nrc-diverges.md).
+links. The plan and its four questions: [nrc-plan.md](../../docs/internal/design/nrc-plan.md). Every departure from the paper and from VkNRC (the
+native implementation we follow): [nrc-diverges.md](../../docs/internal/design/nrc-diverges.md).
 
 **Images:** `node bench/nrc/nrc-report.ts`, then `pnpm --filter @pathtracer/bench viewer` and open `?report=/results/reports/nrc/report.json`:
 plain path tracing, the network and the hash grid side by side on ten views (sponza-white, sponza-glossy, the denoiser chain), with the
@@ -11,7 +11,7 @@ references. It copies the runs' PFMs, which are git-ignored: it only works on th
 
 **Status of the numbers:** quality numbers are deterministic for a seed and final. Timings are best effort (shared Mac, a laptop GPU that
 runs at 80-87 °C under load, other apps open); the ones that would decide a default are queued for the maintainer's quiet pass
-([docs/QUIET-PASS.md](../../docs/QUIET-PASS.md): N2r-e, N11.1). Ratios are paired on one machine, never across machines.
+([docs/internal/QUIET-PASS.md](../../docs/internal/QUIET-PASS.md): N2r-e, N11.1). Ratios are paired on one machine, never across machines.
 
 ## The four answers
 
@@ -39,8 +39,8 @@ What made the NVIDIA kernels fast was layout, not the API: weights held in regis
 workgroup, and loops with a constant trip count (Tint adds a 64-bit counter to every loop it cannot prove finite; on D3D12 those cost 3-4×
 inside a big kernel). The remaining 1.6× (inference) and 2× (training) to VkNRC is mostly a ReLU round trip through memory that WGSL forces
 (no per-element access to matrix tiles), and f32 gradient sums without float atomics. The draft feedback for the subgroup-matrix proposal is
-[docs/design/subgroup-matrix-feedback.md](../../docs/design/subgroup-matrix-feedback.md) (posting it is the maintainer's call, N9).
-Running the matrix kernels on Windows: [docs/design/dawn-node-vulkan.md](../../docs/design/dawn-node-vulkan.md).
+[docs/internal/design/subgroup-matrix-feedback.md](../../docs/internal/design/subgroup-matrix-feedback.md) (posting it is the maintainer's call, N9).
+Running the matrix kernels on Windows: [docs/internal/design/dawn-node-vulkan.md](../../docs/internal/design/dawn-node-vulkan.md).
 
 ## Web vs native (RTX 3060, 720p)
 
@@ -62,7 +62,7 @@ on NVIDIA than it should be until the constant-trip-count fix (P-W1: Sponza 191 
   cache's smooth error, so the lead shrinks (OIDN: 1.3-1.4× on single frames, about 1× once a still camera has accumulated 16 frames), while
   flicker stays 2× lower. A young network is worse than none through OIDN for about 150 frames; a warm-up gate shows plain path tracing until
   it has trained enough (D30: 16 steps per gated frame, so 38 frames).
-* **Against a hash grid** ([nrc-hash-cache.md](../../docs/design/nrc-hash-cache.md)): see Q4. The grid's weakness was blotches from young
+* **Against a hash grid** ([nrc-hash-cache.md](../../docs/internal/design/nrc-hash-cache.md)): see Q4. The grid's weakness was blotches from young
   cells holding one noisy sample (fixed by writing every sample into coarser cells too, plus a sample threshold) and view-independent cells
   on glossy surfaces (not fixed by splitting cells by direction). Its strengths are cost, warm-up and low-frequency accuracy where the
   light does not depend on the view.

@@ -1,6 +1,6 @@
 # Tier 1 feature-coverage matrix
 
-Generated 2026-11-14 by `node bench/adapters/tier1-matrix.ts --report t1cov-1024b` (P2.31, docs/design/tier1.md section 3). Data: `bench/results/reports/tier1/coverage.json`; the viewer's Coverage tab links each cell to its side-by-side comparison.
+Generated 2026-11-14 by `node bench/adapters/tier1-matrix.ts --report t1cov-1024b` (P2.31, docs/internal/design/tier1.md section 3). Data: `bench/results/reports/tier1/coverage.json`; the viewer's Coverage tab links each cell to its side-by-side comparison.
 
 Columns ours, three-gpu-pathtracer and mutracer are **measured by ablation** at 1024 spp (noise from the 512 spp snapshot): each renders the full wave-1 scene and the same scene with the feature stripped from every material. The number after the symbol is ablation relMSE / own noise; "ffN" = N firefly pixels (above 4x the reference maximum) left out of the relMSEs. pbrt-v4 and Mitsuba 3 are **read from the exporters**: what the exporter did with a probe material of that row.
 
