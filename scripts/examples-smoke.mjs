@@ -47,14 +47,17 @@ async function playwright() {
 /** Starts the examples' Vite dev server and resolves with its base URL. */
 function startServer(port) {
   return new Promise((resolve, reject) => {
-    const child = spawn('pnpm', ['--filter', '@pathtracer/examples', 'exec', 'vite', '--port', String(port), '--strictPort'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Its own process group: pnpm wraps vite, and killing only the wrapper leaves the server running.
+    const child = spawn('pnpm', ['--filter', '@pathtracer/examples', 'exec', 'vite', '--port', String(port), '--strictPort'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const stop = () => { try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ } };
     let log = '';
     const timer = setTimeout(() => reject(new Error(`vite did not start:\n${log}`)), 60000);
     const onData = (d) => {
       log += d;
-      if (/Local:/.test(log)) {
+      // Vite colours its banner on some terminals (CI): match the text without the escape codes.
+      if (/Local:/.test(log.replace(/\x1b\[[0-9;]*m/g, ''))) {
         clearTimeout(timer);
-        resolve({ url: `http://localhost:${port}/`, stop: () => child.kill() });
+        resolve({ url: `http://localhost:${port}/`, stop });
       }
     };
     child.stdout.on('data', onData);
