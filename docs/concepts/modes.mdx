@@ -55,13 +55,7 @@ Two details:
 
 ## Limits and packing
 
-- **`PtMegakernel`** starts its limits from the preset. A later `setLimits` replaces them.
-- **`PtWavefront`** takes the preset's integrator settings but not its limits. Set them yourself:
-
-```ts
-const { limits } = ptModePreset('realtime');
-if (limits) pt.setLimits(limits);
-```
+- **Limits:** both schedulers start from the preset's limits. A later `setLimits` replaces them.
 
 - **Scene packing** is never changed by `create`, because the scene copy is uploaded before the kernel exists. Pass `ptModePreset(mode).scenePacking` (when it is not `null`) to both `buildGpuScene(device, input, { packing })` and the kernel's `scenePacking`. Both presets ask for `'packed'`, which is already the default.
 

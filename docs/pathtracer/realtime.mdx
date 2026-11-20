@@ -11,19 +11,16 @@ A progressive path tracer converges over hundreds of samples. A real-time render
 ## Setup
 
 ```ts
-import { fetchBlueNoise } from '@pmndrs/raytracer';
 import { PtMegakernel, ptSceneOptions, type PtLookAtCamera } from '@pmndrs/pathtracer';
 
-const blueNoise = await fetchBlueNoise('/assets/bluenoise', 'gf-vec2-64');
-const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { mode: 'realtime', blueNoise }));
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { mode: 'realtime' }));
 pt.setScene(scene.trace, scene.buffers);
 pt.setFilm(960, 540);
 ```
 
-The `realtime` preset turns on `integrator.frame`, the blue-noise sampler (only when `blueNoise` is passed; Owen-Sobol otherwise), reduced materials after the first bounce, ray-cone texture filtering and cheap cutout shadows. The limits start at `maxDepth` 2 without Russian roulette. Any option you set yourself wins. [Modes](/concepts/modes) lists every entry. The cutout shadows need the cutout cards tagged with an instance mask: see [Alpha cutouts](/pathtracer/integrator-options#alpha-cutouts).
+The `realtime` preset turns on `integrator.frame`, the blue-noise sampler, reduced materials after the first bounce, ray-cone texture filtering and cheap cutout shadows. The limits start at `maxDepth` 2 without Russian roulette. Any option you set yourself wins. [Modes](/concepts/modes) lists every entry. The cutout shadows need the cutout cards tagged with an instance mask: see [Alpha cutouts](/pathtracer/integrator-options#alpha-cutouts).
 
-> [!NOTE]
-> The blue-noise textures are not in the npm package. Copy `manifest.json` and `gf-vec2-64.png` from [`packages/raytracer/assets/bluenoise`](https://github.com/pmndrs/pathtracer/tree/main/packages/raytracer/assets/bluenoise) to your server and pass that folder's URL to `fetchBlueNoise`. Decode them only with `fetchBlueNoise` or `decodeBlueNoisePng`: they are 16-bit PNGs, and a canvas would cut them to 8 bits.
+The blue-noise texture ships in `@pmndrs/raytracer`: without a `blueNoise` option, `create` loads `gf-vec2-64` itself (`loadBlueNoise`, no fetch). Pass `blueNoise: await loadBlueNoise('gf-vec2-128')` for the larger one, or set `integrator.sampler` to keep another sampler.
 
 ## The frame loop
 

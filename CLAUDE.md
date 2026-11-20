@@ -864,6 +864,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   (`Cannot access 'v' before initialization` in the built bundle). Headless checks of an example: serve `examples/dist`, open `<page>/?offscreen=1&scene=Cornell%20box`
   (the Cornell box needs no network), wait for `globalThis.__progressive.samples`, then `readImage()`; the Ray tracer examples expose the same through `exposeForChecks`.
   The `rtOffsetOrigin` / `rtSideNormal` helpers exist only in a module built with `shade`: a kernel without it declares its own.
+- Built-in blue noise (S10): `loadBlueNoise()` reads `packages/raytracer/src/noise/builtin/<name>.ts` (base64 of the committed PNG, `png: string` so the .d.ts stays 200 B, not 105 KB). After regenerating the PNGs run `node scripts/embed-bluenoise.mjs`; `bluenoise-builtin.test.ts` fails on drift. `mode: 'realtime'` now always selects the `bluenoise` sampler and `create` loads the default texture, so a test that wants Owen-Sobol in real-time mode sets `integrator.sampler` explicitly.
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.

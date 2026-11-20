@@ -1,6 +1,8 @@
 # The GitHub Pages site: the pmndrs/docs site at the root (docs/*.mdx), the examples gallery under /examples/ (examples/), and the
 # Classroom showcase under /examples/showcase/classroom/ (bench/hero). scripts/build-site.mjs does the building; this workflow
 # provides what it needs (the denoiser sibling, the upscaler, the prepared Classroom scene) and deploys the result.
+# The Classroom steps may fail (Blender download, the denoiser build) without blocking the docs and examples: the site then deploys
+# without the showcase and the run summary says so.
 name: Deploy docs and examples to GitHub Pages
 
 on:
@@ -51,6 +53,8 @@ jobs:
         with:
           node-version: 22.22.2
       - name: Build denoiser
+        id: denoiser
+        continue-on-error: true
         working-directory: Denoiser
         run: |
           git lfs pull --include='packages/denoiser/tzas/rt_hdr_alb*.tza,packages/denoiser/tzas/rt_hdr_calb_cnrm*.tza,packages/denoiser/tzas/rt_ldr.tza,packages/denoiser/tzas/rt_ldr_small.tza'
@@ -63,6 +67,9 @@ jobs:
           cd pathtracer
           corepack pnpm install --frozen-lockfile
       - name: Prepare the Classroom scene
+        id: classroom-prep
+        if: steps.denoiser.outcome == 'success'
+        continue-on-error: true
         working-directory: pathtracer
         run: |
           cd "$RUNNER_TEMP"
@@ -74,11 +81,21 @@ jobs:
           python3 bench/hero/prepare.py classroom --blender "$RUNNER_TEMP/blender-5.1.1-linux-x64/blender"
       - id: pages
         uses: actions/configure-pages@v5
+      # The Classroom builds on Node 22 (the bench's version) into its own folder, copied into the site after the docs build.
+      - name: Build the Classroom
+        id: classroom
+        if: steps.classroom-prep.outcome == 'success'
+        continue-on-error: true
+        working-directory: pathtracer
+        env:
+          HERO_OUT: ${{ github.workspace }}/pathtracer/dist/classroom
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}/examples/showcase/classroom
+        run: node bench/hero/build-pages.mjs
       # The pmndrs/docs CLI runs on Node 24, as in its reusable workflow; the bench steps above need 22.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Build docs, examples and the Classroom
+      - name: Build docs and examples
         working-directory: pathtracer
         env:
           # pmndrs/docs settings (the inputs of pmndrs/docs/.github/workflows/build.yml, which we cannot call: it uploads its own Pages artifact).
@@ -95,7 +112,18 @@ jobs:
         run: |
           corepack enable
           node scripts/build-site.mjs --check
-          node scripts/build-site.mjs --docs --classroom --out dist/site --base "${{ steps.pages.outputs.base_path }}/"
+          node scripts/build-site.mjs --docs --out dist/site --base "${{ steps.pages.outputs.base_path }}/"
+      - name: Add the Classroom
+        working-directory: pathtracer
+        run: |
+          if [ "${{ steps.classroom.outcome }}" = success ] && [ -d dist/classroom ]; then
+            mkdir -p dist/site/examples/showcase
+            cp -R dist/classroom dist/site/examples/showcase/classroom
+            echo "Classroom showcase included." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Classroom showcase not built (denoiser: ${{ steps.denoiser.outcome }}, prepare: ${{ steps.classroom-prep.outcome }}, build: ${{ steps.classroom.outcome }}); deploying docs and examples without it."
+            echo "Classroom showcase NOT included: see the warnings." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: pathtracer/dist/site

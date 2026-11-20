@@ -132,7 +132,8 @@ See [Shading](/raytracer/shading).
 | --- | --- | --- |
 | `rtOwenSobolWgsl` | function | WGSL of an Owen-scrambled Sobol sampler: `rtOwenSobol2D(index, seed)`, `rtHash32`, `rtUnit24`, ... |
 | `owenSobol2D`, `hash32`, `nestedUniformScramble`, `shuffleIndex` | function | Its CPU twins, bit-identical to the GPU. |
-| `fetchBlueNoise`, `decodeBlueNoisePng`, `parseBlueNoise` | function | Load the package's blue-noise textures (16-bit PNG or raw float32). |
+| `loadBlueNoise` | function | Decode a blue-noise texture shipped in the package (`gf-vec2-64` default, `gf-vec2-128`). |
+| `fetchBlueNoise`, `decodeBlueNoisePng`, `parseBlueNoise` | function | Load other blue-noise textures from a served folder (16-bit PNG or raw float32). |
 | `blueNoiseAt` | function | A texel with toroidal wrap. |
 | `BlueNoiseTexture`, `BlueNoiseMeta` | type | |
 

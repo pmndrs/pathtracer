@@ -51,19 +51,19 @@ The `'bluenoise'` sampler reads the first few pairs of every sample from a blue-
 | --- | --- | --- |
 | `integrator.blueNoisePairs` | 6 | How many leading pairs read the texture (at most 15). 6 covers the jitter, the lens pair and the first vertex. |
 | `integrator.blueNoiseShift` | `'owen'` | The per-frame shift: `'owen'` or `'kronecker'`. `'owen'` accumulates over frames as well as Owen-Sobol does. |
-| `blueNoise` (kernel option) | none | The texture. Required with this sampler. |
+| `blueNoise` (kernel option) | `gf-vec2-64` | The texture. Without one, `create` loads the one shipped in `@pmndrs/raytracer`. |
 
-The textures are our own: we generate them (void-and-cluster and a joint two-channel optimisation) rather than use third-party blue noise. The sampler needs a two-channel, single-slice, power-of-two texture: `gf-vec2-64` or `gf-vec2-128`. They live in [`packages/raytracer/assets/bluenoise/`](https://github.com/pmndrs/pathtracer/tree/main/packages/raytracer/assets/bluenoise) with a `manifest.json`. Serve that folder with your app and load one with `fetchBlueNoise`:
+The textures are our own: we generate them (void-and-cluster and a joint two-channel optimisation) rather than use third-party blue noise. The sampler needs a two-channel, single-slice, power-of-two texture: `gf-vec2-64` or `gf-vec2-128`. Both ship in `@pmndrs/raytracer`, and `loadBlueNoise` decodes one without a fetch (each is a separate module, so a bundle carries only the one you load):
 
 ```ts
-import { fetchBlueNoise } from '@pmndrs/raytracer';
+import { loadBlueNoise } from '@pmndrs/raytracer';
 import { PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
 
-const blueNoise = await fetchBlueNoise('/bluenoise/', 'gf-vec2-64'); // reads /bluenoise/manifest.json
+const blueNoise = await loadBlueNoise('gf-vec2-128'); // the default, gf-vec2-64, needs no option at all
 const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { mode: 'realtime', blueNoise }));
 ```
 
-`fetchBlueNoise` decodes the 16-bit PNG itself. Never decode these files through a canvas or `createImageBitmap`: those are 8-bit and lose the noise's precision. `decodeBlueNoisePng` decodes bytes you already have.
+The other textures (`vc2d-*`, `st-*`) are in [`packages/raytracer/assets/bluenoise/`](https://github.com/pmndrs/pathtracer/tree/main/packages/raytracer/assets/bluenoise) with a `manifest.json`: serve that folder and load one with `fetchBlueNoise(url, name)`, which decodes the 16-bit PNG itself. Never decode these files through a canvas or `createImageBitmap`: those are 8-bit and lose the noise's precision. `decodeBlueNoisePng` decodes bytes you already have.
 
 The `'realtime'` [mode](/concepts/modes) switches to this sampler when you pass `blueNoise`, and stays on Owen-Sobol otherwise.
 

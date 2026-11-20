@@ -1,7 +1,7 @@
 # Trace core (P1 slice 1)
 
 What `@pmndrs/raytracer` traces today, how the two entry points relate, the batch ABI, how correctness is checked,
-and the choices still open. API reference: [packages/raytracer/README.md](../../../packages/raytracer/README.md).
+and the choices still open. API reference: the public [Ray tracer docs](../../raytracer/api.mdx); older package notes in [raytracer-package-notes.md](raytracer-package-notes.md).
 
 ## Layers in this slice
 

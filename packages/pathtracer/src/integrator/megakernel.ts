@@ -19,7 +19,7 @@
  *     pt.setCamera(cam0);  encode(1);  ...  pt.nextFrame(cam1);  pt.encode(encoder, 1);     // the old camera is the previous one (motion)
  *     const { accum, planes } = pt.frameBuffers;                                              // or: const frame = await pt.readFrame();
  */
-import { rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, sceneFormatOf, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings, rtSetResourceTable, rtUsesResourceTable } from '@pmndrs/raytracer';
+import { loadBlueNoise, rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, sceneFormatOf, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings, rtSetResourceTable, rtUsesResourceTable } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { BlueNoiseTexture, Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout, RtResourceTable } from '@pmndrs/raytracer';
 import { ptBsdfAdapterWgsl, ptBsdfReducedWgsl, ptLayeredDispatchWgsl, ptReducedKernelFeatures } from '../bsdf/adapter.ts';
@@ -295,9 +295,11 @@ export class PtMegakernel {
   }
 
   static async create(device: GPUDevice, caps: Caps, requested: PtMegakernelOptions): Promise<PtMegakernel> {
-    const options = ptApplyMode(requested);
+    const moded = ptApplyMode(requested);
+    const bn = moded.integrator?.sampler === 'bluenoise';
+    // The `bluenoise` sampler (real-time mode) defaults to the texture shipped in the package.
+    const options = bn && !moded.blueNoise ? { ...moded, blueNoise: await loadBlueNoise() } : moded;
     const label = options.label ?? 'pt megakernel';
-    const bn = options.integrator?.sampler === 'bluenoise';
     if (bn) validateBlueNoise(options.blueNoise);
     if (options.integrator?.restir) {
       const why = ptRestirUnsupported(options);

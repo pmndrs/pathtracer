@@ -3,6 +3,7 @@ export * from './contract/ray.ts';
 export * from './contract/frame.ts';
 export * from './caps/index.ts';
 export * from './noise/bluenoise.ts';
+export * from './noise/bluenoise-builtin.ts';
 export * from './sampling/owen-sobol.ts';
 export * from './sampling/owen-sobol-wgsl.ts';
 export * from './trace/index.ts';
