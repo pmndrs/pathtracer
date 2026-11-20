@@ -33,7 +33,7 @@ The package also exports the constants, binding numbers and WGSL fragments the k
 | Name | Kind | What |
 | --- | --- | --- |
 | `ptSceneOptions` | function | Kernel options that match a `GpuScene`, with your overrides merged in. |
-| `PtSceneOptionsOverrides` | type | What `ptSceneOptions` takes: any kernel option plus `integrator` and `layered`. |
+| `PtSceneOptionsOverrides` | type | What `ptSceneOptions` takes: any kernel option plus `integrator`, `layered` and `materialProbes`. |
 | `PtIntegratorOptions` | type | The integrator settings. See [Integrator options](/pathtracer/integrator-options). |
 | `resolveIntegratorOptions` | function | The options with every default filled in; throws on invalid combinations. |
 | `PtMaterialOptions`, `PtMaterialFeatures` | type | OpenPBR mode settings and the lobes to compile. |
@@ -115,6 +115,11 @@ The blue-noise texture loaders, `fetchBlueNoise` and `decodeBlueNoisePng`, are i
 
 | Name | Kind | What |
 | --- | --- | --- |
+| `buildMaterialX` | function | A document as a scene-copy material plus its textures (`MtlxSceneMaterial`), in `constants`, `bake` or `codegen` mode. |
+| `mtlxAddToScene` | function | Appends a built material and its textures to a `SceneCopyInput`; returns the `MtlxSceneUse`. |
+| `mtlxKernelOptions` | function | `ptSceneOptions` overrides for the codegen materials: `integrator.materialx` and `materialProbes`. |
+| `mtlxSyntheticImage` | function | The procedural `gen:` test images. |
+| `mtlxFeatureProbes`, `mtlxImageKey` | function | The lobes a program can switch on; the key of an image request. |
 | `loadMtlxMaterial` | function | Parses a `.mtlx` document and lowers a material to OpenPBR parameters (`MtlxMaterial`). |
 | `MtlxLoadOptions` | type | `material`, `lengthScale`. |
 | `mtlxConstantParams` | function | The constant parameters of a material. |

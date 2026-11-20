@@ -8,3 +8,5 @@ export * from './material.ts';
 export * from './image.ts';
 export * from './bake.ts';
 export * from './wgsl.ts';
+export * from './synthetic.ts';
+export * from './scene.ts';

@@ -22,6 +22,37 @@ There are two ways to render a graph whose inputs vary over the surface:
 
 A graph whose inputs are all constant needs neither: its parameters become an ordinary material.
 
+## Using a document
+
+```ts
+import { buildMaterialX, mtlxAddToScene, mtlxKernelOptions, mtlxSyntheticImage, PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
+import { buildGpuScene } from '@pmndrs/raytracer';
+
+const text = await (await fetch('/materials/tiles.mtlx')).text();
+const built = buildMaterialX(text, { mode: 'codegen', images: (file) => myImages.get(file) });
+const use = mtlxAddToScene(input, built);        // appends the material and its textures to your SceneCopyInput
+input.instances[2].material = use.material;      // put it on a mesh (the mesh needs uvs)
+
+const scene = await buildGpuScene(device, input);
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, mtlxKernelOptions([use])));
+```
+
+`buildMaterialX(text, options)` parses the document and builds a scene-copy material (`material`) with the textures it needs (`textures`, decoded RGBA8), in one of three modes:
+
+| `mode` | What it builds |
+| --- | --- |
+| `'constants'` | The folded parameters as one record. Default when nothing in the graph varies; throws if something does. |
+| `'bake'` | Bakes the varying inputs into textures over the uv square (`resolution`, default 256). |
+| `'codegen'` | The parameters at uv (0.5, 0.5) as the record's fallback, plus one texture per image the graph reads (a 1x1 placeholder if none). Default when the graph varies. |
+
+`images(file)` returns the RGBA8 pixels of an image file, or `undefined` (the node's default then applies). `mtlxSyntheticImage` reads the procedural `gen:checker8`, `gen:bumps4`, `gen:ramp` and `gen:rings` images our test documents use. `notes` lists what was approximated.
+
+`mtlxAddToScene(input, built)` appends the material and its textures to a scene input and returns where they went. `mtlxKernelOptions(uses)` returns the overrides for `ptSceneOptions`: `integrator.materialx` with the generated WGSL for every codegen material, and `materialProbes`, so the kernel compiles any lobe a program can switch on (a graph-driven metalness needs the metal/dielectric mix even if the fallback record is not metallic). For constant and baked materials it returns no kernel options.
+
+The [MaterialX example](https://pmndrs.github.io/pathtracer/examples/pathtracer/materialx/) renders a texture graph and a position-driven graph both ways.
+
+The sections below describe the layer underneath, for tools and custom pipelines.
+
 ## Loading
 
 ```ts

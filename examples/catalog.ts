@@ -249,6 +249,20 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     docs: 'pathtracer/spectral',
     source: 'examples/pathtracer/spectral',
   },
+  {
+    slug: 'materialx',
+    path: 'pathtracer/materialx/',
+    title: 'MaterialX',
+    summary: 'MaterialX documents as path tracer materials: graphs compiled to WGSL per hit, or baked into textures.',
+    description:
+      '`buildMaterialX` reads a `.mtlx` document. Codegen turns its graph into WGSL that runs at every hit, so anything it reads (uv, position, images) is exact; ' +
+      'bake renders the uv-driven inputs into textures and needs no kernel change, but a position-driven graph only averages. Compare both on a texture graph and on procedural stripes.',
+    category: 'pathtracer',
+    status: 'experimental',
+    tags: ['MaterialX', 'codegen', 'bake'],
+    docs: 'pathtracer/materialx',
+    source: 'examples/pathtracer/materialx',
+  },
 ];
 
 export const exampleBySlug = (slug: string): ExampleEntry | undefined => EXAMPLES.find((e) => e.slug === slug);

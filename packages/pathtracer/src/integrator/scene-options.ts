@@ -10,7 +10,7 @@
  * metalness per texel, so a textured metal compiles both lobes and the stochastic mix whatever its factor says.
  */
 import { ALPHA_MODE, createMaterial } from '@pmndrs/raytracer';
-import type { GpuScene } from '@pmndrs/raytracer';
+import type { GpuScene, RtMaterialInput } from '@pmndrs/raytracer';
 import { ptMaterialFeatures } from '../bsdf/adapter.ts';
 import type { PtLayeredOptions } from '../bsdf/layered.ts';
 import type { PtIntegratorOptions } from './integrator-wgsl.ts';
@@ -21,14 +21,16 @@ export interface PtSceneOptionsOverrides extends Partial<Omit<PtMegakernelOption
   integrator?: PtIntegratorOptions;
   /** Layered BSDF settings of OpenPBR mode (default: the library default, `layering: 'albedo'`). */
   layered?: PtLayeredOptions;
+  /** Extra material records that count for the compiled lobes only (e.g. `mtlxKernelOptions`' probes: a generated MaterialX program can switch a lobe on). */
+  materialProbes?: readonly RtMaterialInput[];
 }
 
 /** Kernel options for `PtMegakernel.create` / `PtWavefront.create` that match `scene`, with `overrides` merged in. */
 export function ptSceneOptions(scene: GpuScene, overrides: PtSceneOptionsOverrides = {}): PtMegakernelOptions {
-  const { integrator: extra = {}, layered, ...rest } = overrides;
+  const { integrator: extra = {}, layered, materialProbes = [], ...rest } = overrides;
   const inputs = scene.input.materials;
   const records = inputs.map((m) => createMaterial(m.roughnessMetalTexture !== undefined && (m.metalness ?? 0) > 0 ? { ...m, metalness: 0.5 } : m));
-  const features = ptMaterialFeatures(records);
+  const features = ptMaterialFeatures([...records, ...materialProbes.map((m) => createMaterial(m))]);
   const alphaMask = !!scene.copy.textureLayout && records.some((m) => m.alphaMode === ALPHA_MODE.mask);
   const envMap = !!scene.input.environment?.map;
   const integrator: PtIntegratorOptions = {

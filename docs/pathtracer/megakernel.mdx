@@ -32,7 +32,7 @@ pt.setScene(scene.trace, scene.buffers);
 | `integrator.envMap`, `envSampling` | `true` and `'importance'` when the environment has a map. |
 | `integrator.alphaMask` | `true` when a textured material uses `alphaMode` mask. |
 
-Everything in `overrides` wins over the scene's values. `integrator` is merged one level deep, and `integrator.materials` one level deeper. `layered` sets the layered BSDF settings (see [Integrator options](/pathtracer/integrator-options#materials)). Set `integrator.materials` to `null` to use the legacy material adapter, where a non-metal is plain Lambert.
+Everything in `overrides` wins over the scene's values. `integrator` is merged one level deep, and `integrator.materials` one level deeper. `layered` sets the layered BSDF settings (see [Integrator options](/pathtracer/integrator-options#materials)). Set `integrator.materials` to `null` to use the legacy material adapter, where a non-metal is plain Lambert. `materialProbes` adds records that count only for which lobes are compiled (MaterialX programs use it).
 
 > [!WARNING]
 > A kernel and a scene must agree on the node format, the scene packing and whether there are textures. `setScene` throws on a mismatch. Build the kernel from the scene it will draw, with `ptSceneOptions`, rather than by hand.
