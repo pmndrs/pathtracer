@@ -1,5 +1,5 @@
 /**
- * Neural radiance cache on main's megakernel path tracer (research track N, TASKS N6a, docs/design/nrc-plan.md §5).
+ * Neural radiance cache on main's megakernel path tracer (research track N, TASKS N6a, docs/internal/design/nrc-plan.md §5).
  *
  * Two hooked kernels share one hook text (`NRC_HOOK_WGSL`), both built from the plain kernel's own options so the only
  * difference from plain path tracing is the hook:
@@ -492,7 +492,7 @@ fn nrcFinish() {
 `;
 
 /**
- * Frame mode (`integrator.frame`, P4.1 planes; docs/design/nrc-pipeline.md §2): the cache's indirect light is part of the primary vertex's
+ * Frame mode (`integrator.frame`, P4.1 planes; docs/internal/design/nrc-pipeline.md §2): the cache's indirect light is part of the primary vertex's
  * class, so it also lands in the demodulated diffuse (plane 0) or specular (plane 1) plane, divided by that plane's stored factor (plane 4
  * rgb / plane 5 rgb; plane 4 alpha = 1 marks a specular-class primary). `diffuse * albedo + specular * specFactor = beauty` stays exact.
  * Empty when off, so the plain resolve text is unchanged.

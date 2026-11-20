@@ -1,6 +1,6 @@
 # NRC equal-time study, Sponza (track N, M5 / TASKS N6c), 2026-11-15
 
-**Question (Q2 in [nrc-plan.md](../../docs/design/nrc-plan.md)):** does the neural radiance cache make a better image than
+**Question (Q2 in [nrc-plan.md](../../docs/internal/design/nrc-plan.md)):** does the neural radiance cache make a better image than
 plain path tracing in the same time?
 
 **Answer on the M5 Pro: yes, once the cache has warmed up, and it warms up within a few frames.** In the windowed Chrome a
@@ -96,7 +96,7 @@ matrices (D3D12). First load: the cache kernels compile in 2.1-2.4 s on DXC.
 ## Hash grid vs network (M7 / Q4, RTX 3060 Laptop, 2026-11-18)
 
 Does the network beat a plain hash-grid radiance cache in the same time? The hash arm is `NrcCache` with `model: 'hash'`
-([nrc-hash-cache.md](../../docs/design/nrc-hash-cache.md)): the same render paths, training records, targets and resolve as the network
+([nrc-hash-cache.md](../../docs/internal/design/nrc-hash-cache.md)): the same render paths, training records, targets and resolve as the network
 arm, only the store differs (a multi-resolution world-space hash grid, 2^20 cells, 16 px cells, a 16- or 64-sample threshold, 3
 fallback levels; tuned at 640×360 first, nrc-hash-cache.md §6). Quality: `nrc-study model=hash scenario=all res=1280x720 steps=4
 ref=ours` (headless, deterministic for a seed; same seeds and references as the WN5 run above, so the network columns are copied from

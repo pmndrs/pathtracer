@@ -1,0 +1,61 @@
+---
+title: Introduction
+description: WebGPU ray tracing and physically based path tracing for the web.
+nav: 0
+---
+
+<Intro>
+  Two packages for tracing rays on the GPU in the browser. **`@pmndrs/raytracer`** traces rays against a BVH from your own WGSL. **`@pmndrs/pathtracer`** builds a physically based path tracer on it, from converged reference images to one sample per pixel per frame.
+</Intro>
+
+[Examples](https://pmndrs.github.io/pathtracer/examples/) · [GitHub](https://github.com/pmndrs/pathtracer) · [`@pmndrs/raytracer` on npm](https://www.npmjs.com/package/@pmndrs/raytracer) · [`@pmndrs/pathtracer` on npm](https://www.npmjs.com/package/@pmndrs/pathtracer)
+
+## What is in the box
+
+**`@pmndrs/raytracer`** is the trace core: rays in, hits out.
+
+- WGSL functions you paste into your own compute shader: visibility, closest hit, surface lookup.
+- A batch tracer for rays in a GPU buffer.
+- The *scene copy*: materials, textures and lights on the GPU, with light sampling and one-bounce shading.
+- A glTF 2.0 loader.
+
+The BVH and the ray walk come from [`@pmndrs/bvh`](https://github.com/pmndrs/bvh).
+
+**`@pmndrs/pathtracer`** is the integrator:
+
+- OpenPBR materials: metal, glass, coats, sheen, thin film, anisotropy.
+- Next-event estimation with multiple importance sampling.
+- Two schedulers: a megakernel and a wavefront.
+- A real-time mode that writes the planes a denoiser and an upscaler need.
+
+[Choosing a package](/getting-started/choosing-a-package) says which one you need.
+
+## How we check it
+
+Every feature is checked before it is a default:
+
+- Against a CPU twin or a closed-form answer first.
+- Then against [pbrt-v4](https://github.com/mmp/pbrt-v4) and [Mitsuba 3](https://github.com/mitsuba-renderer/mitsuba3) reference renders of the same scenes.
+- Then timed against other WebGPU path tracers.
+
+The furnace tests hit their exact values, and the test scenes converge to within the two reference renderers' own disagreement.
+
+## Status labels
+
+Some features are newer than others. Pages, examples and settings say how settled they are:
+
+| Label | Meaning |
+| --- | --- |
+| *(none)* | **Stable.** Built on the published API with its current defaults. |
+| **Experimental** | Works and is checked, but the API or its defaults can still change. The page title and the example card say so. |
+| **Research** | A study from one of our research tracks (for example the neural radiance cache), not a supported feature. It may move or go away. |
+
+> [!NOTE]
+> Both packages are at 0.1. Expect breaking changes between minor versions until 1.0. Each release lists them.
+
+## Next
+
+- [Installation](/getting-started/installation)
+- [Your first render](/getting-started/your-first-render): a complete program in about 50 lines.
+- [Loading glTF](/getting-started/loading-gltf)
+- [The examples](/getting-started/examples), each one page with its source.

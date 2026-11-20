@@ -43,7 +43,7 @@ interface Case {
 
 const SPECTRAL: PtAdapterSettings = { spectral: {} };
 const CASES: Record<string, Case> = {
-  // media: closed forms and scenes (docs/design/volumes.md)
+  // media: closed forms and scenes (docs/internal/design/volumes.md)
   'vol-absorb-slab': { scene: 'vol-absorb-slab' },
   'vol-camera-medium': { scene: 'vol-camera-medium' },
   'vol-furnace-sphere': { scene: 'vol-furnace-sphere' },

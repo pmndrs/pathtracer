@@ -1,5 +1,5 @@
 /**
- * nrc-pipeline-study (track N, M9; docs/design/nrc-pipeline.md §6): the headless twin of `nrc-pipeline`.
+ * nrc-pipeline-study (track N, M9; docs/internal/design/nrc-pipeline.md §6): the headless twin of `nrc-pipeline`.
  *
  *   node bench/runner/run.ts --page nrc-pipeline-study --gpu nvidia --timeout 1800000 [--headed] --args res=960x540 ...
  *

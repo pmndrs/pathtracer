@@ -1,5 +1,5 @@
 /**
- * Network shape and training settings for research track N (docs/design/nrc.md).
+ * Network shape and training settings for research track N (docs/internal/design/nrc.md).
  *
  * Defaults follow VkNRC's design (§1b, D29): 64 inputs → 5 hidden layers of 64 → 3 outputs, ReLU, no bias,
  * relative-L2 luminance loss, Adam lr 0.002 / β 0.9, 0.999, EMA 0.99, He-normal init. The code is ours.

@@ -1,5 +1,5 @@
 /**
- * Subgroup-matrix inference arm (`wgsl-sgm`, research track N step N3a; docs/design/nrc.md, nrc-diverges.md §B).
+ * Subgroup-matrix inference arm (`wgsl-sgm`, research track N step N3a; docs/internal/design/nrc.md, nrc-diverges.md §B).
  *
  * Layer l computes Z = A · W_lᵀ for a tile of R records: A (R × in, record-major in workgroup memory) is the left
  * operand, W_lᵀ the right operand, loaded straight from storage as a column-major view of row-major [out][in] weights

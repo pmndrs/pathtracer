@@ -70,4 +70,4 @@ Before D32 the quiet baseline of 2026-11-14 had mutracer 1.5x faster on Cornell;
   D25) would put the estimate at about 130-150: it waits for the bvh branch merge (maintainer's call) and the 3060 run. Path tracer on the 3060 (track N / P-W1 fix): megakernel sponza-white
   58.0-60.7 ms/spp, wavefront 49.5-51.8 (was 191-202 megakernel before the loop-counter fix), i.e. within about 10% of the M5 megakernel's 53.9 ms/spp in the table above (different runs, different conditions: not a paired ratio); no competitor numbers there yet.
 - The 3060 competitor table (same commands, `--name p3-gate-3060`) and `ptwfAutoPolicy`'s choice on that GPU: W13.
-- A quiet rerun of this table is an optional confirmation (docs/QUIET-PASS.md baseline step; add `pt-auto` to `--renderers`).
+- A quiet rerun of this table is an optional confirmation (docs/internal/QUIET-PASS.md baseline step; add `pt-auto` to `--renderers`).

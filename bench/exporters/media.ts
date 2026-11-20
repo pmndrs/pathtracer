@@ -1,6 +1,6 @@
 /**
  * Participating media for the native exporters (P5): pbrt-v4 `MakeNamedMedium` (homogeneous, uniformgrid) and Mitsuba 3 `<medium>` (homogeneous,
- * heterogeneous with a `gridvolume`). See docs/design/volumes.md for the conventions and DIVERGES V245-V247 for what differs.
+ * heterogeneous with a `gridvolume`). See docs/internal/design/volumes.md for the conventions and DIVERGES V245-V247 for what differs.
  *
  *  - pbrt `uniformgrid`: `density` samples at (i + 0.5) / n across [p0, p1] in the medium frame (the CTM at `MakeNamedMedium`), trilinear, zero outside the
  *    grid; `scale` multiplies sigma_a and sigma_s. (pbrt's `nanovdb` medium needs a NanoVDB file; the dense grid is the same density without the converter.)

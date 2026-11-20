@@ -1,0 +1,141 @@
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+#view:active {
+  cursor: grabbing;
+}
+
+.ex-pane {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+@media (max-width: 720px) {
+  .ex-pane {
+    top: auto;
+    bottom: 12px;
+    max-height: 45vh;
+  }
+}
+
+.ex-stats {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(14, 14, 12, 0.72);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  font: 12px/1.45 var(--mono);
+  color: var(--muted);
+  pointer-events: none;
+}
+.ex-stats dt {
+  margin: 0;
+}
+.ex-stats dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ex-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+.ex-overlay[hidden] {
+  display: none;
+}
+.ex-overlay .box {
+  pointer-events: auto;
+  max-width: 560px;
+  padding: 18px 20px;
+  border-radius: var(--radius);
+  background: rgba(14, 14, 12, 0.9);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+.ex-overlay.progress .box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+.ex-overlay.progress .box::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: ex-spin 0.8s linear infinite;
+}
+.ex-overlay.error .box {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.ex-overlay.error h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.ex-overlay.error pre {
+  margin: 8px 0 0;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: 12px/1.45 var(--mono);
+  color: var(--muted);
+}
+.ex-drop {
+  position: fixed;
+  inset: 12px;
+  z-index: 150;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  background: rgba(14, 14, 12, 0.6);
+  color: var(--text);
+  font-size: 18px;
+  pointer-events: none;
+}
+.ex-drop[hidden] {
+  display: none;
+}
+@keyframes ex-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ex-overlay.progress .box::before {
+    animation: none;
+  }
+}

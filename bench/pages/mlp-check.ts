@@ -1,5 +1,5 @@
 /**
- * Research track N (docs/design/nrc.md §4): the WGSL MLP against the f64 CPU oracle.
+ * Research track N (docs/internal/design/nrc.md §4): the WGSL MLP against the f64 CPU oracle.
  *  1. inference outputs for a random batch;
  *  2. the batch gradient of one training step;
  *  3. master weights after `steps` Adam steps (the oracle re-derives its gradient from its own f32 weights each step).

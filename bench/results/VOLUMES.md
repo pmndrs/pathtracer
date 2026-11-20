@@ -1,7 +1,7 @@
 # Participating media (P5): results
 
 Run 2026-11-18 on the M5 Pro (Chrome / Metal, headless), `pt-megakernel` megakernel, 4096 spp, references pbrt-v4 `volpath` and Mitsuba 3 `llvm_ad_rgb` `volpath` at 4096 spp (their sidecars are
-`bench/references/vol-*/`). Design and the estimators: [docs/design/volumes.md](../../docs/design/volumes.md); divergences V240-V247; tasks P5.v1-P5.v11.
+`bench/references/vol-*/`). Design and the estimators: [docs/internal/design/volumes.md](../../docs/internal/design/volumes.md); divergences V240-V247; tasks P5.v1-P5.v11.
 **No timing here is a result**: the machine ran at load 3-60 with the GPU lock shared by six agents; wall times are provisional and unpaired.
 
 ## Scenes against pbrt and Mitsuba (relMSE eps 1e-2; floor = pbrt-vs-Mitsuba relMSE; non-finite pixels 0 everywhere)

@@ -1,0 +1,64 @@
+---
+title: Modes
+description: The reference, preview and realtime presets, what each one sets, and how your own options override them.
+nav: 16
+---
+
+A mode is a preset of integrator settings for one use: a converged reference image, a fast progressive preview, or one sample per pixel per frame for a denoiser. Pass it as `mode` when you create a kernel:
+
+```ts
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { mode: 'preview' }));
+```
+
+Without `mode`, every setting has its library default, which is what `'reference'` means.
+
+## What each mode sets
+
+| Setting | `reference` | `preview` | `realtime` |
+| --- | --- | --- | --- |
+| Accumulation | progressive | progressive | one sample per pixel per frame (`frame: true`) |
+| `sampler` | `'owen-sobol'` | `'owen-sobol'` | `'bluenoise'` when you pass `blueNoise`, else `'owen-sobol'` |
+| Alpha cutouts (`alphaPolicy`, `alphaShadow`) | exact | exact for camera and bounce rays; `'transmit'` shadows with `alphaTransmit` 0.45 | as `preview` |
+| `materialLod` | `'full'` | `'secondary'` | `'secondary'` |
+| `textureLod` | 0 (base level) | `'cone'` | `'cone'` |
+| `aovs` | off | on (albedo, normal, viewZ for a denoiser) | off |
+| Layered materials | library default | `layering: 'albedo'`, `albedoBase: 'internal'`, `albedoCorrection: 'texture'` | as `preview` |
+| Limits | yours (default `maxDepth` 5) | `maxDepth` 4, no Russian roulette | `maxDepth` 2, no Russian roulette |
+| Scene packing | default | `'packed'` | `'packed'` |
+
+What the settings do:
+
+- **`materialLod: 'secondary'`**: hits of indirect rays evaluate a reduced material. A layered or coated material becomes one lobe chosen at random with the same average reflectance, sheen is folded into a diffuse lobe, thin film is skipped and anisotropy is averaged. The kernel does less work per bounce; the image is a little noisier.
+- **`textureLod: 'cone'`**: texture lookups pick a mip level from a ray cone instead of always reading the base level.
+- **`alphaShadow: 'transmit'`**: a shadow ray blocked only by alpha-cutout cards counts as `alphaTransmit` visible instead of testing each texel. It is about as cheap as treating the cards as solid. It only works when the cutout cards are in instances whose bvh `mask` carries `alphaMixedMask` (default `0x04`); otherwise the shadows silently become those of solid cards.
+- **`frame`**: each `encode` writes one new sample per pixel (no accumulation) plus the planes a temporal denoiser and an upscaler need. See [Outputs](/pathtracer/outputs) and [Real time](/pathtracer/realtime).
+
+> [!WARNING]
+> `preview` and `realtime` are biased: the cutout shadows, the reduced secondary materials and the texture cone all trade accuracy for speed. Never use them for reference images or for comparing against pbrt-v4 or Mitsuba.
+
+The settings that came from measurements are documented with their status in `PT_MODE_NOTES` (`ptModeNotes(mode)` returns one mode's entries), so a page can print what a mode means.
+
+## Your options win
+
+A preset only fills keys you left `undefined`. Anything you set explicitly stays:
+
+```ts
+// Real-time frames, but full materials at every bounce.
+ptSceneOptions(scene, { mode: 'realtime', blueNoise, integrator: { materialLod: 'full' } });
+```
+
+Two details:
+
+- If you set `alphaPolicy` to anything but `'exact'` (the fastest, solid-shadow setting `'opaqueShadow'`, say), the preset does not add its `'transmit'` shadow settings: your policy decides the shadows.
+- The layered settings are merged only into a kernel whose materials use the layered BSDF, and only into the fields you left out.
+- With ReSTIR on (**Experimental**), `realtime` also sets `restir.sharedHit` on the megakernel unless you set it.
+
+## Limits and packing
+
+- **Limits:** both schedulers start from the preset's limits. A later `setLimits` replaces them.
+
+- **Scene packing** is never changed by `create`, because the scene copy is uploaded before the kernel exists. Pass `ptModePreset(mode).scenePacking` (when it is not `null`) to both `buildGpuScene(device, input, { packing })` and the kernel's `scenePacking`. Both presets ask for `'packed'`, which is already the default.
+
+## Building your own
+
+`ptModePreset(mode)` returns the preset as data (`integrator`, `layered`, `limits`, `scenePacking`), and `ptApplyMode(options, scheduler)` is the merge `create` runs. Use them to show a mode's settings in a UI, or to start a custom preset from one of ours.

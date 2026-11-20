@@ -1,0 +1,159 @@
+---
+title: API reference
+description: The exports of @pmndrs/pathtracer a program calls, grouped by area.
+nav: 39
+---
+
+Everything below is exported from `@pmndrs/pathtracer`. Types are listed where you write them yourself; result types are named in the row of the function that returns them. Rows marked **experimental** can still change. The source is in [`packages/pathtracer/src`](https://github.com/pmndrs/pathtracer/tree/main/packages/pathtracer/src).
+
+The package also exports the constants, binding numbers and WGSL fragments the kernels are built from. They are not listed here: you need them only to build your own pipeline layout around a kernel's text.
+
+## Kernels
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `PtMegakernel` | class | One thread per pixel, one dispatch per sample pass. `create(device, caps, options)`. See [Megakernel](/pathtracer/megakernel). |
+| `PtWavefront` | class | Small kernels joined by GPU queues; same API plus `finish()`, `memory()`, `maxPassesPerEncode()`, `kernelBytes`. See [Wavefront](/pathtracer/wavefront). |
+| `PtMegakernelOptions` | type | Options of `PtMegakernel.create`. |
+| `PtWavefrontOptions` | type | The megakernel's options plus `refill`, `refillThreshold`, `layers`, `appends`, `sort`. |
+| `PtLimits` | type | `maxDepth`, `rrStartDepth`, `textureConeScale` for `setLimits`. |
+| `PtLookAtCamera` | type | `position`, `target`, `up`, `yFovDeg` for `setCamera`. |
+| `PtImage` | type | Result of `readImage`: `width`, `height`, `data` (RGBA `float32`), `samples`. |
+| `ptwfAutoPolicy` | function | Picks the scheduler and its settings for a film, path length and device. |
+| `ptwfAutoLayers` | function | The policy's `layers` for a film of `pixels` pixels. |
+| `ptwfUnsupported` | function | Why the wavefront cannot compile these integrator options, or `null`. |
+| `ptMegakernelBuild` | function | The megakernel's WGSL and source map, without a device. |
+| `ptMegakernelWgsl` | function | The megakernel's WGSL only (for size checks). |
+| `ptWavefrontBuild` | function | Every wavefront kernel's WGSL and source map. |
+| `ptWavefrontKernelBytes` | function | WGSL bytes per kernel of a wavefront build. |
+| `ptCameraBasis`, `ptCameraDirection` | function | The camera vectors the kernel uses, and the ray of a pixel position (CPU twins). |
+
+## Scene options and modes
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `ptSceneOptions` | function | Kernel options that match a `GpuScene`, with your overrides merged in. |
+| `PtSceneOptionsOverrides` | type | What `ptSceneOptions` takes: any kernel option plus `integrator`, `layered` and `materialProbes`. |
+| `PtIntegratorOptions` | type | The integrator settings. See [Integrator options](/pathtracer/integrator-options). |
+| `resolveIntegratorOptions` | function | The options with every default filled in; throws on invalid combinations. |
+| `PtMaterialOptions`, `PtMaterialFeatures` | type | OpenPBR mode settings and the lobes to compile. |
+| `ptMaterialFeatures` | function | The lobes a list of material records needs. |
+| `PtLayeredOptions` | type | Layered BSDF settings (`layering`, `albedoBase`, `albedoCorrection`, ...). |
+| `PtMode` | type | `'reference' \| 'preview' \| 'realtime'`. |
+| `ptModePreset` | function | What a mode sets: integrator options, layering, limits, scene packing. |
+| `ptModeNotes` | function | One status line per preset entry, for display. |
+| `ptApplyMode` | function | Options with a mode's settings filled under your own (what `create` does). |
+
+## Outputs
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `ptDecodeAovs` | function | Splits accumulator sums into a `PtAovs` (`albedo`, `normal`, `viewZ`, `coverage`). `readAovs` uses it. |
+| `ptSummarizeCounters` | function | Means of raw counters: depth, rays, end reasons (`PtCounterSummary`). |
+| `ptCounterImage` | function | One counter word per pixel, divided by the sample count, for a heat map. |
+| `PT_COUNTER`, `PT_TERM`, `PT_TERM_NAMES` | const | Counter word indices and path end reasons. |
+| `PtHooksOptions` | type | **Experimental.** WGSL path hooks (`ptOnVertex`, `ptTerminate`) and their bind group. |
+
+## Real time
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `ptDecodeFrame` | function | Splits the beauty and the plane buffer into a `PtFrame`. `readFrame` uses it. |
+| `PT_FRAME_PLANES` | const | Number of frame planes (7). |
+| `PT_DEMOD_EPS` | const | Floor of the demodulation factors (0.001). |
+| `ptFrameBase` | function | Wavefront: the `vec4f` index where the planes start in the accumulator. |
+| `PtSamplerKind`, `PtBlueNoiseShift` | type | Sampler names and blue-noise shifts. |
+| `ptSample2D`, `ptSampleBlueNoise`, `ptPixelSeed` | function | CPU twins of the samplers, for checks. |
+| `PT_VBUFFER_FORMAT` | const | **Experimental.** `'rgba32uint'`, the V-buffer texture format. |
+| `ptVbufferPack`, `ptVbufferUnpack` | function | **Experimental.** Encode and decode one V-buffer texel. |
+| `ptVbufferResolve` | function | **Experimental.** CPU twin: the hit a V-buffer texel names. |
+
+The blue-noise texture loaders, `loadBlueNoise` (shipped textures) and `fetchBlueNoise`, are in `@pmndrs/raytracer`.
+
+## ReSTIR (experimental)
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `PtRestirOptions` | type | DI options and the `gi` options. See [ReSTIR](/pathtracer/restir). |
+| `PtRestirGiOptions`, `resolveRestirGiOptions` | type, function | The GI options and their defaults. |
+| `resolveRestirOptions` | function | DI options with defaults filled in. |
+| `ptRestirUnsupported` | function | Why a kernel cannot run ReSTIR, or `null`. |
+| `PtRestirPasses` | class | The passes a kernel runs (`pt.restir`): `settings`, `stats`, `dropHistory()`, `giOverrides`. |
+| `ptRestirBuild` | function | The WGSL of the DI or GI pass module. |
+
+## Volumes (experimental)
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `PtVolumeOptions` | type | `integrator.volumes`: media, per-material boundaries, camera medium, tracking settings. |
+| `PtMedium`, `PtMediumGrid`, `PtMaterialVolume` | type | A medium, its density grid, and the media on a material's two sides. |
+| `ptMediumFrom` | function | A medium from absorption and scattering per metre, phase `g`, scale and optional grid. |
+| `gridWorldToIndex` | function | World-to-voxel matrix of a grid from its bounds and its mesh's transform. |
+| `brickMajorants` | function | The coarse majorant grid for `majorant: 'brick'`. |
+| `ptVolumeValidate` | function | Throws on invalid volume options. |
+| `ptMediumMajorant` | function | The scalar majorant of a medium. |
+| `deltaTrack`, `transmittance`, `gridDensity`, `hgPhase`, `hgSampleCos` | function | CPU twins of the WGSL estimators. |
+| `slabTransmittance`, `slabSingleScatter` | function | Closed forms for checks. |
+
+## Spectral (experimental)
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `PtSpectralOptions` | type | `res` and `dispersion` of `integrator.spectral`. |
+| `buildRgb2SpecTable` | function | Fits the RGB-to-spectrum table (`Rgb2SpecTable`). |
+| `defaultRgb2SpecTable` | function | Fits on first use and caches per resolution. |
+| `rgb2SpecTexture` | function | The table as the kernel's texture data. |
+| `rgbToCoeffs`, `sigmoidSpectrum` | function | Look up an RGB value's spectrum and evaluate it at a wavelength. |
+| `xyzToRgb` | function | CIE XYZ to the library's linear Rec.709. |
+| `visibleLambda`, `visiblePdf`, `pathLambdas` | function | The wavelength sampler and its density. |
+| `laneData`, `laneRadianceToRgb` | function | CPU twin of the per-path spectrum-to-RGB estimator. |
+| `iorAt`, `cauchyCoefficients` | function | The dispersion law. |
+| `dispersionFromAbbe`, `abbeFromDispersion` | function | Convert between dispersion and Abbe number. |
+| `CIE_1931_D65` | const | CIE 1931 matching functions and D65 at 5 nm. |
+
+## MaterialX (experimental)
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `buildMaterialX` | function | A document as a scene-copy material plus its textures (`MtlxSceneMaterial`), in `constants`, `bake` or `codegen` mode. |
+| `mtlxAddToScene` | function | Appends a built material and its textures to a `SceneCopyInput`; returns the `MtlxSceneUse`. |
+| `mtlxKernelOptions` | function | `ptSceneOptions` overrides for the codegen materials: `integrator.materialx` and `materialProbes`. |
+| `mtlxSyntheticImage` | function | The procedural `gen:` test images. |
+| `mtlxFeatureProbes`, `mtlxImageKey` | function | The lobes a program can switch on; the key of an image request. |
+| `loadMtlxMaterial` | function | Parses a `.mtlx` document and lowers a material to OpenPBR parameters (`MtlxMaterial`). |
+| `MtlxLoadOptions` | type | `material`, `lengthScale`. |
+| `mtlxConstantParams` | function | The constant parameters of a material. |
+| `mtlxFallbackParams` | function | All parameters evaluated at uv (0.5, 0.5): the record for codegen. |
+| `evalMtlxParams` | function | All parameters at one shading point. |
+| `bakeMtlxMaterial` | function | Bakes varying inputs into textures (`BakedMaterial`). |
+| `BakeOptions` | type | `resolution`, `sample`, `texels`. |
+| `imageSampler`, `sampleImage` | function | Image lookups for the evaluator and the baker. |
+| `mtlxProgramsWgsl` | function | Generates the WGSL for `integrator.materialx` (`MtlxPrograms`). |
+| `parseMaterialX`, `parseXml` | function | The document reader. |
+| `MtlxLowering`, `evalIr`, `foldConstants` | class, function | The lowered graph and its evaluator. |
+| `MTLX_NODES` | const | The supported nodes. |
+| `MtlxUnsupportedError` | class | Thrown for a node or surface that is not supported. |
+| `STANDARD_SURFACE_DEFAULTS`, `GLTF_PBR_DEFAULTS` | const | Authoring defaults that differ from OpenPBR's. |
+
+## BSDF twins and WGSL builders
+
+For tests, tools and your own kernels. The TypeScript functions are twins of the WGSL the kernels run.
+
+| Name | Kind | What |
+| --- | --- | --- |
+| `ptDiffuse`, `ptConductor`, `ptDielectric`, `ptBlack` | function | BSDF parameters (`PtBsdfParams`) of the basic lobes. |
+| `ptBsdfEval`, `ptBsdfPdf`, `ptBsdfSample` | function | Evaluate, get the density of, and sample a BSDF. |
+| `ptBsdfFromMaterial` | function | A material record to BSDF parameters: legacy, or OpenPBR with `options`. |
+| `ptBsdfReduced` | function | The reduced material of `materialLod: 'secondary'`. |
+| `ptLayered`, `ptLayeredCoatedConductor` | function | Layered BSDF parameters: dielectric over diffuse, coat over metal. |
+| `ptLayeredEval`, `ptLayeredPdf`, `ptLayeredSample` | function | The layered BSDF. |
+| `ptLayeredAlbedo` | function | Directional albedo of a rough dielectric interface. |
+| `ptFuzzedEval`, `ptFuzzedSample` | function | A base BSDF under the fuzz (sheen) layer. |
+| `ptThinFilmAiry`, `ptFilmFresnel` | function | Thin-film reflectance. |
+| `ptBsdfWgsl`, `ptLayeredWgsl`, `ptFuzzWgsl`, `ptThinFilmWgsl` | function | WGSL of the lobes. |
+| `ptBsdfAdapterWgsl` | function | WGSL that turns a material record into BSDF parameters. |
+| `ptShadingModulesWgsl` | function | Every scene-independent WGSL part both schedulers use, in order. |
+| `ptIntegratorWgsl` | function | The megakernel's integrator WGSL. |
+| `ptSamplerWgsl` | function | WGSL of a sampler. |
+
+The ray tracing, scene copy and light sampling functions these build on are in `@pmndrs/raytracer`: see its [API reference](/raytracer/api).

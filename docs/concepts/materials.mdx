@@ -1,0 +1,103 @@
+---
+title: Materials
+description: The OpenPBR parameter set, which lobes the path tracer renders, and how a kernel compiles only the lobes a scene uses.
+nav: 12
+---
+
+Every material is one set of [OpenPBR](https://academysoftwarefoundation.github.io/OpenPBR/) parameters. There is no material class hierarchy: a glass, a car paint and a velvet are the same record with different weights. The scene copy stores each material as a 128-byte record, and the path tracer turns the record into a BSDF at every hit.
+
+## Two spellings
+
+| Type | Names | Where it comes from |
+| --- | --- | --- |
+| `RtMaterialInput` | The scene copy's fields (`metalness`, `sheenColor`, `emissionColor` as radiance). | What `SceneCopyInput.materials` takes. Every field is optional; `createMaterial` fills the defaults. |
+| `OpenPbrParams` | OpenPBR 1.1.2 names in camelCase (`baseMetalness`, `fuzzColor`, `emissionLuminance` × `emissionColor`). | What the glTF mapping produces. `resolveOpenPbr` fills the defaults; `openPbrToRtMaterial` converts to the scene copy's form. |
+
+```ts
+import { openPbrToRtMaterial, type RtMaterialInput } from '@pmndrs/raytracer';
+
+const materials: RtMaterialInput[] = [
+  { baseColor: [0.9, 0.6, 0.2], metalness: 1, specularRoughness: 0.25 }, // RtMaterialInput: gold-like metal
+  openPbrToRtMaterial({ transmissionWeight: 1, specularIor: 1.5, specularRoughness: 0 }), // clear glass
+];
+```
+
+Two defaults differ between the spellings: the coat IOR (1.5 in `RtMaterialInput`, OpenPBR's 1.6 in `OpenPbrParams`) and the sheen/fuzz roughness (0.3 and 0.5). `anisotropyRotation` is in turns in `RtMaterialInput` and in radians in `OpenPbrParams`.
+
+## Parameters (`RtMaterialInput`)
+
+| Lobe | Fields (default) |
+| --- | --- |
+| Base | `baseColor` (0.8 grey), `baseWeight` (1), `metalness` (0) |
+| Specular | `specularWeight` (1), `specularColor` (white), `specularRoughness` (0.3), `ior` (1.5), `specularAnisotropy` (0), `anisotropyRotation` (0, turns) |
+| Conductor | `conductorEtaK` (false): a metal uses `conductorEta` and `conductorK` (complex IOR per channel) instead of `baseColor` |
+| Transmission | `transmissionWeight` (0), `transmissionColor` (white), `transmissionDepth` (0 m = no absorption), `thinWalled` (false), `dispersion` (0) |
+| Coat | `coatWeight` (0), `coatRoughness` (0), `coatIor` (1.5) |
+| Sheen (fuzz) | `sheenWeight` (0), `sheenColor` (white), `sheenRoughness` (0.3) |
+| Thin film | `thinFilmWeight` (0), `thinFilmThickness` (0.5 µm), `thinFilmIor` (1.4) |
+| Emission | `emissionColor` (black; radiance in W/sr/m²), `emissionTwoSided` (false) |
+| Alpha | `alphaMode` (`ALPHA_MODE.opaque`), `opacity` (1), `alphaCutoff` (0.5) |
+| Textures | `baseColorTexture`, `roughnessMetalTexture`, `normalTexture`, `emissionTexture`: indices into `SceneCopyInput.textures` |
+
+Roughness is perceptual (GGX alpha = roughness²). Textures multiply their factors as glTF does: base colour × texture, roughness × G, metalness × B, emission × texture.
+
+## What gets rendered
+
+At each hit the path tracer picks one BSDF from the record. The rules, in order:
+
+| Material | BSDF |
+| --- | --- |
+| `metalness` > 0 | A GGX conductor with complex Fresnel. Its reflectance is `baseColor × baseWeight`, or the explicit eta and k with `conductorEtaK`. A metalness between 0 and 1 picks metal or dielectric at random per hit with probability `metalness`, so the mean is the exact blend. |
+| Metal with `coatWeight` > 0.5 | A dielectric coat over the conductor. |
+| `transmissionWeight` > 0.5 | Glass: a smooth or rough dielectric. `thinWalled` makes it a thin sheet tinted by `transmissionColor`. Otherwise `transmissionDepth` > 0 adds Beer absorption inside the mesh (no nesting of media). |
+| Opaque dielectric with a specular lobe or `coatWeight` > 0.5 | A layered BSDF: the specular (or coat) interface over a Lambert base. A coat replaces the specular interface. |
+| Anything else | Lambert with `baseColor × baseWeight`, or black. |
+
+On top of these:
+
+- **Sheen**: `sheenWeight` > 0 with a non-black `sheenColor` wraps the BSDF in OpenPBR's fuzz layer (Zeltner's LTC sheen).
+- **Thin film**: an uncoated metal or opaque dielectric with `thinFilmWeight` > 0 gets an iridescent Fresnel. It needs `layering: 'albedo'` (below).
+- **Anisotropy**: `specularAnisotropy` stretches the GGX lobe of metals along the vertex tangent. The mesh needs tangents (glTF `TANGENT`).
+- **Emission**: from the front face, or both faces with `emissionTwoSided`. An emitter without an emission texture is also a light (see [Lights](/concepts/lights)).
+- **Alpha mask**: with `alphaMode` mask, a hit where the base colour alpha × `opacity` is below `alphaCutoff` is passed through. The kernel only compiles the cutout test for a textured scene.
+
+The coat weight and the transmission weight are thresholded at 0.5: there is no partial coat or partial transmission. These parameters are stored but not rendered yet: coat colour, `alphaMode` blend (partial opacity renders opaque), subsurface, diffuse roughness, and the metal's F82 tint. `dispersion` is only read in spectral mode (**Experimental**).
+
+## Layered BSDF settings
+
+The layered BSDF (a dielectric interface over a base) has two ways to evaluate it:
+
+| `layering` | What it does |
+| --- | --- |
+| `'albedo'` (default) | A closed form: the base is scaled by the energy the interface lets through, with light the interface reflects back down. Fast, and adds no noise of its own. |
+| `'stochastic'` | pbrt-v4's random walk between the layers (`coateddiffuse`, `coatedconductor`). The reference. It costs more and adds noise. |
+
+With `'albedo'`, `albedoBase: 'internal'` (default) is the closed form of a diffuse base under a dielectric; `'openpbr'` uses the OpenPBR specification's albedo scaling instead. `albedoCorrection` brings the closed form's energy to the random walk's on rough interfaces: `'texture'` (default, an 8 × 8 lookup texture), `'lut'` (the same table as WGSL constants) or `'none'`.
+
+```ts
+const options = ptSceneOptions(scene, { layered: { layering: 'stochastic' } });
+```
+
+## Only the lobes a scene uses
+
+Each lobe costs WGSL, and a big kernel compiles slowly (on Windows in particular). `ptSceneOptions(scene)` calls `ptMaterialFeatures` on the scene's material table and compiles only what the table needs:
+
+| Feature | Compiled when some material has |
+| --- | --- |
+| `mix` | `0 < metalness < 1` (a metallic-roughness texture counts) |
+| `thin` | thin-walled transmission |
+| `medium` | thick transmission with `transmissionDepth` > 0 |
+| `layered` | a dielectric specular lobe or a coat |
+| `coatedMetal` | a coated metal |
+| `aniso` | an anisotropic metal |
+| `fuzz` | sheen |
+| `thinFilm` | a thin film |
+
+Every material in the table counts, even one no ray ever hits.
+
+> [!NOTE]
+> If you write kernel options by hand, pass `integrator.materials` (`{ features: ptMaterialFeatures(records) }`) as `ptSceneOptions` does. Without it the kernel uses its legacy material adapter, which renders every non-metal as pure Lambert. See [Integrator options](/pathtracer/integrator-options).
+
+## glTF
+
+`loadGltf` maps glTF materials and their `KHR_materials_*` extensions to these parameters. [Loading glTF](/getting-started/loading-gltf) has the table.

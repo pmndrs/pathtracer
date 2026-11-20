@@ -75,6 +75,12 @@ Mitsuba 3 code was not read for the BSDFs.
 | `packages/pathtracer/src/bsdf/fuzz-table.ts`, `fuzz.ts`, `fuzz-wgsl.ts` (P2.25) | <https://github.com/tizian/ltc-sheen>: `fitting/python/data/ltc_table_sheen_volume.cpp` (the 32 x 32 LTC table, copied as numbers) and `pbrt-v3/src/materials/sheenltc.cpp` (table lookup, LTC evaluation and sampling, re-written in TypeScript/WGSL) | Apache-2.0, Copyright Tizian Zeltner, Brent Burley, Matt Jen-Yuan Chiang | The fuzz BRDF OpenPBR 1.1.2 recommends (spec, Fuzz section). |
 | `packages/pathtracer/src/bsdf/thinfilm.ts`, `thinfilm-wgsl.ts` (P2.27) | <https://github.com/KhronosGroup/glTF-Sample-Renderer> `source/Renderer/shaders/iridescence.glsl` (`evalIridescence`, `evalSensitivity`, the Gaussian fit constants of the CIE 1931 curves in Fourier space), after Belcour and Barla, "A Practical Extension to Microfacet Theory for the Modeling of Varying Iridescence", SIGGRAPH 2017 | Apache-2.0, Copyright the Khronos Group | Re-written in TypeScript/WGSL; DIVERGES V82 lists the changes (white balance, thickness units). |
 
+### 1.6 ACES filmic curve fit (Krzysztof Narkowicz, 2016)
+
+`examples/shared/present.ts` tone maps with the five-constant fit from Narkowicz's blog post "ACES Filmic Tone Mapping Curve"
+(<https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/>), a published formula used across engines. Cited in the
+shader; examples only, not part of the packages.
+
 ### 1.4 Clean-room status
 
 - NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC, NRD): nothing ported. NRD code never opened.
@@ -106,6 +112,9 @@ are built under `.cache/native/` (git-ignored) and only their rendered images ar
 | Sponza (glTF + `.bin`; geometry only, every material replaced by a grey Lambertian) | scene `sponza-white` (`bench/scenes/tier2/sponza-white.ts`) | Cryengine Limited License Agreement (Crytek, 2016) for the model, CC-BY-4.0 for the glTF metadata | Khronos glTF-Sample-Assets, commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb`, `Models/Sponza` <https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Sponza> | **No.** Downloaded by `bench/assets/fetch.ts`, git-ignored under `bench/assets/downloads/`, sha256 pinned in [bench/assets/MANIFEST.json](bench/assets/MANIFEST.json). Do not commit or redistribute the model files. |
 | Cornell box dimensions and colours | scene `cornell` (`bench/scenes/tier0/cornell.ts`) | measurement data, no licence file; rebuilt as our own geometry code | Goral et al., as distributed by the Cornell PCG lab | Numbers only, in our own scene code |
 
+| pmndrs logo (`examples/shared/pmndrs-logo.svg`, `docs/logo.svg`) | examples gallery nav and favicon, docs logo | MIT (Poimandres, 2020) | pmndrs/branding, `logo.svg` on `master` <https://github.com/pmndrs/branding> | Yes (the SVG, unchanged) |
+| Khronos sample models (Damaged Helmet, Sheen Chair, Toy Car, Clear Coat Test, Metal Rough Spheres, Dragon Attenuation) | example `start/gltf` | per model (CC-BY 4.0 for most; see each model's README) | Khronos glTF-Sample-Assets, commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb` | **No.** Streamed by the page from raw.githubusercontent.com at that commit; never copied into the repo or the site |
+
 Attribution line for Sponza (required by the manifest): "Sponza by Crytek (2016), via Khronos glTF-Sample-Assets".
 The Cryengine licence text is fetched with the asset (`downloads/sponza/LicenseRef-CRYENGINE-Agreement.txt`); read it before
 any redistribution of rendered images that show the model (reference renders are git-ignored today).
@@ -113,7 +122,7 @@ any redistribution of rendered images that show the model (reference renders are
 ### 3.1 Tier 1 models (glTF-Sample-Assets, P2.18)
 
 Eighteen purpose-built test models from Khronos glTF-Sample-Assets, commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb`
-(docs/design/tier1.md section 1.1), used by the Tier 1 coverage matrix and the golden material tables
+(docs/internal/design/tier1.md section 1.1), used by the Tier 1 coverage matrix and the golden material tables
 (`bench/scenes/tier1/golden/`, which hold only OpenPBR parameters derived from the models' material lists, no geometry or textures).
 Downloaded by `bench/assets/fetch.ts` into `bench/assets/downloads/tier1/<Name>/` (git-ignored, **not committed**), sha256 pinned in
 [bench/assets/MANIFEST.json](bench/assets/MANIFEST.json) (ids `tier1-<Name>`), each with its `LICENSE.md` and `metadata.json`. Total download

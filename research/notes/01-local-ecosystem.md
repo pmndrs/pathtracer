@@ -149,7 +149,7 @@ scratch levels + copy dispatches); subgroup kernel + fp16 are M3 ideas, not buil
 
 **Perf (M5 Pro, per full chain, vs render passes).** 1920x1080 rgba8 0.037 ms (3.1x), 4096^2 0.34 ms (1.3x), 1024^2 0.016 ms (7.2x).
 **Infra.** `npm run test:gpu` (headless Chrome real adapter, `--quick`, `--adapter=swiftshader`, `--compat`, 14 shards, CPU oracles + 12-19 mutation checks per feature), `npm run bench`, device lab page;
-Windows RTX 3060 + Intel UHD run + native SPD/D3D11 `GenerateMips`/nvpro matches pending (`docs/WINDOWS-HANDOFF.md`, branch `windows-testing`).
+Windows RTX 3060 + Intel UHD run + native SPD/D3D11 `GenerateMips`/nvpro matches pending (`docs/internal/WINDOWS-HANDOFF.md`, branch `windows-testing`).
 **Own ray walks:** none. **Consumers for us:** Hi-Z for screen-space rays and SSR fallback, mip chains for env/textures, exposure/SH scalar reductions, luminance pyramid for
 adaptive sampling/progressive-exposure.
 

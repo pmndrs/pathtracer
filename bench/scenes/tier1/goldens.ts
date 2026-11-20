@@ -1,5 +1,5 @@
 /**
- * Golden OpenPBR material tables for the Tier 1 models (docs/design/tier1.md section 1.1, TASKS P2.17/P2.18): the output of
+ * Golden OpenPBR material tables for the Tier 1 models (docs/internal/design/tier1.md section 1.1, TASKS P2.17/P2.18): the output of
  * `gltfMaterialToOpenPbr` over each downloaded model's material list, read straight from the model JSON (GLB JSON chunk or `.gltf`),
  * textures skipped (only the slot names are listed).
  *

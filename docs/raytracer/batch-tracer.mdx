@@ -1,0 +1,116 @@
+---
+title: Batch tracer
+description: RtBatchTracer traces a GPU buffer of rays into a GPU buffer of results.
+nav: 22
+---
+
+`RtBatchTracer` is a compiled kernel that reads rays from a storage buffer and writes one result per ray: a hit record (`'closest'`) or a visibility word (`'visible'`). Everything is recorded into your command encoder. Nothing is read back, and once a batch's buffers have been seen, a frame does no CPU writes.
+
+Use it when one pass makes the rays and a later pass uses the results, for example shadow rays for a list of light samples, or when the ray count is only known on the GPU. If you are already inside a kernel per pixel, calling `rtVisible` [inline](/raytracer/inline-wgsl) is simpler.
+
+[Live example](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/): shadow rays from a buffer.
+
+## Tracing a batch
+
+```ts
+import { RtBatchTracer, buildGpuScene, packRays, readVisibility, type Ray } from '@pmndrs/raytracer';
+
+const scene = await buildGpuScene(device, input);
+const tracer = await RtBatchTracer.create(device, caps, { ...scene.format, mode: 'visible' });
+
+const rays: Ray[] = [
+  { origin: [0, 0.01, 0], tMin: 0, direction: [0, 1, 0], tMax: 2 },
+  { origin: [1, 0.01, 0], tMin: 0, direction: [0, 1, 0], tMax: 2 },
+];
+const packed = packRays(rays);
+const rayBuffer = device.createBuffer({ size: packed.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+device.queue.writeBuffer(rayBuffer, 0, packed);
+const results = device.createBuffer({ size: rays.length * tracer.resultBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+
+const encoder = device.createCommandEncoder();
+tracer.encode(encoder, scene.trace, { rays: rayBuffer, results, count: rays.length });
+device.queue.submit([encoder.finish()]);
+
+// Reading back is for tests and tools; a renderer binds `results` in its next pass instead.
+const staging = device.createBuffer({ size: results.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+const copy = device.createCommandEncoder();
+copy.copyBufferToBuffer(results, 0, staging, 0, results.size);
+device.queue.submit([copy.finish()]);
+await staging.mapAsync(GPUMapMode.READ);
+const visible = readVisibility(staging.getMappedRange(), rays.length); // one boolean per ray
+staging.unmap();
+```
+
+`encode(encoder, trace, batch)` opens its own compute pass. `dispatch(pass, trace, batch)` records into a pass you already have; several batches can share one. `destroy()` frees the small uniform and argument buffers the tracer made; your buffers are never touched.
+
+## Options
+
+`RtBatchTracer.create(device, caps, options)` compiles one kernel. Everything below is fixed at compile time.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `mode` | required | `'closest'`: a hit record per ray. `'visible'`: one `u32` per ray, 1 = nothing in the way. |
+| `nodeFormat`, `triangleLeaves`, `positionLayout` | bvh's defaults | Spread `scene.format`. A scene in another format throws when traced. |
+| `workgroupSize` | `64` | `32`, `64`, `128` or `256`. |
+| `rayLayout` | `'aos'` | `'aos'`: one buffer of 32-byte rays. `'soa'`: two buffers, `[origin, tMin]` and `[direction, tMax]`, 16 bytes per ray each. |
+| `hitRecord` | `'full'` | `'full'`: 40-byte record. `'compact'`: 24 bytes, without material and normal. |
+| `indirect` | `false` | Read the ray count from a GPU buffer and dispatch indirectly. |
+| `cones` | `false` | Closest mode only: read a ray cone per ray, write the cone width at the hit. |
+| `rayMasks` | `true` | Compile instance masks in. |
+| `triangleFilter`, `anyHitOrder` | | As for [`rtModuleWgsl`](/raytracer/inline-wgsl#options). |
+| `label` | `rt batch <mode>` | Label of the pipeline and buffers. |
+
+## The batch
+
+| Field | What |
+| --- | --- |
+| `rays` | One buffer (`aos`) or a pair `[a, b]` (`soa`), `STORAGE` usage. |
+| `results` | At least `count * tracer.resultBytes` bytes, `STORAGE` usage. |
+| `count` | The ray count, or for an indirect tracer `{ buffer, word, capacity }`: the count is `buffer[word]` (a `u32`, `STORAGE` usage), clamped to `capacity`. |
+| `mask` | One ray mask for the whole batch. Default all ones. |
+| `cones` | Cone tracer only: `{ cones, widths }`. `cones` holds 8 bytes per ray (`width`, `spread`), `widths` gets one `f32` per ray (0 on a miss). |
+| `timestampWrites` | For `encode` only: timestamps around the batch's pass. |
+
+Buffers smaller than `capacity` entries throw. The tracer caches a uniform and a bind group per batch shape (its buffers, count and mask), up to 256 shapes. A direct count that changes every frame makes a new shape every frame: use an indirect tracer for that.
+
+## Record layouts
+
+A ray is 32 bytes (`RAY_BYTES`), the same layout as bvh's `BvhRay` and WGSL `RtRay`:
+
+| Bytes | Field |
+| --- | --- |
+| 0-11 | `origin` (vec3 f32) |
+| 12-15 | `tMin` |
+| 16-27 | `direction` (unit length) |
+| 28-31 | `tMax` |
+
+A full hit record is 40 bytes (`HIT_BYTES`); the compact one is the first 24 (`HIT_COMPACT_BYTES`):
+
+| Word | Field |
+| --- | --- |
+| 0 | `t` (f32), negative on a miss (`MISS_T` is -1) |
+| 1 | `instance` |
+| 2 | `triangle`: index in the instance's original mesh |
+| 3 | `frontFace` (0 or 1) |
+| 4-5 | barycentrics of vertices 1 and 2 (f32) |
+| 6 | `material` (full only) |
+| 7-9 | world-space geometric normal (full only) |
+
+`HIT_WORD` gives these word offsets in code. `resultBytes(mode, hitRecord)` gives the stride.
+
+## CPU helpers
+
+| Function | What it does |
+| --- | --- |
+| `packRays(rays)` | `Ray[]` to a `Float32Array` in the AoS layout. |
+| `packRaysSoa(rays)` | `Ray[]` to `{ a, b }` for the SoA layout. |
+| `aosToSoa(packed)` | AoS floats to `{ a, b }`, bit for bit. |
+| `unpackRay(packed, index)` | One `Ray` back from AoS floats. |
+| `packCones(cones)` | `RayCone[]` to a `Float32Array`. |
+| `readHits(data, count, hitRecord)` | Hit records to `Hit[]`. Compact records report material `0xffffffff` and a zero normal. |
+| `readVisibility(data, count)` | Visibility words to `boolean[]`. |
+| `dispatchGrid(count, workgroupSize, maxPerDimension)` | The 2D workgroup grid the kernel uses for large counts. |
+
+## Building your own pipeline
+
+The tracer is a thin wrapper. If you want the kernel inside your own pipeline setup, `rtBatchKernelWgsl(caps, options)` returns its WGSL (entry point `rtBatch`, the walk in group 0, the batch IO in group 1), `rtBatchEntries(resolveBatchOptions(options))` its group 1 layout entries, and `rtBatchArgsKernelWgsl` the one-thread kernel (entry point `rtBatchArgs`) that writes indirect dispatch arguments.

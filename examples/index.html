@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pathtracer examples</title>
+    <meta name="description" content="Examples of @pmndrs/raytracer and @pmndrs/pathtracer: WebGPU ray and path tracing." />
+    <link rel="icon" type="image/svg+xml" href="/shared/pmndrs-logo.svg" />
+    <link rel="stylesheet" href="/shared/theme.css" />
+    <link rel="stylesheet" href="/gallery.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap top-row">
+        <a class="brand" href="./" aria-label="pathtracer examples">
+          <img src="/shared/pmndrs-logo.svg" alt="" width="32" height="32" />
+          <span>pathtracer <em>examples</em></span>
+        </a>
+        <nav class="links" aria-label="Project links">
+          <a id="docs-link" href="../">Docs</a>
+          <a href="https://github.com/pmndrs/pathtracer">GitHub</a>
+          <a href="https://www.npmjs.com/package/@pmndrs/pathtracer">npm</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="intro">
+        <h1>Ray and path tracing on WebGPU</h1>
+        <p>
+          <code>@pmndrs/raytracer</code> traces rays against a GPU BVH from your own shaders. <code>@pmndrs/pathtracer</code> builds a physically based
+          path tracer on it, from reference renders to real-time frames. Each example is one page with its source on GitHub.
+        </p>
+        <div id="gpu" class="gpu" role="status">Checking WebGPU…</div>
+      </section>
+
+      <section class="controls" aria-label="Filter examples">
+        <div id="chips" class="chips" role="group" aria-label="Category"></div>
+        <label class="toggle"><input id="show-experimental" type="checkbox" checked /> Show experimental and research</label>
+      </section>
+
+      <aside class="legend" aria-label="Status labels">
+        <span class="item"><span class="badge experimental">Experimental</span> works and is checked, but the API or its defaults can still change.</span>
+        <span class="item"><span class="badge research">Research</span> a study from a research track, not a supported feature.</span>
+      </aside>
+
+      <div id="sections"></div>
+    </main>
+
+    <footer class="wrap foot">
+      MIT licensed. Part of <a href="https://pmnd.rs">Poimandres</a>. Models are streamed from the
+      <a href="https://github.com/KhronosGroup/glTF-Sample-Assets">Khronos glTF sample assets</a> under their own licences.
+    </footer>
+    <script type="module" src="/gallery.ts"></script>
+  </body>
+</html>

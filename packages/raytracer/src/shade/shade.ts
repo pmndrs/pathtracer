@@ -7,7 +7,7 @@
  *
  * Modes (`depth` in the spec): FLAT (no rays), LAMBERT (diffuse only, one shadow ray), FULL (diffuse + GGX specular, one shadow ray).
  * The estimator is the plain single-sample one, `L = Le f |cos| / (pmfLight * pdfSample)`: no MIS, because `rtShade` takes no BSDF
- * sample (the consumer's continuation ray is the BSDF sample and it ends at its own `rtShade`). See docs/design/shade.md.
+ * sample (the consumer's continuation ray is the BSDF sample and it ends at its own `rtShade`). See docs/internal/design/shade.md.
  *
  * Conventions: every vector is world space; `wo` points from the surface toward the viewer; `normal` and `geometricNormal` are on the
  * viewer's side; `u = (selectLight, pointU, pointV)` are three independent numbers in [0, 1) from the caller's sampler.
@@ -37,7 +37,7 @@ export interface RtShadeOptions {
   /**
    * How an environment light picked by the light selection is sampled: `'uniform'` over the sphere (same as the path tracer's NEE)
    * or `'cosine'` over the shading hemisphere (zero variance for a Lambertian surface under a uniform sky). Default 'uniform'
-   * until the A/B in docs/design/shade.md settles it.
+   * until the A/B in docs/internal/design/shade.md settles it.
    */
   envSampling?: 'uniform' | 'cosine';
   /** FLAT mode content: `'cache'` (default) = emission + indirect only; `'albedo'` = emission + the unlit base colour, in `direct`. */

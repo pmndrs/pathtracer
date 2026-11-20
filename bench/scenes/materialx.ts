@@ -1,6 +1,6 @@
 /**
  * MaterialX materials as bench scene materials (P5). A MaterialX document becomes an `openpbr` `MaterialDesc` plus the textures it needs, by one of
- * three modes (docs/design/materialx.md):
+ * three modes (docs/internal/design/materialx.md):
  *
  *  - `constants`: every input is constant (folded); the material is exactly the equivalent `openpbr` description.
  *  - `bake` (approach a): inputs that vary over uv are baked to textures in the scene's texture buckets (`bakeMtlxMaterial`); no kernel change.
@@ -10,14 +10,14 @@
  * Texels are lazy (`generator: 'lazy'`): describing a scene parses the document only; baking and image decoding happen when a renderer builds the
  * scene copy. Everything here is page-safe (no `node:` imports); Node-only image loaders are passed in by the caller.
  */
-import { bakeMtlxMaterial, imageSampler, loadMtlxMaterial, mtlxConstantParams, mtlxFallbackParams, mtlxProgramsWgsl, type MtlxImage, type MtlxImageRequest, type MtlxMaterial, type MtlxPrograms } from '@pmndrs/pathtracer';
+import { bakeMtlxMaterial, imageSampler, loadMtlxMaterial, mtlxConstantParams, mtlxFallbackParams, mtlxFeatureProbes as featureProbes, mtlxImageKey as imageKey, mtlxProgramsWgsl, type MtlxImageLoader, type MtlxImageRequest, type MtlxMaterial, type MtlxPrograms } from '@pmndrs/pathtracer';
 import type { RtMaterialInput } from '@pmndrs/raytracer';
 import { syntheticImage } from './materialx-images.ts';
 import type { MaterialDesc, OpenPbrParams, SceneDesc, TextureDesc } from './schema.ts';
 import { registerLazyTexture } from './textures.ts';
 
 export type MaterialXMode = 'constants' | 'bake' | 'codegen';
-export type MtlxImageLoader = (file: string) => MtlxImage | undefined;
+export type { MtlxImageLoader };
 
 export interface MaterialXSource {
   /** Registry key (also the prefix of the texture names). Unique per material. */
@@ -51,8 +51,6 @@ export const getMtlxEntry = (key: string): MtlxEntry => {
   if (!e) throw new Error(`MaterialX material '${key}' is not registered (import the module that defines the scene)`);
   return e;
 };
-
-const imageKey = (r: MtlxImageRequest): string => `${r.file}|${r.srgb ? 's' : 'l'}|${r.uaddress}|${r.vaddress}`;
 
 /** Parses, plans and registers; returns the material description and its textures (lazy). */
 export function buildMaterialX(src: MaterialXSource): { material: Extract<MaterialDesc, { type: 'openpbr' }>; textures: Record<string, TextureDesc>; entry: MtlxEntry } {
@@ -121,18 +119,6 @@ export function buildMaterialX(src: MaterialXSource): { material: Extract<Materi
   const desc = { type: 'openpbr' as const, ...(params as OpenPbrParams), ...(out as OpenPbrParams) };
   entries.set(src.key, entry);
   return { material: desc, textures, entry };
-}
-
-/** Feature probes for `ptMaterialFeatures`: a program that varies a lobe weight needs the kernel compiled for that lobe, whatever the record's fallback value is. */
-function featureProbes(mtl: MtlxMaterial): RtMaterialInput[] {
-  const probes: RtMaterialInput[] = [];
-  const v = mtl.varying;
-  if (v.coatWeight || v.coatRoughness || v.coatColor) probes.push({ coatWeight: 0.5, coatRoughness: 0.1 });
-  if (v.transmissionWeight) probes.push({ transmissionWeight: 0.5 });
-  if (v.fuzzWeight) probes.push({ sheenWeight: 0.5 });
-  if (v.baseMetalness) probes.push({ metalness: 0.5 });
-  if (v.specularRoughnessAnisotropy) probes.push({ specularAnisotropy: 0.5 });
-  return probes;
 }
 
 export interface MaterialXKernelInput {

@@ -2,7 +2,7 @@
  * The megakernel path tracer's WGSL (prefix `pt`), one thread per pixel, one sample per dispatch. The integrator is pbrt-v4's
  * `PathIntegrator` (Apache-2.0, THIRD_PARTY 1.3) in structure: emission at the hit, depth check, next-event estimation with
  * the power heuristic against BSDF sampling, BSDF sampling, Russian roulette; Mitsuba's `max_depth` is ours + 1.
- * See docs/design/integrator.md for the semantics line by line and DIVERGES.md for where we leave pbrt.
+ * See docs/internal/design/integrator.md for the semantics line by line and DIVERGES.md for where we leave pbrt.
  *
  * Bindings: bvh walk at group 0, scene copy at group 1 (two buffers), group 2 = `ptParams` (uniform, dynamic offset) and
  * `ptAccum` (read-write `array<vec4f>`, one f32 sum per pixel). Radiance is `PtRadiance` = vec4f (rgb + a reserved lane,
@@ -26,16 +26,16 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   sampler?: PtSamplerKind;
   /** `sampler: 'bluenoise'`: how many leading pairs read the texture (default 6, at most 15). */
   blueNoisePairs?: number;
-  /** `sampler: 'bluenoise'`: the per-frame shift (`'owen'` default, `'kronecker'`; P4.1 A/B, `docs/design/realtime.md`). */
+  /** `sampler: 'bluenoise'`: the per-frame shift (`'owen'` default, `'kronecker'`; P4.1 A/B, `docs/internal/design/realtime.md`). */
   blueNoiseShift?: PtBlueNoiseShift;
   /**
-   * Per-frame guide outputs for a temporal denoiser / upscaler (P4.1, real-time mode; megakernel only; docs/design/realtime.md): the kernel writes ONE sample per pixel per
+   * Per-frame guide outputs for a temporal denoiser / upscaler (P4.1, real-time mode; megakernel only; docs/internal/design/realtime.md): the kernel writes ONE sample per pixel per
    * dispatch (no accumulation: `accumulate` defaults to false with it) plus 7 planes in `ptFrame`: diffuse and specular radiance demodulated, world normal + viewZ, motion
    * + roughness, the demodulation factors, the emission that bypasses them (`frameEmission`). Default false: no frame code at all (the kernel text is unchanged).
    */
   frame?: boolean;
   /**
-   * With `frame` (P4.5a, docs/design/realtime.md section 3): which light bypasses the demodulated planes into plane 6 (`emission`, added back AFTER the filter): radiance the primary
+   * With `frame` (P4.5a, docs/internal/design/realtime.md section 3): which light bypasses the demodulated planes into plane 6 (`emission`, added back AFTER the filter): radiance the primary
    * BSDF does not modulate, noise-free at the primary hit, which dividing by the albedo factor (floored at 1e-3 for an emitter) turns into a huge value the filter would spread.
    *  - `'none'`: off, plane 6 is zero and emission is demodulated like everything else (the P4.1 behaviour; the A/B baseline).
    *  - `'primary'`: emission of an emitter hit by the primary ray, and the environment / sun seen by a primary ray that missed.
@@ -125,7 +125,7 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   materials?: PtMaterialOptions | null;
   /**
    * L3 path hooks (R10, spec section 8): user WGSL `ptOnVertex(v: PtPathVertex) -> u32` and `ptTerminate(v: PtPathVertex) -> vec3f`, called by both
-   * schedulers at every scattering vertex after emission and next-event estimation (`outputs-wgsl.ts`; `docs/design/integrator.md`). A hook that returns
+   * schedulers at every scattering vertex after emission and next-event estimation (`outputs-wgsl.ts`; `docs/internal/design/integrator.md`). A hook that returns
    * `PT_HOOK_TERMINATE` ends the path and adds `throughput * ptTerminate(v)`. Default null: no hook code at all (the kernel text is unchanged).
    */
   hooks?: PtHooksOptions | null;
@@ -158,14 +158,14 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   restir?: PtRestirOptions | null;
   /**
-   * Participating media (P5, megakernel only; docs/design/volumes.md): homogeneous and dense-grid media bounded by closed meshes, delta tracking for free flight,
+   * Participating media (P5, megakernel only; docs/internal/design/volumes.md): homogeneous and dense-grid media bounded by closed meshes, delta tracking for free flight,
    * Henyey-Greenstein scattering with next-event estimation and MIS, transmittance on shadow rays, medium-boundary ("interface") surfaces that rays pass through.
    * Default null: no volume code at all (the kernel text is unchanged). Cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, `alphaMask`, hooks or the
    * `materials.features.medium` absorber (`materials` may be set for other lobes).
    */
   volumes?: PtVolumeOptions | null;
   /**
-   * Spectral transport (P5, `docs/design/spectral.md`): paths carry three wavelengths (hero sampling) in the lanes of the vec3 throughput; every RGB reflectance,
+   * Spectral transport (P5, `docs/internal/design/spectral.md`): paths carry three wavelengths (hero sampling) in the lanes of the vec3 throughput; every RGB reflectance,
    * conductor eta / k, transmission / coat / sheen colour is uplifted to its sigmoid-polynomial spectrum (Jakob and Hanika 2019, as pbrt-v4), emission and the
    * environment / sun to the same times D65, and the sample is converted to linear Rec.709 by the CIE 1931 matching functions. Opt-in (default off: the kernel text is
    * unchanged). Needs the table texture (`PtMegakernelOptions.spectralTable`, group 2 binding `PT_SPEC_BINDING`); megakernel only; no hooks / frame / AOVs / ReSTIR.

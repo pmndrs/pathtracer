@@ -1,0 +1,180 @@
+---
+title: Inline WGSL
+description: rtModuleWgsl gives you trace functions to call from your own compute shader.
+nav: 21
+---
+
+`rtModuleWgsl(caps, options)` returns a block of WGSL: bvh's walk, the trace functions and, if you ask, the scene copy. Append your own kernel to it, compile, and call `rtClosest` or `rtVisible` wherever you need a ray. The module declares its own bindings; you choose the group and first binding number.
+
+## A complete kernel
+
+This shader traces one camera ray per pixel and writes the shading normal of the hit as a colour. [The live version](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) adds more views (depth, uv, material id).
+
+```ts
+import {
+  rtCreateComputePipelineAsync, rtModuleWgsl, rtSceneBindGroupEntries, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtWalkEntries, withBindings,
+} from '@pmndrs/raytracer';
+
+// device and caps from requestDeviceForCaps (see Capabilities), scene from buildGpuScene (see Overview).
+
+// Group 0: the walk. Group 1: the scene copy. Group 2: ours.
+const module = rtModuleWgsl(caps, {
+  ...scene.format,
+  traceSlot: { group: 0, firstBinding: 0 },
+  scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, textures: scene.copy.textureLayout, packing: scene.packing },
+});
+
+const kernel = /* wgsl */ `
+struct Cam { origin: vec3f, tanHalfFov: f32, right: vec3f, aspect: f32, up: vec3f, width: u32, forward: vec3f, height: u32 }
+@group(2) @binding(0) var<uniform> cam: Cam;
+@group(2) @binding(1) var outImage: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= cam.width || id.y >= cam.height) { return; }
+  let ndc = (vec2f(id.xy) + 0.5) / vec2f(f32(cam.width), f32(cam.height)) * 2.0 - 1.0;
+  let dir = normalize(cam.forward + cam.right * (ndc.x * cam.tanHalfFov * cam.aspect) - cam.up * (ndc.y * cam.tanHalfFov));
+  let ray = rtRay(cam.origin, dir, 0.0, 1e30);
+  let hit = rtClosest(ray, RT_MASK_ALL);
+  var color = vec3f(0.0);
+  if (rtIsHit(hit)) {
+    let s = rtSurface(hit, ray, RT_SURF_SHADING_NORMAL);
+    color = s.shadingNormal * 0.5 + 0.5;
+  }
+  textureStore(outImage, id.xy, vec4f(color, 1.0));
+}`;
+
+const COMPUTE = GPUShaderStage.COMPUTE;
+const layouts = [
+  device.createBindGroupLayout({ entries: withBindings(rtWalkEntries(scene.format)) }),
+  device.createBindGroupLayout({ entries: rtSceneCopyLayoutEntries(0, scene.copy.textureLayout, scene.packing) }),
+  device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+    { binding: 1, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba8unorm' } },
+  ] }),
+];
+const pipeline = await rtCreateComputePipelineAsync(device, {
+  layout: device.createPipelineLayout({ bindGroupLayouts: layouts }),
+  code: module + kernel,
+  entryPoint: 'main',
+});
+
+const [width, height] = [640, 360];
+const image = device.createTexture({ size: [width, height], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+
+// Camera at (0, 1.5, 5) looking down -Z, 45 degree vertical field of view (right-handed, +Y up).
+const cam = new ArrayBuffer(64);
+const [f, u] = [new Float32Array(cam), new Uint32Array(cam)];
+f.set([0, 1.5, 5, Math.tan((45 * Math.PI) / 360), 1, 0, 0, width / height, 0, 1, 0]);
+u[11] = width;
+f.set([0, 0, -1], 12);
+u[15] = height;
+const camBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+device.queue.writeBuffer(camBuffer, 0, cam);
+
+const groups = [
+  device.createBindGroup({ layout: layouts[0]!, entries: rtSceneBindGroupEntries(scene.trace) }),
+  device.createBindGroup({ layout: layouts[1]!, entries: rtSceneCopyBindGroupEntries(scene.buffers) }),
+  device.createBindGroup({ layout: layouts[2]!, entries: [
+    { binding: 0, resource: { buffer: camBuffer } },
+    { binding: 1, resource: image.createView() },
+  ] }),
+];
+
+const encoder = device.createCommandEncoder();
+const pass = encoder.beginComputePass();
+pass.setPipeline(pipeline);
+groups.forEach((group, i) => pass.setBindGroup(i, group));
+pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
+pass.end();
+device.queue.submit([encoder.finish()]);
+```
+
+`image` now holds the picture. Copy it to a canvas texture or draw it with a fullscreen pass.
+
+## Options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `nodeFormat`, `triangleLeaves`, `positionLayout` | bvh's defaults | The scene's buffer formats, compiled into the walk. Spread `scene.format` (or `sceneFormatOf(trace)`) so they always match. |
+| `traceSlot` | `{ group: 0, firstBinding: 0 }` | Where the walk's bindings go: 3 storage buffers, 4 with indexed leaves. |
+| `scene` | none | Add the scene copy at `scene.slot`: `rtSurface`, `rtMaterial` and the light functions. See below. |
+| `shade` | off | Add `rtShade`, one-bounce shading. `true` or `RtShadeOptions`. See [Shading](/raytracer/shading). |
+| `intervals` | `false` | Add the [interval queries](/raytracer/interval-queries). |
+| `rayMasks` | `true` | Compile instance masks into the walk. `false` makes the `mask` argument a no-op and the walk a little smaller. |
+| `stripComments` | `true` | Remove comments, keeping line breaks so compiler line numbers still match. |
+| `minify` | `false` | Also drop indentation and spaces around punctuation (line breaks stay). Use it with `shade`. |
+| `anyHitOrder` | `'far'` | Child order of the any-hit walk (bvh's setting). |
+| `triangleFilter` | every triangle blocks | WGSL for bvh's `fn bvhTrianglePasses(candidate: BvhCandidate) -> bool` hook, called for triangles flagged in bvh; `null` to declare it yourself. See [@pmndrs/bvh](https://github.com/pmndrs/bvh). |
+| `wideWalk`, `wideDecode` | `wideDecode: 'folded'` | Compile options of the experimental wide formats (`bvh4`, `cwbvh8`). |
+
+`scene` takes:
+
+| Field | Default | What it does |
+| --- | --- | --- |
+| `slot` | required | Group and first binding of the scene copy (1 binding packed, 2 split, then textures). |
+| `layout` | required | `scene.copy.layout`: which vertex attributes the copy stores. |
+| `packing` | `'packed'` | Must match the upload (`scene.packing`). |
+| `textures` | none | `scene.copy.textureLayout`: adds the texture arrays and lookups. Pass it whenever the scene has textures, so the layout and the bind group agree. |
+| `surface`, `materials`, `lights` | `true` | Leave out `rtSurface`, `rtMaterial` or the light functions. |
+| `sampling` | `false` | Add light point sampling (`rtSampleLightLi`). |
+
+## The WGSL you get
+
+```wgsl
+struct RtRay { origin: vec3f, tMin: f32, direction: vec3f, tMax: f32 }   // direction unit length
+struct RtCone { width: f32, spread: f32 }
+struct RtHit { t: f32, instance: u32, triangle: u32, frontFace: bool, bary: vec2f, material: u32, normal: vec3f, coneWidth: f32 }
+
+fn rtVisible(ray: RtRay, mask: u32) -> bool                       // true = nothing blocks [tMin, tMax]
+fn rtVisibleSegment(a: vec3f, b: vec3f, mask: u32, eps: f32) -> bool
+fn rtClosest(ray: RtRay, mask: u32) -> RtHit                      // t == RT_MISS_T (-1) on a miss
+fn rtClosestCone(ray: RtRay, mask: u32, cone: RtCone) -> RtHit    // also sets coneWidth at the hit
+fn rtSurface(hit: RtHit, ray: RtRay, want: u32) -> RtSurface      // needs the scene copy
+```
+
+Both ends of `[tMin, tMax]` are inclusive. `RtHit.triangle` is the triangle's index in its original mesh, `bary` are the weights of vertices 1 and 2, and `normal` is the world-space geometric normal of the authored front side. `material` is the instance's or triangle's material id, `RT_NO_MATERIAL` when there is none.
+
+Helpers: `rtRay(origin, direction, tMin, tMax)`, `rtSegment(a, b, trimStart, trimEnd)` (a segment as a ray, pulled in at both ends), `rtIsHit(hit)`, `rtConeAt(cone, t)`, `rtConePropagate(cone, t, extraSpread)`.
+
+### rtSurface
+
+`rtSurface` decodes what a hit needs from the scene copy. Only the bits in `want` are loaded:
+
+| Bit | Field |
+| --- | --- |
+| `RT_SURF_POSITION` | `position`: world space. From the vertices when the copy stores positions (`buildGpuScene` does), else `origin + t * direction`. |
+| `RT_SURF_GEOMETRIC_NORMAL` | `geometricNormal`, `frontFace` (free: they come with the hit). |
+| `RT_SURF_SHADING_NORMAL` | `shadingNormal`: interpolated, on the geometric normal's side; the geometric normal when the mesh has none. |
+| `RT_SURF_UV` | `uv`, zero when the mesh has none. |
+| `RT_SURF_MATERIAL` | `material` (free). |
+| `RT_SURF_TEXFRAME` | `uvDensity` and `tangent` for texture level of detail and normal maps. Only with `scene.textures`. |
+| `RT_SURF_TANGENT` | `vertexTangent`. Only when the layout stores tangents. |
+
+`RT_SURF_ALL` is the first five. Normals face the authored front side, so flip them with `frontFace` when you need the side facing the ray.
+
+## Masks
+
+Each instance has an 8-bit mask (`mask` on the scene's instances, 0 to 255, default 255). A trace skips an instance when `(instanceMask & rayMask) == 0`. `RT_MASK_ALL` hits everything. Use a mask bit to keep shadow rays from hitting emitters, or picking rays from hitting helpers. Masks survive bvh's merging of static instances.
+
+## Compiler errors
+
+The module is long and generated, so a raw compiler message is hard to place. `rtCreateComputePipelineAsync(device, { code, layout, entryPoint, map })` compiles normally. If the pipeline fails, it throws an `Error` with the compiler messages, the source line and the lines around it.
+
+If you shrink the text yourself with `rtTransformWgsl` (prune unused declarations, shorten names, minify), pass the returned `map`: messages then name the original lines and identifiers.
+
+```ts
+import { rtTransformWgsl, stripWgslComments } from '@pmndrs/raytracer';
+
+const { code, map } = rtTransformWgsl(module + stripWgslComments(kernel), { keep: ['main'] });
+const pipeline = await rtCreateComputePipelineAsync(device, { layout, code, map, entryPoint: 'main' });
+```
+
+To read messages by hand: `rtMapCompilationInfo(await shaderModule.getCompilationInfo(), map)`, or `rtCheckShaderModule(shaderModule, map)`, which throws on an error.
+
+## Things to know
+
+- The module starts with `enable` lines for the device's features. Put it first in your shader. To paste it into the middle of another shader, build `caps` with no optional features ([Capabilities](/raytracer/capabilities)).
+- Do not run the module through `buildWgsl` again: it is already preprocessed.
+- Keep the whole shader under about 50 KB: Windows' shader compiler slows down sharply above that. `rtModuleStorageBuffers(options)` tells you how many storage buffers the module adds.
+- With a packed scene copy, your own WGSL that reads `rtSceneTable` or `rtSceneData` directly must go through `rtPackSceneAccess`. Calling the module's functions needs nothing.

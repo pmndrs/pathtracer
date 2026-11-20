@@ -1,0 +1,60 @@
+/* Shared tokens for the gallery and the example frame. The palette follows the pmndrs docs (lime on warm neutral greys). */
+:root {
+  color-scheme: dark;
+  --bg: #0e0e0c;
+  --surface: #181815;
+  --surface-2: #22221e;
+  --border: rgba(255, 255, 240, 0.1);
+  --border-strong: rgba(255, 255, 240, 0.2);
+  --text: #ecebe4;
+  --muted: #a3a194;
+  --accent: #caf543;
+  --accent-ink: #172000;
+  --experimental: #ffc35a;
+  --research: #c9a7ff;
+  --danger: #ff4980;
+  --radius: 12px;
+  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 var(--font);
+}
+
+a {
+  color: var(--accent);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font: 600 11px/18px var(--font);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.badge.experimental {
+  color: var(--experimental);
+}
+.badge.research {
+  color: var(--research);
+}
+.badge.stable {
+  color: var(--accent);
+}
+.badge.muted {
+  color: var(--muted);
+  border-color: var(--border-strong);
+}

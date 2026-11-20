@@ -1,0 +1,127 @@
+---
+title: Megakernel
+description: PtMegakernel runs a whole path per thread, one dispatch per sample pass.
+nav: 30
+---
+
+`PtMegakernel` is the default scheduler. One compute thread traces one pixel's whole path: camera ray, bounces, next-event estimation and Russian roulette. Each dispatch adds one sample to every pixel. It has the smallest setup cost and supports every integrator option.
+
+[Your first render](/getting-started/your-first-render) builds a complete program with it. This page covers the rest of the API. For when to pick the [wavefront](/pathtracer/wavefront) instead, see [Schedulers](/concepts/schedulers).
+
+## Creating a kernel
+
+```ts
+import { PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
+
+const options = ptSceneOptions(scene, { integrator: { sampler: 'owen-sobol' } });
+const pt = await PtMegakernel.create(device, caps, options);
+pt.setScene(scene.trace, scene.buffers);
+```
+
+`PtMegakernel.create(device, caps, options)` generates WGSL for exactly these options, compiles it and returns the kernel. Compiling a shader of this size is not free, so create a kernel once per scene and keep it.
+
+`ptSceneOptions(scene, overrides)` reads a `GpuScene` from `buildGpuScene` and fills in what the scene decides:
+
+| Field | Comes from |
+| --- | --- |
+| `format` | The BVH node format of `scene.trace`. The wide formats `bvh4` and `cwbvh8` are experimental. |
+| `layout` | The surface layout of the scene copy (normals, uvs, positions, tangents). |
+| `textures` | The texture layout, or `null` for an untextured scene. |
+| `scenePacking` | How the scene copy was uploaded (`scene.packing`). |
+| `integrator.materials` | The OpenPBR lobes the materials use (`ptMaterialFeatures`). |
+| `integrator.envMap`, `envSampling` | `true` and `'importance'` when the environment has a map. |
+| `integrator.alphaMask` | `true` when a textured material uses `alphaMode` mask. |
+
+Everything in `overrides` wins over the scene's values. `integrator` is merged one level deep, and `integrator.materials` one level deeper. `layered` sets the layered BSDF settings (see [Integrator options](/pathtracer/integrator-options#materials)). Set `integrator.materials` to `null` to use the legacy material adapter, where a non-metal is plain Lambert. `materialProbes` adds records that count only for which lobes are compiled (MaterialX programs use it).
+
+> [!WARNING]
+> A kernel and a scene must agree on the node format, the scene packing and whether there are textures. `setScene` throws on a mismatch. Build the kernel from the scene it will draw, with `ptSceneOptions`, rather than by hand.
+
+### Other create options
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `mode` | none | `'reference'`, `'preview'` or `'realtime'`. Fills the integrator settings you left undefined and the starting limits. See [Modes](/concepts/modes). |
+| `blueNoise` | none | The blue-noise texture, needed by `sampler: 'bluenoise'`. See [Real time](/pathtracer/realtime). |
+| `volumeGrid` | none | The density grid of a grid medium. See [Volumes](/pathtracer/volumes). |
+| `spectralTable` | fitted on first use | The RGB-to-spectrum table. See [Spectral rendering](/pathtracer/spectral). |
+| `minify` | `true` | Drops indentation and spaces. Line breaks stay, so line numbers do not move. |
+| `prune` | `true` | Drops WGSL declarations the entry point cannot reach. |
+| `shortenNames` | `true` | Renames top-level WGSL names to one or two letters. |
+| `sourceMap` | `false` | Also passes a Source Map v3 to `createShaderModule`. Browsers may ignore it. |
+| `label` | `'pt megakernel'` | Label of the pipeline and buffers. |
+
+`mode` does not change `scenePacking`. If you want the mode's packing, pass `ptModePreset(mode).scenePacking` to both `buildGpuScene` and the kernel.
+
+## The lifecycle
+
+| Call | What it does |
+| --- | --- |
+| `setScene(trace, buffers)` | Binds the BVH and the scene copy. Call again after rebuilding the scene. |
+| `setFilm(width, height)` | Allocates the accumulator. A new size replaces it and restarts the sample count. |
+| `setCamera(camera)` | A look-at pinhole: `position`, `target`, `up`, `yFovDeg` (vertical field of view in degrees). |
+| `setLimits(limits)` | `maxDepth`, optional `rrStartDepth` and `textureConeScale`. |
+| `setSeed(seed)` | The scrambling seed. A new seed gives an independent noise pattern. |
+| `reset(encoder)` | Clears the accumulator and the sample count. Records a clear into `encoder`. |
+| `encode(encoder, passes)` | Records `passes` sample passes into your encoder. |
+| `readImage()` | Reads back the mean radiance. |
+| `destroy()` | Frees the kernel's buffers and textures. |
+
+`setLimits` follows pbrt's semantics. `maxDepth` counts scattering events: 1 is direct lighting only, and the emission seen by the camera ray is always included. `rrStartDepth` is the first vertex with Russian roulette; omitted or 0 turns it off. Without a mode, the limits start at `{ maxDepth: 5 }` with no roulette. `setLimits` replaces the whole object.
+
+`encode(encoder, passes, timestampWrites?)` records one compute pass with `passes` dispatches. It takes at most 256 passes per call. Each pass writes its own record into a ring of 1024 uniform slots, so keep fewer than 1024 passes in flight between submits. `encode` reads nothing back, so it can go in a frame loop.
+
+The optional `timestampWrites` go on the compute pass, for GPU timing.
+
+## Progressive accumulation
+
+The accumulator is a storage buffer of `width * height` `vec4f`: the radiance sum in `rgb` and the sample count in `w`. Each pass adds one sample. `pt.samples` counts the passes encoded since the last `reset`.
+
+```ts
+// The camera moved: start over.
+pt.setCamera(camera);
+const encoder = device.createCommandEncoder();
+pt.reset(encoder);
+pt.encode(encoder, 4);
+device.queue.submit([encoder.finish()]);
+```
+
+There are two ways to see the image:
+
+- `readImage()` copies the accumulator to a staging buffer, maps it and divides by the sample count. It returns `{ width, height, data, samples }` with RGBA `float32` data, linear, row 0 at the top. Call it outside timed code, never every frame.
+- `pt.accumulator` is the `GPUBuffer` itself (or `null` before `setFilm`). A fullscreen pass can divide by `w`, tone map and draw it, with no readback.
+
+With `integrator.aovs` the AOVs live in the tail of the same buffer. See [Outputs](/pathtracer/outputs).
+
+## Compile errors
+
+The kernel text is minified, pruned and renamed by default, so a raw compiler message would name `C5` at a shifted line. `create` translates errors back: the message it throws has the original names, the source line numbers and the lines around the error.
+
+To see the source yourself:
+
+```ts
+import { ptMegakernelBuild, ptMegakernelWgsl } from '@pmndrs/pathtracer';
+
+const { code, map } = ptMegakernelBuild(caps, options); // what create compiles, plus its source map
+const readable = ptMegakernelWgsl(caps, { ...options, minify: false, prune: false, shortenNames: false });
+```
+
+`map` reads a compiler's messages with `rtMapCompilationInfo` from `@pmndrs/raytracer`. To get readable names in your own errors, build with `shortenNames: false`.
+
+## Kernel size
+
+`pt.wgslBytes` is the length of the compiled WGSL. The kernel only contains code the scene and the options need, so it ranges from about 40 KB for a plain scene to just over 50 KB with every OpenPBR lobe.
+
+Size matters on Windows: the DXC compiler behind Chrome's D3D12 backend gets slow on large shaders, and the project keeps generated kernels near 50 KB or less. `ptwfAutoPolicy` takes `kernelBytes` and sends a megakernel over that size to the wavefront scheduler, whose kernels are smaller. See [Wavefront](/pathtracer/wavefront#choosing-a-scheduler).
+
+## Debug helpers
+
+| Member | What |
+| --- | --- |
+| `options` | The options after the mode preset was applied. |
+| `instrumented` | `true` when the kernel writes debug counters. Its timings are not results. |
+| `restir` | The ReSTIR passes, or `null`. See [ReSTIR](/pathtracer/restir). |
+| `hookBindGroupLayout`, `setHookBindGroup(group)` | The path hooks' own bind group (experimental). |
+| `setVbuffer(texture)`, `setVbufferJitter(x, y)` | V-buffer primaries (experimental, `integrator.primary: 'vbuffer'`). |
+
+The [schedulers example](https://pmndrs.github.io/pathtracer/examples/pathtracer/schedulers/) runs the same scene on both schedulers.

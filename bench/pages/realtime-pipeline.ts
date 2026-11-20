@@ -1,5 +1,5 @@
 /**
- * realtime-pipeline (P4.5 / P4.6 / P4.7; docs/design/realtime.md section 5): the library's real-time path through the shared chain, NO cache.
+ * realtime-pipeline (P4.5 / P4.6 / P4.7; docs/internal/design/realtime.md section 5): the library's real-time path through the shared chain, NO cache.
  *
  *   node bench/runner/run.ts --page realtime-pipeline --timeout 3600000 --load-wait 0 --args scenes=sponza-white scenarios=static,path,timing
  *

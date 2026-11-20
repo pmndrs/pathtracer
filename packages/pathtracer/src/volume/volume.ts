@@ -1,6 +1,6 @@
 /**
  * Participating media (P5): the data model, the TypeScript twins of the WGSL estimators (`volume-wgsl.ts`) and the closed forms the checks compare with.
- * docs/design/volumes.md has the derivations; DIVERGES V240+ the departures from pbrt-v4's `VolPathIntegrator`.
+ * docs/internal/design/volumes.md has the derivations; DIVERGES V240+ the departures from pbrt-v4's `VolPathIntegrator`.
  *
  * A medium has `sigma_t(x) = density(x) * sigmaT` (RGB, per metre; density is 1 for a homogeneous medium), a single-scattering albedo
  * `albedo` (per channel, `sigma_s = albedo * sigma_t`) and a Henyey-Greenstein phase function with mean cosine `g` (pbrt's sign: g > 0 scatters forward).

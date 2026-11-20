@@ -1,0 +1,96 @@
+---
+title: Outputs
+description: AOVs for a denoiser, debug counters, and where the real-time frame planes fit.
+nav: 33
+---
+
+Besides the radiance, a kernel can write three kinds of extra output. Each is an integrator option that is off by default and adds no code when off.
+
+| Option | What | For |
+| --- | --- | --- |
+| `aovs` | Albedo, normal, view depth and coverage, accumulated with the radiance | Denoising a progressive or final image |
+| `counters` | Per-pixel path statistics | Debugging and profiling where paths end |
+| `frame` | Seven per-frame planes, one sample each | A real-time temporal denoiser and upscaler |
+
+`frame` and `aovs` cannot be combined on the wavefront (both use the tail of its accumulation buffer). The real-time mode uses `frame`; the preview mode uses `aovs`.
+
+## AOVs
+
+```ts
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { integrator: { aovs: true } }));
+// ... encode as usual ...
+const aovs = await pt.readAovs();
+```
+
+`readAovs()` returns the AOVs averaged over the samples so far, row 0 at the top:
+
+| Field | Per pixel | What |
+| --- | --- | --- |
+| `albedo` | 3 floats | Albedo of the first non-specular vertex: base colour times base weight, white for a transmissive surface. A miss counts 0. |
+| `normal` | 3 floats | World-space unit normal of that vertex, renormalised after averaging. 0 where no sample hit. |
+| `viewZ` | 1 float | View-space depth of the first hit, negative in front. Averaged over the samples that hit; 0 where none did. |
+| `coverage` | 1 float | Fraction of samples whose camera ray hit a surface. |
+
+The "first non-specular vertex" rule follows the path through smooth mirrors and smooth glass, so a denoiser sees the albedo and normal of what they reflect or refract.
+
+`readAovs` maps a buffer: call it once, after the last pass. Both schedulers support AOVs; the wavefront only with `layers: 1`.
+
+### On the GPU
+
+The AOVs live in the tail of `pt.accumulator`, after the `width * height` radiance sums: two `vec4f` per pixel (`PT_AOV_VEC4`). For pixel `p`, with `n = width * height`:
+
+| `vec4f` index | `xyz` | `w` |
+| --- | --- | --- |
+| `n + 2p` | albedo sum | view-depth sum |
+| `n + 2p + 1` | normal sum | number of samples that hit |
+
+Divide the albedo by the sample count (`w` of the radiance sum), the view depth by the hit count. `ptDecodeAovs(sums, width, height, samples)` does this on the CPU.
+
+### Denoising a final frame
+
+The AOVs are what an image denoiser such as Open Image Denoise takes as auxiliary inputs: colour, albedo and normal. This library does not include a denoiser. [`pmndrs/denoiser`](https://github.com/pmndrs/denoiser) has a WebGPU OIDN that takes these inputs.
+
+> [!NOTE]
+> Our normals are in world space. OIDN expects view-space normals in `[-1, 1]`, with 0 on a miss. Rotate them by the camera's view matrix before passing them on.
+
+For a moving camera, use the real-time frame planes below instead.
+
+## Counters
+
+```ts
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { integrator: { counters: true } }));
+// ... encode ...
+const { summary, raw } = await pt.readCounters();
+console.log(summary.depth, summary.shadowRays, summary.reasons.rr);
+```
+
+`readCounters()` returns sums over all samples since the last `reset`:
+
+| Field | What |
+| --- | --- |
+| `raw` | `PT_COUNTER_WORDS` (12) `u32` per pixel. |
+| `summary.depth` | Mean scattering events per path. |
+| `summary.extensionRays`, `summary.shadowRays` | Mean rays per path, cutout pass-throughs included. |
+| `summary.nodeVisits` | Reserved, always 0. |
+| `summary.reasons` | Fraction of paths per end reason: `escaped`, `absorbed`, `maxDepth`, `rr`, `hook`, `invalid`, `maskOverflow`. The fractions sum to 1. |
+
+`ptCounterImage(raw, width, height, samples, word)` turns one counter into a per-sample image for a heat map. The word indices are in `PT_COUNTER`, the reasons in `PT_TERM`.
+
+> [!WARNING]
+> Counters cost time inside the kernel. `pt.instrumented` is `true` for such a kernel: never report its timings. The wavefront refuses counters with alpha cutouts.
+
+## Frame planes
+
+For real-time rendering, `integrator.frame` writes one sample per pixel per frame and seven planes a temporal denoiser and an upscaler read:
+
+| Plane | `rgb` | `a` |
+| --- | --- | --- |
+| 0 diffuse | Diffuse radiance divided by its albedo factor | Hit distance of the first bounce |
+| 1 specular | Specular radiance divided by its specular factor | Hit distance of the first bounce |
+| 2 normal, viewZ | World-space normal of the primary hit | View-space depth |
+| 3 motion, roughness | `rg`: motion in NDC, `b`: perceptual roughness | Change in view depth |
+| 4 albedo factor | Diffuse demodulation factor | 1 for a specular primary hit |
+| 5 specular factor | Specular demodulation factor | 1 when the primary ray hit |
+| 6 emission | Light that skips demodulation | 0 |
+
+[Real time](/pathtracer/realtime) describes them in full, with the frame loop and the chain to a denoiser and an upscaler.

@@ -19,9 +19,8 @@
  * resolved by the caller (`resolveFile`); the bench's async glb loaders live elsewhere.
  */
 import type { SceneCopyInput, SceneCopyInstance, SceneCopyMesh, RtMaterialInput, SceneCopyOptions } from '@pmndrs/raytracer';
-import { ALPHA_MODE, buildSceneCopy, envMapMean, type SceneCopy } from '@pmndrs/raytracer';
+import { buildSceneCopy, envMapMean, openPbrToRtMaterial, rotationTurns, type SceneCopy } from '@pmndrs/raytracer';
 import { compose, tessellate, type TriangleMesh } from './geometry.ts';
-import { resolveOpenPbr } from './openpbr.ts';
 import type { EnvironmentDesc, GeometryDesc, MaterialDesc, MeshDesc, Rgb, SceneDesc } from './schema.ts';
 import { generateTexture } from './textures.ts';
 
@@ -56,10 +55,7 @@ export interface DescSceneCopyInput extends SceneCopyInput {
 }
 
 /** glTF `anisotropyRotation` (radians, any sign) as the scene copy's unorm field: turns in [0, 1). */
-export function rotationTurns(radians: number): number {
-  const t = radians / (2 * Math.PI);
-  return t - Math.floor(t);
-}
+export { rotationTurns };
 
 /** The scene-copy material of one bench material (no emission). Exported so tests can check the mapping. */
 export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => number = (name) => {
@@ -81,28 +77,9 @@ export function materialFromDesc(desc: MaterialDesc, texture: (name: string) => 
         ...(desc.normalTexture ? { normalTexture: texture(desc.normalTexture) } : {}),
         ...(desc.emissiveTexture ? { emissionTexture: texture(desc.emissiveTexture) } : {}),
       };
-    case 'openpbr': {
-      // The fields the scene copy has today; subsurface, diffuse roughness and the metal's F82 tint have no record slot yet (P2.21+), the rest map one to one.
-      // Dispersion (P5) is KHR_materials_dispersion's 20 / Abbe number, scaled; only the spectral mode reads it.
-      const m = resolveOpenPbr(desc);
-      const tex = (name: string | undefined) => (name ? texture(name) : undefined);
-      const baseColorTexture = tex(m.baseColorTexture), roughnessMetalTexture = tex(m.metallicRoughnessTexture), normalTexture = tex(m.normalTexture), emissionTexture = tex(m.emissiveTexture);
-      return {
-        baseColor: [...m.baseColor], baseWeight: m.baseWeight, metalness: m.baseMetalness,
-        specularWeight: m.specularWeight, specularColor: [...m.specularColor], specularRoughness: m.specularRoughness, ior: m.specularIor,
-        dispersion: m.transmissionDispersionScale > 0 && m.transmissionDispersionAbbeNumber > 0 ? (m.transmissionDispersionScale * 20) / m.transmissionDispersionAbbeNumber : 0,
-        specularAnisotropy: m.specularRoughnessAnisotropy, anisotropyRotation: rotationTurns(m.anisotropyRotation),
-        transmissionWeight: m.transmissionWeight, transmissionColor: [...m.transmissionColor], transmissionDepth: m.transmissionDepth,
-        coatWeight: m.coatWeight, coatColor: [...m.coatColor], coatRoughness: m.coatRoughness, coatIor: m.coatIor,
-        sheenWeight: m.fuzzWeight, sheenColor: [...m.fuzzColor], sheenRoughness: m.fuzzRoughness,
-        thinFilmWeight: m.thinFilmWeight, thinFilmThickness: m.thinFilmThickness, thinFilmIor: m.thinFilmIor,
-        emissionColor: [m.emissionColor[0] * m.emissionLuminance, m.emissionColor[1] * m.emissionLuminance, m.emissionColor[2] * m.emissionLuminance],
-        opacity: m.geometryOpacity, alphaCutoff: m.alphaCutoff, alphaMode: ALPHA_MODE[m.alphaMode],
-        thinWalled: m.geometryThinWalled, doubleSided: m.doubleSided, emissionTwoSided: m.emissionTwoSided,
-        ...(baseColorTexture !== undefined ? { baseColorTexture } : {}), ...(roughnessMetalTexture !== undefined ? { roughnessMetalTexture } : {}),
-        ...(normalTexture !== undefined ? { normalTexture } : {}), ...(emissionTexture !== undefined ? { emissionTexture } : {}),
-      };
-    }
+    case 'openpbr':
+      // The mapping is the public loader's (`openPbrToRtMaterial`, @pmndrs/raytracer gltf/material.ts).
+      return openPbrToRtMaterial(desc, texture);
     case 'conductor':
       return { conductorEtaK: true, conductorEta: [...desc.eta], conductorK: [...desc.k], metalness: 1, baseWeight: 1, specularRoughness: desc.roughness, specularWeight: 1 };
     case 'dielectric':

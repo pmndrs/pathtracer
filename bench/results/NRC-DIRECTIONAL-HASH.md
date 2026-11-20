@@ -19,7 +19,7 @@ Each renderer hash received exactly 10,485,844 bytes including auxiliary storage
 
 ## Angular behavior and update cost
 
-The directional representation fits one constant and three linear direction terms per RGB channel. It estimates centered, regularized moments of the observed directions and bounds the slope to keep radiance nonnegative. Insufficient samples, insufficient angular spread and ineligible roughness fall back to the RGB mean. The direction-bin arm uses the historical 4 × 4 octahedral layout. [MobileRC](https://doi.org/10.1111/cgf.70537) · [Earlier bin experiment](../../docs/design/nrc-hash-cache.md)
+The directional representation fits one constant and three linear direction terms per RGB channel. It estimates centered, regularized moments of the observed directions and bounds the slope to keep radiance nonnegative. Insufficient samples, insufficient angular spread and ineligible roughness fall back to the RGB mean. The direction-bin arm uses the historical 4 × 4 octahedral layout. [MobileRC](https://doi.org/10.1111/cgf.70537) · [Earlier bin experiment](../../docs/internal/design/nrc-hash-cache.md)
 
 | Analytic held-out directions, relative RMS | RGB | Bins | SH |
 |---|---:|---:|---:|

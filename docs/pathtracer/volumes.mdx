@@ -1,0 +1,116 @@
+---
+title: Volumes (experimental)
+description: Homogeneous and grid participating media inside closed meshes, with scattering and shadows.
+nav: 36
+---
+
+> [!WARNING]
+> Experimental. It works and is checked against pbrt-v4 and Mitsuba 3, but the API can still change.
+
+A participating medium is a volume that absorbs and scatters light: fog, smoke, milk, murky water. `integrator.volumes` adds them to the path tracer. A medium fills the inside of a closed mesh. Light is attenuated along every ray through it, and paths can scatter inside it, with next-event estimation at the scattering point.
+
+Two kinds of media are supported:
+
+- **Homogeneous**: the same density everywhere.
+- **Grid**: a dense 3D density grid, looked up with trilinear interpolation.
+
+Both schedulers run media.
+
+## Describing media
+
+The kernel takes the media as an integrator option, `PtVolumeOptions`:
+
+| Field | What |
+| --- | --- |
+| `media` | The media, as `PtMedium` records. Medium id = index + 1; id 0 is vacuum. |
+| `materials` | One `PtMaterialVolume` per scene-copy material id: which media lie on its two sides. Ids past the end have no medium. |
+| `cameraMedium` | The medium id the camera starts in (a homogeneous medium). Default 0. |
+| `shadowTracking` | Shadow transmittance through a homogeneous medium: `'analytic'` (default, `exp(-sigma_t d)`, no noise) or `'ratio'` (ratio tracking, as pbrt). Grids always use ratio tracking. |
+| `majorant` | Grid media: `'global'` (default) or `'brick'`, a coarser grid of local maxima that cuts wasted steps in sparse volumes. |
+
+A medium (`PtMedium`) holds `sigmaT` (extinction per metre, RGB), `albedo` (scattering over extinction, per channel), `g` (the Henyey-Greenstein mean cosine, positive scatters forward) and an optional `grid`. `ptMediumFrom(sigmaA, sigmaS, g, scale, grid)` builds one from absorption and scattering coefficients per metre, the way pbrt takes them.
+
+## Medium boundaries
+
+A medium is bounded by a closed mesh whose triangles are wound outward. Each scene-copy material says what its surface separates (`PtMaterialVolume`):
+
+| Field | What |
+| --- | --- |
+| `interior` | Medium id on the side the normals point away from: inside the mesh. |
+| `exterior` | Medium id on the outside. |
+| `boundary` | `true`: the surface is only a medium boundary. Rays pass through it without a bounce. |
+
+A boundary surface gives no reflection and costs no path vertex. Its scene-copy material can be anything; a black one with `baseWeight: 0` and `specularWeight: 0` makes the intent clear. A surface with `boundary: false` and a medium pair is an ordinary surface that also switches media, such as a glass sphere full of milk.
+
+The medium pair belongs to the material id, so a material that borders different media on different meshes needs one scene-copy material per pair.
+
+```ts
+import type { SceneCopyInput } from '@pmndrs/raytracer';
+import { PtMegakernel, ptMediumFrom, ptSceneOptions, type PtVolumeOptions } from '@pmndrs/pathtracer';
+
+// Scene-copy materials: 0 floor, 1 lamp, 2 the boundary of a fog box.
+const input: SceneCopyInput = {
+  // ... meshes and instances: the fog box is a closed, outward-wound mesh with material 2
+  materials: [
+    { baseColor: [0.8, 0.8, 0.8] },
+    { baseColor: [0, 0, 0], specularWeight: 0, emissionColor: [20, 18, 15] },
+    { baseColor: [0, 0, 0], baseWeight: 0, specularWeight: 0 },
+  ],
+};
+const volumes: PtVolumeOptions = {
+  media: [ptMediumFrom([0.05, 0.05, 0.05], [0.4, 0.4, 0.4], 0.3)],
+  materials: [
+    { interior: 0, exterior: 0, boundary: false },
+    { interior: 0, exterior: 0, boundary: false },
+    { interior: 1, exterior: 0, boundary: true },
+  ],
+};
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { integrator: { volumes } }));
+```
+
+The integrator keeps one current medium per path, set by the last boundary crossed. Nested media work as long as each boundary names both of its sides; there is no medium stack.
+
+Shadow rays pass boundary surfaces and are blocked by every other surface. A glass sphere therefore shadows the medium inside it, as in pbrt and Mitsuba.
+
+## Grid media
+
+A grid medium adds a `PtMediumGrid` to its `PtMedium`, and the density itself goes to `create` as `volumeGrid`:
+
+```ts
+import { gridWorldToIndex, ptMediumFrom } from '@pmndrs/pathtracer';
+
+const resolution = [64, 64, 64] as const;
+const density = new Float32Array(64 * 64 * 64); // x fastest, then y, then z
+// ... fill it ...
+const densityMax = density.reduce((a, b) => Math.max(a, b), 0);
+const bounds = [[-1, 0, -1], [1, 2, 1]] as const; // the grid's box in the mesh's object space
+const grid = { resolution, worldToIndex: gridWorldToIndex(resolution, bounds, objectToWorld), densityMax };
+
+// `materials`: the PtMaterialVolume list, as in the fog box above.
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, {
+  integrator: { volumes: { media: [ptMediumFrom([0.1, 0.1, 0.1], [2, 2, 2], 0.5, 1, grid)], materials } },
+  volumeGrid: { resolution, density },
+}));
+```
+
+- The density multiplies the medium's `sigmaT`. Voxel centres sit at `(i + 0.5) / n` across the bounds; outside the grid the density is 0.
+- `worldToIndex` is a row-major 3x4 matrix from world space to voxel index space. `gridWorldToIndex(resolution, bounds, toWorld)` builds it from the bounds in the owning mesh's object space and that mesh's object-to-world matrix (column-major, identity when omitted).
+- One grid per kernel: the density is one 3D texture. The camera cannot start inside a grid medium.
+- `majorant: 'brick'` also needs `volumeGrid.majorant = brickMajorants(resolution, density)`.
+
+The library takes a dense array only. Our bench converts OpenVDB files to one with WebVDB's `parseVdb` ([`vdb-grid.ts`](https://github.com/pmndrs/pathtracer/blob/main/bench/scenes/volumes/vdb-grid.ts)); a dense grid of a large sparse volume costs a lot of memory.
+
+## Path rules
+
+- A scattering event in a medium counts as a path vertex for `maxDepth`, like a surface hit (pbrt's `volpath` rule).
+- Boundary crossings are free, up to 256 per path.
+- Free flight uses delta tracking against a single majorant; the phase function is sampled exactly.
+- Media are RGB. Use grey coefficients when comparing against a spectral renderer such as pbrt.
+
+## What it refuses
+
+`integrator.volumes` cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, alpha cutouts, `hooks`, `counters`, `aovs`, `spectral`, or the Beer-law absorber of glass materials (`materials.features.medium`). Other OpenPBR lobes are fine. The wavefront also refuses `materialLod: 'secondary'` with media.
+
+Media add about 3 to 4 KB of WGSL. With every OpenPBR lobe the megakernel passes 50 KB: consider the [wavefront](/pathtracer/wavefront).
+
+The helpers behind the WGSL have TypeScript twins for tests: `deltaTrack`, `transmittance`, `gridDensity`, `hgPhase`, `hgSampleCos`, and the closed forms `slabTransmittance` and `slabSingleScatter`.

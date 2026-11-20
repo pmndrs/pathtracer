@@ -51,7 +51,7 @@ export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'realtime.textureLod': 'as preview',
   'realtime.layered': 'as preview (D24 + P2.32b)',
   'realtime.scenePacking': 'as preview',
-  'realtime.sampler': 'bluenoise (P4.1, V120): only when the texture is passed (`blueNoise`); else owen-sobol. A/B in `realtime-check` (TASKS P4.1); both schedulers since P4.1b (V210)',
+  'realtime.sampler': 'bluenoise (P4.1, V120): the passed texture, else the one shipped in the package (`loadBlueNoise`, S10). A/B in `realtime-check` (TASKS P4.1); both schedulers since P4.1b (V210)',
   'realtime.frame': 'per-frame outputs for the temporal filter (P4.1, V122); both schedulers since P4.1b (the wavefront: plain scheduler only, planes in the accumulator tail, V211); costs 7 planes of vec4 per pixel of write bandwidth (the 7th is the emission plane, P4.5a, V200); not timed yet (QUIET-PASS)',
   'realtime.restir': 'opt-in (`integrator.restir`), D32: when on, `unbiased` (no initial visibility), M 8, temporal, spatial 2 random are the library defaults, and the realtime preset adds `sharedHit` (megakernel, trace primaries, positions in the layout: -5.8% frame on Sponza 1280x720); pays on many-light scenes only (1.9-2.8x relMSE, -28% FLIP at +13..30% frame time), a sun + sky scene gains nothing',
   'realtime.scheduler': 'D32: `ptwfAutoPolicy({ ..., frame: true, triangles, kernelBytes })` is the recommended scheduler choice: wavefront for big scenes (>= 100k triangles, >= 2^17 pixels) or a megakernel over the ~50 KB DXC class, else megakernel',
@@ -92,7 +92,7 @@ export function ptModeNotes(mode: PtMode): Array<[string, string]> {
 export interface PtModeOptions {
   mode?: PtMode;
   integrator?: PtIntegratorOptions;
-  /** Blue-noise texture handed to the kernel: the realtime preset uses the `bluenoise` sampler only when it is present. */
+  /** Blue-noise texture handed to the kernel (default: the package's `gf-vec2-64`, loaded by `create`). */
   blueNoise?: unknown;
 }
 
@@ -116,7 +116,8 @@ export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'meg
   }
   // P4.2e: the ReSTIR passes bind the blue-noise texture too, so `restir` no longer falls back to Owen-Sobol (megakernel only, as before).
   // P4.1b: the wavefront runs the blue-noise sampler and the frame outputs too (plain scheduler: `integrator.frame` throws with refill), so the scheduler no longer changes the preset.
-  if (options.mode === 'realtime') set('sampler', options.blueNoise ? 'bluenoise' : 'owen-sobol');
+  // S10: the kernels load the blue-noise texture shipped in @pmndrs/raytracer when none is passed (`loadBlueNoise`), so the preset no longer falls back to Owen-Sobol.
+  if (options.mode === 'realtime') set('sampler', 'bluenoise');
   // D32: with ReSTIR on, the realtime preset shares the primary hit (one camera-ray trace per frame instead of two: x0.942 on Sponza 1280x720, TASKS P4.2c). Megakernel, trace-mode primaries and a
   // surface layout with positions only (the wavefront and the V-buffer path throw or ignore it); a caller's explicit `sharedHit` (even false) wins.
   const restir = merged.restir as { sharedHit?: boolean } | null | undefined;

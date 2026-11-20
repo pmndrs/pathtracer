@@ -13,7 +13,7 @@
  *     fn rtShadeDiffuseFromIrradiance(p, E) -> vec3f  helper for caches that store irradiance
  *     fn rtOffsetOrigin(p, n) -> vec3f, rtSideNormal(n, w) -> vec3f   self-intersection-free ray origin (Waechter and Binder)
  *
- * Hooks (see docs/design/shade.md):
+ * Hooks (see docs/internal/design/shade.md):
  *     fn rtShadeIndirect(p: RtShadePoint) -> vec3f          default: black. `cache: 'external'` = you declare it.
  *     fn rtShadeBsdf(p: RtShadePoint, wi: vec3f) -> vec3f   `bsdf: 'external'` = you declare it (f, no cosine). Used by FULL only.
  */

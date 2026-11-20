@@ -7,7 +7,7 @@
  * pt-wf-indirect,pt-wf-secondary --scenes tex-mask,foliage-mask --spp 1024 --snapshots 1024 --repeat 5 --interleave --name <name>`. For every (scene, renderer): the image against
  * each reference (relMSE, relBias = mean(t) / mean(r) - 1), the exact policy's own relMSE as the noise floor, and ms/spp from
  * bench/results/competitor.csv (min..max over the valid interleaved runs, ratio to the exact policy of the same scheduler, paired by run). A biased policy shows as
- * relMSE well above the exact one; timing rows carry the load the runner recorded and are provisional until the quiet pass (docs/QUIET-PASS.md).
+ * relMSE well above the exact one; timing rows carry the load the runner recorded and are provisional until the quiet pass (docs/internal/QUIET-PASS.md).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
