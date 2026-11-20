@@ -78,7 +78,7 @@ defineExample(async (ctx) => {
 
   const sceneFolder = pane.addFolder({ title: 'Scene' });
   const picker = await scenePicker(ctx, sceneFolder, 'Sheen Chair', async (scene: GpuScene, loaded) => {
-    kernel = await TraceKernel.create(device, caps, scene, { label: 'ao', wgsl: WGSL, entryPoints: ['ao'], io: ioEntries(['uniform', 'write']), module: { scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, textures: scene.copy.textureLayout, packing: scene.packing, materials: false, lights: false } } });
+    kernel = await TraceKernel.create(device, caps, scene, { label: 'ao', wgsl: WGSL, entryPoints: ['ao'], io: ioEntries(['uniform', 'write']), module: { scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, packing: scene.packing, materials: false, lights: false } } });
     bound = null;
     // A radius of a tenth of the scene's size is a good start.
     params.radius = Number((Math.hypot(...loaded.bounds.max.map((v, i) => v - loaded.bounds.min[i]!)) * 0.1).toPrecision(2));

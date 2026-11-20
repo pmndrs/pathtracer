@@ -20,6 +20,11 @@ export interface TraceKernelOptions {
   io: GPUBindGroupLayoutEntry[];
   /** Extra module options (e.g. `shade: true`). */
   module?: Partial<RtModuleOptions>;
+  /**
+   * Bind the bvh walk in group 0 (default true). A kernel that only reads the scene copy (no rtClosest / rtVisible) passes false: group 0 is
+   * then empty, which saves 3-4 storage buffers (Chrome on Apple GPUs allows 10 per shader stage in one pipeline).
+   */
+  walk?: boolean;
 }
 
 export class TraceKernel {
@@ -46,7 +51,7 @@ export class TraceKernel {
     });
     const code = `${module}\n${scene.packing === 'packed' ? rtPackSceneAccess(o.wgsl) : o.wgsl}`;
     const layouts = [
-      device.createBindGroupLayout({ label: `${o.label} walk`, entries: withBindings(rtWalkEntries(scene.format)) }),
+      device.createBindGroupLayout({ label: `${o.label} walk`, entries: o.walk === false ? [] : withBindings(rtWalkEntries(scene.format)) }),
       device.createBindGroupLayout({ label: `${o.label} scene`, entries: rtSceneCopyLayoutEntries(0, scene.copy.textureLayout, scene.packing) }),
       device.createBindGroupLayout({ label: `${o.label} io`, entries: o.io }),
     ] as const;
@@ -56,7 +61,7 @@ export class TraceKernel {
     const layout = device.createPipelineLayout({ bindGroupLayouts: layouts });
     const pipelines: Record<string, GPUComputePipeline> = {};
     for (const entryPoint of o.entryPoints) pipelines[entryPoint] = await device.createComputePipelineAsync({ label: `${o.label} ${entryPoint}`, layout, compute: { module: shader, entryPoint } });
-    const walkGroup = device.createBindGroup({ layout: layouts[0], entries: rtSceneBindGroupEntries(scene.trace) });
+    const walkGroup = device.createBindGroup({ layout: layouts[0], entries: o.walk === false ? [] : rtSceneBindGroupEntries(scene.trace) });
     const sceneGroup = device.createBindGroup({ layout: layouts[1], entries: rtSceneCopyBindGroupEntries(scene.buffers) });
     return new TraceKernel(pipelines, layouts[2], walkGroup, sceneGroup, code.length);
   }

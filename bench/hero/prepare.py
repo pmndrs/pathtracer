@@ -29,6 +29,15 @@ def verify(file, entry):
             and hashlib.sha256(file.read_bytes()).hexdigest() == entry["sha256"])
 
 
+BLENDER_ORG = "https://download.blender.org/"
+BLENDER_MIRRORS = [
+    "https://mirrors.ocf.berkeley.edu/blender/",
+    "https://ftp.nluug.nl/pub/graphics/blender/",
+    "https://ftp.halifax.rwth-aachen.de/blender/",
+    "https://mirror.clarkson.edu/blender/",
+]
+
+
 def fetch(entry):
     dest = assets / entry["path"]
     if verify(dest, entry):
@@ -38,20 +47,33 @@ def fetch(entry):
     with tempfile.NamedTemporaryFile(dir=dest.parent, delete=False) as output:
         tmp = Path(output.name)
     try:
-        # A browser user agent and a few retries: download.blender.org has answered CI runners with 403 (site.yml caches the result).
-        request = urllib.request.Request(entry["url"], headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"})
-        for attempt in range(4):
+        # download.blender.org has answered CI runners with 403: try it, then Blender's official mirrors (same tree), each with a browser
+        # user agent and a retry. The SHA-256 below decides whatever served the file (site.yml caches the result).
+        urls = [entry["url"]]
+        if entry["url"].startswith(BLENDER_ORG):
+            urls += [mirror + entry["url"][len(BLENDER_ORG):] for mirror in BLENDER_MIRRORS]
+        for i, url in enumerate(urls):
             try:
-                with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
-                    shutil.copyfileobj(response, output)
-                break
+                if i:
+                    print("  trying", url, flush=True)
+                request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"})
+                for attempt in range(2):
+                    try:
+                        with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
+                            shutil.copyfileobj(response, output)
+                        break
+                    except OSError as error:
+                        if attempt == 1:
+                            raise
+                        print(f"  retry after {error}", flush=True)
+                        time.sleep(5)
+                if verify(tmp, entry):
+                    break
+                print(f"  {url}: size or SHA-256 mismatch", flush=True)
             except OSError as error:
-                if attempt == 3:
-                    raise
-                print(f"  retry {attempt + 1} after {error}", flush=True)
-                time.sleep(5 * (attempt + 1))
+                print(f"  {url}: {error}", flush=True)
         if not verify(tmp, entry):
-            raise ValueError(f"Size or SHA-256 mismatch for {dest}")
+            raise ValueError(f"No source served {dest.name} with the expected size and SHA-256 (tried {len(urls)})")
         tmp.replace(dest)
     finally:
         tmp.unlink(missing_ok=True)
