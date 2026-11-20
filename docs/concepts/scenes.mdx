@@ -1,0 +1,122 @@
+---
+title: Scenes
+description: Meshes and instances, the BVH, the scene copy, and the formats a kernel is compiled for.
+nav: 11
+---
+
+A scene on the GPU has two halves:
+
+1. **The trees**: a BVH that the ray walk traverses. It comes from [`@pmndrs/bvh`](https://github.com/pmndrs/bvh) and knows only triangles, instances and a 16-bit material id per triangle.
+2. **The scene copy**: everything else a hit needs to be shaded. That is the material table, the light table, the per-vertex surface data (normals, uvs, positions, tangents) and the textures.
+
+Both are built from one input, `SceneCopyInput`, and a kernel is compiled for the formats of both.
+
+## The input
+
+```ts
+import type { SceneCopyInput } from '@pmndrs/raytracer';
+
+const input: SceneCopyInput = {
+  meshes: [{ positions, indices, normals, uvs }],
+  instances: [{ meshIndex: 0, instanceIndex: 0, objectToWorld: identity, material: 0 }],
+  materials: [{ baseColor: [0.8, 0.2, 0.1], specularRoughness: 0.4 }],
+  sun: { direction: [-0.3, -1, -0.2], irradiance: [3, 3, 3] },
+  environment: { radiance: [0.2, 0.25, 0.3] },
+};
+```
+
+| Field | What |
+| --- | --- |
+| `meshes` | Object-space triangles: `positions` (xyz per vertex), optional `indices`, `normals`, `uvs`, `tangents`. `triangleMaterials` gives one material per triangle (`0xffff` = use the instance's). |
+| `instances` | A mesh placed in the world: `meshIndex`, a unique `instanceIndex`, `objectToWorld` (column-major), `material`, `visible`, and the bvh `mask` (0-255). |
+| `materials` | [OpenPBR parameters](/concepts/materials). The material id indexes this list. Fields you leave out take their defaults. |
+| `textures` | RGBA8 images, row 0 = top, each with a `colorSpace` (`'srgb'` for colour, `'linear'` for data) and a `wrap`. Materials name them by index. |
+| `sun`, `environment` | See [Lights](/concepts/lights). |
+| `options` | Surface data (`surface`), light selection, texture storage. |
+
+`loadGltf` returns this shape directly ([Loading glTF](/getting-started/loading-gltf)).
+
+## Building it
+
+`buildGpuScene` does both halves in one call:
+
+```ts
+import { buildGpuScene } from '@pmndrs/raytracer';
+
+const scene = await buildGpuScene(device, input);
+// scene.trace   bvh trace buffers
+// scene.buffers the uploaded scene copy
+// scene.format  the BVH formats a kernel must be compiled for
+// scene.packing the scene copy binding a kernel must be compiled for
+```
+
+It builds one tree per mesh on the CPU, merges every instance into one static tree, and stores vertex positions in the scene copy (hit positions then come from barycentrics, which is what the path tracer wants). Call `scene.destroy()` when the scene is no longer drawn.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `nodeFormat` | `'quantized'` | bvh node format: `'quantized'`, `'f32'`, or the experimental wide `'bvh4'` / `'cwbvh8'`. |
+| `packing` | `DEFAULT_SCENE_PACKING` (`'packed'`) | How the scene copy is bound (below). |
+| `positions` | `true` | Store vertex positions. `false` makes the copy smaller; hit positions are then `origin + t · direction`. |
+| `mipGenerator` | a per-device `@pmndrs/downsampler` | Fills texture mip levels on the GPU. |
+| `label` | `'scene'` | Buffer labels. |
+
+The two halves can also be built separately: bvh's `buildTraceScene` + `uploadTraceScene` for the trees, `buildSceneCopy` + `uploadSceneCopy` for the copy. Use that form when you rebuild one half alone, or when you manage moving instances with bvh's own scene API. [Scene copy](/raytracer/scene-copy) covers it in detail.
+
+## What is in the scene copy
+
+| Section | Content |
+| --- | --- |
+| Instances and meshes | Transforms and offsets into the vertex data, the same records `rtSurface` reads. |
+| Materials | One 128-byte record per material, plus a default record at the end for ids past the table. |
+| Lights | Every emissive triangle in world space, then the sun, then the environment, with an alias table for picking one. |
+| Data | Indices, vertex attributes, the environment map and its sampling tables, light maps. |
+| Textures | One `texture_2d_array` and one sampler per size bucket (size, colour space and wrap). |
+
+Textures are resampled to power-of-two sizes (at most 4096) and grouped into at most 8 arrays by default. Mip levels 1 and up are generated on the GPU at upload.
+
+**Experimental:** `options.textures.binding: 'table'` puts the texture arrays in a resource table instead of separate bindings. It needs a browser with `chromium-experimental-sampling-resource-table` (`caps.resourceTable`) and does not run in compute passes on macOS yet.
+
+## Packing
+
+The scene copy is two arrays: a table of fixed-size records and a data array.
+
+| Packing | Bindings | Use |
+| --- | --- | --- |
+| `'packed'` (default) | One storage buffer: header, table, data. | Frees a storage binding in every kernel, which matters on devices with 10 storage buffers per stage (Apple GPUs). |
+| `'split'` | Two storage buffers. | A scene copy too big for one binding: each half then has its own limit. |
+
+Images are the same with either packing. The kernel and the upload must agree: pass the same `packing` to `buildGpuScene` (or `uploadSceneCopy`) and `scenePacking` to the kernel. `ptSceneOptions(scene)` copies it for you, and `setScene` throws on a mismatch.
+
+## Size limits
+
+A storage binding has a size cap: `sceneCopyBindingLimit(device)`, 128 MiB on most devices. With `'packed'` the whole copy must fit under it; `uploadSceneCopy` throws a `RangeError` that names the sizes and suggests `'split'` otherwise.
+
+A triangle with normals and positions costs about 84 bytes in the copy, so one 128 MiB binding holds about 1.5 million such triangles. Lights add 96 bytes each and instances 128 bytes each. The trees are separate buffers and are not part of this limit. There is no chunking yet.
+
+## The scene format
+
+A kernel compiles one BVH walk for one node format. `scene.format` (from `sceneFormatOf(traceBuffers)`) holds the node format, the leaf layout and the position layout. Pass it as `format` to `PtMegakernel`, `PtWavefront`, `RtBatchTracer` or `rtModuleWgsl`; `ptSceneOptions` does this for you. `setScene` throws when the scene's node format is not the one the kernel was built for.
+
+**Experimental:** the wide node formats `'bvh4'` and `'cwbvh8'` give a shallower tree with 4 or 8 children per node. The scene must be built with the same `nodeFormat` as the kernel, and the walk is a few KB more WGSL. A CWBVH scene reorders triangles, so where two triangles coincide a hit may name the other one.
+
+## Changing a scene
+
+The scene copy is rebuilt as a whole; there are no incremental updates yet. When only materials, the sun or the environment change, the trees stay, and the new copy can be written into the old buffers:
+
+```ts
+import { buildSceneCopy, writeSceneCopy } from '@pmndrs/raytracer';
+
+const copy = buildSceneCopy({
+  ...scene.input,
+  materials: editedMaterials,
+  options: { ...scene.input.options, surface: { ...scene.input.options?.surface, positions: true } },
+});
+if (!writeSceneCopy(device, scene.buffers, copy)) {
+  // The new copy needs bigger buffers: upload it again and call setScene.
+}
+```
+
+`writeSceneCopy` returns `false` and writes nothing when the copy no longer fits. Texture arrays are not rewritten.
+
+> [!WARNING]
+> The kernel text depends on which material features the scene uses. If an edit adds a feature no material had before (a coat, fuzz, transmission), create the kernel again from `ptSceneOptions`, or the new lobe is not compiled.

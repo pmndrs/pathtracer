@@ -173,6 +173,7 @@ export function defineExample(setup: (ctx: ExampleContext) => Promise<void> | vo
     resize();
 
     let busy = false;
+    let gpuMs = 0;
     let last = performance.now();
     const loop: ExampleContext['loop'] = (frame) => {
       const tick = (now: number) => {
@@ -191,7 +192,16 @@ export function defineExample(setup: (ctx: ExampleContext) => Promise<void> | vo
         if (worked === false) return;
         device.queue.submit([encoder.finish()]);
         busy = true;
-        device.queue.onSubmittedWorkDone().then(() => (busy = false), () => (busy = false));
+        const submitted = performance.now();
+        device.queue.onSubmittedWorkDone().then(
+          () => {
+            busy = false;
+            // Submit to done, smoothed: the GPU time of a frame plus queueing (a wall-clock reading, not a benchmark).
+            gpuMs = gpuMs === 0 ? performance.now() - submitted : gpuMs * 0.9 + (performance.now() - submitted) * 0.1;
+            stats.set('frame', `${gpuMs.toFixed(1)} ms`);
+          },
+          () => (busy = false),
+        );
       };
       requestAnimationFrame(tick);
     };

@@ -25,6 +25,7 @@ export * from './wavefront/wavefront-wgsl.ts';
 export * from './wavefront/wavefront.ts';
 export * from './restir/restir-wgsl.ts';
 export * from './restir/restir.ts';
+export { resolveRestirGiOptions, type PtRestirGiOptions, type ResolvedRestirGiOptions } from './restir/restir-gi-wgsl.ts';
 export * from './volume/volume.ts';
 export * from './volume/volume-wgsl.ts';
 export * from './spectral/cie1931.ts';

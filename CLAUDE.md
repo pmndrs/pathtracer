@@ -857,7 +857,13 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   wrap them (file I/O, reference class, `SceneDesc` shapes). A mapping change goes in the package, and the Tier 1 goldens test it (download the models with
   `node bench/assets/fetch.ts` or 18 golden tests skip). Never pass a texture field as `undefined` to `createMaterial` (`roughnessMetalTexture: undefined`
   throws): spread it in conditionally. `bench/scenes/tangents.test.ts` fails without `bench/assets/generated/env-sky-512x256.pfm` (`node bench/scenes/tier0/generate-assets.ts`).
+- pmndrs/docs sorts every page by its frontmatter `nav` across the whole site and groups the sidebar in that order (ties: folder order, alphabetical): each section keeps its own range
+  (getting-started 0-9, concepts 10-19, raytracer 20-29, pathtracer 30-39). The sidebar label is the folder name.
 - Tweakpane 4 needs `@tweakpane/core` installed next to it for its types (`Pane` has no `addFolder` otherwise).
+- Examples that call `scenePicker` must not read the returned `picker` inside the callbacks they pass to it: it calls `onScene` and `onCamera` before it returns
+  (`Cannot access 'v' before initialization` in the built bundle). Headless checks of an example: serve `examples/dist`, open `<page>/?offscreen=1&scene=Cornell%20box`
+  (the Cornell box needs no network), wait for `globalThis.__progressive.samples`, then `readImage()`; the Ray tracer examples expose the same through `exposeForChecks`.
+  The `rtOffsetOrigin` / `rtSideNormal` helpers exist only in a module built with `shade`: a kernel without it declares its own.
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.

@@ -1,0 +1,105 @@
+---
+title: Real time
+description: One sample per pixel per frame, with the planes a temporal denoiser and an upscaler read.
+nav: 34
+---
+
+A progressive path tracer converges over hundreds of samples. A real-time renderer gets one sample per pixel per frame and leaves the rest to a temporal denoiser and an upscaler. For that, the kernel writes more than radiance: the diffuse and specular light separated from the surface colour, normals, depth and motion.
+
+`mode: 'realtime'` sets this up. Both schedulers support it (the wavefront without `refill` or `layers`).
+
+## Setup
+
+```ts
+import { fetchBlueNoise } from '@pmndrs/raytracer';
+import { PtMegakernel, ptSceneOptions, type PtLookAtCamera } from '@pmndrs/pathtracer';
+
+const blueNoise = await fetchBlueNoise('/assets/bluenoise', 'gf-vec2-64');
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { mode: 'realtime', blueNoise }));
+pt.setScene(scene.trace, scene.buffers);
+pt.setFilm(960, 540);
+```
+
+The `realtime` preset turns on `integrator.frame`, the blue-noise sampler (only when `blueNoise` is passed; Owen-Sobol otherwise), reduced materials after the first bounce, ray-cone texture filtering and cheap cutout shadows. The limits start at `maxDepth` 2 without Russian roulette. Any option you set yourself wins. [Modes](/concepts/modes) lists every entry. The cutout shadows need the cutout cards tagged with an instance mask: see [Alpha cutouts](/pathtracer/integrator-options#alpha-cutouts).
+
+> [!NOTE]
+> The blue-noise textures are not in the npm package. Copy `manifest.json` and `gf-vec2-64.png` from [`packages/raytracer/assets/bluenoise`](https://github.com/pmndrs/pathtracer/tree/main/packages/raytracer/assets/bluenoise) to your server and pass that folder's URL to `fetchBlueNoise`. Decode them only with `fetchBlueNoise` or `decodeBlueNoisePng`: they are 16-bit PNGs, and a canvas would cut them to 8 bits.
+
+## The frame loop
+
+One `encode(encoder, 1)` is one frame: one sample per pixel, written over the previous frame. `encode` throws for more than one pass.
+
+```ts
+pt.setCamera(camera); // the first frame
+
+function frame(camera: PtLookAtCamera) {
+  pt.nextFrame(camera); // the old camera becomes the previous one
+  const encoder = device.createCommandEncoder();
+  pt.encode(encoder, 1);
+  // ... your passes that read pt.frameBuffers, in the same encoder ...
+  device.queue.submit([encoder.finish()]);
+}
+```
+
+- `setCamera(camera)` sets the camera without a previous one. Use it for the first frame.
+- `nextFrame(camera)` makes the current camera the previous one, then sets the new one. Motion vectors project each hit through both cameras.
+- `setPrevCamera(camera | null)` sets the previous camera directly. After a camera cut, call `setCamera(camera)` and `setPrevCamera(camera)`, so the frame has zero motion, and reset your denoiser's history.
+- `setFrameIndex(index)` sets the frame number the sampler uses. It advances by one with every `encode`; set it to replay a frame. `reset` sets it to 0.
+
+The cameras are unjittered. The sampler jitters each pixel's camera ray inside the pixel, and it is the only jitter owner: motion vectors stay jitter-free, and a downstream upscaler must run without its own jitter.
+
+## The frame planes
+
+`pt.frameBuffers` returns the GPU buffers, valid until the next `encode`:
+
+| Field | What |
+| --- | --- |
+| `accum` | The beauty: one `vec4f` per pixel, the total radiance of this frame's sample, `a` = 1. |
+| `planes` | `PT_FRAME_PLANES` (7) planes of `width * height` `vec4f`, plane after plane. Plane `p` starts at byte `p * width * height * 16`. |
+| `planesOffset` | Wavefront only: there `planes` is the same buffer as `accum`, and the planes start at this byte offset (a multiple of 256). |
+| `width`, `height` | The film. |
+
+Rows run top to bottom. `readFrame()` reads everything back to the CPU as a `PtFrame` for checks; keep it out of the frame loop.
+
+| Plane | `PtFrame` field | `rgb` | `a` |
+| --- | --- | --- | --- |
+| 0 | `diffuse` | Diffuse-class radiance divided by the albedo factor | Hit distance of the first bounce ray (0 on a miss or for a specular path) |
+| 1 | `specular` | Specular-class radiance divided by the specular factor | The same distance (0 on a miss or for a diffuse path) |
+| 2 | `normalViewZ` | World-space unit shading normal of the primary hit (0 on a miss) | View-space depth, negative in front (0 on a miss) |
+| 3 | `motionRoughness` | `rg`: motion, NDC current minus previous, +y up. `b`: perceptual roughness | View depth in the previous frame minus in this one |
+| 4 | `albedo` | Albedo factor: the primary hit's albedo, at least 0.001 per channel (1 on a miss) | 1 when the primary lobe is specular-class |
+| 5 | `specularFactor` | Specular factor: an approximate pre-integrated specular term, floored the same way (1 on a miss) | 1 when the primary ray hit |
+| 6 | `emission` | Light that is not demodulated (below) | 0 |
+
+The primary hit's lobe decides the class: a conductor or dielectric lobe is specular-class, Lambert and layered materials are diffuse-class. Everything the path gathers after the primary hit goes into that class's plane. The stored factors are the floored ones, so per pixel:
+
+```
+diffuse * albedo + specular * specularFactor + emission = radiance
+```
+
+A filter can work on `diffuse` and `specular`, which are smooth across textures, and multiply the factors back afterwards.
+
+**The emission plane.** Light the primary surface does not modulate goes to plane 6: an emitter hit by the camera ray, the sky behind a miss, and (with the default `frameEmission: 'mirror'`) what a chain of smooth-metal reflections reaches. Divided by the albedo factor of a black emitter, a lamp would be a huge value that a filter smears. Add plane 6 back after the filter. `frameEmission: 'primary'` leaves out the mirror chains; `'none'` puts everything in the demodulated planes.
+
+Motion covers camera movement only. Moving objects and the motion of reflections are not in the planes yet.
+
+## Blue noise
+
+`sampler: 'bluenoise'` reads a 2D blue-noise texture for the first few sample dimensions of every pixel: the jitter, and the light and BSDF samples of the first vertex (`blueNoisePairs`, default 6). The error of a single frame then sits at high frequencies, which a spatial filter removes better than white noise. The pattern shifts every frame (`blueNoiseShift`, default `'owen'`) so frames average to the right answer.
+
+It needs the `blueNoise` create option: a 2-channel texture with power-of-two sides, `gf-vec2-64` or `gf-vec2-128` from the package's set.
+
+## The chain to a denoiser and an upscaler
+
+The library stops at the frame planes. A full real-time pipeline adds a temporal denoiser and an upscaler, which are separate packages. The project's bench wires one in [`bench/realtime/chain.ts`](https://github.com/pmndrs/pathtracer/blob/main/bench/realtime/chain.ts); copy it as a starting point. Its data flow per frame:
+
+1. **Path trace** at a reduced size (for example half the display), one `encode(encoder, 1)`.
+2. **Pack.** A compute pass copies the planes into the textures the denoiser takes (`rgba16float` colour and guides, `r32float` depth), and derives device depth from view depth with the camera's projection.
+3. **Denoise.** A temporal diffuse/specular filter (SVGF in the bench, from `pmndrs/denoiser`) takes plane 0 and plane 1 as its two inputs, the factors in planes 4 and 5 to remodulate, the normal, depth, roughness and motion as guides, and the hit distances. Its camera data comes from your current and previous cameras, with zero jitter.
+4. **Composite.** Diffuse plus specular, then the emission plane added on top.
+5. **Upscale** with [`@pmndrs/upscaler`](https://github.com/pmndrs/upscaler) in temporal mode, jitter off: colour, depth, and plane 3's motion as velocity.
+6. **Tone map** to the canvas.
+
+The denoiser and the upscaler submit their own command buffers; nothing in the chain reads back to the CPU.
+
+ReSTIR DI and GI add better light sampling to the same loop. See [ReSTIR](/pathtracer/restir).

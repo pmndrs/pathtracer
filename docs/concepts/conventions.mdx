@@ -1,0 +1,73 @@
+---
+title: Conventions
+description: Spaces, units, signs and image layout shared by both packages.
+nav: 10
+---
+
+Both packages, and the sibling libraries they feed (denoiser, upscaler), use one set of conventions. The single source is [`packages/raytracer/src/contract/`](https://github.com/pmndrs/pathtracer/blob/main/packages/raytracer/src/contract/conventions.ts). Adapters convert at the edges; the core never invents a third convention.
+
+The constants on this page are exported from `@pmndrs/raytracer` (`WORLD`, `NDC`, `VIEW_Z_SIGN`, `MOTION`, `MOTION_TO_UV`, `NORMAL_SPACE`, `JITTER`, `IMAGE`), so code can check against them.
+
+## Space and units
+
+| Topic | Convention |
+| --- | --- |
+| Handedness | Right-handed, +Y up. |
+| Units | Metres, including material lengths such as `transmissionDepth`. Some glTF sample models are millimetres wide: check `bounds` and scale them. |
+| View space | The camera looks down −Z. |
+| Matrices | Column-major 4×4, as WGSL `mat4x4f`. `objectToWorld` of an instance is 16 numbers in that order. |
+| NDC | x and y in `[−1, 1]`, +y up; depth in `[0, 1]`. Reversed Z is a per-camera flag, never implied. |
+| Camera | `PtLookAtCamera`: `position`, `target`, `up`, `yFovDeg` (vertical field of view in degrees). |
+| Triangles | The front face is counter-clockwise seen from the front. An emitter emits from its front face unless the material says `emissionTwoSided`. |
+
+## Colour and light
+
+Everything inside is **linear, scene-referred HDR** with Rec.709 primaries. There is no tone mapping and no pre-exposure unless you add one when you display the image.
+
+| Quantity | Unit |
+| --- | --- |
+| Material colours (`baseColor`, `specularColor`, ...) | Linear RGB reflectance in `[0, 1]`. |
+| `emissionColor` of a material | Radiance, W/sr/m², already multiplied by any intensity. |
+| Sun `irradiance` | W/m² on a surface facing the sun. |
+| Environment `radiance` | W/sr/m². |
+| Roughness | Perceptual, as glTF and OpenPBR. GGX alpha = roughness² (`roughnessToAlpha`). |
+
+Accumulation is always f32. f16 is only for storage (histories, guide images) where a consumer chooses it, never for sums.
+
+## Images
+
+- Row 0 is the **top** row in memory. `readImage` returns RGBA float32 in that order.
+- Texture coordinates follow glTF: uv `(0, 0)` is the first texel of row 0 (top left), v grows downward.
+- Environment maps are equirectangular with row 0 = +Y. u = 0 looks toward −Z and u = 0.25 toward +X.
+- When we exchange float images (reference renders, the bench), the format is **PFM** (float32, linear). PNG is for previews only.
+
+## Per-pixel outputs
+
+These rules apply to every guide image the libraries write (AOVs, the real-time frame planes) and that the denoiser and upscaler read.
+
+| Output | Convention |
+| --- | --- |
+| Normals | World space, unit length, in `[−1, 1]`. A miss writes `(0, 0, 0)`. Adapters rotate them for consumers that want view space (OIDN). |
+| `viewZ` | Linear view depth, **negative in front** of the camera (three.js convention). Consumers that want a positive distance negate it. |
+| Motion | NDC delta **current − previous**, +y up, jitter removed. Multiply by `MOTION_TO_UV` = `[0.5, −0.5]` for a UV offset, so that `prevUV = uv − motionUV`. |
+| Albedo | First-scatter albedo in `[0, 1]`, accumulated by the tracer, not taken from a raster G-buffer. |
+
+> [!NOTE]
+> The contract stores `−far` for the `viewZ` of a miss. The path tracer's frame planes have no far plane and write 0 there; test the hit flag rather than the depth. In those planes, motion comes from camera motion only: a moving instance reads as static. See [Outputs](/pathtracer/outputs).
+
+## Jitter
+
+Sub-pixel jitter is measured in pixels, x right and y down, each in `[−0.5, 0.5]`. The sample position of pixel `(i, j)` is `(i + 0.5 + jx, j + 0.5 + jy)`, and its NDC offset is `(2·jx / width, −2·jy / height)`.
+
+A pipeline has exactly **one jitter owner**. By default the path tracer jitters its own camera rays: every sample draws a new offset inside the pixel. With V-buffer primaries (**Experimental**) the engine that rasterises the V-buffer owns the jitter and passes it in. Motion vectors never contain jitter, whoever owns it.
+
+## Hits and materials
+
+- A ray is `{ origin, tMin, direction, tMax }` with a unit direction (`Ray`, 32 bytes). A hit's `t < 0` means a miss.
+- Barycentrics are the weights of vertices 1 and 2; vertex 0 gets `1 − u − v`.
+- A hit's `normal` is the world-space geometric normal. Shading normals, uvs and tangents come from the scene copy (`rtSurface`).
+- Material ids are 16 bits (`BVH_MAX_MATERIAL` = 65534) and index the scene's own material table.
+
+## WGSL names
+
+WGSL has no namespaces, so each package owns a prefix: `bvh*` for `@pmndrs/bvh`, `rt*` for `@pmndrs/raytracer`, `pt*` for `@pmndrs/pathtracer`. Do not declare names with these prefixes in your own WGSL. See [Inline WGSL](/raytracer/inline-wgsl).

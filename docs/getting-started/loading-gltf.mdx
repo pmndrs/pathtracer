@@ -51,7 +51,8 @@ Each glTF material becomes a set of [OpenPBR](https://academysoftwarefoundation.
 | `baseColorFactor` / texture, `metallicFactor`, `roughnessFactor` / texture | base colour, base metalness, specular roughness |
 | `normalTexture` | the shading normal |
 | `emissiveFactor` / texture × `KHR_materials_emissive_strength` | emission |
-| `alphaMode` `MASK` / `BLEND` | alpha cutout / stochastic opacity |
+| `alphaMode` `MASK` | alpha cutout (when the scene has textures; see [Materials](/concepts/materials)) |
+| `alphaMode` `BLEND` | stored, but not rendered yet: the surface renders opaque |
 | `KHR_materials_ior`, `KHR_materials_specular` | specular IOR, weight and colour |
 | `KHR_materials_transmission` + `KHR_materials_volume` | transmission; thin-walled without a volume, Beer absorption with `attenuationDistance` |
 | `KHR_materials_clearcoat` | coat (IOR 1.5) |

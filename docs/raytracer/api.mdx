@@ -1,0 +1,160 @@
+---
+title: API reference
+description: The public exports of @pmndrs/raytracer, grouped by area.
+nav: 27
+---
+
+Every name below is exported from `@pmndrs/raytracer`. WGSL functions are listed on the page that covers them. The source is in [`packages/raytracer/src`](https://github.com/pmndrs/pathtracer/blob/main/packages/raytracer/src); each export has a doc comment there.
+
+Items marked **experimental** work and are checked, but their API can still change.
+
+## Device and capabilities
+
+See [Capabilities](/raytracer/capabilities).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `detectCaps` | function | Reads an adapter's features and limits into a `Caps`. |
+| `requestDeviceForCaps` | function | Requests a device with every useful feature and raised limits; returns `{ device, caps }`. |
+| `buildCaps` | function | `Caps` from any adapter-like or device-like object (for example one with no features). |
+| `featuresToRequest`, `limitsToRequest` | function | What `requestDeviceForCaps` would request. |
+| `DEFAULT_LIMIT_CAPS` | constant | Ceilings on requested limits. |
+| `capsHash` | function | Stable hash of everything that changes generated code: a pipeline cache key. |
+| `deriveTier` | function | The tier label of a set of caps. Report it, never branch on it. |
+| `Caps`, `RequestDeviceOptions`, `DeviceForCaps`, `Tier` | type | |
+
+## Scene building
+
+The input types are described in [Scenes](/concepts/scenes), [Materials](/concepts/materials) and [Lights](/concepts/lights).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `buildGpuScene` | function | Builds the BVH and the scene copy from a `SceneCopyInput` and uploads both. Returns a `GpuScene`. |
+| `GpuScene` | type | `trace`, `buffers`, `copy`, `format`, `packing`, `destroy()`. |
+| `buildSceneCopy` | function | The CPU half: material, light and surface tables, textures. |
+| `uploadSceneCopy` | function | Uploads a `SceneCopy` to storage buffers and texture arrays. |
+| `writeSceneCopy` | function | Rewrites a rebuilt copy into existing buffers when it fits. |
+| `createMaterial`, `defaultMaterial` | function | A full `RtMaterial` from a partial one; the OpenPBR defaults. |
+| `makeSun`, `makeEnvironment` | function | Light records from `SunInput` and `EnvironmentInput`. |
+| `buildTriangleLights` | function | The emissive-triangle lights of meshes and instances. |
+| `lightSelectionWeights`, `parseLightSelection` | function | Light-selection strategies (`'pbrt'`, `'power'`, `'kind'`, capped). |
+| `buildAliasTable`, `sampleAlias` | function | Vose alias table and its sampler (CPU). |
+| `buildEnvMapTable`, `envMapMean` | function | Sampling tables and mean radiance of an equirect environment map. |
+| `SceneCopyInput`, `SceneCopyMesh`, `SceneCopyInstance`, `SceneCopyOptions`, `RtMaterialInput`, `SunInput`, `EnvironmentInput`, `TextureInput`, `TextureOptions` | type | Inputs. |
+| `SceneCopy`, `SceneCopyBuffers`, `RtMaterial`, `RtLight` | type | Outputs. |
+
+## Scene copy in WGSL
+
+See [Scene copy](/raytracer/scene-copy).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `rtSceneCopyLayoutEntries` | function | Bind group layout entries of the scene copy (buffers, then texture arrays and samplers). |
+| `rtSceneCopyBindGroupEntries` | function | The matching bind group entries for uploaded buffers. |
+| `rtPackSceneAccess` | function | Rewrites WGSL written against the split buffers to read the packed one. |
+| `rtLightSampleWgsl` | function | WGSL of light point sampling (`rtSampleLightLi`); `envMap: true` adds map importance sampling. |
+| `rtSceneWgsl` | function | The scene-copy WGSL on its own (what `rtModuleWgsl` adds with `scene`). |
+| `rtMipGenerator` | function | The default per-device `@pmndrs/downsampler` mip generator. |
+| `sceneCopyBindingLimit` | function | The device's storage binding size cap. |
+| `DEFAULT_SCENE_PACKING` | constant | `'packed'`. |
+| `RtMipGenerator`, `SceneCopyPacking`, `TextureLayout` | type | |
+| `rtSetResourceTable`, `rtUsesResourceTable` | function | **Experimental.** Bindless textures: bind a resource table; whether a texture layout needs one. |
+
+CPU twins, for tests and tools: `readMaterial`, `unpackMaterial`, `readLight`, `readLightIndexOfHit`, `readLightPmfOfHit`, `readSurfaceFromTable`, `sampleSceneTexture`, `textureLod`, `coneUvFootprint`, `applyNormalMap`, `sampleLightLi`, `lightPdfLi`, `envMapLookup`, `envMapPdf`, `sampleEnvMap`.
+
+## Tracing in WGSL
+
+See [Inline WGSL](/raytracer/inline-wgsl).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `rtModuleWgsl` | function | The inline module: walk, `rtVisible`, `rtClosest`, and optionally `rtSurface`, the scene copy, `rtShade`, intervals. |
+| `RtModuleOptions` | type | Its options. |
+| `sceneFormatOf` | function | The formats of bvh trace buffers, to spread into module and tracer options. |
+| `rtWalkEntries` | function | Layout entries (without binding numbers) of the walk's buffers. |
+| `withBindings` | function | Numbers module entries from a first binding. |
+| `rtSceneBindGroupEntries` | function | Bind group entries of the walk for bvh trace buffers. |
+| `rtModuleStorageBuffers` | function | Storage buffers a module adds to a kernel. |
+| `RT_MASK_ALL`, `RT_NO_MATERIAL` | constant | All ray-mask bits; the material id of a hit with none. |
+| `SURFACE` | constant | The `RT_SURF_*` bit values. |
+| `rtIsWideNodeFormat` | function | **Experimental.** True for the wide formats `bvh4` and `cwbvh8`. |
+
+## Batch and interval tracers
+
+See [Batch tracer](/raytracer/batch-tracer) and [Interval queries](/raytracer/interval-queries).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `RtBatchTracer` | class | Traces a GPU ray buffer into hit records or visibility words. |
+| `RtBatchTracerOptions`, `RtBatch`, `RtIndirectCount` | type | Its options, a batch, a GPU-side count. |
+| `packRays`, `packRaysSoa`, `aosToSoa`, `unpackRay`, `packCones` | function | Ray and cone buffers from CPU data. |
+| `readHits`, `readVisibility` | function | Decode read-back results. |
+| `resultBytes`, `dispatchGrid` | function | Bytes per result; the workgroup grid for a ray count. |
+| `rtBatchKernelWgsl`, `rtBatchArgsKernelWgsl`, `rtBatchEntries`, `resolveBatchOptions` | function | The batch kernel's parts, for your own pipeline. |
+| `Ray`, `Hit`, `RayCone` | type | The CPU forms of rays, hits and cones. |
+| `RAY_BYTES`, `HIT_BYTES`, `HIT_COMPACT_BYTES`, `RAY_CONE_BYTES`, `HIT_WORD`, `MISS_T` | constant | Record sizes, hit word offsets, the miss distance. |
+| `RtIntervalTracer` | class | **Experimental.** Batched interval queries from rays or probe bundles. |
+| `RtIntervalJob`, `IntervalKernelOptions` | type | **Experimental.** A job; the tracer's options. |
+| `intervalResultBytes`, `intervalRayCount` | function | **Experimental.** Result stride; rays per job. |
+| `intervalBounds`, `inInterval`, `cascadeEnd`, `cascadeStart`, `cascadeIndex` | function | **Experimental.** CPU twins of the interval and cascade arithmetic. |
+| `octEqualAreaDecode`, `bundleDirection` | function | **Experimental.** Equal-area square-to-sphere map; a probe cell's direction. |
+| `nextUpF32`, `nextDownF32`, `RT_T_INF` | function, constant | **Experimental.** f32 stepping; the largest finite f32. |
+
+## glTF
+
+See [Loading glTF](/getting-started/loading-gltf).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `loadGltf` | function | Reads a `.glb` or `.gltf` (URL or bytes) into a `SceneCopyInput` with cameras, sun and notes. |
+| `LoadGltfOptions`, `GltfSceneInput` | type | Its options and result. |
+| `decodeImageWithCanvas` | function | The default image decoder (browsers and workers). |
+| `gltfSceneFromJson`, `gltfSceneToInput` | function | The two steps of `loadGltf`, for files you have already parsed. |
+| `parseGlb`, `isGlb` | function | GLB container parsing. |
+| `gltfMaterialToOpenPbr`, `openPbrToRtMaterial` | function | glTF material to OpenPBR parameters to a scene-copy material. |
+| `resolveOpenPbr`, `OPENPBR_DEFAULTS` | function, constant | OpenPBR parameter defaults. |
+
+## Shading
+
+See [Shading](/raytracer/shading).
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `RtShadeOptions` | type | Options of the `shade` module option. |
+| `RT_SHADE_MODE` | constant | `{ flat, lambert, full }` values of the WGSL `RT_SHADE_*` constants. |
+| `rtShadeWgsl` | function | The shading WGSL on its own (what `rtModuleWgsl` adds with `shade`). |
+| `shade` | function | CPU twin of `rtShade` (f64). |
+| `makeShadePoint`, `builtinBsdf`, `shadeMiss`, `shadeTotal`, `shadeDiffuseFromIrradiance` | function | Parts of the twin. |
+
+## Noise and sampling
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `rtOwenSobolWgsl` | function | WGSL of an Owen-scrambled Sobol sampler: `rtOwenSobol2D(index, seed)`, `rtHash32`, `rtUnit24`, ... |
+| `owenSobol2D`, `hash32`, `nestedUniformScramble`, `shuffleIndex` | function | Its CPU twins, bit-identical to the GPU. |
+| `fetchBlueNoise`, `decodeBlueNoisePng`, `parseBlueNoise` | function | Load the package's blue-noise textures (16-bit PNG or raw float32). |
+| `blueNoiseAt` | function | A texel with toroidal wrap. |
+| `BlueNoiseTexture`, `BlueNoiseMeta` | type | |
+
+## WGSL tooling
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `rtCreateComputePipelineAsync` | function | Creates a pipeline; on failure throws the compiler messages mapped to source lines and names. |
+| `rtTransformWgsl` | function | Prune, shorten and minify in one call, with a source map. |
+| `rtPruneWgsl`, `rtShortenWgsl`, `rtMinifyWgsl`, `stripWgslComments` | function | The individual size transforms. |
+| `rtMapCompilationInfo`, `rtMapCompilationMessage` | function | Translate compiler messages through a source map. |
+| `rtCheckShaderModule` | function | Reads a module's compilation info and throws translated errors. |
+| `rtFormatCompilationMessages`, `rtFormatSourceContext` | function | Human-readable messages with source context. |
+| `rtComposeSourceMaps`, `rtWgslIdentityMap`, `rtWgslSourceMapV3` | function | Build and combine source maps; export one as Source Map v3. |
+| `RtWgslSourceMap`, `RtWgslBuild` | type | |
+| `buildWgsl`, `preprocess` | function | The `#if` preprocessor, with or without the `enable` lines. |
+| `wgslEnableLines`, `capsDefines` | function | The `enable` lines and preprocessor defines for a set of caps. |
+
+## Conventions
+
+| Name | Kind | What it does |
+| --- | --- | --- |
+| `WORLD`, `NDC`, `VIEW_Z_SIGN`, `MOTION`, `JITTER`, `IMAGE`, `NORMAL_SPACE` | constant | The shared conventions in code. See [Conventions](/concepts/conventions). |
+| `roughnessToAlpha` | function | Perceptual roughness to GGX alpha (`roughness^2`). |
+| `FrameCamera`, `AOV` | type, constant | Camera and render-output names shared with real-time consumers. |

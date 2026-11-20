@@ -1,0 +1,94 @@
+---
+title: Sampling
+description: Samplers, seeds and sample indices, blue noise, path depth and Russian roulette.
+nav: 14
+---
+
+Every random number the path tracer uses comes from a **sampler**, addressed by three things: the pixel (through a per-pixel seed), the sample index and a dimension. Changing the sampler changes how the noise looks and how fast it falls; the mean of the image stays the same.
+
+## Samplers
+
+Set with `integrator.sampler`:
+
+| Sampler | Use |
+| --- | --- |
+| `'owen-sobol'` (default) | Progressive and reference renders. Owen-scrambled Sobol points: each pixel's samples are stratified, so the error falls faster than with independent random numbers. |
+| `'pcg'` | Debugging. Independent, unstratified random numbers from a PCG hash. Same mean, more noise. |
+| `'bluenoise'` | Real-time frames at one sample per pixel. The error is spread as high-frequency noise across neighbouring pixels, which a denoiser removes more easily. Needs a blue-noise texture (below). |
+
+### How Owen-Sobol is laid out
+
+The sampler hands out **pairs** of numbers. Each pair has its own seed, shuffle and scramble, so pairs are independent of each other, and the first 2^m samples of one pair are well stratified. Sample counts that are powers of two make the most of that.
+
+| Pair | Used for |
+| --- | --- |
+| 0 | The sub-pixel jitter of the camera ray |
+| 1 | Reserved (lens, time) |
+| `2 + 4v + 0` | Vertex `v`: a point on the chosen light |
+| `2 + 4v + 1` | Vertex `v`: the BSDF direction |
+| `2 + 4v + 2` | Vertex `v`: light selection, BSDF lobe choice |
+| `2 + 4v + 3` | Vertex `v`: Russian roulette |
+
+Pairs are hashed, not tabulated, so a deep path costs no table. The map is in [`dimensions.ts`](https://github.com/pmndrs/pathtracer/blob/main/packages/pathtracer/src/integrator/dimensions.ts), with a TypeScript twin of every sampler.
+
+## Seeds and the sample index
+
+- **`setSeed(seed)`** sets the scrambling seed. Each seed gives an independent realisation of the noise. Two renders with the same seed and the same sample count use the same random numbers.
+- **The sample index** is the number of sample passes since the last `reset`. It is the sample counter `pt.samples`. `reset` sets it back to 0, so a restarted image repeats the noise pattern of the first one; give it a new seed if that matters.
+- In frame mode (`integrator.frame`) the sample index is the **frame** index: it advances with each `encode`, and `setFrameIndex` sets it, for example to replay a frame.
+
+```ts
+pt.setSeed(7);
+pt.reset(encoder); // sample index back to 0
+pt.encode(encoder, 64); // samples 0..63 of seed 7
+```
+
+## Blue noise
+
+The `'bluenoise'` sampler reads the first few pairs of every sample from a blue-noise texture at the pixel, and shifts the texture every frame so the average over frames still converges to the right image. Deeper pairs fall back to Owen-Sobol.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `integrator.blueNoisePairs` | 6 | How many leading pairs read the texture (at most 15). 6 covers the jitter, the lens pair and the first vertex. |
+| `integrator.blueNoiseShift` | `'owen'` | The per-frame shift: `'owen'` or `'kronecker'`. `'owen'` accumulates over frames as well as Owen-Sobol does. |
+| `blueNoise` (kernel option) | none | The texture. Required with this sampler. |
+
+The textures are our own: we generate them (void-and-cluster and a joint two-channel optimisation) rather than use third-party blue noise. The sampler needs a two-channel, single-slice, power-of-two texture: `gf-vec2-64` or `gf-vec2-128`. They live in [`packages/raytracer/assets/bluenoise/`](https://github.com/pmndrs/pathtracer/tree/main/packages/raytracer/assets/bluenoise) with a `manifest.json`. Serve that folder with your app and load one with `fetchBlueNoise`:
+
+```ts
+import { fetchBlueNoise } from '@pmndrs/raytracer';
+import { PtMegakernel, ptSceneOptions } from '@pmndrs/pathtracer';
+
+const blueNoise = await fetchBlueNoise('/bluenoise/', 'gf-vec2-64'); // reads /bluenoise/manifest.json
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, { mode: 'realtime', blueNoise }));
+```
+
+`fetchBlueNoise` decodes the 16-bit PNG itself. Never decode these files through a canvas or `createImageBitmap`: those are 8-bit and lose the noise's precision. `decodeBlueNoisePng` decodes bytes you already have.
+
+The `'realtime'` [mode](/concepts/modes) switches to this sampler when you pass `blueNoise`, and stays on Owen-Sobol otherwise.
+
+## Path depth
+
+`setLimits({ maxDepth, rrStartDepth })` bounds each path.
+
+**`maxDepth`** counts scattering events, with pbrt-v4's `maxdepth` meaning:
+
+| `maxDepth` | What a path sees |
+| --- | --- |
+| 0 | Emitters and the sky seen directly. |
+| 1 | Direct lighting: one scattering vertex with next-event estimation. |
+| `n` | Up to `n` scattering vertices. |
+
+Mitsuba 3's `max_depth` is our `maxDepth + 1`. Without a `setLimits` call the kernel uses `maxDepth` 5 and no Russian roulette; a [mode](/concepts/modes) preset may start from other limits.
+
+Glass needs depth: light through a closed glass object takes at least two scattering events, and smooth dielectrics in a white furnace need very deep paths to reach their exact value.
+
+## Russian roulette
+
+Russian roulette ends paths that carry little light, at random, and scales up the ones that survive so the mean is unchanged. From scattering vertex `rrStartDepth` on (1 = the first surface hit), a path whose throughput's largest channel `m` is below 1 ends with probability `1 − m`; otherwise its throughput is divided by `m`. Omitted or 0 turns it off.
+
+```ts
+pt.setLimits({ maxDepth: 16, rrStartDepth: 3 });
+```
+
+Roulette trades a little noise for speed on deep paths. The `preview` and `realtime` presets turn it off and cap the depth instead.

@@ -116,6 +116,139 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     source: 'examples/start/gltf',
     network: true,
   },
+  {
+    slug: 'hits',
+    path: 'raytracer/hits/',
+    title: 'Hit inspector',
+    summary: 'rtClosest and rtSurface in your own compute shader: normals, uvs, materials and distances of the first hit.',
+    description:
+      'One camera ray per pixel per frame through `rtClosest`, then `rtSurface` decodes what was hit. Pick the property to show: shading or geometric normal, ' +
+      'front or back face, distance bands, texture coordinates, barycentrics, material and instance ids, or the base colour with its texture. No path tracer is involved.',
+    category: 'raytracer',
+    status: 'stable',
+    tags: ['rtClosest', 'rtSurface', 'inline WGSL'],
+    docs: 'raytracer/inline-wgsl',
+    source: 'examples/raytracer/hits',
+    network: true,
+  },
+  {
+    slug: 'ao',
+    path: 'raytracer/ao/',
+    title: 'Ambient occlusion',
+    summary: 'rtVisible, the cheapest query: cosine rays over the hemisphere ask only whether anything is within a radius.',
+    description:
+      'For the first hit of each pixel, a few cosine-distributed rays per frame ask `rtVisible` whether anything lies within the radius: an any-hit walk that stops at the first blocker. ' +
+      'The fraction that escapes converges to the ambient occlusion. Change the radius to see contact shadows turn into broad darkening.',
+    category: 'raytracer',
+    status: 'stable',
+    tags: ['rtVisible', 'any hit', 'inline WGSL'],
+    docs: 'raytracer/inline-wgsl',
+    source: 'examples/raytracer/ao',
+    network: true,
+  },
+  {
+    slug: 'shade',
+    path: 'raytracer/shade/',
+    title: 'One-bounce shading',
+    summary: 'rtShade at the first hit: emission and one light sample with its shadow ray, the lighting a reflection or GI effect needs.',
+    description:
+      '`rtShade(hit, ray, mode, u, mask)` lights a hit with one sample of the scene\u2019s lights (sun, sky, emissive triangles) and one shadow ray, and returns the environment for a miss. ' +
+      'It is not a path tracer: there is no indirect light unless you plug your own cache into `rtShadeIndirect`. Compare the full, Lambert-only and flat modes.',
+    category: 'raytracer',
+    status: 'stable',
+    tags: ['rtShade', 'light sampling', 'inline WGSL'],
+    docs: 'raytracer/shading',
+    source: 'examples/raytracer/shade',
+    network: true,
+  },
+  {
+    slug: 'batch',
+    path: 'raytracer/batch/',
+    title: 'Batch tracing',
+    summary: 'RtBatchTracer: camera rays and shadow rays from GPU buffers, hits and visibility back into GPU buffers, five passes and no readback.',
+    description:
+      'Each frame: our kernel writes camera rays into a buffer, `RtBatchTracer` (closest) turns them into hit records, our kernel builds shadow rays towards the sun, ' +
+      '`RtBatchTracer` (visible) answers them, and a last kernel composes base colour, sun and sky. The trace core never appears in our shaders\u2019 text: the batch tracer owns the walk.',
+    category: 'raytracer',
+    status: 'stable',
+    tags: ['RtBatchTracer', 'shadow rays', 'GPU buffers'],
+    docs: 'raytracer/batch-tracer',
+    source: 'examples/raytracer/batch',
+    network: true,
+  },
+  {
+    slug: 'schedulers',
+    path: 'pathtracer/schedulers/',
+    title: 'Megakernel or wavefront',
+    summary: 'The same estimator scheduled two ways: one kernel per sample, or kernels connected by GPU queues. Same image, different time.',
+    description:
+      '`PtMegakernel` traces a whole path per thread; `PtWavefront` splits a sample into camera, intersect, shade and shadow kernels joined by queues and indirect dispatch, ' +
+      'and can refill a pixel as soon as its path ends. The image is the same per pixel. Switch schedulers and their options and watch the frame time; ' +
+      'the stats show what `ptwfAutoPolicy` would pick for this film and path length. Frame times here are wall-clock readings, not benchmarks.',
+    category: 'pathtracer',
+    status: 'stable',
+    tags: ['PtMegakernel', 'PtWavefront', 'ptwfAutoPolicy'],
+    docs: 'concepts/schedulers',
+    source: 'examples/pathtracer/schedulers',
+    network: true,
+  },
+  {
+    slug: 'cutouts',
+    path: 'pathtracer/cutouts/',
+    title: 'Alpha cutouts',
+    summary: 'Leaf cards with alpha-masked textures: exact cutout shadows, and the faster settings that trade bias or noise for speed.',
+    description:
+      'Cards with an `alphaMode` MASK material are cut out where their texture alpha is below the cutoff: camera and bounce rays step through the holes. ' +
+      'Shadow rays are the expensive part. Compare the exact test with opaque shadows (card-shaped, too dark), roulette (unbiased, noisier) and transmit (uniform partial shadow).',
+    category: 'pathtracer',
+    status: 'stable',
+    tags: ['alpha mask', 'textures', 'shadows'],
+    docs: 'pathtracer/integrator-options',
+    source: 'examples/pathtracer/cutouts',
+  },
+  {
+    slug: 'lights',
+    path: 'pathtracer/lights/',
+    title: 'Many lights',
+    summary: '64 coloured lamps, a sun and a sky: light selection strategies for next-event estimation, and ReSTIR DI.',
+    description:
+      'Next-event estimation picks one light per vertex; how it picks decides the noise. Switch the light table\u2019s selection rule (pbrt, power, kind, capped), ' +
+      'or turn on ReSTIR DI (experimental), which resamples several candidates per pixel and reuses good picks over time and between neighbours.',
+    category: 'pathtracer',
+    status: 'stable',
+    tags: ['NEE', 'light selection', 'ReSTIR DI'],
+    docs: 'concepts/lights',
+    source: 'examples/pathtracer/lights',
+  },
+  {
+    slug: 'volumes',
+    path: 'pathtracer/volumes/',
+    title: 'Fog and clouds',
+    summary: 'Participating media: homogeneous fog filling the Cornell box, or a cloud read from a 3D density grid.',
+    description:
+      'A medium lives inside a closed mesh whose material is a medium boundary: rays pass through it and switch the medium they travel in. ' +
+      'Set the extinction, the scattering albedo and the Henyey-Greenstein anisotropy, or switch to a cloud whose density comes from a procedural 3D grid.',
+    category: 'pathtracer',
+    status: 'experimental',
+    tags: ['volumes', 'media', 'density grid'],
+    docs: 'pathtracer/volumes',
+    source: 'examples/pathtracer/volumes',
+    heavy: true,
+  },
+  {
+    slug: 'spectral',
+    path: 'pathtracer/spectral/',
+    title: 'Spectral rendering and dispersion',
+    summary: 'Paths that carry wavelengths: glass whose index of refraction depends on the wavelength splits white bars into colour fringes.',
+    description:
+      'With `integrator.spectral` every path carries three wavelengths: colours are lifted to spectra and converted back at the end. A dispersive glass prism and slab stand in front of bright bars, ' +
+      'so the split shows as colour fringes in the refracted view. Turn spectral off to see the same scene in RGB, where dispersion is ignored.',
+    category: 'pathtracer',
+    status: 'experimental',
+    tags: ['spectral', 'dispersion', 'glass'],
+    docs: 'pathtracer/spectral',
+    source: 'examples/pathtracer/spectral',
+  },
 ];
 
 export const exampleBySlug = (slug: string): ExampleEntry | undefined => EXAMPLES.find((e) => e.slug === slug);

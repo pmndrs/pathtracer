@@ -1,0 +1,103 @@
+---
+title: MaterialX (experimental)
+description: Render MaterialX graphs by baking them to textures or compiling them to WGSL.
+nav: 38
+---
+
+> [!WARNING]
+> Experimental. It works and is checked against its own TypeScript twin and against equivalent native materials, but the API can still change.
+
+[MaterialX](https://materialx.org/) describes a material as a graph: a surface shader whose inputs are driven by pattern nodes such as images, ramps and math. The path tracer reads `.mtlx` documents with `open_pbr_surface`, `standard_surface` or `gltf_pbr` surfaces and renders them as its own OpenPBR materials. The reader is plain TypeScript, with no MaterialX WASM module.
+
+There are two ways to render a graph whose inputs vary over the surface:
+
+| | Bake | Codegen |
+| --- | --- | --- |
+| How | Evaluate the graph into textures on the CPU | Compile the graph to WGSL inside the kernel |
+| Kernel | Unchanged | `integrator.materialx`, larger kernel |
+| What can vary | Base colour and weight, opacity, roughness, metalness, emission, normal map; anything else is averaged | Every material field the scene copy has |
+| Inputs a graph may read | uv only | uv, position, normal, tangent |
+| Precision | Limited by texture size and 8 bits | Exact per hit |
+| Changing a material | Re-bake the texture | Recompile the kernel |
+
+A graph whose inputs are all constant needs neither: its parameters become an ordinary material.
+
+## Loading
+
+```ts
+import { loadMtlxMaterial, mtlxConstantParams } from '@pmndrs/pathtracer';
+import { openPbrToRtMaterial, type OpenPbrParams } from '@pmndrs/raytracer';
+
+const mtl = loadMtlxMaterial(await (await fetch('/materials/brass.mtlx')).text());
+console.log(Object.keys(mtl.varying)); // inputs that depend on the shading point
+const material = openPbrToRtMaterial(mtlxConstantParams(mtl) as OpenPbrParams);
+```
+
+`loadMtlxMaterial(source, options)` parses the document, picks a material (`options.material`, default the first) and lowers its surface to OpenPBR parameters. The result splits them into `constants` and `varying`; `images` lists the image files the varying part reads. `lengthScale` (default 0.01) converts MaterialX centimetres to our metres for `transmission_depth`.
+
+Parameters come out under OpenPBR names (`MtlxParams`), which `openPbrToRtMaterial` from `@pmndrs/raytracer` turns into a scene-copy material. `standard_surface` and `gltf_pbr` defaults that differ from OpenPBR's are applied. Inputs with no counterpart, such as subsurface radius or coat darkening, are listed in `mtl.surface.ignored`.
+
+## Baking
+
+```ts
+import { bakeMtlxMaterial, imageSampler } from '@pmndrs/pathtracer';
+
+const baked = bakeMtlxMaterial(mtl, { resolution: 1024, sample: imageSampler((file) => images.get(file)) });
+```
+
+`bakeMtlxMaterial(mtl, options)` evaluates the graph at the texel centres of a square over the uv range `[0, 1]`. It returns `params` (constants as authored, baked inputs at a neutral factor) and up to four `BakedTexture`s: `baseColorTexture`, `metallicRoughnessTexture`, `emissiveTexture`, `normalTexture`. Each is RGBA8 with a `colorSpace`, the shape `SceneCopyInput.textures` takes. `approximations` lists what was averaged or dropped.
+
+| Option | Default | What |
+| --- | --- | --- |
+| `resolution` | `256` | Side of the baked textures. |
+| `sample` | none | Image lookups for `image` and `tiledimage` nodes: `imageSampler(load)`, where `load(file)` returns RGBA8 pixels. |
+| `texels` | `true` | `false` plans only: the same parameters and texture sizes, without the pixel work. |
+
+To use the textures, add them to `SceneCopyInput.textures`, name them in `params` (`baseColorTexture`, `metallicRoughnessTexture`, `emissiveTexture`, `normalTexture`) and pass `openPbrToRtMaterial` a second argument that maps those names to texture indices. The mesh's uvs must stay inside `[0, 1]`.
+
+## Codegen
+
+```ts
+import { mtlxFallbackParams, mtlxProgramsWgsl } from '@pmndrs/pathtracer';
+
+// The record holds the parameters at uv (0.5, 0.5); the generated function overrides them per hit.
+materials[3] = openPbrToRtMaterial(mtlxFallbackParams(mtl) as OpenPbrParams);
+
+// slotOf: your own lookup from an image file to its index in SceneCopyInput.textures.
+const programs = mtlxProgramsWgsl([{ material: 3, mtl }], { textureSlot: (request) => slotOf(request.file) });
+const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, {
+  integrator: { materialx: { wgsl: programs.wgsl, normal: programs.normal } },
+}));
+```
+
+`mtlxProgramsWgsl(programs, { textureSlot })` generates one WGSL function per material and a dispatcher the kernel calls after its own texture lookups. `textureSlot` maps each image the graph reads to its index in `SceneCopyInput.textures`, or -1 for none (the node's default then applies). `notes` lists what could not be generated.
+
+- The scene copy must have textures, because uv, position and tangent come with them. A graph that reads no image still needs one: add a 1x1 placeholder texture.
+- If emission varies, set the record's `emissionLuminance` to 0. The generated function emits at the hit, and an emissive record would add the surface to the light table.
+- An opacity that varies is seen by shading, not by alpha cutouts or shadow rays.
+- Both schedulers take the generated text. It composes with spectral mode (the graph runs in RGB, then the uplift).
+
+`position`, `normal` and `tangent` in a graph are world-space values at the hit.
+
+## Supported nodes
+
+| Group | Nodes |
+| --- | --- |
+| Math | `add subtract multiply divide modulo power min max absval floor ceil round fract sign sin cos tan asin acos atan2 sqrt exp ln clamp invert remap smoothstep mix ifgreater ifgreatereq ifequal normalize magnitude dotproduct crossproduct luminance` |
+| Data | `constant dot convert combine2 combine3 combine4 extract swizzle separate2 separate3 separate4` |
+| Geometry | `texcoord position normal tangent`, `transformpoint transformvector transformnormal` |
+| Patterns | `image tiledimage place2d rotate2d ramplr ramptb splitlr splittb normalmap` |
+| Surfaces | `open_pbr_surface standard_surface gltf_pbr` through `surfacematerial` |
+
+Anything else throws `MtlxUnsupportedError` naming the node. Notably missing: the noise family, `checkerboard`, colour-correction and HSV nodes, matrix nodes, `bump`, `heighttonormal`, and time and frame.
+
+## Conventions
+
+- uv `(0, 0)` is the top-left texel and v grows downward, as in glTF and the scene textures.
+- `file` inputs get the document's `fileprefix`. Images with `colorspace="srgb_texture"` are sRGB colour; everything else is linear data.
+- Address modes `periodic`, `clamp` and `mirror` map to the texture wrap; `constant` reads as clamp. Filtering is always bilinear.
+- The normal input must be a tangent-space `normalmap` for codegen.
+
+## For tools
+
+`parseMaterialX`, `MtlxLowering`, `evalIr`, `evalMtlxParams`, `foldConstants` and `MTLX_NODES` expose the parser, the lowered graph and the TypeScript evaluator that the baker and the code generator share.

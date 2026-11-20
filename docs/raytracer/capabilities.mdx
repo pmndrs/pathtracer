@@ -1,0 +1,87 @@
+---
+title: Capabilities
+description: What a device offers, how to ask for it, and how kernels compile against it.
+nav: 26
+---
+
+Every kernel in both packages compiles against a `Caps` object: the optional features and limits of one device. Get it once at start-up and pass it to everything that builds WGSL.
+
+## Getting a device
+
+```ts
+import { detectCaps, requestDeviceForCaps } from '@pmndrs/raytracer';
+
+const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+if (!adapter) throw new Error('no WebGPU adapter');
+const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter));
+```
+
+`detectCaps(adapter)` reads what the adapter offers. `requestDeviceForCaps(adapter, caps, options)` requests a device with every optional feature the adapter has and raised limits, then returns the caps **of the device**: use those, not the adapter's.
+
+| Option | What it does |
+| --- | --- |
+| `label` | Device label. |
+| `disable` | Flags to leave off although the adapter has them (for example `['subgroups']`, to test the path without them). |
+| `limitCaps` | Change the ceilings on requested limits (defaults in `DEFAULT_LIMIT_CAPS`, for example 2 GiB per storage binding). |
+| `extraFeatures` | Other feature strings to request when the adapter has them. |
+
+Limits are requested at the adapter's maximum, clamped by `DEFAULT_LIMIT_CAPS`. `featuresToRequest` and `limitsToRequest` return what would be requested, if you create the device yourself; then build caps from the device with `buildCaps`.
+
+## What Caps holds
+
+| Field | What |
+| --- | --- |
+| `subgroups`, `subgroupSizeControl`, `shaderF16`, `timestampQuery` | Optional features, `true` when present. |
+| `immediates` | The WGSL language feature `immediate_address_space`. |
+| `resourceTable` | `'none'`, `'sampling'` or `'heterogeneous'` (bindless; experimental). |
+| `subgroupMatrix`, `subgroupMatrixConfigs` | Subgroup matrices and the tile shapes the adapter reports. |
+| `float32Filterable`, `textureFormatsTier1`, `compressed` | Texture features; `compressed` has `bc`, `bcSliced3d`, `astc`, `etc2`. |
+| `accelerationStructure` | Detected only; nothing uses it. |
+| `limits` | The limits the library reads (`maxStorageBufferBindingSize`, `maxStorageBuffersPerShaderStage`, ...). |
+| `subgroupMinSize`, `subgroupMaxSize` | 0 when not reported. |
+| `meetsBaseline` | At least 128 MiB per storage binding, 16 KiB of workgroup storage and 8 storage buffers per stage. |
+| `adapter` | Vendor, architecture, device and description strings (often empty). |
+| `features`, `wgslLanguageFeatures` | The raw strings. |
+| `featureNames` | The exact string matched for each flag. Feature names are tried in their prefixed and unprefixed forms, so code keeps working across Chrome's renames. |
+| `tier` | A summary label, 0 to 3. See below. |
+
+`capsHash(caps)` is a short stable hash of everything that changes generated code. Use it to key a pipeline cache.
+
+### The tier label
+
+`tier` summarises a device for reports and logs:
+
+| Tier | Adds |
+| --- | --- |
+| 0 | WebGPU baseline. |
+| 1 | `shader-f16`, timestamps, immediates, BC or ASTC compression, 1 GiB storage bindings, 256 invocations per workgroup. |
+| 2 | Subgroups. |
+| 3 | A resource table. |
+
+> [!WARNING]
+> Never branch on `tier`. It hides which feature is missing. Test the flag you need (`caps.subgroups`, `caps.shaderF16`, ...).
+
+## Enable lines and the preprocessor
+
+Generated WGSL starts with `enable` lines for the features the device has (`enable f16;`, `enable subgroups;`, ...). WGSL only allows them at the top of a shader, so:
+
+- Put the output of `rtModuleWgsl` first and append your code after it.
+- Error line numbers in your part are shifted by the number of `enable` lines. `wgslEnableLines(caps)` returns them, so you can count them.
+
+`buildWgsl(source, caps, defines)` is the preprocessor the library uses: it prepends the `enable` lines and resolves `#if NAME`, `#if !NAME`, `#elif`, `#else` and `#endif` against `capsDefines(caps)` (`HAS_SUBGROUPS`, `HAS_F16`, `HAS_TIMESTAMP`, `BINDLESS`, ...) plus your own `defines`. Dropped lines become empty lines, so line numbers still match. `preprocess(source, defines)` does the `#if` part alone. Use them for your own kernels if you like.
+
+> [!NOTE]
+> Output of `rtModuleWgsl` is already preprocessed. Running it through `buildWgsl` again adds a second block of `enable` lines in the middle of the file, which fails to compile.
+
+## Pasting into someone else's shader
+
+When the module has to go into the middle of another shader (a three.js node, another library's kernel), it must not carry `enable` lines. Build caps with no optional features:
+
+```ts
+import { buildCaps, rtModuleWgsl } from '@pmndrs/raytracer';
+
+const plainCaps = buildCaps({ features: new Set(), limits: device.limits as unknown as Record<string, unknown> });
+const code = rtModuleWgsl(plainCaps, { ...scene.format, traceSlot: { group: 3, firstBinding: 0 } });
+```
+
+The trace, surface, material, light and shading code needs no optional feature, so nothing is lost. The one exception is the experimental resource-table texture binding, which needs `caps.resourceTable`. Choose `traceSlot` and the scene slot so they do not collide with the host shader's bindings, and check that the host does not use names starting with `rt` or `bvh`.

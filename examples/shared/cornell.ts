@@ -8,7 +8,7 @@ import type { RtMaterialInput, SceneCopyInput, SceneCopyInstance, SceneCopyMesh 
 type V3 = [number, number, number];
 
 /** Quads a, b, c, d (counter-clockwise from the front) as two triangles with flat normals. */
-function mesh(quads: readonly (readonly V3[])[]): SceneCopyMesh {
+export function mesh(quads: readonly (readonly V3[])[]): SceneCopyMesh {
   const positions: number[] = [], normals: number[] = [], indices: number[] = [];
   for (const [a, b, c, d] of quads as V3[][]) {
     const e1 = [b![0] - a![0], b![1] - a![1], b![2] - a![2]], e2 = [c![0] - a![0], c![1] - a![1], c![2] - a![2]];
@@ -25,7 +25,7 @@ function mesh(quads: readonly (readonly V3[])[]): SceneCopyMesh {
 }
 
 /** An outward-facing box: centre, half sizes, rotation about +y in degrees. */
-function box(center: V3, half: V3, rotYDeg: number): readonly V3[][] {
+export function box(center: V3, half: V3, rotYDeg: number): readonly V3[][] {
   const r = (rotYDeg * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
   const p = (x: number, y: number, z: number): V3 => {
     const lx = x * half[0], ly = y * half[1], lz = z * half[2];

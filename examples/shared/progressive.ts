@@ -1,8 +1,9 @@
 /**
- * A progressive renderer for the examples: a `PtMegakernel` over a `GpuScene`, sized to the canvas, restarting when the camera or the
- * scene changes and stopping at `maxSamples`. This is the whole loop of a progressive path tracer: `reset`, `encode`, draw the accumulator.
+ * A progressive renderer for the examples: a `PtMegakernel` (or `PtWavefront`: the same calls) over a `GpuScene`, sized to the canvas,
+ * restarting when the camera or the scene changes and stopping at `maxSamples`. This is the whole loop of a progressive path tracer:
+ * `reset`, `encode`, draw the accumulator.
  */
-import { PtMegakernel, ptSceneOptions, type PtLookAtCamera, type PtSceneOptionsOverrides } from '@pmndrs/pathtracer';
+import { PtMegakernel, PtWavefront, ptSceneOptions, type PtLookAtCamera, type PtSceneOptionsOverrides, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { GpuScene } from '@pmndrs/raytracer';
 import type { ExampleContext } from './example.ts';
 import { AccumulationView } from './present.ts';
@@ -16,10 +17,13 @@ export interface ProgressiveSettings {
   maxDepth: number;
 }
 
+/** Which scheduler to compile: the megakernel (default) or the wavefront with its scheduling options. */
+export type SchedulerChoice = { scheduler?: 'megakernel' } | ({ scheduler: 'wavefront' } & Pick<PtWavefrontOptions, 'refill' | 'layers' | 'appends' | 'sort'>);
+
 export class ProgressiveRenderer {
   readonly view: AccumulationView;
   readonly settings: ProgressiveSettings = { samplesPerFrame: 2, maxSamples: 4096, maxDepth: 8 };
-  private pt: PtMegakernel;
+  private pt: PtMegakernel | PtWavefront;
   private scene: GpuScene;
   private camera: PtLookAtCamera;
   private dirty = true;
@@ -31,7 +35,7 @@ export class ProgressiveRenderer {
 
   private readonly ctx: ExampleContext;
 
-  private constructor(ctx: ExampleContext, pt: PtMegakernel, scene: GpuScene, camera: PtLookAtCamera) {
+  private constructor(ctx: ExampleContext, pt: PtMegakernel | PtWavefront, scene: GpuScene, camera: PtLookAtCamera) {
     this.ctx = ctx;
     this.pt = pt;
     this.scene = scene;
@@ -41,10 +45,12 @@ export class ProgressiveRenderer {
   }
 
   /** Compiles a kernel for `scene` (its materials, textures and formats decide the kernel text) and binds the scene. */
-  static async create(ctx: ExampleContext, scene: GpuScene, camera: PtLookAtCamera, overrides: PtSceneOptionsOverrides = {}): Promise<ProgressiveRenderer> {
-    const pt = await PtMegakernel.create(ctx.device, ctx.caps, ptSceneOptions(scene, overrides));
+  static async create(ctx: ExampleContext, scene: GpuScene, camera: PtLookAtCamera, overrides: PtSceneOptionsOverrides = {}, scheduler: SchedulerChoice = {}): Promise<ProgressiveRenderer> {
+    const options = ptSceneOptions(scene, overrides);
+    const pt = scheduler.scheduler === 'wavefront' ? await PtWavefront.create(ctx.device, ctx.caps, { ...options, ...scheduler }) : await PtMegakernel.create(ctx.device, ctx.caps, options);
     pt.setScene(scene.trace, scene.buffers);
-    ctx.stats.set('kernel', `${(pt.wgslBytes / 1024).toFixed(1)} KB`);
+    const bytes = pt instanceof PtWavefront ? Object.values(pt.kernelBytes).reduce((a, b) => a + (b ?? 0), 0) : pt.wgslBytes;
+    ctx.stats.set('kernel', `${(bytes / 1024).toFixed(1)} KB${pt instanceof PtWavefront ? ` in ${Object.keys(pt.kernelBytes).length} kernels` : ''}`);
     const renderer = new ProgressiveRenderer(ctx, pt, scene, camera);
     // Headless checks read the image through this (outside any frame: it maps a buffer).
     (globalThis as { __progressive?: ProgressiveRenderer }).__progressive = renderer;
@@ -56,8 +62,14 @@ export class ProgressiveRenderer {
   }
 
   /** The mean radiance so far (RGBA float32, row 0 = top). A readback: for checks and saving, not for every frame. */
-  readImage(): ReturnType<PtMegakernel['readImage']> {
+  async readImage(): ReturnType<PtMegakernel['readImage']> {
+    if (this.pt instanceof PtWavefront) await this.pt.finish();
     return this.pt.readImage();
+  }
+
+  /** The kernel object (for settings this wrapper does not expose). */
+  get kernel(): PtMegakernel | PtWavefront {
+    return this.pt;
   }
 
   /** Starts the image again (call after changing a setting that changes the image). */
@@ -97,7 +109,8 @@ export class ProgressiveRenderer {
       this.dirty = false;
       this.started = performance.now();
     }
-    const n = Math.min(this.settings.samplesPerFrame, this.settings.maxSamples - this.pt.samples);
+    const perEncode = this.pt instanceof PtWavefront ? this.pt.maxPassesPerEncode() : 256;
+    const n = Math.min(this.settings.samplesPerFrame, this.settings.maxSamples - this.pt.samples, perEncode);
     if (n > 0) this.pt.encode(encoder, n);
     this.view.encode(encoder, this.pt.accumulator!, w, h, this.ctx.target());
     const seconds = (performance.now() - this.started) / 1000;
