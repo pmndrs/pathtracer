@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   publish:
+    # A Pages-only push may carry pending package changes. An explicit dispatch can release them later.
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip npm]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
