@@ -3,7 +3,9 @@
 The trace core: rays in, hits out, on WebGPU, over `@pmndrs/bvh`'s scene buffers and WGSL walk.
 WGSL names start with `rt` / `Rt` / `RT_`; the bvh walk underneath keeps its own `bvh*` names.
 
-Status: **P1 slice 1** (L0, L1, `rtSurface`, batch dispatcher). Correct against bvh's CPU oracle on the M5
+> Historical notes (the package README until 2026-11-20). The current reference is the public [Ray tracer docs](../../raytracer/overview.mdx); the scene copy, shading (L2) and interval queries described as missing below exist now.
+
+Status at the time: **P1 slice 1** (L0, L1, `rtSurface`, batch dispatcher). Correct against bvh's CPU oracle on the M5
 (`node bench/runner/run.ts --page trace-core`); speed numbers are provisional. Not yet: L2 shading, the
 material/light scene copy, L3. Design notes: [docs/internal/design/trace-core.md](trace-core.md).
 

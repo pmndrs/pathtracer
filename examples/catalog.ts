@@ -345,6 +345,21 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     check: { samples: 8, thumbQuery: 'accumulate=1', thumbSamples: 64 },
   },
   {
+    slug: 'convergence',
+    path: 'lab/convergence/',
+    title: 'Convergence',
+    summary: 'Error against a reference as samples accumulate, log-log: Owen-Sobol against independent random numbers, and the 1/spp line.',
+    description:
+      'The page renders a reference, then renders the same view again from scratch and measures the relMSE against the reference at 1, 2, 4, ... samples per pixel. ' +
+      'Monte Carlo error falls as 1/spp; Owen-scrambled Sobol points are stratified and fall faster at low counts. Near the reference\'s own sample count the curve flattens: its noise is the floor.',
+    category: 'lab',
+    status: 'stable',
+    tags: ['relMSE', 'sampling', 'owen-sobol', 'pcg'],
+    docs: 'concepts/sampling',
+    source: 'examples/lab/convergence',
+    check: { query: 'ref=16', samples: 4 },
+  },
+  {
     slug: 'caps',
     path: 'lab/caps/',
     title: 'GPU report',

@@ -101,6 +101,8 @@ export function defineExample(setup: (ctx: ExampleContext) => Promise<void> | vo
       return;
     }
     const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter), { label: 'example' });
+    // The device is up: the start-up message goes (an example shows its own progress from here; one that loads nothing never clears it).
+    progress(null);
     device.lost.then((info) => {
       if (info.reason !== 'destroyed') showError('The GPU device was lost', info.message);
     });
