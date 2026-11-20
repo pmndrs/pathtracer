@@ -11,7 +11,7 @@ git rev-parse HEAD
 pnpm install --frozen-lockfile
 ```
 
-For a separate benchmark checkout, `git switch codex/nrc-windows-handoff` selects the published handoff branch. WN8 is the first task for the renderer agent. WN9–WN11 can run afterward on the same laptop. [Phases 0–15](nrc-experiments.md#phase-table) · [Task tracker](../../TASKS.md) · [Mac compact WebNN results](../../bench/results/NRC-WEBNN-COMPACT.md)
+For a separate benchmark checkout, `git switch codex/nrc-windows-handoff` selects the published handoff branch. WN8 is the first task for the renderer agent. WN9–WN11 can run afterward on the same laptop. [Phases 0–15](nrc-experiments.md#phase-table) · [Task tracker](../../../TASKS.md) · [Mac compact WebNN results](../../../bench/results/NRC-WEBNN-COMPACT.md)
 
 Use Node 22.18 or later in the Node 22 line and pnpm 10.23.0. The bench workspace links the Denoiser and upscaler checkouts at `../Denoiser` and `../upscaler` relative to the pathtracer root. The blue-card fixture builds its geometry procedurally and renders its reference locally. The committed Mac reports and figures are in `bench/results/`. The eight-pair viewer in the Mac review uses captures stored locally on that machine.
 
@@ -36,17 +36,17 @@ foreach ($device in @('gpu', 'npu')) {
 }
 ```
 
-Each run writes `bench/results/incoming/<run-id>/run.json`. The WebNN replay includes feature packing, weight publication, graph dispatch, synchronization and returning predictions to WebGPU. Its paired WGSL timer uses the same records and weights. Record requested WebNN device type separately from the renderer adapter. Use the earlier Dawn/Vulkan matrix results as a separate comparison. [Replay implementation](../../bench/nrc/webnn-replay.ts) · [Windows matrix measurements](../../bench/results/NRC.md)
+Each run writes `bench/results/incoming/<run-id>/run.json`. The WebNN replay includes feature packing, weight publication, graph dispatch, synchronization and returning predictions to WebGPU. Its paired WGSL timer uses the same records and weights. Record requested WebNN device type separately from the renderer adapter. Use the earlier Dawn/Vulkan matrix results as a separate comparison. [Replay implementation](../../../bench/nrc/webnn-replay.ts) · [Windows matrix measurements](../../../bench/results/NRC.md)
 
 ## Historical M6 handoff for WN1–WN7
 
-The instructions below document the November 16 experiment. Its completed Windows results are in [the NRC report](../../bench/results/NRC.md).
+The instructions below document the November 16 experiment. Its completed Windows results are in [the NRC report](../../../bench/results/NRC.md).
 
 _Written on the Mac at the end of M5. This is milestone **M6** of [nrc-plan.md](nrc-plan.md): the neural radiance cache
-(NRC) on NVIDIA. Read [CLAUDE.md](../../CLAUDE.md) first (rules, licences, Traps), then
-[docs/WINDOWS-HANDOFF.md](../WINDOWS-HANDOFF.md) (machine setup and rules; they all apply here). Background for this
+(NRC) on NVIDIA. Read [CLAUDE.md](../../../CLAUDE.md) first (rules, licences, Traps), then
+[docs/internal/WINDOWS-HANDOFF.md](../WINDOWS-HANDOFF.md) (machine setup and rules; they all apply here). Background for this
 track: [nrc-plan.md](nrc-plan.md) (questions, milestones, budget, log), [nrc.md](nrc.md) (spec; §9 is the VkNRC
-baseline), [nrc-diverges.md](nrc-diverges.md), TASKS.md section N and [bench/results/NRC-STUDY.md](../../bench/results/NRC-STUDY.md)._
+baseline), [nrc-diverges.md](nrc-diverges.md), TASKS.md section N and [bench/results/NRC-STUDY.md](../../../bench/results/NRC-STUDY.md)._
 
 _Matrix kernels on Windows run outside Chrome, in dawn.node on Vulkan: setup, switches and pitfalls in
 [dawn-node-vulkan.md](dawn-node-vulkan.md)._
@@ -81,7 +81,7 @@ laptop.
   - Your local timing patches stay in `.cache` and are never committed. Describe them in words in TASKS, not as a diff.
 - **NVIDIA RTX SDK repos** (NRC SDK, RTXGI, SHaRC): no code.
 - **Nothing outward:** do not post to gpuweb, Chromium or Dawn bug trackers (N9). Write findings into
-  `docs/design/subgroup-matrix-feedback.md`; the maintainer decides.
+  `docs/internal/design/subgroup-matrix-feedback.md`; the maintainer decides.
 - **Timing:**
   - Use a quiet machine: plugged in, card cool, other GPU apps closed.
   - Record `nvidia-smi` clocks and temperature.

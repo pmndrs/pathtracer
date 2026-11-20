@@ -78,7 +78,7 @@ Scenes against pbrt-v4 and Mitsuba 3 at 4096 spp (128x128; relMSE with the metri
 
 The Cornell scene's 1% is the colour of the walls, not the medium: the plain `cornell` references already differ by pbrt -0.69% (spectral uplift of the chromatic reflectances); we agree with Mitsuba (RGB).
 
-Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match and why): [bench/results/VOLUMES.md](../../bench/results/VOLUMES.md). The scenes and what each proves are listed at the top of `bench/scenes/volumes/index.ts`.
+Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match and why): [bench/results/VOLUMES.md](../../../bench/results/VOLUMES.md). The scenes and what each proves are listed at the top of `bench/scenes/volumes/index.ts`.
 
 ## 6. Open problems
 

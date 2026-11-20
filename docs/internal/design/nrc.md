@@ -1,7 +1,7 @@
 # Neural radiance cache on WebGPU (research track N)
 
 Status: **draft spec + plan, 2026-11-14** (revised the same day around VkNRC, §1b). Nothing here is decided. It turns the "NRC: Prototype at most, needs
-coop-matrix" line in [spec §7](../../spec/SPEC-draft.md) into a measurable track. The track has two products:
+coop-matrix" line in [spec §7](../../../spec/SPEC-draft.md) into a measurable track. The track has two products:
 
 1. **A small MLP engine in WGSL** (inference + online training) with backends we can A/B: plain f32, plain f16, and
    `subgroup-matrix`. ORT-Web and WebNN are measured as extra arms.
@@ -56,7 +56,7 @@ with its section**, except the few marked "not stated":
   axis-aligned stripes from the frequency encoding; low-frequency scintillation; little benefit when transport is dominated by dielectrics;
   the last vertex of a training path may reach regions the cache was never trained on (Sec. 3.2).
 
-The research notes flagged these as unchecked ([07](../../research/notes/07-denoise-neural.md) "exact NRC cost numbers ... check PDF");
+The research notes flagged these as unchecked ([07](../../../research/notes/07-denoise-neural.md) "exact NRC cost numbers ... check PDF");
 they are checked now. Where we differ: [nrc-diverges.md](nrc-diverges.md).
 
 ## 1b. Reference implementation: VkNRC (the one we port the design of)
@@ -142,7 +142,7 @@ This is the case for `subgroup-matrix`, and it is also why the demo should run a
 
 **Existing evidence to respect.** The Denoiser's hand-written WGSL beat ORT-Web by about 3× on its U-Net, WebNN
 won only on the larger nets (via CoreML), and its subgroup-matrix conv kernel **helped f32 only** on M5 Pro
-([01 §3.3](../../research/notes/01-local-ecosystem.md)). So "subgroup-matrix is a big win" is a hypothesis, most
+([01 §3.3](../../../research/notes/01-local-ecosystem.md)). So "subgroup-matrix is a big win" is a hypothesis, most
 likely to hold on NVIDIA/AMD through Vulkan, and it may not hold on Apple. The plan below is built to find out.
 
 ### 2b. What the Denoiser measured on the M5 Pro (github.com/pmndrs/denoiser, `docs/specs/runtimes.md`)
@@ -174,7 +174,7 @@ overhead and buffer hand-offs every step, on a net of about 20k parameters where
 | `wgsl-f16` | fused WGSL, f16 activations, f32 accumulate where needed | same, f32 master weights | `shader-f16` | the default if matrix ops don't win |
 | `wgsl-sgm` | `subgroup_matrix` f16, tile shape from the adapter's config | same | `chromium-experimental-subgroup-matrix` | the demo; win size per vendor unknown |
 | `ort-webgpu` | ORT-Web WebGPU EP, I/O binding on GPU buffers | training-step-as-graph | Chrome | comparison only |
-| `webnn` | WebNN graph, `MLTensor` export to WebGPU | training-step-as-graph | Chrome behind a flag | comparison only; WebNN is not shipped ([06](../../research/notes/06-web-platform.md)) |
+| `webnn` | WebNN graph, `MLTensor` export to WebGPU | training-step-as-graph | Chrome behind a flag | comparison only; WebNN is not shipped ([06](../../../research/notes/06-web-platform.md)) |
 
 **Suggestion:** hand-write the WGSL (all three precision arms from one generator), and build the ORT and WebNN arms only
 for inference plus one training step, as microbench rows. Spec §0 lists "WebNN in the frame loop" as a v1 non-goal;
@@ -244,7 +244,7 @@ the honest competitor: research note 08 rated it "gets 80% of NRC's benefit"; th
 
 ## 6. Plan
 
-Rows are in [TASKS.md](../../TASKS.md) section N. Each stage ends with a bench output, not a claim.
+Rows are in [TASKS.md](../../../TASKS.md) section N. Each stage ends with a bench output, not a claim.
 
 | Stage | Output | Gate to continue |
 |---|---|---|

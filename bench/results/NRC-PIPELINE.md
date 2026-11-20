@@ -74,7 +74,7 @@ standard net once per still view and nothing after it.
 
 ## Hash grid in the same chain (M7 / N7c, 2026-11-18)
 
-The cache arm with the hash grid in the network's place (`nrc-pipeline-study model=hash`, [nrc-hash-cache.md](../../docs/design/nrc-hash-cache.md);
+The cache arm with the hash grid in the network's place (`nrc-pipeline-study model=hash`, [nrc-hash-cache.md](../../docs/internal/design/nrc-hash-cache.md);
 same paths, records and resolve), against the network re-run today with identical arguments (`warm=300 frames=16 checkpoints=1,4,16
 pathCheckpoints=1,4,16 stableFrom=2`, the saved 4096 spp reference of run `20261117T113629Z`). Plain gets 1 spp per frame in every run (both
 cache frames are cheaper than a plain sample, so plain has more time). Runs `20261117T222843Z` (hash, SVGF), `223018Z` (network, SVGF),
@@ -233,7 +233,7 @@ scratchpad, metrics `gate-g<G>[s<s>]_f<t>_*` in the run JSON.)
   (`integrator.frame`, blue-noise sampler, scene copy packed); the cache arm adds the hook (inline training, 4 steps of 16k records per frame,
   tiled f16 inference: Chrome on Windows has no subgroup matrices), query at vertex 1. Chain (identical): pack → Denoiser
   `DiffuseSpecularDenoiser` (SVGF, A-SVGF anti-lag auto, the Denoiser's defaults, remodulated) → composite → pmndrs/upscaler temporal path
-  (defaults: sharpness 0.8, auto exposure, 24 frames; `jitter: false`, the sampler owns the jitter). [nrc-pipeline.md](../../docs/design/nrc-pipeline.md).
+  (defaults: sharpness 0.8, auto exposure, 24 frames; `jitter: false`, the sampler owns the jitter). [nrc-pipeline.md](../../docs/internal/design/nrc-pipeline.md).
 * Reference: **our own** plain megakernel at 4096 spp, 1280 × 720 (the Mitsuba PFM is git-ignored and lives on the Mac; N11.4 reruns against
   it), resampled (tent) to 960 × 540 for raw / denoised and to 1920 × 1080 for the final. Its image mean (0.24612 0.24045 0.23956) lies between
   Mitsuba's (0.24646 0.24077 0.23987, −0.14%) and pbrt's (0.24590 0.24024 0.23939, +0.09%) in `bench/references/agreement.md`, so bias numbers

@@ -9,7 +9,7 @@
  * the expected one (plane 3 alpha = motionZ), so disocclusions do not count as boil. A static, noise-free image has boil 0 under exact reprojection; noise
  * of standard deviation s gives s (sqrt(1 + 4 + 1) / sqrt(6) = 1).
  *
- * Differences from the scorecard (documented in docs/design/realtime.md section 5): no per-region split (static / moving / disoccluded come from a per-frame
+ * Differences from the scorecard (documented in docs/internal/design/realtime.md section 5): no per-region split (static / moving / disoccluded come from a per-frame
  * reference there; here only the depth-consistency validity), nearest-tap motion and bilinear luma, the reference's own boil floor is not available
  * (no per-frame references), strides 1 and 4 only. Compare variants on the same path, not across scenes. Pure TS: unit-tested without a GPU.
  */

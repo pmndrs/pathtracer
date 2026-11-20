@@ -1,6 +1,6 @@
 # ReSTIR GI (P5)
 
-Real-time mode only, on the megakernel and (P5 wavefront GI, below) the plain wavefront, on top of ReSTIR DI (`docs/design/restir-di.md`): `integrator.restir.gi`, default off. Reference mode and every kernel without `gi`
+Real-time mode only, on the megakernel and (P5 wavefront GI, below) the plain wavefront, on top of ReSTIR DI (`docs/internal/design/restir-di.md`): `integrator.restir.gi`, default off. Reference mode and every kernel without `gi`
 are byte-identical (`node bench/size-snapshot.ts`, `diff -r` before / after: no file of the old set changed). Code: `packages/pathtracer/src/restir/restir-gi-wgsl.ts` (options, the three
 passes, the shade-side read), the host in `restir.ts` (`PtRestirPasses`: GI buffer, pipelines, steps), the shade hook in `integrator/integrator-wgsl.ts`, the CPU oracle in
 `restir-gi-oracle.ts`. Checks: `restir-check check=gi` and `realtime-pipeline restir=gi,giu` (both below).

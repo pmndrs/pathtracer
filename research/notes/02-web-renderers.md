@@ -258,7 +258,7 @@ pbrt-v4 ZSobol, ZetaRay, FidelityFX FSR) - attribution in `LICENSES/`. Per brief
 
 ## 5. Other serious projects (notes)
 
-- **Rayzee** (`rayzee/src/pathtracer`, `bvh`, `docs/design/*`): "pure wavefront": kernels Generate -> Extend ->
+- **Rayzee** (`rayzee/src/pathtracer`, `bvh`, `docs/internal/design/*`): "pure wavefront": kernels Generate -> Extend ->
   (optional Sort) -> Shade -> Compact (+ FinalWrite), stream compaction, fixed path budget, image streamed in *row bands*
   (`PATH_TRACER_SHADER_ARCHITECTURE.md:25`), SoA path state (`PackedRayBuffer`, `QueueManager`, `KernelManager`), TSL-generated
   WGSL, Node/headless mode on Dawn, deterministic mode. **BVH:** Rust->WASM SAH build (`rayzee/wasm/bvh`), spatial
@@ -420,7 +420,7 @@ pbrt-v4 (quality), Mitsuba 3, our own native Windows runs (OptiX/Capsaicin) late
 
 1. Is the preview frame's sample sequence identical every frame in mutracer (frame-coherent noise)? Not verified.
 2. Rayzee's sampler (Sobol/PCG/blue noise), texture strategy, and light-sampling details - not read; a second pass on
-   `rayzee/src/shaders` and `docs/design/SHADING.md` is warranted before final comparisons.
+   `rayzee/src/shaders` and `docs/internal/design/SHADING.md` is warranted before final comparisons.
 3. Real numbers: nobody publishes cross-project comparisons. Need our own harness (section 9). How do mutracer, 3GPT-wavefront,
    Rayzee compare on one M-series and one RTX Windows box, same scenes? Unknown.
 4. Wavefront vs megakernel on **our** BVH (H-PLOC + wide layouts) and Apple vs NVIDIA vs AMD: 3GPT/Rayzee say wavefront wins,

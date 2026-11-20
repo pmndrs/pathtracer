@@ -1,6 +1,6 @@
 /**
  * `openpbr` material -> glTF 2.0 material (core + `KHR_materials_*`): the inverse of `gltfMaterialToOpenPbr` (bench/scenes/gltf-openpbr.ts),
- * for the web competitors (three-gpu-pathtracer, mutracer) that load glTF through three's GLTFLoader (P2.31, docs/design/tier1.md section 3).
+ * for the web competitors (three-gpu-pathtracer, mutracer) that load glTF through three's GLTFLoader (P2.31, docs/internal/design/tier1.md section 3).
  *
  * Only the extensions a material actually uses are written, and a field at its glTF default writes nothing. The mapping is the one of section 2
  * run backwards; what glTF cannot say is listed in `notes` (one line each). Textures are not written (the wave-1 scenes have none; a texture slot

@@ -1,5 +1,5 @@
 /**
- * Tier 1 wave 1 scenes (docs/design/tier1.md sections 1.1 and 4; P2.19): Khronos `glTF-Sample-Assets` test models with a sidecar each
+ * Tier 1 wave 1 scenes (docs/internal/design/tier1.md sections 1.1 and 4; P2.19): Khronos `glTF-Sample-Assets` test models with a sidecar each
  * (camera, environment, film, integrator, overrides). Wave 1 has no textures: the labels are dropped and the textured backdrop becomes a grey
  * Lambertian, so the scene is named `<model>-notex` (`MetalRoughSpheresNoTextures` has none to begin with).
  *

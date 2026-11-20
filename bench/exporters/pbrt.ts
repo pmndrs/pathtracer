@@ -72,7 +72,7 @@ const f = (name: string, v: number): string => `"float ${name}" ${num(v)}`;
 const rgbP = (name: string, v: readonly number[]): string => `"rgb ${name}" [ ${vec(v)} ]`;
 
 /**
- * `openpbr` -> pbrt-v4 named materials (docs/design/tier1.md section 2):
+ * `openpbr` -> pbrt-v4 named materials (docs/internal/design/tier1.md section 2):
  *  - metalness 1: `conductor` (`reflectance` = base colour, eta 1 + complex k; anisotropic alphas via u/v roughness), with `coatedconductor`
  *    when `coat_weight` > 0 (interface eta = coat IOR);
  *  - metalness 0: transmission 1 -> `dielectric` (or `thindielectric` when thin-walled and smooth); transmission 0 -> `coateddiffuse`

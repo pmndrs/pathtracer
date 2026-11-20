@@ -163,7 +163,7 @@ export type MaterialDesc =
   /** Lambertian. `reflectanceTexture` (a `textures` key, sRGB) multiplies `reflectance`. */
   | { type: 'diffuse'; reflectance: Rgb; reflectanceTexture?: string }
   /**
-   * OpenPBR 1.1.2 subset (docs/design/tier1.md section 2): the Tier 1 material. Fields and defaults are in `OpenPbrParams`
+   * OpenPBR 1.1.2 subset (docs/internal/design/tier1.md section 2): the Tier 1 material. Fields and defaults are in `OpenPbrParams`
    * (`bench/scenes/openpbr.ts` resolves the defaults). Ours renders what the scene copy and BSDF implement today and ignores the
    * rest; the exporters (pbrt, Mitsuba) do not read it yet (P2.20). `gltfMaterialToOpenPbr` (`gltf-openpbr.ts`) produces it from glTF.
    */

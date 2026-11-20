@@ -1,5 +1,5 @@
 /**
- * glTF 2.0 material (core + `KHR_materials_*`) -> OpenPBR-subset `MaterialDesc` (docs/design/tier1.md section 2, DIVERGES V53).
+ * glTF 2.0 material (core + `KHR_materials_*`) -> OpenPBR-subset `MaterialDesc` (docs/internal/design/tier1.md section 2, DIVERGES V53).
  *
  * OpenPBR 1.1.2 has no glTF mapping section; this one is ours. Input is a material's JSON (and its `extensions` object, taken from
  * the material by default); output is a sparse `openpbr` description (only fields the glTF material sets or that differ from OpenPBR's

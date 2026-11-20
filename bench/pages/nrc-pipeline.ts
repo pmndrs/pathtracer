@@ -1,5 +1,5 @@
 /**
- * nrc-pipeline (track N, M9; docs/design/nrc-pipeline.md): the neural radiance cache as the low-noise input of a real-time chain.
+ * nrc-pipeline (track N, M9; docs/internal/design/nrc-pipeline.md): the neural radiance cache as the low-noise input of a real-time chain.
  *
  *   node bench/live.ts nrc-pipeline          (then open the printed URL in Chrome)
  *

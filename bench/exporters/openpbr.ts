@@ -1,5 +1,5 @@
 /**
- * Shared analysis for exporting `openpbr` materials to the native references (pbrt-v4, Mitsuba 3), docs/design/tier1.md section 2.
+ * Shared analysis for exporting `openpbr` materials to the native references (pbrt-v4, Mitsuba 3), docs/internal/design/tier1.md section 2.
  *
  * Everything renderer-neutral lives here: the class gate (class C throws unless `coverage`), the derived quantities (reflectance ->
  * eta/k, GGX alphas, extinction from `transmission_color`/`transmission_depth`, Cauchy fit of the Abbe number) and the note

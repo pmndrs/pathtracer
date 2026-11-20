@@ -59,7 +59,7 @@ export interface PtRestirOptions {
    */
   sharedHit?: boolean;
   /**
-   * ReSTIR GI (P5, docs/design/restir-gi.md): resample the secondary path vertex x2 (with the radiance it reflects) of one BSDF-sampled ray per pixel, with temporal and spatial reuse and
+   * ReSTIR GI (P5, docs/internal/design/restir-gi.md): resample the secondary path vertex x2 (with the radiance it reflects) of one BSDF-sampled ray per pixel, with temporal and spatial reuse and
    * the reconnection Jacobian, on top of this DI pipeline (it needs the same G-buffer and replaces the path's continuation after the first non-delta vertex: the GI term is a 2-bounce
    * estimate). Default null: no GI code at all (every kernel text is unchanged).
    */

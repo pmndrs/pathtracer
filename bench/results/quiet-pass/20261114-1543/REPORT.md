@@ -22,4 +22,4 @@ Absolute (median Mrays/s, A): primary 284, bounce 136, shadow 163, AO 235.
   control sets that don't write it don't move. Packing costs more than the bytes it saves on this GPU.
 - **Suggestion for the maintainer:** keep the current defaults (workgroup 64, AoS, full record); they are the best or tied
   on every set. The 3060 may differ (NVIDIA was bandwidth-bound in bvh's record tests): rerun there before closing
-  open choices 1–3 in docs/design/trace-core.md.
+  open choices 1–3 in docs/internal/design/trace-core.md.

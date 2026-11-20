@@ -2,7 +2,7 @@
 
 Reviewed November 19, 2026 against pathtracer `dd771c8` and Denoiser `7014384`. The frame and quality numbers below come from the repository's earlier studies. The warm-up and WebNN correctness probes were run for this review.
 
-The follow-up [execution plan](../../docs/design/nrc-experiments.md) records the warm-up fix, reruns and runnable WebNN experiments. The findings below describe the reviewed revision.
+The follow-up [execution plan](../../docs/internal/design/nrc-experiments.md) records the warm-up fix, reruns and runnable WebNN experiments. The findings below describe the reviewed revision.
 
 ## What to try first
 
@@ -21,7 +21,7 @@ The follow-up [execution plan](../../docs/design/nrc-experiments.md) records the
 | Diffuse Sponza, 3060 browser. The hash and network were within 2–4% per frame. Their frames cost 0.76 and 1.04 plain samples respectively. The hash also led through the denoisers. | Start with a hash for diffuse GI. The paired Mac hash-versus-network study remains open. |
 | Glossy Sponza, metal roughness 0.15/0.30. At 256 frames relMSE was 0.026 for the hash, 0.013 for the MLP. A 4 × 4 direction split reached 0.023 and worsened single-frame error. | A global single-frame metric can hide lost reflection detail. Compare a glossy-region crop after accumulation as well as the moving result. |
 
-Timing is best effort. The earlier Windows chain used the renderer's own high-sample reference, and the Mac Mitsuba chain rerun is outstanding. The studies cover one scene family. [Bench summary](../../bench/results/NRC.md) · [Hash settings and glossy results](../../docs/design/nrc-hash-cache.md) · [Reconstruction chain results](../../bench/results/NRC-PIPELINE.md)
+Timing is best effort. The earlier Windows chain used the renderer's own high-sample reference, and the Mac Mitsuba chain rerun is outstanding. The studies cover one scene family. [Bench summary](../../bench/results/NRC.md) · [Hash settings and glossy results](../../docs/internal/design/nrc-hash-cache.md) · [Reconstruction chain results](../../bench/results/NRC-PIPELINE.md)
 
 ## Implementation review
 
@@ -80,4 +80,4 @@ WGSL currently fuses record encoding with inference and reads the query count on
 | 4 | Compare plain hash, low-order directional cells, and a compact MLP on glossy Sponza and on a textured, normal-mapped metal/roughness ramp beside a small bright emitter. For the prefiltered specular variant, include grazing angles and retain real ray hits for mirror/glass. | Inspect the reflection crop and diffuse-only regions at 1 and 256 frames. Report highlight width/energy, signed HDR bias, relMSE, FLIP and motion flicker. Compare after the same denoiser and upscaler as well as on raw output. |
 | 5 | WebNN GPU/NPU vs tiled on Mac. On Windows compare browser portable per-record/tiled, WebNN where exposed, and the existing Dawn/Vulkan matrix kernel in its own environment. Replay identical encoded records and EMA weights through each. | Require numerical parity with the CPU/WGSL oracle and fresh weights over consecutive dispatches. Measure cold compile separately, then paired windowed p50/p95 full-frame time, packing, synchronization, inference, training and resolve. Promote only if equal-time image quality holds and the whole frame gets cheaper. |
 
-Use the existing `nrc-check`, `nrc-study`, `nrc-pipeline-study` and `reflections-ab` harnesses. Keep the same camera path, seed sequence, reconstruction settings and lighting. Include a cold start, unseen corridor, moving light, disocclusion and an offscreen object visible only in a mirror. Use a matched Mitsuba reference where available and label any high-spp self-reference. The immediate open decisions are whether the diffuse hash wins on the Mac at equal time, which roughness/footprint warrants a real reflection continuation, and whether WebNN can hand off an entire batch fast enough. [Mac handoff](../../docs/design/nrc-mac-handoff.md) · [Current renderer studies](../../bench/results/NRC-STUDY.md)
+Use the existing `nrc-check`, `nrc-study`, `nrc-pipeline-study` and `reflections-ab` harnesses. Keep the same camera path, seed sequence, reconstruction settings and lighting. Include a cold start, unseen corridor, moving light, disocclusion and an offscreen object visible only in a mirror. Use a matched Mitsuba reference where available and label any high-spp self-reference. The immediate open decisions are whether the diffuse hash wins on the Mac at equal time, which roughness/footprint warrants a real reflection continuation, and whether WebNN can hand off an entire batch fast enough. [Mac handoff](../../docs/internal/design/nrc-mac-handoff.md) · [Current renderer studies](../../bench/results/NRC-STUDY.md)

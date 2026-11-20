@@ -87,7 +87,7 @@ The runner wraps all of the above, so every bench page runs unchanged in dawn.no
 node bench/runner/run.ts --page mlp-timing --gpu nvidia --dawn vulkan --dawn-toggles allow_unsafe_apis,vulkan_enable_f16_on_nvidia
 ```
 
-- [bench/runner/dawn-host.ts](../../bench/runner/dawn-host.ts) builds the `create()` flags (`dawnCreateFlags`). It
+- [bench/runner/dawn-host.ts](../../../bench/runner/dawn-host.ts) builds the `create()` flags (`dawnCreateFlags`). It
   gives the page a fake `window`, `location` and `document` and dawn.node's `navigator.gpu`, and makes relative
   `fetch` go to the runner's Vite server. One process runs per page, so each run gets a fresh device.
 - `bench/runner/dawn-session.ts` spawns it. The runner keeps its load checks, ABBA order and CSV output; rows say
@@ -99,4 +99,4 @@ node bench/runner/run.ts --page mlp-timing --gpu nvidia --dawn vulkan --dawn-tog
 
 This is an **out-of-browser** result. A Windows Chrome user today gets D3D12 and our portable kernels, not these
 matrix numbers. The numbers show what WebGPU's subgroup matrices can do on NVIDIA hardware with the same Dawn and
-Tint, and what Chrome on Windows would gain if it offered them. `docs/design/nrc-diverges.md` records the split.
+Tint, and what Chrome on Windows would gain if it offered them. `docs/internal/design/nrc-diverges.md` records the split.

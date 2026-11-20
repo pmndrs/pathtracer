@@ -1,5 +1,5 @@
 /**
- * Tier 1 feature ablations (P2.31, docs/design/tier1.md section 3): a scene with one feature stripped from every `openpbr` material.
+ * Tier 1 feature ablations (P2.31, docs/internal/design/tier1.md section 3): a scene with one feature stripped from every `openpbr` material.
  *
  * `<scene>--no-<tag>` is the base scene with `ABLATIONS[tag].strip` applied to each of its `openpbr` materials; `getScene` resolves the name, so
  * the same variant goes through every adapter and exporter unchanged (the sceneHash of the glb sidecar covers the stripped parameters).

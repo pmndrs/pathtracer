@@ -3,7 +3,7 @@
 What the library gives a real-time pipeline (spec section 7: demod -> SVGF-class temporal + spatial filter -> upscaler) and
 what it leaves to the engine. Checked by `node bench/runner/run.ts --page realtime-check`. Sections 1-4 are the contract (P4.1);
 section 5 is the chain that consumes it: the filter (P4.5), the upscaler (P4.6) and the preview pipeline (P4.7), measured in
-[bench/results/REALTIME-PIPELINE.md](../../bench/results/REALTIME-PIPELINE.md).
+[bench/results/REALTIME-PIPELINE.md](../../../bench/results/REALTIME-PIPELINE.md).
 
 ## 1. Mode presets (`integrator/modes.ts`)
 
@@ -195,13 +195,13 @@ costs 2.3x the boil (0.0082 against 0.0036): off by default, a quality-vs-steadi
 **P4.7, the preview pipeline,** is the same chain with `denoise: 'oidn'` (`moving: 'fast'` every frame, `stillSamples: Infinity`, `hold: false`) at a lower render size and maxDepth 4 (`RealtimePipelineSession { preview: true }`, page args `res=640x360 maxDepth=4 variants=svgf,oidn-fast`).
 It runs the real-time frame kernel (OIDN's albedo and normal guides come from the frame planes), not `mode: 'preview'` (whose AOV path serves `pt_denoise=oidn`, the converged-frame variant). Numbers: REALTIME-PIPELINE.md. OIDN small costs 4.6 ms at 640 x 360 and 11.8 ms at 960 x 540 on the M5 Pro (wall clock, awaited, provisional) against 1.2 ms for SVGF at 960 x 540; the preview frame (640 x 360 -> 1280 x 720, maxDepth 4) is 20.1 ms (13.3 trace + 0.6 pack + 5.0 OIDN + 0.4 upscale), SVGF in the same configuration 14.9 ms.
 
-**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants). (Both schedulers run the chain's kernel since P4.1b / P4.2a: `scheduler=wavefront` in `realtime-pipeline`; ReSTIR GI too since P5.6: `restir=gi,giu`, docs/design/restir-gi.md.)
+**What the chain does not do yet.** Instance motion (moving objects: the scene copy has only the current transforms), motion of reflections (the virtual-motion variants). (Both schedulers run the chain's kernel since P4.1b / P4.2a: `scheduler=wavefront` in `realtime-pipeline`; ReSTIR GI too since P5.6: `restir=gi,giu`, docs/internal/design/restir-gi.md.)
 Emitters seen directly by the primary ray are handled (P4.5a): plane 6 is summed over the frame's samples by `pipeAccumulate`, packed as an `rgba16float` texture (clamped at 65000: a visible sun disc, 7e5, saturates) and added by the composite AFTER the
 filter (`diffuse + specular + emission` where the primary ray hit, the raw beauty, which holds the sky, where it missed); the upscaler sees the full image. Only the sub-pixel emitter's silhouette aliasing remains (above).
 
 ### Results (M5 Pro, provisional timing; own depth-2 references at 1920 x 1080)
 
-Detail and every table: [REALTIME-PIPELINE.md](../../bench/results/REALTIME-PIPELINE.md). sponza-white, 960 x 540 -> 1920 x 1080, maxDepth 2:
+Detail and every table: [REALTIME-PIPELINE.md](../../../bench/results/REALTIME-PIPELINE.md). sponza-white, 960 x 540 -> 1920 x 1080, maxDepth 2:
 
 | stage | ms (load 3-10; batched wall clock, PROVISIONAL) |
 |---|---|

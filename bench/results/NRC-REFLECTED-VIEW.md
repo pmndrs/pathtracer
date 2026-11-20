@@ -1,6 +1,6 @@
 # Reflected direction on the compact NRC network
 
-November 19, 2026. On the Apple M5 Pro, reflecting the view vector reduced average glossy crop error at both camera heights. It tracked moving highlights better on the oblique roughness ramp. At grazing angles it reproduced the average image more closely while tracking changes in the brightest reflections less accurately. Keep the view input as the control and the reflected input available for comparison. [Execution plan](../../docs/design/nrc-experiments.md)
+November 19, 2026. On the Apple M5 Pro, reflecting the view vector reduced average glossy crop error at both camera heights. It tracked moving highlights better on the oblique roughness ramp. At grazing angles it reproduced the average image more closely while tracking changes in the brightest reflections less accurately. Keep the view input as the control and the reflected input available for comparison. [Execution plan](../../docs/internal/design/nrc-experiments.md)
 
 ## Results
 

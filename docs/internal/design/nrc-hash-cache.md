@@ -2,7 +2,7 @@
 
 Question Q4 of [nrc-plan.md](nrc-plan.md): does the neural cache beat a plain hash-grid radiance cache (SHaRC-like) in the
 same time? This note says what we built and how the A/B is set up. Results go to
-[NRC-STUDY.md](../../bench/results/NRC-STUDY.md) ("Hash grid vs network").
+[NRC-STUDY.md](../../../bench/results/NRC-STUDY.md) ("Hash grid vs network").
 
 ## 1. One cache class, two stores
 
@@ -25,7 +25,7 @@ divergences to try next, not mixed into the first answer.
 ## 2. The grid
 
 Sources: Binder et al., "Massively parallel path space filtering" (arXiv 1902.05942); SHaRC's integration notes as
-summarised in [research/notes/08-realtime-gi.md](../../research/notes/08-realtime-gi.md) §3.3. Ideas only, no SDK code
+summarised in [research/notes/08-realtime-gi.md](../../../research/notes/08-realtime-gi.md) §3.3. Ideas only, no SDK code
 (CLAUDE.md licence rules).
 
 - **Cell** = (level, integer cell of size `minCell · 2^level`, normal bin). The level grows with distance to the camera
@@ -59,7 +59,7 @@ Recorded in [nrc-diverges.md](nrc-diverges.md) §D (N-H1..N-H6).
 - **Update from the network's training records**, not from SHaRC's own update paths (every vertex of ~4% of paths,
   radiance propagated back over a few bounces). Ours: every 16th tile (6.25% of pixels), 4 vertices, cache as tail. Close
   in spirit; the ratio and depth are the network arm's.
-- **Termination** uses fixed depth by default. Both representations can opt into path spread, and the hash can reject coarse or high-variance display hits. [Phase 2 comparison](../../bench/results/NRC-ADAPTIVE.md)
+- **Termination** uses fixed depth by default. Both representations can opt into path spread, and the hash can reject coarse or high-variance display hits. [Phase 2 comparison](../../../bench/results/NRC-ADAPTIVE.md)
 - **View-independent radiance per cell**, no material demodulation; the network conditions on direction and albedo. On
   sponza-white (one white diffuse material) this costs nothing; on a glossy or textured scene it would.
 
@@ -107,7 +107,7 @@ young cells across neighbours' lookups).
 
 `nrc-pipeline-study model=hash` and the `nrc-pipeline` demo's "Hash grid" cache entry (auto warm-up gate: 10 frames). After SVGF and OIDN
 the grid beats the network at every checkpoint, keeps a 1.5× lead over plain under OIDN on an accumulated still view (the network's falls to
-1×), and is ahead of plain on every measure from 10 training frames. Tables: [NRC-PIPELINE.md](../../bench/results/NRC-PIPELINE.md) "Hash grid
+1×), and is ahead of plain on every measure from 10 training frames. Tables: [NRC-PIPELINE.md](../../../bench/results/NRC-PIPELINE.md) "Hash grid
 in the same chain".
 
 ## 8. A glossy scene (N7b)
@@ -116,4 +116,4 @@ in the same chain".
 sample, but its converged image has twice the network's error (256 frames: 0.026 vs 0.013) and a worse FLIP than plain path tracing
 (0.149 vs 0.111): one value per cell averages the reflection over all view directions. `dirBins` (N × N octahedral bins of the outgoing
 direction at vertices with roughness < 0.5, `hgDirBins`) was tried at 4 × 4 and barely helps (0.023; single frames noisier, 1.71), because
-each bin gets a sixteenth of the samples. Default off. Tables: [NRC-STUDY.md](../../bench/results/NRC-STUDY.md) "Glossy floor and columns".
+each bin gets a sixteenth of the samples. Default off. Tables: [NRC-STUDY.md](../../../bench/results/NRC-STUDY.md) "Glossy floor and columns".

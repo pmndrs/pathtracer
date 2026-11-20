@@ -9,7 +9,7 @@ layering default (D24 + the P2.32b correction, now the library default, D32). **
 beside the megakernel (per pixel equal; refill, samples in flight, early-out), alpha MASK in both, visibility-buffer
 primaries, ray-class material LOD, scene-copy packing, cache hooks / counters / AOVs. Every new path is a setting; since D32 the library
 defaults follow the best provisional evidence (packed scene copy, albedo correction texture, `ptwfAutoPolicy` as the scheduler entry point, ReSTIR unbiased when on) and the quiet pass is an optional
-confirmation (docs/QUIET-PASS.md). Competitor gate (provisional, `bench/results/P3-GATE.md`): see below. The 3060 (W10 compile time, W13 gate numbers) is the open half.
+confirmation (docs/internal/QUIET-PASS.md). Competitor gate (provisional, `bench/results/P3-GATE.md`): see below. The 3060 (W10 compile time, W13 gate numbers) is the open half.
 **P4 (real time) is closed provisionally too (P4.5b, the 3060 30 fps number, pending Windows):** built end to end on both schedulers (megakernel and wavefront agree per pixel): mode presets (D31 cutouts),
 blue-noise sampler, per-frame denoiser planes incl. an emission plane, ReSTIR DI (unbiased within the seed spread after the
 P4.2b key fix), and the bench chain kernel -> SVGF -> upscaler (P4.5/P4.6) plus an OIDN preview chain (P4.7). M5 numbers
@@ -54,7 +54,7 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
   Materials so far: diffuse, metal and glass (smooth and rough), ported from pbrt-v4. Not yet: the HDR sky scene. Speed is not measured properly yet (best effort on the M5: Cornell 512² about 14 ms
   per sample, Sponza 1280×720 about 51 ms).
 - **Quiet pass.** Timing that decides defaults or passes a gate is batched into one run the maintainer starts from a CLI
-  session with every app closed (docs/QUIET-PASS.md).
+  session with every app closed (docs/internal/QUIET-PASS.md).
 
 - **Wavefront (P3.1, slice 1).** A second scheduler, `PtWavefront`, runs the same estimator as the megakernel over SoA path state with GPU-written indirect dispatch (camera / intersect / shade / shadow / args kernels, each under 50 KB even for the layered + fuzz + film combination that pushes the megakernel past it). It matches the megakernel per pixel on Tier 0, Sponza and 14 feature scenes (alpha MASK not yet). Provisional M5 timing: 1.6x faster on Cornell, 1.28x on Sponza, 1.4-1.7x slower on small films (quiet pass pending).
 
@@ -63,12 +63,12 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
   on Dawn/Vulkan they reach the tensor cores, 4.4x). A warm cache has 3-4x lower error than plain path tracing per frame and
   keeps a lead through a denoiser + upscaler chain. A plain hash grid matches the network on a diffuse scene for less; the
   network wins on a glossy one once converged. Summary: `bench/results/NRC.md` (accepted by the maintainer). Mac reruns
-  and the quiet pass remain: `docs/design/nrc-mac-handoff.md`. Plan and progress: `docs/design/nrc-plan.md`.
+  and the quiet pass remain: `docs/internal/design/nrc-mac-handoff.md`. Plan and progress: `docs/internal/design/nrc-plan.md`.
 
 **Next**
 - P2 Tier 1 wave 2: anisotropy (tangents), textured models, sheen, iridescence; the 50 KB kernel limit with layered materials.
 - Reflections onto the core (P1.5, the P1 gate): built on reflections branch `p1.5-raytracer-core`; waits for the quiet timing run, the hit-shading default (P1.5b) and the merge.
-- Track N (merged into main 2026-11-18): the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/design/nrc-mac-handoff.md`).
+- Track N (merged into main 2026-11-18): the Mac reruns (Mitsuba twin N11.4, hash vs network with subgroup matrices N7b, N2r-e) and the quiet pass (`docs/internal/design/nrc-mac-handoff.md`).
 - Windows: the `windows-testing` branch and handoff doc are pushed; the maintainer starts it on the laptop.
 - P5 (breadth): 6 of 7 items built. On main: ReSTIR GI, volumes, spectral + dispersion, MaterialX -> WGSL, Split RC interval tracing for gi (all opt-in, default kernels byte-identical), each on both schedulers (per pixel equal except long dispersive glass paths, P5.s9 open). The subgroup-matrix denoiser is on Denoiser branch `feat/wgsl-sgm-v2` (unmerged, maintainer's call). Bindless is built too (opt-in, megakernel): this Mac's Canary has the feature but Metal can't use it in compute and SwiftShader gets divergent lookups wrong, so whether it works (and is faster) is a 3060 question (W17). Left: the 3060 runs.
 - P3 / P4 closed on a provisional basis (D32): defaults flipped (packed scene copy, albedo correction texture, ReSTIR unbiased when on, `ptwfAutoPolicy` as the scheduler entry point with a kernel-size rule); open items in TASKS "Open after closing P3 / P4".
@@ -78,4 +78,4 @@ the real 3060 run (P4.5b). Track N (NRC, hash grid, 3.3x faster 3060 walk) is me
 
 **Speed vs the web competitors (M5, provisional P3 gate, 2026-11-18):** with the auto scheduler we are fastest on Sponza (1.64x mutracer, 1.76x tgpt-wavefront, 5.0x tgpt-megakernel to equal error); on Cornell mutracer is about 10% faster to relMSE 1e-2 and we are 1.19x faster to 1e-3. Report: bench/results/P3-GATE.md (the quiet baseline of 2026-11-14 is bench/results/quiet-pass/20261114-1419/REPORT.md). Mrays/s on the 3060L: pending Windows (W13).
 
-**Waiting on the maintainer:** the wide-BVH default (needs the RTX 3060 run, QUIET-PASS). The Tier 1 gate (D23), the default layering (D24 + the correction) and the other P3 / P4 defaults are decided (D32, provisional); the quiet pass is an optional confirmation. Open on the 3060 (docs/WINDOWS-HANDOFF.md W10, W13-W16): DXC compile time, the P3 gate numbers, the P4 30 fps gate, the wide-BVH formats, `downsampler-check`. Nothing blocks building meanwhile.
+**Waiting on the maintainer:** the wide-BVH default (needs the RTX 3060 run, QUIET-PASS). The Tier 1 gate (D23), the default layering (D24 + the correction) and the other P3 / P4 defaults are decided (D32, provisional); the quiet pass is an optional confirmation. Open on the 3060 (docs/internal/WINDOWS-HANDOFF.md W10, W13-W16): DXC compile time, the P3 gate numbers, the P4 30 fps gate, the wide-BVH formats, `downsampler-check`. Nothing blocks building meanwhile.

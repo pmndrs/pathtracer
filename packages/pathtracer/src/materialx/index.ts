@@ -1,4 +1,4 @@
-// MaterialX (P5): graphs and surfaces -> OpenPBR parameters, baked textures (a) or WGSL (b). Design: docs/design/materialx.md.
+// MaterialX (P5): graphs and surfaces -> OpenPBR parameters, baked textures (a) or WGSL (b). Design: docs/internal/design/materialx.md.
 export * from './xml.ts';
 export * from './document.ts';
 export * from './nodes.ts';

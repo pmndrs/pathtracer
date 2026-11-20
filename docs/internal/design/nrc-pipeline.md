@@ -19,8 +19,8 @@ path tracer, frame mode (integrator.frame)          960 x 540, 6 planes + beauty
                 pmndrs/upscaler, temporal path, jitter: false                                1920 x 1080
 ```
 
-Code: [`bench/realtime/chain.ts`](../../bench/realtime/chain.ts) (`PipelineArm`: the chain, shared with the cache-free real-time session since P4.5; moved from `bench/nrc/pipeline.ts`), [`bench/nrc/pipeline-session.ts`](../../bench/nrc/pipeline-session.ts)
-(scene, both arms, one frame, stage timing), [`bench/nrc/cache.ts`](../../bench/nrc/cache.ts) (frame-mode resolve). Demo:
+Code: [`bench/realtime/chain.ts`](../../../bench/realtime/chain.ts) (`PipelineArm`: the chain, shared with the cache-free real-time session since P4.5; moved from `bench/nrc/pipeline.ts`), [`bench/nrc/pipeline-session.ts`](../../../bench/nrc/pipeline-session.ts)
+(scene, both arms, one frame, stage timing), [`bench/nrc/cache.ts`](../../../bench/nrc/cache.ts) (frame-mode resolve). Demo:
 `node bench/live.ts nrc-pipeline`; headless twin: `node bench/runner/run.ts --page nrc-pipeline-study --gpu nvidia --timeout 3600000 [--args ref=ours]` (the default
 `ref=mitsuba` needs the git-ignored Mitsuba PFM, which only the Mac has).
 
@@ -122,7 +122,7 @@ A cache frame is cheaper than one plain sample, so equal time gives plain N = 1 
 here (submit overhead included); on a quiet GPU it should be a few ms. Levers if the budget matters: the realtime preset's maxDepth 2 for
 both arms (equal time spent on depth instead of samples, §7), sgm inference where the browser offers it, fewer training steps.
 
-## 6. Results (sponza-white, RTX 3060, [bench/results/NRC-PIPELINE.md](../../bench/results/NRC-PIPELINE.md))
+## 6. Results (sponza-white, RTX 3060, [bench/results/NRC-PIPELINE.md](../../../bench/results/NRC-PIPELINE.md))
 
 At equal time the cache arm wins at every stage, but the chain narrows the gap: relMSE ratio plain / NRC **3.5-3.8×** raw, **1.6-2.2×** after
 SVGF, **1.05-1.6×** final (1.6× right after a cut, ~1.1× once the upscaler's 24-frame history is full); LDR-FLIP of the final 17-30% lower;

@@ -1,6 +1,6 @@
 /**
  * MaterialX materials as bench scene materials (P5). A MaterialX document becomes an `openpbr` `MaterialDesc` plus the textures it needs, by one of
- * three modes (docs/design/materialx.md):
+ * three modes (docs/internal/design/materialx.md):
  *
  *  - `constants`: every input is constant (folded); the material is exactly the equivalent `openpbr` description.
  *  - `bake` (approach a): inputs that vary over uv are baked to textures in the scene's texture buckets (`bakeMtlxMaterial`); no kernel change.

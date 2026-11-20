@@ -1,6 +1,6 @@
 /**
  * The `openpbr` bench material: OpenPBR 1.1.2 defaults, default resolution, anisotropy conversion and the reference-class
- * helper of docs/design/tier1.md sections 0 and 2. Pure functions, no I/O.
+ * helper of docs/internal/design/tier1.md sections 0 and 2. Pure functions, no I/O.
  */
 import type { OpenPbrParams, Rgb } from './schema.ts';
 
@@ -105,7 +105,7 @@ export const openPbrCmToMetres = (cm: number): number => cm / OPENPBR_CM_PER_MET
 export const nmToMicrometres = (nm: number): number => nm / 1000;
 
 // ---------------------------------------------------------------------------------------------------------------
-// Reference classes (docs/design/tier1.md sections 0 and 2)
+// Reference classes (docs/internal/design/tier1.md sections 0 and 2)
 // ---------------------------------------------------------------------------------------------------------------
 
 /**

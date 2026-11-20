@@ -8,7 +8,7 @@
  * `normals: 'shading'` keeps the file's `NORMAL` (transformed by the inverse transpose, still un-welded; a primitive without `NORMAL`
  * falls back to geometric). Instancing is baked: no Tier 1 model shares a mesh between nodes except two tiny ones, and
  * `MetalRoughSpheresNoTextures` (the one that matters) shares *accessors*, not meshes (102 meshes, 98 materials); `SceneDesc` has no
- * shared-mesh instances either, so a keep-instances path would not reach a renderer (docs/design/tier1.md section 1.4).
+ * shared-mesh instances either, so a keep-instances path would not reach a renderer (docs/internal/design/tier1.md section 1.4).
  *
  * Materials: `gltfMaterialToOpenPbr` per entry of `json.materials` (the P2.17 golden tables are exactly `materials[i].material`), plus the
  * texture slots the scene copy has (baseColor, metallic-roughness, normal, emissive; `KHR_materials_unlit` base colour textures become the

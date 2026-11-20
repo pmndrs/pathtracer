@@ -117,7 +117,7 @@ _D32 (2026-11-18): `DEFAULT_SCENE_PACKING` is `packed` (provisional: per-pixel i
 
 1. **Light selection weights for sun and environment.** Settled (D22): default `pbrt`, pbrt-v4's rule. Each infinite
    light gets 1/(nInfinite+1), and the area lights share the rest by power. `power`, `kind` and `cap:c` stay as settings.
-   Numbers: docs/design/integrator.md open choice 3.
+   Numbers: docs/internal/design/integrator.md open choice 3.
 2. **Material precision** (f16 eta/k, unorm16 weights). Keep: errors far under the reference noise floor. Settle: the
    P2 furnace and copper tests; if bias shows, move eta/k to f32 (record grows to 160 B).
 3. **One table + one data buffer vs a buffer per section.** Keep 2 bindings (saves 3). Cost: one 128 MiB binding holds

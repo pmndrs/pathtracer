@@ -92,7 +92,7 @@ a metal term (`baseColor·baseWeight`, or the normal-incidence reflectance of `c
 continuous in metalness, and `specularWeight 0` is exactly Lambert (the bench `diffuse` material).
 
 Verification of the builtin model (unit tests, no GPU): white metal at normal incidence integrates to 0.9957 / 0.9158 /
-0.3068 at roughness 0.25 / 0.5 / 1, equal to the path tracer BSDF's documented furnace values (`docs/design/bsdf.md`) to
+0.3068 at roughness 0.25 / 0.5 / 1, equal to the path tracer BSDF's documented furnace values (`docs/internal/design/bsdf.md`) to
 1e-3; reciprocal to 1e-9; GGX `D` normalised to 1e-3; a rough dielectric stays under albedo 1.
 
 ## Verification (M5 Pro, Chrome 157, 2026-11-14; load average 4.4, one GPU process)

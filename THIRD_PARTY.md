@@ -113,7 +113,7 @@ any redistribution of rendered images that show the model (reference renders are
 ### 3.1 Tier 1 models (glTF-Sample-Assets, P2.18)
 
 Eighteen purpose-built test models from Khronos glTF-Sample-Assets, commit `8f492390ddc7a2ae221a1369ef560589cf8c70fb`
-(docs/design/tier1.md section 1.1), used by the Tier 1 coverage matrix and the golden material tables
+(docs/internal/design/tier1.md section 1.1), used by the Tier 1 coverage matrix and the golden material tables
 (`bench/scenes/tier1/golden/`, which hold only OpenPBR parameters derived from the models' material lists, no geometry or textures).
 Downloaded by `bench/assets/fetch.ts` into `bench/assets/downloads/tier1/<Name>/` (git-ignored, **not committed**), sha256 pinned in
 [bench/assets/MANIFEST.json](bench/assets/MANIFEST.json) (ids `tier1-<Name>`), each with its `LICENSE.md` and `metadata.json`. Total download

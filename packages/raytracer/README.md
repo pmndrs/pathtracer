@@ -5,7 +5,7 @@ WGSL names start with `rt` / `Rt` / `RT_`; the bvh walk underneath keeps its own
 
 Status: **P1 slice 1** (L0, L1, `rtSurface`, batch dispatcher). Correct against bvh's CPU oracle on the M5
 (`node bench/runner/run.ts --page trace-core`); speed numbers are provisional. Not yet: L2 shading, the
-material/light scene copy, L3. Design notes: [docs/design/trace-core.md](../../docs/design/trace-core.md).
+material/light scene copy, L3. Design notes: [docs/internal/design/trace-core.md](../../docs/internal/design/trace-core.md).
 
 ## API
 
@@ -80,7 +80,7 @@ does no CPU writes and no readback. CPU helpers: `packRays`, `packRaysSoa`, `aos
 
 `rtModuleWgsl(caps, { intervals: true })` adds `rtClosestInterval(origin, direction, t0, t1, mask) -> RtHit` over the half-open `(t0, t1]` (`rtClosestIntervalLo`: `[t0, t1)`), `rtVisibleInterval*`, `rtCascadeEnd / Start / Index` and
 `rtOctEqualAreaDecode`; `RtIntervalTracer` is the batched form (sources `rays` / `probes`, outputs `hit` / `distance` / `visible` / `shaded`, one kernel for many dispatches per frame). Semantics, the boundary
-rule, numbers and how gi calls it: [docs/design/split-rc-tracing.md](../../docs/design/split-rc-tracing.md). Not boundary exact: the any-hit forms (V290).
+rule, numbers and how gi calls it: [docs/internal/design/split-rc-tracing.md](../../docs/internal/design/split-rc-tracing.md). Not boundary exact: the any-hit forms (V290).
 
 ### Scene copy (P1.4, D4): materials, lights, surface data
 
@@ -128,7 +128,7 @@ it keeps no resources of its own beyond the pipelines, so there is nothing to di
 
 Scene fingerprints hash level 0 only, so they do not depend on the mode. A custom generator is anything with `encode(encoder, texture)` (`RtMipGenerator`). A textured emitter is not in the light table.
 CPU twins and the layout in `scene/texture.ts` (`buildSceneTextures`, `sampleSceneTexture`, `textureLod`, `coneUvFootprint`,
-`triangleTextureFrame`, `applyNormalMap`). Design and the open storage choice: [docs/design/scene-copy.md](../../docs/design/scene-copy.md).
+`triangleTextureFrame`, `applyNormalMap`). Design and the open storage choice: [docs/internal/design/scene-copy.md](../../docs/internal/design/scene-copy.md).
 
 ### L2 shading (P1.3): `rtShade`
 
@@ -139,7 +139,7 @@ const code = rtModuleWgsl(caps, { ...format, scene: { slot, layout: copy.layout 
 
 Emission + one next-event ray + an indirect hook (`rtShadeIndirect`, black by default), in modes `RT_SHADE_FLAT` (no rays), `RT_SHADE_LAMBERT`
 and `RT_SHADE_FULL` (builtin diffuse + GGX, or your own `rtShadeBsdf`). TypeScript twin `shade()`. Design, hooks, numbers and open
-choices: [docs/design/shade.md](../../docs/design/shade.md). The module with shade is 50.2 KB unminified: pass `minify: true`.
+choices: [docs/internal/design/shade.md](../../docs/internal/design/shade.md). The module with shade is 50.2 KB unminified: pass `minify: true`.
 
 ### Size transforms and source maps (P2.10, P2.10b)
 

@@ -13,7 +13,7 @@
  * is never rewritten before the pass that read it ran, as long as no more than `PT_PARAM_SLOTS` passes are outstanding.
  * Accumulation is f32 `array<vec4f>` (sum of radiance, w = samples); `readImage` divides. Nothing here reads back unless you call it.
  *
- * Real-time frames (P4.1, `docs/design/realtime.md`): `mode: 'realtime'` (or `integrator: { frame: true, sampler: 'bluenoise' }` + `blueNoise`) turns a pass into ONE 1 spp frame
+ * Real-time frames (P4.1, `docs/internal/design/realtime.md`): `mode: 'realtime'` (or `integrator: { frame: true, sampler: 'bluenoise' }` + `blueNoise`) turns a pass into ONE 1 spp frame
  * that overwrites the accumulator and writes the denoiser guides:
  *     const pt = await PtMegakernel.create(device, caps, { format, layout, mode: 'realtime', blueNoise, integrator: { ... } });
  *     pt.setCamera(cam0);  encode(1);  ...  pt.nextFrame(cam1);  pt.encode(encoder, 1);     // the old camera is the previous one (motion)

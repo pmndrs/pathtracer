@@ -24,7 +24,7 @@ const round = (v: unknown): unknown => {
 const plain = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
 
 /**
- * Per model: triangles in the file (docs/design/tier1.md section 1.1; counts every node's instance of a shared mesh, so
+ * Per model: triangles in the file (docs/internal/design/tier1.md section 1.1; counts every node's instance of a shared mesh, so
  * `AnisotropyRotationTest` is 13,876 = 7,476 + a second use of one mesh), triangles dropped as zero-area (sphere poles), and the
  * number of textures the four bench slots read (the file's other images are guides, labels, or slots with no scene-copy field).
  */

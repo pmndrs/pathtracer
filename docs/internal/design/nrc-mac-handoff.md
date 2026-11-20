@@ -1,8 +1,8 @@
 # Track N back on the Mac: handoff from the RTX 3060 agent (2026-11-18)
 
 _Written on Windows at the end of M9 and M8. The reverse of [nrc-windows-handoff.md](nrc-windows-handoff.md). Read
-[CLAUDE.md](../../CLAUDE.md) (rules, licences, Traps; the "Windows:" traps do not apply on the Mac) and
-[nrc-plan.md](nrc-plan.md) first. The one-page summary of the whole track is [bench/results/NRC.md](../../bench/results/NRC.md)._
+[CLAUDE.md](../../../CLAUDE.md) (rules, licences, Traps; the "Windows:" traps do not apply on the Mac) and
+[nrc-plan.md](nrc-plan.md) first. The one-page summary of the whole track is [bench/results/NRC.md](../../../bench/results/NRC.md)._
 
 ## Where things stand
 
