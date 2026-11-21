@@ -39,8 +39,11 @@ for any `ps in (0, 1]`; the choice makes the scatter weight at most 1 per channe
 
 A grid medium's density is a `texture_3d<f32>` (`r32float`, `textureLoad`, 8-tap manual trilinear, zero outside) at group 2 binding 16 (`PT_VOLUME_BINDING`), uploaded by
 `PtMegakernel.create({ volumeGrid })`. One grid per kernel (all grid media would share one texture). The medium owns a row-major 3x4 world-to-index matrix (`gridWorldToIndex`,
-the owning mesh's transform inverted), so an instance transform moves the grid. The **majorant is global** (`densityMax * max sigma_t`); a brick / coarse-grid majorant with a DDA
-walk is the next step (open problem 1) and would cut the null collisions in sparse volumes.
+the owning mesh's transform inverted), so an instance transform moves the grid. `volumeGrid.format` is `r32float` (default) or `r16float` (half the memory, P5.v18; the majorants are computed from the f16-rounded values).
+The majorant has two modes, `volumes.majorant`: `global` (`densityMax * max sigma_t`, the default until the quiet-pass timing) and `brick` (P5.v8, V243): a coarse `r32float` texture
+holds the max density of each 8^3-voxel brick (group 2 binding 17, `PT_VOLUME_MAJORANT_BINDING`; TS twin `brickMajorants`), and the free-flight loop walks the ray through it with a 3D DDA
+(`ptDdaInit` / `ptDdaNext`, TS twin `ddaSegments`), running delta tracking per segment with that brick's majorant (`ptVolSampleBrick`, shadows `ptVolTrBrick`; `volume-wgsl.ts`). Both schedulers.
+Same image as `global` within noise (`bench/results/VOLUMES.md`); it cuts the null collisions in sparse volumes.
 WebVDB: the density arrives as a dense array. `bench/scenes/volumes/vdb-grid.ts` rasterises a `.vdb` float grid parsed by WebVDB's `vdb-web-tools` (`parseVdb`) to such an array
 (see TASKS P5.v7); a NanoVDB traversal in WGSL (WebVDB's `nanovdb-wgsl`) would keep it sparse but adds a storage buffer and ~10 KB of WGSL (open problem 2).
 
@@ -103,7 +106,7 @@ Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match
 
 ## 6. Open problems
 
-1. Brick / coarse-grid majorant (DDA) for sparse grids; today the null-collision count scales with `densityMax * path length`.
+1. Brick majorant (section 3) is built; open: the brick-size A/B (8^3 is the first guess), a majorant hierarchy only if 1k^3+ grids appear, and the quiet-pass timing that decides the `global` / `brick` default.
 2. NanoVDB traversal instead of a dense texture (memory: 48^3 = 0.4 MB is nothing, a 512^3 fog volume is 512 MB dense).
 3. ReSTIR / real-time modes with media; `materialLod` with media on the wavefront.
 4. Spectral media: RGB sigma with the per-channel weights above is exact in RGB; pbrt's spectral uplift of a saturated sigma differs (V62), so references use grey sigma.

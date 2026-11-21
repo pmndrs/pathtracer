@@ -54,6 +54,8 @@ const CASES: Record<string, Case> = {
   'vol-cornell-smoke-ratio': { scene: 'vol-cornell-smoke', settings: { volumeShadow: 'ratio' } },
   'vol-milk-sphere': { scene: 'vol-milk-sphere' },
   'vol-grid-cloud': { scene: 'vol-grid-cloud' },
+  'vol-cl-single-mie10': { scene: 'vol-cl-single-mie10' },
+  'vol-cl-sph-hg2-a99-t50': { scene: 'vol-cl-sph-hg2-a99-t50' },
   'vol-vdb-smoke': { scene: 'vol-vdb-smoke' },
   'vol-vdb-smoke-brick': { scene: 'vol-vdb-smoke', settings: { volumeMajorant: 'brick' } },
   // spectral transport
