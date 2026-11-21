@@ -259,6 +259,23 @@ describe('wavefront media and spectral transport (P5 follow-up, V270)', () => {
     }
   });
 
+  it('V5.2 volume outputs: plain scheduler only; the march in intersect, the order split in shade / shadow, the flush in its own kernel; off = no trace of them', () => {
+    const on = ptWavefrontBuild(caps, { ...variants.plain!, integrator: { volumes: { ...volHomog, outputs: true } }, ...raw });
+    expect(ptwfUnsupported({ volumes: { ...volHomog, outputs: true } })).toBeNull();
+    expect(on.intersect.code).toContain('ptVoBegin(');
+    expect(on.intersect.code).toMatch(/ptAccum\[n \+ path\]\.w \+= ptVoT/);
+    expect(on.shade.code).toContain('ptwfAddRadianceVo');
+    expect(on.shade.code).toMatch(/select\(0u, 1u, vertex == 0u\)/);
+    expect(on.shadow.code).toContain('info.w != 0u');
+    expect(on.voFinish?.code).toContain('ptwfVoFinish');
+    const off = ptWavefrontBuild(caps, { ...variants.plain!, integrator: { volumes: volHomog }, ...raw });
+    expect(off.voFinish).toBeUndefined();
+    for (const k of PTWF_KERNELS) {
+      expect(off[k].code).not.toMatch(/ptVo[A-Z]|ptwfAddRadianceVo/);
+    }
+    expect(() => ptWavefrontBuild(caps, { ...variants.plain!, refill: true, integrator: { volumes: { ...volHomog, outputs: true } }, ...raw })).toThrow(/plain scheduler/);
+  });
+
   it('media: free flight and the interface skips are in the intersect kernel, the scatter vertex in shade, the transmittance in shadow', () => {
     const b = ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, ...raw });
     expect(b.intersect.code).toContain('ptVolSample(med,');

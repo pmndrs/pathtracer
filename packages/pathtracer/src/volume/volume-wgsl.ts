@@ -5,6 +5,16 @@
  * Tables are `var<private>` initialisers (a few media and one entry per material: tens of vec4, no storage buffer). A dense density grid is a
  * `texture_3d<f32>` (`r32float`, `textureLoad` only) at group 2 binding `PT_VOLUME_BINDING`; at most one grid per kernel (all grid media share it).
  *
+ * Hard loop caps (V1.4; a dense medium that reaches one is silently biased; `cap-risk.ts` `ptVolumeCapRisk` warns at create when expected collisions > 10% of the cap):
+ *  - free flight `ptVolSample` (global majorant), 4096 tentative collisions: the path is "killed" (darkens).
+ *  - brick free flight `ptVolSampleBrick`: 4096 cells (outer) or 4096 collisions in one cell (inner): the rest of the segment / cell is passed without
+ *    collisions (brightens; rare).
+ *  - ratio-tracking shadow transmittance `ptVolTr*`, 4096 collisions: returns the partial product so far (brightens).
+ *  - `ptVoBegin` (volume outputs), 256 boundary crossings: the primary-transmittance walk stops (that output only, never the image).
+ *  - `ptVolTrCore`, 64 boundary crossings of a shadow ray: returns 0, the light is treated as occluded (darkens).
+ *  - path interface skips, 256: the path ends (darkens).
+ *  - telescoping `k` steps per cell, clamp 64: more variance only, no bias.
+ *
  * Needs from the surrounding module: `RtRay`, `rtClosest`, `RT_MASK_ALL`, `ptOffsetOrigin`, `ptSideNormal`, `ptMax3`, `PtFrame` helpers, the light sampling.
  */
 import type { PtMedium, PtVolumeOptions } from './volume.ts';
@@ -16,6 +26,8 @@ export const PT_VOLUME_BINDING = 16;
 export const PT_VOLUME_MAJORANT_BINDING = 17;
 /** V1.2 `densityFilter: 'hardware'`: the linear clamp-to-edge sampler of the density lookup (group 2; the grid texture is then bound `float`, filterable). */
 export const PT_VOLUME_SAMPLER_BINDING = 20;
+/** V3.2 `gridLayout: 'atlas'`: the `r32uint` brick indirection texture (`bx | by << 10 | bz << 20` of the atlas brick, `0xffffffff` empty); binding 16 is then the atlas. */
+export const PT_VOLUME_INDIRECTION_BINDING = 21;
 
 const f32Lit = (v: number): string => {
   const f = Math.fround(v);
@@ -78,8 +90,8 @@ function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
  * the brick DDA (needs `bind`), `flight` delta tracking (`ptVolSample`), `tr` shadow-ray transmittance (walk, `ptOffsetOrigin`), `nee` next-event estimation at a
  * medium vertex (light sampling, MIS). No argument = all of them, in the order the megakernel appends them.
  */
-export type PtVolumePart = 'seedOf' | 'bind' | 'tables' | 'hg' | 'density' | 'flight' | 'tr' | 'nee' | 'outputs';
-/** `outputs` emits text only with `volumes.outputs` (megakernel; the wavefront refuses the option and never asks for the part). */
+export type PtVolumePart = 'seedOf' | 'bind' | 'tables' | 'hg' | 'density' | 'flight' | 'tr' | 'nee' | 'outputs' | 'outputsMarch';
+/** `outputs` emits text only with `volumes.outputs` (megakernel). `outputsMarch` (not in ALL_PARTS; V5.2) is the first half of it, the privates and `ptVoBegin`, which the wavefront's intersect kernel runs at iteration 0 (needs `tr`). */
 export const PT_VOLUME_ALL_PARTS: readonly PtVolumePart[] = ['seedOf', 'bind', 'tables', 'hg', 'density', 'flight', 'tr', 'nee', 'outputs'];
 
 /**
@@ -96,6 +108,7 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const ratio = ptVolumeRatioShadows(v);
   const brick = grid && v.majorant === 'brick';
   const hw = grid && v.densityFilter === 'hardware';
+  const atlas = grid && v.gridLayout === 'atlas';
   const roulette = v.trRoulette === true;
   const tele = brick && v.shadowTracking === 'telescoping';
   // telescoping estimates can be negative (a debiasing term): only an exact zero ends a shadow ray, or the clamp would bias the mean
@@ -119,6 +132,7 @@ fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
   }
   if (has('bind')) {
     chunks.push(`${grid ? `@group(2) @binding(${PT_VOLUME_BINDING}) var ptVolGrid: texture_3d<f32>;
+` : ''}${atlas ? `@group(2) @binding(${PT_VOLUME_INDIRECTION_BINDING}) var ptVolInd: texture_3d<u32>;
 ` : ''}${hw ? `@group(2) @binding(${PT_VOLUME_SAMPLER_BINDING}) var ptVolSampler: sampler;
 ` : ''}${brick ? `@group(2) @binding(${PT_VOLUME_MAJORANT_BINDING}) var ptVolMaj: texture_3d<f32>;
 ` : ''}`);
@@ -206,7 +220,29 @@ ${grid ? `    if (m.info.x == 0.0) {
         return 1.0;
     }
     let gx = vec3f(dot(m.w0.xyz, p) + m.w0.w, dot(m.w1.xyz, p) + m.w1.w, dot(m.w2.xyz, p) + m.w2.w);
-${hw ? `    let nf = vec3f(m.info.y, m.info.z, m.info.w);
+${atlas ? `    let fl = floor(gx);
+    let fr = gx - fl;
+    let i0 = vec3i(fl);
+    let dims = vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w));
+    let c = (i0 + vec3i(1)) >> vec3u(3u);
+    if (any(c < vec3i(0)) || any(c >= (dims + vec3i(8)) / vec3i(8))) {
+        return 0.0;
+    }
+    let pk = textureLoad(ptVolInd, vec3u(c), 0).x;
+    if (pk == 0xffffffffu) {
+        return 0.0;
+    }
+    let org = vec3i(i32(pk & 1023u), i32((pk >> 10u) & 1023u), i32((pk >> 20u) & 1023u)) * 9 + i0 - (c * 8 - vec3i(1));
+${hw ? `    return textureSampleLevel(ptVolGrid, ptVolSampler, (vec3f(org) + fr + vec3f(0.5)) / vec3f(textureDimensions(ptVolGrid)), 0.0).x;
+` : `    var acc = 0.0;
+    for (var cc = 0u; cc < 8u; cc++) {
+        let o = vec3i(i32(cc & 1u), i32((cc >> 1u) & 1u), i32((cc >> 2u) & 1u));
+        let v = textureLoad(ptVolGrid, vec3u(org + o), 0).x;
+        let w = select(1.0 - fr.x, fr.x, o.x == 1) * select(1.0 - fr.y, fr.y, o.y == 1) * select(1.0 - fr.z, fr.z, o.z == 1);
+        acc += v * w;
+    }
+    return acc;
+`}` : hw ? `    let nf = vec3f(m.info.y, m.info.z, m.info.w);
     let bf = clamp(gx + vec3f(1.0), vec3f(0.0), vec3f(1.0)) * clamp(nf - gx, vec3f(0.0), vec3f(1.0));
     return bf.x * bf.y * bf.z * textureSampleLevel(ptVolGrid, ptVolSampler, (gx + vec3f(0.5)) / nf, 0.0).x;
 ` : `    let dims = vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w));
@@ -585,7 +621,7 @@ fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u
     return li.radiance * ph * tr * (w / pl);
 }
 `);
-  if (has('outputs') && v.outputs) chunks.push(/* wgsl */ `
+  if ((has('outputs') || has('outputsMarch')) && v.outputs) chunks.push(/* wgsl */ `
 // P5.v15 / P5.v16 volume outputs (megakernel): per-sample values that ptMain adds to the accumulator tail.
 var<private> ptVoRad01: vec3f;
 var<private> ptVoCaptured: bool;
@@ -630,7 +666,8 @@ fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
     ptVoT = dot(max(tr, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
     ptVolState = keep;
 }
-
+`);
+  if (has('outputs') && v.outputs) chunks.push(/* wgsl */ `
 // Called just before a path's depth goes from 1 to 2: everything added so far is orders 0 and 1.
 fn ptVoCapture(depth: u32, radiance: vec3f) {
     if (depth == 1u && !ptVoCaptured) {

@@ -1,4 +1,5 @@
 import { hgPhase, phaseEval, ptPhaseLobes, slabSingleScatterPhase } from '@pmndrs/pathtracer';
+import { compose, rotationX, translation } from '../geometry.ts';
 import type { MediumDesc, MeshDesc, SceneDesc } from '../schema.ts';
 
 /**
@@ -271,4 +272,25 @@ export const volThinFogSun: SceneDesc = {
   lights: [{ type: 'directional', direction: [0.3, 0.2, 1], irradiance: [3, 3, 3] }],
   environment: { type: 'uniform', radiance: [0, 0, 0] },
 };
-export const cloudScenes: readonly SceneDesc[] = [volThinFogSun, ...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];
+/**
+ * V4.1: a small emissive quad (5 cm, radiance 500, one-sided, facing down) inside a 3 m box of thin homogeneous fog (tau 0.3 across the box, albedo 0.9, HG g 0.3), black sky, maxDepth 1
+ * (unscattered light plus exactly one scattering event: the single-scatter integral toward the lamp). A camera ray passing the lamp at 5-30 cm gets its light from a 1/r^2 peak that the
+ * exponential distance misses; equiangular sampling about the lamp point is the test. No reference render (compare our own plain / forced / equiangular renders).
+ */
+export const volLampFog: SceneDesc = {
+  version: 1,
+  name: 'vol-lamp-fog',
+  purpose: 'Small lamp inside a 3 m box of thin homogeneous fog (tau 0.3, albedo 0.9, g 0.3), black sky, maxDepth 1 (V4.1: equiangular distance sampling A/B; no pbrt / Mitsuba reference).',
+  tier: 2,
+  camera: { type: 'perspective', position: [0, 0.3, 4.5], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 24 },
+  film: { width: 64, height: 64, filter: 'box' },
+  integrator: { maxDepth: 1 },
+  materials: { boundary: { type: 'interface' }, lamp: { type: 'diffuse', reflectance: [0, 0, 0] } },
+  media: { fog: grey(0.3 / 3, 0.9, 0.3) },
+  meshes: [
+    { name: 'fog-box', geometry: { type: 'box', size: [3, 3, 3] }, material: 'boundary', medium: { interior: 'fog' } },
+    { name: 'lamp', geometry: { type: 'quad', size: [0.05, 0.05] }, material: 'lamp', transform: compose(translation(0.25, 0.1, 0.2), rotationX(Math.PI)), emission: [500, 500, 500] },
+  ],
+  environment: { type: 'uniform', radiance: [0, 0, 0] },
+};
+export const cloudScenes: readonly SceneDesc[] = [volThinFogSun, volLampFog, ...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];

@@ -34,8 +34,9 @@ import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
-import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
-import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptF16Bits, ptR8Bytes, ptTexelBound, type PtVolumeOutputs } from '../volume/volume.ts';
+import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
+import { PT_VOLUME_BINDING, PT_VOLUME_INDIRECTION_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import { PT_VOLUME_OUTPUT_VEC4, brickAtlasMemory, buildBrickAtlas, ptDecodeVolumeOutputs, ptF16Bits, ptR8Bytes, ptTexelBound, type PtVolumeOutputs } from '../volume/volume.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
@@ -226,6 +227,21 @@ export function createVolumeTexture(device: GPUDevice, grid: NonNullable<PtMegak
   return texture;
 }
 
+/**
+ * V3.2 (`volumes.gridLayout: 'atlas'`): the sparse brick atlas of the dense `volumeGrid` (binding `PT_VOLUME_BINDING`, same format rules as the dense texture) and its `r32uint`
+ * indirection texture (binding `PT_VOLUME_INDIRECTION_BINDING`). `memory` is the atlas against the dense grid (`brickAtlasMemory`).
+ */
+export function createVolumeAtlasTextures(device: GPUDevice, grid: NonNullable<PtMegakernelOptions['volumeGrid']>, label: string): { atlas: GPUTexture; indirection: GPUTexture; memory: ReturnType<typeof brickAtlasMemory> } {
+  const [nx, ny, nz] = grid.resolution;
+  if (grid.density.length !== nx * ny * nz) throw new RangeError(`volumeGrid: ${grid.density.length} values for a ${nx} x ${ny} x ${nz} grid`);
+  const a = buildBrickAtlas(grid.resolution, grid.density);
+  const atlas = createVolumeTexture(device, { ...grid, resolution: a.dims, density: a.data }, `${label} atlas`);
+  const [cx, cy, cz] = a.cells;
+  const indirection = device.createTexture({ label: `${label} volume brick indirection`, size: [cx, cy, cz], dimension: '3d', format: 'r32uint', usage: 0x04 | 0x02 });
+  device.queue.writeTexture({ texture: indirection }, a.indirection as unknown as GPUAllowSharedBufferSource, { bytesPerRow: cx * 4, rowsPerImage: cy }, [cx, cy, cz]);
+  return { atlas, indirection, memory: brickAtlasMemory(a, grid.format === 'r16float' ? 2 : grid.format === 'r8unorm' ? 1 : 4) };
+}
+
 /** The brick majorant texture (`volumeGrid.majorant`): `r32float` (max), or `rg32float` (max, min; V2.1) when `minima` is given. */
 export function createMajorantTexture(device: GPUDevice, mj: { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array }, label: string, scale = 1): GPUTexture {
   if (scale !== 1) mj = { resolution: mj.resolution, values: mj.values.map((v) => ptTexelBound(v, scale)), ...(mj.minima ? { minima: mj.minima.map((v) => ptTexelBound(v, scale, false)) } : {}) }; // V3.1: density units -> r8 texel units
@@ -269,6 +285,9 @@ export class PtMegakernel {
   private volumeTexture: GPUTexture | null = null;
   private volumeSampler: GPUSampler | null = null;
   private majorantTexture: GPUTexture | null = null;
+  /** V3.2: the brick indirection texture of `volumes.gridLayout: 'atlas'` (`volumeTexture` is then the atlas) and its size against the dense grid. */
+  private indirectionTexture: GPUTexture | null = null;
+  atlasMemory: ReturnType<typeof brickAtlasMemory> | null = null;
   private readonly hookLayout: GPUBindGroupLayout | null;
   private hookGroup: GPUBindGroup | null = null;
   private vbufferView: GPUTextureView | null = null;
@@ -335,6 +354,7 @@ export class PtMegakernel {
     }
     const { code, map } = ptMegakernelBuild(caps, options);
     const volumeGrid = ptVolumeHasGrid(options.integrator?.volumes);
+    ptWarnVolumeCapRisk('PtMegakernel', options.integrator?.volumes, undefined, options.integrator?.volumes?.majorant === 'brick' ? options.volumeGrid?.majorant?.values : undefined);
     if (volumeGrid && !options.volumeGrid) throw new Error('PtMegakernel: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
     const volumeHw = volumeGrid && options.integrator?.volumes?.densityFilter === 'hardware';
     if (volumeHw && (options.volumeGrid?.format ?? 'r32float') === 'r32float' && !device.features.has('float32-filterable')) throw new Error("PtMegakernel: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
@@ -364,6 +384,7 @@ export class PtMegakernel {
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(volumeGrid && options.integrator?.volumes?.majorant === 'brick' ? [{ binding: PT_VOLUME_MAJORANT_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
           ...(volumeGrid ? [{ binding: PT_VOLUME_BINDING, visibility: COMPUTE, texture: { sampleType: (volumeHw ? 'float' : 'unfilterable-float') as 'float' | 'unfilterable-float', viewDimension: '3d' as const } }] : []),
+          ...(volumeGrid && options.integrator?.volumes?.gridLayout === 'atlas' ? [{ binding: PT_VOLUME_INDIRECTION_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '3d' as const } }] : []),
           ...(volumeHw ? [{ binding: PT_VOLUME_SAMPLER_BINDING, visibility: COMPUTE, sampler: { type: 'filtering' as const } }] : []),
           ...(spectral ? [{ binding: PT_SPEC_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
@@ -382,7 +403,12 @@ export class PtMegakernel {
     const kernel = new PtMegakernel(device, options, pipeline, layouts, code.length, fuzzTable);
     if (options.integrator?.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, layouts[0] as GPUBindGroupLayout, layouts[1] as GPUBindGroupLayout);
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
-    if (volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid!, label);
+    if (volumeGrid && options.integrator?.volumes?.gridLayout === 'atlas') {
+      const at = createVolumeAtlasTextures(device, options.volumeGrid!, label);
+      kernel.volumeTexture = at.atlas;
+      kernel.indirectionTexture = at.indirection;
+      kernel.atlasMemory = at.memory;
+    } else if (volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid!, label);
     if (volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
       const mj = options.volumeGrid!.majorant!;
@@ -568,6 +594,7 @@ export class PtMegakernel {
         ...(this.restir?.hitBuffer ? [{ binding: PT_RESTIR_HIT_BINDING, resource: { buffer: this.restir.hitBuffer } }] : []),
         ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
         ...(this.volumeTexture ? [{ binding: PT_VOLUME_BINDING, resource: this.volumeTexture.createView({ dimension: '3d' }) }] : []),
+        ...(this.indirectionTexture ? [{ binding: PT_VOLUME_INDIRECTION_BINDING, resource: this.indirectionTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.volumeSampler ? [{ binding: PT_VOLUME_SAMPLER_BINDING, resource: this.volumeSampler }] : []),
         ...(this.majorantTexture ? [{ binding: PT_VOLUME_MAJORANT_BINDING, resource: this.majorantTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.specTexture ? [{ binding: PT_SPEC_BINDING, resource: this.specTexture.createView() }] : []),
@@ -721,6 +748,7 @@ export class PtMegakernel {
     this.fuzzTable?.destroy();
     this.corrTexture?.destroy();
     this.volumeTexture?.destroy();
+    this.indirectionTexture?.destroy();
     this.majorantTexture?.destroy();
     this.restir?.destroy();
     this.blueTexture?.destroy();

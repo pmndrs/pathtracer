@@ -40,8 +40,8 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // P5 follow-up (V270): `integrator.volumes` (the intersect kernel runs free flight and the interface skips, shade handles the scatter vertex, the shadow kernel the transmittance) and
   // `integrator.spectral` (the wavelengths are recomputed from pixel and sample in shade; one hero bit in the path state) run on the wavefront.
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
+  if (o.volumes?.equiangular) return 'integrator.volumes.equiangular (equiangular distance sampling builds on the forced NEE, megakernel only: V4.1)';
   if (o.volumes?.forcedNee) return 'integrator.volumes.forcedNee (forced in-scatter NEE is megakernel only: V4.2)';
-  if (o.volumes?.outputs) return 'integrator.volumes.outputs (the order split, primary transmittance and second moment are megakernel only: P5.v15 / P5.v16)';
   if (o.volumes && o.aovs) return 'integrator.volumes with integrator.aovs (the first-scatter guides are megakernel only: V5.1a)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
@@ -376,13 +376,25 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
  */
 function ptwfIntersectVolWgsl(o: ResolvedIntegratorOptions, wf: PtwfConfig): string {
   const v = o.volumes as NonNullable<ResolvedIntegratorOptions['volumes']>;
+  // V5.2 `volumes.outputs`: at iteration 0 the intersect kernel runs the megakernel's primary-transmittance march (`ptVoBegin`, its own stream: the same numbers) and adds T to the w lane of plane 1
+  const vo = !!v.outputs;
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
-${bindings(['params', 'state', 'hit', 'count', 'queue'])}
+${bindings(vo ? ['params', 'accum', 'state', 'hit', 'count', 'queue'] : ['params', 'state', 'hit', 'count', 'queue'])}
 ${ptCommonHeadWgsl(o)}
 ${PT_MIS_WGSL}
-${ptVolumeWgsl(v, ['seedOf', 'bind', 'tables', 'density', 'flight'])}
-${commonWgsl(wf)}${stateWgsl(o)}
+${ptVolumeWgsl(v, vo ? ['seedOf', 'bind', 'tables', 'density', 'flight', 'tr', 'outputsMarch'] : ['seedOf', 'bind', 'tables', 'density', 'flight'])}
+${commonWgsl(wf)}${stateWgsl(o)}${vo ? `
+// the sampler's pixel seed (\`ptPixelSeed\`: rtHash32 of the pixel and the seed), which the walk-only intersect module does not carry
+fn ptwfVoHash(x0: u32) -> u32 {
+    var x = x0;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    return x ^ (x >> 16u);
+}
+` : ''}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -397,7 +409,13 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
     ptVolState = st.volState;
     var ray = RtRay(st.origin, 0.0, st.dir, PT_FAR);
     var med = st.med;
-    var skips = st.skips;
+${vo ? `    if (iter == 0u) {
+        let px = path % ptParams.dims.x;
+        let py = path / ptParams.dims.x;
+        ptVoBegin(ray, med, ptwfVoHash(px ^ ptwfVoHash(py ^ ptParams.dims.w)), ptParams.dims.z);
+        ptAccum[n + path].w += ptVoT;
+    }
+` : ''}    var skips = st.skips;
     var back = st.volBack;
     var flag = 0u;
     var hit: RtHit;
@@ -598,8 +616,37 @@ ${ratio ? `    ptVolState = info.y;
 ` : ''}${v.shadowTracking === 'telescoping' ? `    ptVolSampleIdx = info.z;
 ` : ''}    let tr = ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), info.x);
     if (${v.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0'}) {
-        ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2) * tr, 0.0);
+${v.outputs ? `        let c = vec4f(ptwfF3(r2) * tr, 0.0);
+        ptAccum[4u * n + path] = ptAccum[4u * n + path] + c;
+        if (info.w != 0u) {
+            ptAccum[n + path] = ptAccum[n + path] + c;
+        }
+` : `        ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2) * tr, 0.0);
+`}    }
+}
+`;
+}
+
+/**
+ * V5.2 finish kernel (`volumes.outputs`, plain scheduler): after the last iteration of a sample pass, adds the sample's radiance (plane 4, collected by the shade and shadow kernels) to the beauty,
+ * its square to plane 2 (the second moment) and clears plane 4. One thread per pixel. Standalone module.
+ */
+export function ptwfVoFinishWgsl(): string {
+  return /* wgsl */ `
+${PT_PARAMS_WGSL}
+${bindings(['params', 'accum'])}
+@compute @workgroup_size(8, 8)
+fn ptwfVoFinish(@builtin(global_invocation_id) id: vec3u) {
+    let dims = ptParams.dims;
+    if (id.x >= dims.x || id.y >= dims.y) {
+        return;
     }
+    let n = dims.x * dims.y;
+    let i = id.y * dims.x + id.x;
+    let l = ptAccum[4u * n + i].xyz;
+    ptAccum[i] = ptAccum[i] + vec4f(l, 0.0);
+    ptAccum[2u * n + i] = ptAccum[2u * n + i] + vec4f(l * l, 0.0);
+    ptAccum[4u * n + i] = vec4f(0.0);
 }
 `;
 }
@@ -720,7 +767,9 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
   const sd = vol && !!o.volumes!.separateDepth;
   const volRatio = vol && ptVolumeRatioShadows(o.volumes as NonNullable<typeof o.volumes>);
   const spec = o.spectral;
-  const addOut = emitMode ? 'ptwfAddRadianceE(path, n, radiance, fEmit, fEmitW)' : frameOut ? 'ptwfAddRadianceF(path, n, radiance, fDirect)' : spec ? 'ptwfAddRadiance(path, ptSpecToRgb(radiance))' : 'ptwfAddRadiance(path, radiance)';
+  // V5.2 `volumes.outputs`: radiance goes to the per-sample scratch (plane 4, flushed by the finish kernel), contributions of order <= 1 also to plane 1
+  const vo = vol && !!o.volumes!.outputs;
+  const addOut = vo ? (spec ? 'ptwfAddRadianceVo(path, n, ptSpecToRgb(radiance), st.depth <= 1u)' : 'ptwfAddRadianceVo(path, n, radiance, st.depth <= 1u)') : emitMode ? 'ptwfAddRadianceE(path, n, radiance, fEmit, fEmitW)' : frameOut ? 'ptwfAddRadianceF(path, n, radiance, fDirect)' : spec ? 'ptwfAddRadiance(path, ptSpecToRgb(radiance))' : 'ptwfAddRadiance(path, radiance)';
   const escaped = spec ? PT_ESCAPED_WGSL.replace('le += rtEnvironmentLe(e, dir) * w;', 'le += ptSpecIllum(rtEnvironmentLe(e, dir)) * w;').replace('le += rtSunRadiance(s) * w;', 'le += ptSpecIllum(rtSunRadiance(s)) * w;') : PT_ESCAPED_WGSL;
   const radianceOf = spec ? 'ptSpecIllum(li.radiance)' : 'li.radiance';
   const pixelOf = wf.refill ? 'pixel' : 'path';
@@ -729,7 +778,7 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
     `${ind}ptwfShadowRay[path] = vec4u(bitcast<vec3u>(ld.ray.origin), bitcast<u32>(ld.ray.tMin));
 ${ind}ptwfShadowRay[n + path] = vec4u(bitcast<vec3u>(ld.ray.direction), bitcast<u32>(ld.ray.tMax));
 ${ind}ptwfShadowRay[2u * n + path] = vec4u(bitcast<vec3u>(${spec ? 'ptSpecToRgb(beta * ld.contrib)' : 'beta * ld.contrib'}), 0u);
-${vol ? `${ind}ptwfShadowRay[3u * n + path] = vec4u(ld.med, ${volRatio ? 'ptVolFork()' : '0u'}, ${o.volumes?.shadowTracking === 'telescoping' ? 'sampleIndex' : '0u'}, 0u);
+${vol ? `${ind}ptwfShadowRay[3u * n + path] = vec4u(ld.med, ${volRatio ? 'ptVolFork()' : '0u'}, ${o.volumes?.shadowTracking === 'telescoping' ? 'sampleIndex' : '0u'}, ${vo ? 'select(0u, 1u, vertex == 0u)' : '0u'});
 ` : ''}${onRadiance ? `${ind}ptwfShadowRay[3u * n + path] = vec4u(vertex, ptHookFlags, sampleIndex, path);
 ` : ''}${wf.subgroup ? `${ind}ptwfWantShadow = true;
 ` : `${ind}let ss = atomicAdd(&ptwfCount[2u + (iter & 1u)], 1u);
@@ -750,7 +799,11 @@ ${ind}ptwfQueue[2u * n + ss] = path;
         let vertex = depth;
         depth += 1u;${sd ? '\n        mdepth += 1u;' : ''}
         let pm = st.origin - st.dir * st.volBack + st.dir * hit.t;
-        let woM = -ray.direction;
+${vo ? `        if (vertex == 0u) {
+            ptAccum[2u * n + path].w += length(pm - ptParams.origin.xyz);
+            ptAccum[3u * n + path].x += 1.0;
+        }
+` : ''}        let woM = -ray.direction;
         if (PT_NEE) {
             let ld = ptwfSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
             if (ld.valid) {
@@ -885,7 +938,17 @@ fn ptwfAddRadiance(path: u32, l: vec3f) {
         ptAccum[path] = ptAccum[path] + vec4f(l, 0.0);
     }
 }
-${emitMode ? `
+${vo ? `
+// V5.2 volume outputs: the sample's radiance collects in plane 4 (the finish kernel adds it to the beauty and squares it); orders 0-1 (emission / sky at depth <= 1, next-event light of vertex 0) also go to plane 1.
+fn ptwfAddRadianceVo(path: u32, n: u32, l: vec3f, early: bool) {
+    if (!(l.x == 0.0 && l.y == 0.0 && l.z == 0.0)) {
+        ptAccum[4u * n + path] = ptAccum[4u * n + path] + vec4f(l, 0.0);
+        if (early) {
+            ptAccum[n + path] = ptAccum[n + path] + vec4f(l, 0.0);
+        }
+    }
+}
+` : ''}${emitMode ? `
 // Frame mode with an emission plane (P4.5a): \`l\` = light the primary BSDF modulates (class plane, divided by its factor), \`e\` = emission that bypasses it (plane 6); \`ew\` is the part of \`e\`
 // the depth-0 write already put in plane 6. The beauty gets both.
 fn ptwfAddRadianceE(path: u32, n: u32, l: vec3f, e: vec3f, ew: vec3f) {

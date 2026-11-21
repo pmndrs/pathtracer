@@ -62,6 +62,11 @@ const CASES: Record<string, Case> = {
   'vol-grid-cloud-residual': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'residual', volumeTrRoulette: true } },
   'vol-grid-cloud-telescoping': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'telescoping' } },
   'vol-grid-cloud-hw': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeDensityFilter: 'hardware' } },
+  'vol-grid-cloud-atlas': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeGridLayout: 'atlas' } },
+  // V5.2: `volumes.outputs` on the wavefront: the three tail planes (orders 0-1 + primary transmittance, standard error, first-scatter distance + fraction) are compared as well as the beauty
+  'vol-grid-cloud-outputs': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeOutputs: true } },
+  'vol-cornell-smoke-outputs': { scene: 'vol-cornell-smoke', settings: { volumeOutputs: true } },
+  'vol-slab-single-outputs': { scene: 'vol-slab-single', settings: { volumeOutputs: true } },
   'vol-grid-cloud-r8': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r8unorm' } },
   // spectral transport
   cornell: { scene: 'cornell', settings: SPECTRAL },
@@ -206,6 +211,7 @@ async function runCase(name: string, c: Case, variants: string[], o: { spp: numb
     metrics[`${name}_control_packing_pixels_over_1e-3`] = a.over1e3;
     other.dispose();
   }
+  const voRef = c.settings?.volumeOutputs ? await mk.readVolumeOutputs() : null;
   for (const v of variants) {
     const opt = VARIANTS[v];
     if (!opt) throw new Error(`unknown variant '${v}' (have ${Object.keys(VARIANTS).join(', ')})`);
@@ -229,7 +235,30 @@ async function runCase(name: string, c: Case, variants: string[], o: { spp: numb
       metrics[`${tag}_mean_mk_${'rgb'[k]}`] = a.meanA[k] as number;
       metrics[`${tag}_mean_wf_${'rgb'[k]}`] = a.meanB[k] as number;
     }
-    const bad = a.overPx > 0 || a.nonFinite > 0;
+    let voBad = false;
+    if (voRef) {
+      // V5.2: the tail planes, per pixel (largest difference of the array over its largest element, floor 1e-3 of the mean): orders 0-1 (rgb), transmittance, standard error (a difference of two close
+      // numbers, so it gets a 1000x looser gate: 3 of 49k cloud elements read 2e-3 from the cancellation), first-scatter distance and fraction
+      const vw = await wf.readVolumeOutputs();
+      const planes: Array<[string, Float32Array, Float32Array, number]> = [['order01', voRef.order01, vw.order01, o.tol], ['transmittance', voRef.transmittance, vw.transmittance, o.tol], ['stderr', voRef.stdError, vw.stdError, o.tol * 1000], ['first_scatter_distance', voRef.firstScatterDistance, vw.firstScatterDistance, o.tol], ['scatter_fraction', voRef.scatterFraction, vw.scatterFraction, o.tol]];
+      for (const [pn, pa, pb, gate] of planes) {
+        let mean = 0;
+        for (let i = 0; i < pa.length; i++) mean += Math.abs(pa[i] as number) / pa.length;
+        const fl = Math.max(1e-6, 1e-3 * mean);
+        let worst = 0;
+        let over = 0;
+        for (let i = 0; i < pa.length; i++) {
+          const d = Math.abs((pb[i] as number) - (pa[i] as number)) / Math.max(Math.abs(pa[i] as number), Math.abs(pb[i] as number), fl);
+          if (!(d <= worst)) worst = d;
+          if (!(d <= gate)) over++;
+        }
+        metrics[`${tag}_vo_${pn}_relelem_max`] = worst;
+        metrics[`${tag}_vo_${pn}_over_gate`] = over;
+        metrics[`${tag}_vo_${pn}_mean_mk`] = mean;
+        if (over > 0) voBad = true;
+      }
+    }
+    const bad = a.overPx > 0 || a.nonFinite > 0 || voBad;
     metrics[`${tag}_mismatch`] = bad ? 1 : 0;
     if (bad && a.worst.length > 0) note(`${tag} worst pixels (x, y, rel): ${a.worst.map(([i, r]) => `(${i % scene.film.width}, ${Math.floor(i / scene.film.width)}, ${r.toExponential(1)})`).join(' ')}`);
     if (bad) note(`${tag}: ${a.overPx} of ${a.total} pixels differ by more than ${o.tol} of their size (max ${a.maxRelPx}; per channel ${a.over} over, max ${a.maxRel}, over 1e-3: ${a.over1e3}), non-finite ${a.nonFinite}`);

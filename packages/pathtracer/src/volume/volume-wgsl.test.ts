@@ -13,6 +13,7 @@ const grid = { resolution: [8, 8, 8] as const, worldToIndex: [8, 0, 0, 3.5, 0, 8
 const homog: PtVolumeOptions = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
 const gridded: PtVolumeOptions = { ...homog, media: [{ ...homog.media[0]!, grid }] };
 const hardware: PtVolumeOptions = { ...gridded, densityFilter: 'hardware' };
+const atlased: PtVolumeOptions = { ...gridded, gridLayout: 'atlas' };
 const bricked: PtVolumeOptions = { ...gridded, majorant: 'brick' };
 const ratio: PtVolumeOptions = { ...homog, shadowTracking: 'ratio' };
 const build = (volumes?: PtVolumeOptions) => ptMegakernelBuild(caps, { format: {}, layout, ...(volumes ? { integrator: { volumes } } : {}), shortenNames: false, minify: false }).code;
@@ -35,6 +36,16 @@ describe('integrator.volumes (P5)', () => {
     const text = build(gridded);
     expect(text).toMatch(/@group\(2\) @binding\(16\) var ptVolGrid: texture_3d<f32>/);
     expect(text).toContain('textureLoad(ptVolGrid');
+  });
+
+  it("gridLayout 'atlas' adds the indirection binding 21 and reads through it; 'dense' text has no trace of it", () => {
+    const text = build(atlased);
+    expect(text).toContain('@group(2) @binding(21) var ptVolInd: texture_3d<u32>');
+    expect(text).toContain('ptVolInd');
+    expect(build(gridded)).not.toContain('ptVolInd');
+    const hwAtlas = build({ ...atlased, densityFilter: 'hardware' });
+    expect(hwAtlas).toContain('textureSampleLevel(ptVolGrid');
+    expect(hwAtlas).not.toContain('bf.x');
   });
 
   it("densityFilter 'hardware' samples once through a sampler at binding 20; 'manual' text has neither", () => {
@@ -156,7 +167,7 @@ describe('P5.v14 phase lobes and P5.v15 / P5.v16 outputs at the kernel-text leve
     expect(text.split('ptVoCapture(depth, radiance);').length - 1).toBe(2);
     expect(balanced(text)).toBe(true);
     expect(ptVolumeWgsl(withOut, ['seedOf', 'tables', 'hg'])).not.toContain('ptVoBegin');
-    expect(ptwfUnsupported({ volumes: withOut })).toMatch(/megakernel only/);
+    expect(ptwfUnsupported({ volumes: withOut })).toBeNull(); // V5.2: the wavefront (plain scheduler) has them too
     expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: withOut, accumulate: false } })).toThrow(/needs accumulate/);
     // grid + brick + outputs is 50.5 KB, with the two-lobe phase 51.5 KB: just over the ~50 KB DXC class (a Windows compile-time concern; these are reference kernels)
     expect(ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: { ...withOut, majorant: 'brick' } } }).code.length).toBeLessThan(52_500);

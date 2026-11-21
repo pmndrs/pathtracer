@@ -38,7 +38,7 @@ Gate: `vol-cl-cloud256` and `vol-cl-sph-g85-a99-t200` at 256 spp keep their mean
 | ✅ V1.1 ★ | Roulette in ratio tracking (T < 0.05, survive 0.75, weight 1/0.75), shadow rays and the outputs' transmittance, both schedulers | TS twin mean at 1e5 trials vs line integral; the two scenes at 256 spp within the SE; lookup counter |
 | ✅ V1.2 ★ | Hardware-filtered density (`textureSampleLevel` on r16float / r8unorm, r32float with `float32-filterable`) as an option, manual 8-tap stays the default until the A/B | `vol-grid-slab` closed form; same-seed relMSE vs manual on `vol-cl-cloud256` (~1e-5); bytes saved |
 | ✅ V1.3 ★ | Separate `maxVolumeDepth` (medium scatters vs surface bounces) | equal to today with both caps equal; `vol-cl-ground-sph` with surface 8 / medium 2048 |
-| V1.4 | Loop caps visible: count truncations (4096 collisions, brick cell cap, ratio-tracking cap); warn at upload when densityMax x sigma_t x diagonal > ~1e3 | synthetic dense slab near the cap |
+| ✅ V1.4 | Loop caps visible: count truncations (4096 collisions, brick cell cap, ratio-tracking cap); warn at upload when densityMax x sigma_t x diagonal > ~1e3 | synthetic dense slab near the cap |
 | ✅ V1.5 | Doc fixes: volumes.md sections 3 / 6.1 and DIVERGES V243 still describe the global majorant only | read-through |
 | ✅ V1.6 ★ | Per-pixel wavefront check of lobe scenes | `wf-p5-check cases=vol-cl-single-mie10,vol-cl-sph-hg2-a99-t50 spp=16` |
 | V1.7 | Offset-bound follow-ups: ReSTIR G-buffer positions, light-sample end points, medium interface skips, `positions: 'ray'` | `vol-cl-ground-occluder` with each path on |
@@ -64,7 +64,7 @@ Gate: the clouds' 504x352x616 grid fits in <= 128 MB with an image same-seed equ
 | id | task | check |
 |---|---|---|
 | ✅ V3.1 ★ | r8unorm grids with a per-medium scale | same-seed relMSE vs r16 |
-| V3.2 ★ | Sparse brick atlas: indirection texture at brick resolution + atlas of occupied 8^3 bricks with a 1-voxel apron (one texture, no storage buffer); gives several grids per kernel | same-seed image vs dense on `vol-cl-cloud256`; memory printout |
+| ✅ V3.2 ★ | Sparse brick atlas: indirection texture at brick resolution + atlas of occupied 8^3 bricks with a 1-voxel apron (one texture, no storage buffer); gives several grids per kernel | same-seed image vs dense on `vol-cl-cloud256`; memory printout |
 | V3.3 | Camera inside a grid medium; auto-detect the camera medium | `vol-camera-medium` grid twin |
 | V3.4 | Browser `.vdb` loader (WebVDB `parseVdb` in a worker -> dense / atlas; licence check of WebVDB / NanoVDB first) | `vol-vdb-smoke` from the browser = from Node |
 
@@ -74,7 +74,7 @@ Gate: lamp-lit fog and thin-fog god rays at least 3x better equal-time relMSE th
 
 | id | task | check |
 |---|---|---|
-| V4.1 | Equiangular + distance MIS for emissive triangles in homogeneous media | new `vol-lamp-fog` (maxDepth 1) vs a 1D quadrature |
+| ✅ V4.1 | Equiangular + distance MIS for emissive triangles in homogeneous media | new `vol-lamp-fog` (maxDepth 1) vs a 1D quadrature |
 | ✅ V4.2 | Forced in-scatter NEE for thin homogeneous media | thin-fog closed form (single scatter) |
 | V4.3 | Volume scattering probability guiding (VSPG, Cycles) | thin-fog scene equal time |
 | V4.4 | Equiangular in grid media (Cycles' scheme) | `vol-cornell-smoke` grid twin |
@@ -89,7 +89,7 @@ reference mean within 1% in under 2 s on the M5.
 | id | task | check |
 |---|---|---|
 | 🟨 V5.1 | (V5.1a ✅ `aovs` + OIDN with media, megakernel) Lift `frame` / `aovs` refusal for media: medium primary-vertex semantics (albedo sigma_s / sigma_t, normal 0 / -wo, viewZ and motion from the first scatter), sky x T in the emission plane | `realtime-check` plane identity on `vol-cornell-smoke` |
-| V5.2 ★ | `volumes.outputs` on the wavefront; `ptwfAutoPolicy` for media after the quiet-pass A/B (inline refill read 0.72x per spp, provisional) | `wf-p5-check` outputs per pixel |
+| ✅ V5.2 ★ (plain scheduler) | `volumes.outputs` on the wavefront; `ptwfAutoPolicy` for media after the quiet-pass A/B (inline refill read 0.72x per spp, provisional) | `wf-p5-check` outputs per pixel |
 | V5.3 | `preview` media preset (ray-marched shadows N = 1, lower medium depth, hardware filtering), A/B vs reference mode | mean within 1% on the V0 scenes |
 | V5.4 | ReSTIR DI on surfaces behind homogeneous media (final shadow ray through `ptVolTr`) | `restir-check` bias scan on a fog scene |
 | V5.5 | Research: volumetric ReSTIR; NRC at medium vertices (NRC track) | design notes first |

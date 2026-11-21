@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -489,4 +489,52 @@ describe('V2.3 telescoping transmittance twin (Cycles / Misso et al. 2022)', () 
       expect(Math.abs(m2 - exact)).toBeLessThan(4 * se2 + 1e-9);
     });
   }
+});
+
+describe('sparse brick atlas (V3.2)', () => {
+  const res: [number, number, number] = [37, 21, 29];
+  const rand = rng(7);
+  const data = new Float32Array(res[0] * res[1] * res[2]);
+  // two blobs (one touching the grid corner) and a lone voxel on a brick face, everything else exactly zero
+  for (let k = 0; k < res[2]; k++) for (let j = 0; j < res[1]; j++) for (let i = 0; i < res[0]; i++) {
+    const a = (i - 5) ** 2 + (j - 4) ** 2 + (k - 3) ** 2, b = (i - 30) ** 2 + (j - 12) ** 2 + (k - 20) ** 2;
+    if (a < 30 || b < 25) data[i + res[0] * (j + res[1] * k)] = Math.fround(0.2 + rand());
+  }
+  data[15 + res[0] * (8 + res[1] * 16)] = 0.7; // on the +side face of brick 2 (voxel 15 = 8 * 2 - 1 .. support of cell 1 and 2)
+  const atlas = buildBrickAtlas(res, data);
+  const dense = gridDensity({ resolution: res, worldToIndex: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], densityMax: 2 }, data);
+
+  it('is sparse, and an empty brick has majorant 0 and indirection ATLAS_EMPTY', () => {
+    const mj = brickMajorants(res, data).values;
+    let occ = 0;
+    for (let i = 0; i < mj.length; i++) {
+      expect((atlas.indirection[i] === ATLAS_EMPTY) === ((mj[i] as number) === 0)).toBe(true);
+      if ((mj[i] as number) > 0) occ++;
+    }
+    expect(atlas.occupied).toBe(occ);
+    expect(occ).toBeLessThan(mj.length);
+    expect(brickAtlasMemory(atlas, 4).ratio).toBeLessThan(1.2);
+    expect(atlas.dims.map((d) => d % ATLAS_CELL)).toEqual([0, 0, 0]);
+  });
+
+  it('reads exactly the dense trilinear density at random points, brick edges and outside the grid', () => {
+    const r = rng(11);
+    let nonzero = 0;
+    for (let n = 0; n < 20000; n++) {
+      const p = [r() * (res[0] + 6) - 3, r() * (res[1] + 6) - 3, r() * (res[2] + 6) - 3];
+      if (n % 3 === 0) for (let a = 0; a < 3; a++) p[a] = Math.round((p[a] as number) / 8) * 8 + (r() < 0.5 ? -1 : 0) + (r() < 0.5 ? 0 : (r() - 0.5) * 1e-4); // brick faces (8c - 1) and edges
+      const a = atlasDensityAtIndex(atlas, p[0] as number, p[1] as number, p[2] as number);
+      const d = dense(p[0] as number, p[1] as number, p[2] as number);
+      expect(a).toBe(d);
+      if (d > 0) nonzero++;
+    }
+    expect(nonzero).toBeGreaterThan(300);
+  });
+
+  it('apron: a point on every brick face reads the neighbour voxels from inside its own brick', () => {
+    for (let c = 0; c < 4; c++) for (const x of [8 * c - 1, 8 * c - 1 + 1e-5, 8 * c + 6.999, 8 * c + 7 - 1e-6]) {
+      expect(atlasDensityAtIndex(atlas, x, 8, 16)).toBe(dense(x, 8, 16));
+      expect(atlasDensityAtIndex(atlas, 5, x, 3)).toBe(dense(5, x, 3));
+    }
+  });
 });

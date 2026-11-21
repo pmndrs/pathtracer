@@ -89,6 +89,14 @@ export interface PtVolumeOptions {
    */
   densityFilter?: 'manual' | 'hardware';
   /**
+   * V3.2: how the density grid is stored. `'dense'` (default, kernel text unchanged): one 3D texture of the whole grid (group 2 binding `PT_VOLUME_BINDING`).
+   * `'atlas'`: only the OCCUPIED 8^3 bricks (the bricks of `brickMajorants`: a brick whose 9^3 trilinear support is all zero is dropped), each stored with its 9^3 support
+   * (one voxel of apron on the +side: the lookups of a brick never leave it) in a 3D atlas texture at the same binding, plus an `r32uint` indirection texture at brick
+   * resolution (`PT_VOLUME_INDIRECTION_BINDING`). Densities are identical to the dense lookup (same eight taps, same weights); build the textures with `buildBrickAtlas`
+   * (`volumeGrid` of the kernel option is still the DENSE grid). With `densityFilter: 'hardware'` no boundary factor is needed (the zero voxels around the grid are stored).
+   */
+  gridLayout?: 'dense' | 'atlas';
+  /**
    * P5.v15 / P5.v16 (megakernel only): extra per-pixel sums in the accumulator tail (`PT_VOLUME_OUTPUT_VEC4` vec4 per pixel after the radiance; layout in
    * `ptDecodeVolumeOutputs`): the radiance of scattering orders 0 and 1 (the light of paths with at most one scatter or bounce vertex, the expectation of a
    * `maxDepth` 1 render), the primary ray's transmittance through the media up to the first solid surface (ratio tracking on its own stream, so the beauty image
@@ -103,6 +111,12 @@ export interface PtVolumeOptions {
    * refused with `outputs`. Default false: the kernel text is unchanged.
    */
   forcedNee?: boolean;
+  /**
+   * V4.1 (megakernel only, implies `forcedNee`): equiangular distance sampling (Kulla and Fajardo 2012) for the forced in-scatter estimate. The light point is picked first; when it is on an emissive
+   * triangle the distance along the segment is drawn from the equiangular density about that point or from the truncated exponential (one-sample MIS, balance heuristic, 1/2 each), which turns the
+   * 1/r^2 noise of a lamp close to the ray into a smooth estimate. Sun / environment picks keep the exponential distance. Derivation and twin: `volume/equiangular-wgsl.ts`. Default false: the kernel text is unchanged.
+   */
+  equiangular?: boolean;
 }
 
 /** vec4 per pixel the volume outputs add to the accumulator (after the `width * height` radiance sums). */
@@ -631,4 +645,85 @@ export function ptF16Bits(density: ArrayLike<number>, exact = false): Uint16Arra
     out[i] = h;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Sparse brick atlas (V3.2, `volumes.gridLayout: 'atlas'`)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/** Atlas cell edge in voxels: brick `c` holds the grid voxels [8c - 1, 8c + 7] (the support of every lookup whose floor(index) lies in [8c - 1, 8c + 6]). */
+export const ATLAS_CELL = BRICK + 1;
+/** Indirection value of an empty brick (the density there is exactly 0). A full value is `bx | by << 10 | bz << 20` (atlas brick coordinates). */
+export const ATLAS_EMPTY = 0xffffffff;
+
+export interface BrickAtlas {
+  /** The grid resolution and the brick grid (`brickDims`). */
+  resolution: [number, number, number];
+  cells: [number, number, number];
+  /** Atlas size in bricks and in texels (`ATLAS_CELL` per brick). */
+  bricks: [number, number, number];
+  dims: [number, number, number];
+  /** Density texels of the atlas, x fastest; voxels outside the grid are 0. */
+  data: Float32Array;
+  /** The indirection texels (`ATLAS_EMPTY` or `bx | by << 10 | bz << 20`), x fastest over `cells`. */
+  indirection: Uint32Array;
+  occupied: number;
+}
+
+/** Atlas packing of a dense density grid: occupied bricks in x-fastest order, laid out in a near-cubic block of bricks. */
+export function buildBrickAtlas(resolution: readonly [number, number, number], data: ArrayLike<number>): BrickAtlas {
+  const [nx, ny, nz] = resolution;
+  const cells = brickDims(resolution);
+  const total = cells[0] * cells[1] * cells[2];
+  const mj = brickMajorants(resolution, data).values;
+  let occupied = 0;
+  for (let i = 0; i < total; i++) if ((mj[i] as number) > 0) occupied++;
+  const ax = Math.max(1, Math.ceil(Math.cbrt(occupied)));
+  const ay = ax;
+  const az = Math.max(1, Math.ceil(occupied / (ax * ay)));
+  if (ax > 1023 || az > 1023) throw new RangeError(`buildBrickAtlas: ${occupied} bricks do not fit the 10-bit atlas coordinates`);
+  const dims: [number, number, number] = [ax * ATLAS_CELL, ay * ATLAS_CELL, az * ATLAS_CELL];
+  const atlas = new Float32Array(dims[0] * dims[1] * dims[2]);
+  const indirection = new Uint32Array(total).fill(ATLAS_EMPTY);
+  let n = 0;
+  for (let ck = 0; ck < cells[2]; ck++) for (let cj = 0; cj < cells[1]; cj++) for (let ci = 0; ci < cells[0]; ci++) {
+    const ci1 = ci + cells[0] * (cj + cells[1] * ck);
+    if (!((mj[ci1] as number) > 0)) continue;
+    const bx = n % ax, by = Math.floor(n / ax) % ay, bz = Math.floor(n / (ax * ay));
+    n++;
+    indirection[ci1] = (bx | (by << 10) | (bz << 20)) >>> 0;
+    for (let k = 0; k < ATLAS_CELL; k++) for (let j = 0; j < ATLAS_CELL; j++) for (let i = 0; i < ATLAS_CELL; i++) {
+      const gi = ci * BRICK - 1 + i, gj = cj * BRICK - 1 + j, gk = ck * BRICK - 1 + k;
+      if (gi < 0 || gj < 0 || gk < 0 || gi >= nx || gj >= ny || gk >= nz) continue;
+      atlas[bx * ATLAS_CELL + i + dims[0] * (by * ATLAS_CELL + j + dims[1] * (bz * ATLAS_CELL + k))] = data[gi + nx * (gj + ny * gk)] as number;
+    }
+  }
+  return { resolution: [nx, ny, nz], cells, bricks: [ax, ay, az], dims, data: atlas, indirection, occupied };
+}
+
+/** Texel count and bytes of the atlas plus its indirection (`bytesPerTexel`: 4 r32float, 2 r16float, 1 r8unorm) against the dense grid. */
+export function brickAtlasMemory(atlas: BrickAtlas, bytesPerTexel: number): { atlasBytes: number; indirectionBytes: number; denseBytes: number; ratio: number; occupied: number; bricks: number } {
+  const atlasBytes = atlas.data.length * bytesPerTexel;
+  const indirectionBytes = atlas.indirection.length * 4;
+  const denseBytes = atlas.resolution[0] * atlas.resolution[1] * atlas.resolution[2] * bytesPerTexel;
+  return { atlasBytes, indirectionBytes, denseBytes, ratio: (atlasBytes + indirectionBytes) / denseBytes, occupied: atlas.occupied, bricks: atlas.indirection.length };
+}
+
+/** The twin of the atlas `ptVolDensity` (manual filter) in index space: the dense trilinear lookup, read through the indirection (an empty brick is 0). `taps` receives every atlas texel read. */
+export function atlasDensityAtIndex(atlas: BrickAtlas, gx: number, gy: number, gz: number): number {
+  const fl = [Math.floor(gx), Math.floor(gy), Math.floor(gz)];
+  const fr = [gx - (fl[0] as number), gy - (fl[1] as number), gz - (fl[2] as number)];
+  const c = fl.map((f) => (f + 1) >> 3);
+  if (c.some((v, a) => v < 0 || v >= (atlas.cells[a] as number))) return 0;
+  const pk = atlas.indirection[(c[0] as number) + atlas.cells[0] * ((c[1] as number) + atlas.cells[1] * (c[2] as number))] as number;
+  if (pk === ATLAS_EMPTY) return 0;
+  const org = [(pk & 1023) * ATLAS_CELL, ((pk >> 10) & 1023) * ATLAS_CELL, ((pk >>> 20) & 1023) * ATLAS_CELL];
+  const loc = fl.map((f, a) => f - ((c[a] as number) * BRICK - 1));
+  let acc = 0;
+  for (let k = 0; k < 8; k++) {
+    const di = k & 1, dj = (k >> 1) & 1, dk = (k >> 2) & 1;
+    const v = atlas.data[(org[0] as number) + (loc[0] as number) + di + atlas.dims[0] * ((org[1] as number) + (loc[1] as number) + dj + atlas.dims[1] * ((org[2] as number) + (loc[2] as number) + dk))] as number;
+    acc += v * (di ? (fr[0] as number) : 1 - (fr[0] as number)) * (dj ? (fr[1] as number) : 1 - (fr[1] as number)) * (dk ? (fr[2] as number) : 1 - (fr[2] as number));
+  }
+  return acc;
 }

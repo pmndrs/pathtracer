@@ -30,10 +30,13 @@ import { PT_RESTIR_GI_SHADE_BINDING } from '../restir/restir-gi-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable } from '../spectral/rgb2spec.ts';
-import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
-import { createBlueNoiseTexture, createMajorantTexture, createSpectralTexture, createVolumeSampler, createVolumeTexture, ptNeedsRayMasks, ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, validateBlueNoise, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
+import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, type PtVolumeOutputs, type brickAtlasMemory } from '../volume/volume.ts';
+import { ptRenderUntil, type PtRenderUntilResult, type PtStopOptions } from '../integrator/render-until.ts';
+import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
+import { PT_VOLUME_BINDING, PT_VOLUME_INDIRECTION_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import { createBlueNoiseTexture, createMajorantTexture, createSpectralTexture, createVolumeAtlasTextures, createVolumeSampler, createVolumeTexture, ptNeedsRayMasks, ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, validateBlueNoise, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
 import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
-import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfPrimaryWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfSortWgsl, ptwfUnsupported, type PtwfConfig } from './wavefront-wgsl.ts';
+import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfPrimaryWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfSortWgsl, ptwfUnsupported, ptwfVoFinishWgsl, type PtwfConfig } from './wavefront-wgsl.ts';
 
 const STORAGE = 0x80;
 const COPY_DST = 0x8;
@@ -87,24 +90,24 @@ function scheduling(options: Pick<PtWavefrontOptions, 'refill' | 'layers' | 'ref
 }
 
 export const PTWF_KERNELS = ['camera', 'intersect', 'shade', 'shadow', 'args'] as const;
-/** Kernels that exist only with a setting: `sortHit` / `sortRay` (`sort`, P3.4), `primary` (`refill: 'ordered'`, P3.10). */
-export const PTWF_EXTRA_KERNELS = ['sortHit', 'sortRay', 'primary'] as const;
+/** Kernels that exist only with a setting: `sortHit` / `sortRay` (`sort`, P3.4), `primary` (`refill: 'ordered'`, P3.10), `voFinish` (`volumes.outputs`, V5.2: per-sample flush of the radiance scratch). */
+export const PTWF_EXTRA_KERNELS = ['sortHit', 'sortRay', 'primary', 'voFinish'] as const;
 export type PtwfBaseKernel = (typeof PTWF_KERNELS)[number];
 export type PtwfExtraKernel = (typeof PTWF_EXTRA_KERNELS)[number];
 /** Group 2 bindings each kernel declares (`PTWF_BINDING` numbers; 2 = fuzz table, only with `features.fuzz`). Must match the `bindings([...])` of the WGSL. */
-const IO_BINDINGS: Record<PtwfKernel, readonly number[]> = { camera: [0, 1, 3, 6], intersect: [0, 3, 4, 5, 6], shade: [0, 1, 2, 3, 4, 5, 6, 7], shadow: [0, 1, 5, 6, 7], args: [0, 5], sortHit: [0, 4, 5, 6], sortRay: [0, 3, 5, 6], primary: [0, 3, 5, 6] };
-const USES_WALK: Record<PtwfKernel, boolean> = { camera: false, intersect: true, shade: false, shadow: true, args: false, sortHit: false, sortRay: false, primary: false };
+const IO_BINDINGS: Record<PtwfKernel, readonly number[]> = { camera: [0, 1, 3, 6], intersect: [0, 3, 4, 5, 6], shade: [0, 1, 2, 3, 4, 5, 6, 7], shadow: [0, 1, 5, 6, 7], args: [0, 5], sortHit: [0, 4, 5, 6], sortRay: [0, 3, 5, 6], primary: [0, 3, 5, 6], voFinish: [0, 1] };
+const USES_WALK: Record<PtwfKernel, boolean> = { camera: false, intersect: true, shade: false, shadow: true, args: false, sortHit: false, sortRay: false, primary: false, voFinish: false };
 /** Kernels that bind the scene copy (group 1): shade always; with alpha MASK also intersect (cutout loop) and, for an exact shadow policy, shadow (`ptVisibleMasked`). */
 function usesScene(kernel: PtwfKernel, integrator: PtIntegratorOptions | undefined, textures: unknown): boolean {
   if (kernel === 'shade') return true;
-  if (kernel === 'sortHit' || kernel === 'sortRay' || kernel === 'primary') return false;
+  if (kernel === 'sortHit' || kernel === 'sortRay' || kernel === 'primary' || kernel === 'voFinish') return false;
   const o = resolveIntegratorOptions({ ...integrator, ...(textures ? { textures: true } : {}) });
   if (o.primary === 'vbuffer' && kernel === 'intersect') return true; // resolves the V-buffer texel through the scene copy's surface table
   return o.alphaMask && (kernel === 'intersect' || (kernel === 'shadow' && ptShadowNeedsScene(o)));
 }
 export type PtwfKernel = PtwfBaseKernel | PtwfExtraKernel;
 /** The five kernels, plus (`integrator.materialLod: 'secondary'`, R1) `shadeSecondary`: the smaller shade kernel for depth >= `materialLodDepth` (the `shade` kernel then only runs depth < N), plus the settings' extra kernels. */
-export type PtWavefrontBuild = Record<PtwfBaseKernel, RtWgslBuild> & { shadeSecondary?: RtWgslBuild; sortHit?: RtWgslBuild; sortRay?: RtWgslBuild; primary?: RtWgslBuild };
+export type PtWavefrontBuild = Record<PtwfBaseKernel, RtWgslBuild> & { shadeSecondary?: RtWgslBuild; sortHit?: RtWgslBuild; sortRay?: RtWgslBuild; primary?: RtWgslBuild; voFinish?: RtWgslBuild };
 type KernelBytes = Record<PtwfBaseKernel, number> & Partial<Record<'shadeSecondary' | PtwfExtraKernel, number>>;
 
 /**
@@ -125,6 +128,7 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
     const why = ptRestirUnsupported({ ...options, integrator: options.integrator });
     if (why) throw new Error(`PtWavefront: ${why}`);
   }
+  if (requested.volumes?.outputs && wf.refill) throw new Error('PtWavefront: integrator.volumes.outputs needs the plain scheduler (refill: false, layers: 1): the per-sample second moment is the square of the sample total, which a refill slot (reused when its path ends, with shadow rays still pending) cannot flush');
   if (resolveIntegratorOptions(options.integrator ?? {}).primary === 'vbuffer') {
     if (wf.refill) throw new Error("PtWavefront: integrator.primary 'vbuffer' does not support refill / layers (a slot starts its next sample at its own time; a V-buffer is one frame)");
     if (!options.layout.positions) throw new Error("PtWavefront: integrator.primary 'vbuffer' needs a surface layout with positions");
@@ -169,6 +173,7 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
     args: rtTransformWgsl(ptwfArgsWgsl(wf), { ...t, keep: ['ptwfArgsMain'] }),
     ...(wf.sortHit ? { sortHit: rtTransformWgsl(ptwfSortWgsl('hit', wf), { ...t, keep: ['ptwfSort'] }) } : {}),
     ...(wf.sortRay ? { sortRay: rtTransformWgsl(ptwfSortWgsl('ray', wf), { ...t, keep: ['ptwfSort'] }) } : {}),
+    ...(ro.volumes?.outputs ? { voFinish: rtTransformWgsl(ptwfVoFinishWgsl(), { ...t, keep: ['ptwfVoFinish'] }) } : {}),
     ...(wf.ordered ? { primary: rtTransformWgsl(ptwfPrimaryWgsl(wf), { ...t, keep: ['ptwfPrimary'] }) } : {}),
   };
 }
@@ -195,7 +200,7 @@ interface PtwfLayouts {
 function ioBindings(kernel: PtwfKernel, fuzz: boolean, counters: boolean, refill: boolean, vbuffer = false, corr = false, extra: PtwfExtraBindings = {}): number[] {
   // refill: the camera kernel (start pass) also appends to the queue, so it binds the counters (5)
   // P4.1b / P4.2a: the blue-noise texture (camera + shade: both draw sampler pairs), the previous camera (shade: motion of the primary hit) and the ReSTIR reservoirs (shade: the first vertex's light)
-  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : []), ...(kernel === 'intersect' && vbuffer ? [PT_VBUFFER_BINDING] : []), ...(kernel === 'shade' && corr ? [PT_LAYER_CORR_BINDING] : []), ...(kernel === 'shade' && extra.restir ? [PT_RESTIR_SHADE_BINDING] : []), ...(kernel === 'shade' && extra.restirGi ? [PT_RESTIR_GI_SHADE_BINDING] : []), ...((kernel === 'camera' || kernel === 'shade') && extra.blueNoise ? [PT_BLUENOISE_BINDING] : []), ...(kernel === 'shade' && extra.frame ? [PT_FRAME_PARAMS_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeMajorant ? [PT_VOLUME_MAJORANT_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeGrid ? [PT_VOLUME_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeHw ? [PT_VOLUME_SAMPLER_BINDING] : []), ...(kernel === 'shade' && extra.spectral ? [PT_SPEC_BINDING] : [])].filter((binding) => binding !== 2 || fuzz);
+  return [...(kernel === 'camera' && refill ? [0, 1, 3, 5, 6] : IO_BINDINGS[kernel]), ...(kernel === 'shade' && counters ? [PTWF_BINDING.counters] : []), ...(kernel === 'intersect' && vbuffer ? [PT_VBUFFER_BINDING] : []), ...(kernel === 'intersect' && extra.volumeOutputs ? [1] : []), ...(kernel === 'shade' && corr ? [PT_LAYER_CORR_BINDING] : []), ...(kernel === 'shade' && extra.restir ? [PT_RESTIR_SHADE_BINDING] : []), ...(kernel === 'shade' && extra.restirGi ? [PT_RESTIR_GI_SHADE_BINDING] : []), ...((kernel === 'camera' || kernel === 'shade') && extra.blueNoise ? [PT_BLUENOISE_BINDING] : []), ...(kernel === 'shade' && extra.frame ? [PT_FRAME_PARAMS_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeMajorant ? [PT_VOLUME_MAJORANT_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeGrid ? [PT_VOLUME_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeAtlas ? [PT_VOLUME_INDIRECTION_BINDING] : []), ...((kernel === 'intersect' || kernel === 'shadow') && extra.volumeHw ? [PT_VOLUME_SAMPLER_BINDING] : []), ...(kernel === 'shade' && extra.spectral ? [PT_SPEC_BINDING] : [])].filter((binding) => binding !== 2 || fuzz);
 }
 
 /** Group 2 bindings the real-time options add (P4.1b / P4.2a): the blue-noise texture, the per-frame outputs' previous-camera uniform, the ReSTIR reservoirs. */
@@ -208,8 +213,12 @@ interface PtwfExtraBindings {
   /** P5 media (V270): the density grid (and the brick majorant grid) the intersect and shadow kernels read; the spectral table the shade kernel reads. */
   volumeGrid?: boolean;
   volumeMajorant?: boolean;
+  /** V3.2: `volumes.gridLayout: 'atlas'` (the indirection texture, intersect and shadow kernels). */
+  volumeAtlas?: boolean;
   /** V1.2: `volumes.densityFilter: 'hardware'` (the grid is bound filterable, plus a sampler). */
   volumeHw?: boolean;
+  /** V5.2: `volumes.outputs` (the intersect kernel binds the accumulator for the primary transmittance). */
+  volumeOutputs?: boolean;
   spectral?: boolean;
 }
 
@@ -246,6 +255,8 @@ export class PtWavefront {
   private volumeTexture: GPUTexture | null = null;
   private volumeSampler: GPUSampler | null = null;
   private majorantTexture: GPUTexture | null = null;
+  private indirectionTexture: GPUTexture | null = null;
+  atlasMemory: ReturnType<typeof brickAtlasMemory> | null = null;
   private specTexture: GPUTexture | null = null;
   /** Ring of previous-camera records, one slot per params slot (`integrator.frame`, shade kernel binding `PT_FRAME_PARAMS_BINDING`). */
   private frameParamsBuffer: GPUBuffer | null = null;
@@ -313,7 +324,8 @@ export class PtWavefront {
     const features = options.integrator?.materials?.features;
     const corrTexture = !!features?.layered && ptLayerCorrNeedsTexture(options.integrator?.materials?.layered);
     const resolved = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
-    const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi, ...(ptVolumeHasGrid(resolved.volumes) ? { volumeGrid: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.densityFilter === 'hardware' ? { volumeHw: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.majorant === 'brick' ? { volumeMajorant: true } : {}), ...(resolved.spectral ? { spectral: true } : {}) };
+    const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi, ...(ptVolumeHasGrid(resolved.volumes) ? { volumeGrid: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.densityFilter === 'hardware' ? { volumeHw: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.majorant === 'brick' ? { volumeMajorant: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.gridLayout === 'atlas' ? { volumeAtlas: true } : {}), ...(resolved.volumes?.outputs ? { volumeOutputs: true } : {}), ...(resolved.spectral ? { spectral: true } : {}) };
+    ptWarnVolumeCapRisk('PtWavefront', resolved.volumes, undefined, resolved.volumes?.majorant === 'brick' ? options.volumeGrid?.majorant?.values : undefined);
     if (extra.volumeGrid && !options.volumeGrid) throw new Error('PtWavefront: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
     if (extra.volumeHw && (options.volumeGrid?.format ?? 'r32float') === 'r32float' && !device.features.has('float32-filterable')) throw new Error("PtWavefront: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
     if (extra.volumeMajorant && !options.volumeGrid?.majorant) throw new Error("PtWavefront: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
@@ -329,7 +341,7 @@ export class PtWavefront {
     const scene = device.createBindGroupLayout({ label: `${label} scene`, entries: rtSceneCopyLayoutEntries(0, options.textures, options.scenePacking) });
     const ioEntries = (kernel: PtwfKernel): GPUBindGroupLayoutEntry[] =>
       ioBindings(kernel, !!features?.fuzz, !!options.integrator?.counters, wf.refill, options.integrator?.primary === 'vbuffer', corrTexture, extra).map((binding) =>
-        binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_FRAME_PARAMS_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } } : binding === PT_BLUENOISE_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_LAYER_CORR_BINDING ? ptLayerCorrLayoutEntry() : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : binding === PT_VOLUME_SAMPLER_BINDING ? { binding, visibility: COMPUTE, sampler: { type: 'filtering' } } : binding === PT_VOLUME_BINDING || binding === PT_VOLUME_MAJORANT_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: binding === PT_VOLUME_BINDING && extra.volumeHw ? 'float' : 'unfilterable-float', viewDimension: '3d' } } : binding === PT_SPEC_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_RESTIR_SHADE_BINDING || binding === PT_RESTIR_GI_SHADE_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'read-only-storage' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
+        binding === 0 ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_PARAMS_BYTES } } : binding === PT_FRAME_PARAMS_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } } : binding === PT_BLUENOISE_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_LAYER_CORR_BINDING ? ptLayerCorrLayoutEntry() : binding === PT_VBUFFER_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } } : binding === PT_VOLUME_SAMPLER_BINDING ? { binding, visibility: COMPUTE, sampler: { type: 'filtering' } } : binding === PT_VOLUME_INDIRECTION_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '3d' } } : binding === PT_VOLUME_BINDING || binding === PT_VOLUME_MAJORANT_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: binding === PT_VOLUME_BINDING && extra.volumeHw ? 'float' : 'unfilterable-float', viewDimension: '3d' } } : binding === PT_SPEC_BINDING ? { binding, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } } : binding === PT_RESTIR_SHADE_BINDING || binding === PT_RESTIR_GI_SHADE_BINDING ? { binding, visibility: COMPUTE, buffer: { type: 'read-only-storage' } } : { binding, visibility: COMPUTE, buffer: { type: binding === 2 ? 'read-only-storage' : 'storage' } },
       ) as GPUBindGroupLayoutEntry[];
     const io = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, device.createBindGroupLayout({ label: `${label} io ${k}`, entries: ioEntries(k) })])) as Record<PtwfKernel, GPUBindGroupLayout>;
     const argsLayout = device.createBindGroupLayout({ label: `${label} args`, entries: [{ binding: 0, visibility: COMPUTE, buffer: { type: 'storage' } }] });
@@ -345,7 +357,7 @@ export class PtWavefront {
     const pipelineLayouts = Object.fromEntries([...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].map((k) => [k, pipelineLayout(k)])) as Record<PtwfKernel, GPUPipelineLayout>;
     const layoutError = await device.popErrorScope();
     if (layoutError) throw new Error(`PtWavefront: invalid bind group / pipeline layout: ${layoutError.message}`);
-    const entry: Record<PtwfKernel, string> = { camera: 'ptwfCamera', intersect: 'ptwfIntersect', shade: 'ptwfShade', shadow: 'ptwfShadow', args: 'ptwfArgsMain', sortHit: 'ptwfSort', sortRay: 'ptwfSort', primary: 'ptwfPrimary' };
+    const entry: Record<PtwfKernel, string> = { camera: 'ptwfCamera', intersect: 'ptwfIntersect', shade: 'ptwfShade', shadow: 'ptwfShadow', args: 'ptwfArgsMain', sortHit: 'ptwfSort', sortRay: 'ptwfSort', primary: 'ptwfPrimary', voFinish: 'ptwfVoFinish' };
     const built = [...PTWF_KERNELS, ...PTWF_EXTRA_KERNELS].filter((k): k is PtwfKernel => !!build[k]);
     const made = await Promise.all(built.map((k) => rtCreateComputePipelineAsync(device, { label: `${label} ${k}`, layout: pipelineLayouts[k], code: (build[k] as RtWgslBuild).code, map: (build[k] as RtWgslBuild).map, entryPoint: entry[k], sourceMap: options.sourceMap })));
     const pipelines = Object.fromEntries(built.map((k, i) => [k, made[i]])) as Record<PtwfKernel, GPUComputePipeline>;
@@ -362,7 +374,12 @@ export class PtWavefront {
     if (extra.blueNoise) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     if (extra.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, walk, scene);
     if (extra.volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
-    if (extra.volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>, label);
+    if (extra.volumeGrid && extra.volumeAtlas) {
+      const at = createVolumeAtlasTextures(device, options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>, label);
+      kernel.volumeTexture = at.atlas;
+      kernel.indirectionTexture = at.indirection;
+      kernel.atlasMemory = at.memory;
+    } else if (extra.volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>, label);
     if (extra.volumeMajorant) {
       const mj = (options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>).majorant as { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array };
       if ((resolved.volumes?.shadowTracking === 'residual' || resolved.volumes?.shadowTracking === 'telescoping') && !mj.minima) throw new Error("PtWavefront: integrator.volumes.shadowTracking 'residual' / 'telescoping' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
@@ -415,7 +432,7 @@ export class PtWavefront {
     const frameBytes = this.options.integrator?.frame ? ptFrameTailBytes(paths) : 0;
     if (frameBytes > max) throw new RangeError(`PtWavefront.setFilm: the beauty + per-frame planes need ${frameBytes} bytes, past maxStorageBufferBindingSize (${max}); render a smaller film`);
     this.buffers = {
-      accum: make('accum', frameBytes || paths * 16 * (this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : 1), STORAGE | COPY_SRC | COPY_DST),
+      accum: make('accum', frameBytes || paths * 16 * (this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : this.options.integrator?.volumes?.outputs ? 2 + PT_VOLUME_OUTPUT_VEC4 : 1), STORAGE | COPY_SRC | COPY_DST),
       state: make('state', bytes.state, STORAGE | COPY_DST),
       hit: make('hit', bytes.hit),
       count: make('counters', bytes.counters, STORAGE | COPY_SRC | COPY_DST),
@@ -608,6 +625,7 @@ export class PtWavefront {
     const gy = Math.ceil(this.height / 8);
     let offset = 0;
     const frame = !!this.options.integrator?.frame;
+    const voOut = !!this.options.integrator?.volumes?.outputs;
     const record = (sampleIndex: number, iter: number): void => {
       offset = (this.slot % PTWF_PARAM_SLOTS) * this.slotBytes;
       this.slot++;
@@ -656,6 +674,10 @@ export class PtWavefront {
         }
         use('shadow');
         pass.dispatchWorkgroupsIndirect(this.argsBuffer, PTWF_ARGS_SHADOW);
+      }
+      if (voOut) {
+        use('voFinish'); // the dims of the last iteration's record are the same: no extra uniform slot
+        pass.dispatchWorkgroups(gx, gy);
       }
       this.samples++;
       this.lastEncodedCamera = this.camera;
@@ -823,6 +845,7 @@ export class PtWavefront {
       [PT_BLUENOISE_BINDING]: this.blueView() ?? undefined,
       [PT_FRAME_PARAMS_BINDING]: this.frameParamsBuffer ? { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } : undefined,
       [PT_VOLUME_BINDING]: this.volumeTexture ? this.volumeTexture.createView({ dimension: '3d' }) : undefined,
+      [PT_VOLUME_INDIRECTION_BINDING]: this.indirectionTexture ? this.indirectionTexture.createView({ dimension: '3d' }) : undefined,
       [PT_VOLUME_SAMPLER_BINDING]: this.volumeSampler ?? undefined,
       [PT_VOLUME_MAJORANT_BINDING]: this.majorantTexture ? this.majorantTexture.createView({ dimension: '3d' }) : undefined,
       [PT_SPEC_BINDING]: this.specTexture ? this.specTexture.createView() : undefined,
@@ -890,6 +913,37 @@ export class PtWavefront {
     return data;
   }
 
+  /** `integrator.volumes.outputs` (V5.2): as `PtMegakernel.readVolumeOutputs` (orders 0-1, primary transmittance, standard error, first-scatter distance and fraction), averaged over the samples so far. Outside any timed region. */
+  async readVolumeOutputs(): Promise<PtVolumeOutputs> {
+    if (!this.buffers) throw new Error('PtWavefront: nothing rendered');
+    if (!this.options.integrator?.volumes?.outputs) throw new Error('PtWavefront.readVolumeOutputs: the kernels were built without integrator.volumes.outputs');
+    const sums = new Float32Array(await this.readBuffer(this.buffers.accum, this.width * this.height * 16 * (1 + PT_VOLUME_OUTPUT_VEC4)));
+    return ptDecodeVolumeOutputs(sums, this.width, this.height, this.samples);
+  }
+
+  /** V5.2: as `PtMegakernel.renderUntil` (growing batches until the standard-error target is met); needs `integrator.volumes.outputs`. */
+  async renderUntil(options: PtStopOptions): Promise<PtRenderUntilResult> {
+    if (!this.options.integrator?.volumes?.outputs) throw new Error('PtWavefront.renderUntil: the kernels were built without integrator.volumes.outputs');
+    const perSubmit = Math.max(1, Math.min(options.passesPerSubmit ?? 8, this.maxPassesPerEncode()));
+    return ptRenderUntil(
+      {
+        run: async (n) => {
+          for (let left = n; left > 0; ) {
+            const c = Math.min(perSubmit, left);
+            const encoder = this.device.createCommandEncoder({ label: 'ptwf renderUntil' });
+            this.encode(encoder, c);
+            this.device.queue.submit([encoder.finish()]);
+            left -= c;
+            await this.device.queue.onSubmittedWorkDone();
+          }
+        },
+        read: () => this.readVolumeOutputs(),
+      },
+      options,
+      this.samples,
+    );
+  }
+
   /** The AOVs (`integrator.aovs`), averaged over the samples so far. Outside any timed region. */
   async readAovs(): Promise<PtAovs> {
     if (!this.buffers) throw new Error('PtWavefront: nothing rendered');
@@ -920,6 +974,7 @@ export class PtWavefront {
     this.corrTexture?.destroy();
     this.blueTexture?.destroy();
     this.volumeTexture?.destroy();
+    this.indirectionTexture?.destroy();
     this.volumeSampler = null;
     this.majorantTexture?.destroy();
     this.specTexture?.destroy();
