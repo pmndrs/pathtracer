@@ -1,17 +1,22 @@
 import { encodingWgsl, forward, layerCount, layerIn, layerOffset, layerOut, nrcEncodingWgsl } from '@pathtracer/mlp';
 import { halfToFloat } from '../pages/mlp-common.ts';
 import { type NrcCache, nrcInputsWgsl } from './cache.ts';
+import { webnnReplayOptions } from './webnn-replay-options.ts';
 
 // The interop API is experimental and has no DOM library declarations.
 interface Tensor { destroy(): void }
 interface Graph { destroy(): void }
-interface Descriptor { dataType: 'float16'; shape: number[] }
+interface Descriptor { dataType: 'float16'; shape: number[]; readable?: boolean; writable?: boolean }
 interface Context {
   createExportableTensor(d: Descriptor, gpu: GPUDevice): Promise<Tensor>;
+  createTensor(d: Descriptor): Promise<Tensor>;
   exportToGPU(t: Tensor): Promise<GPUBuffer>;
+  writeTensor(t: Tensor, data: ArrayBufferView): void;
+  readTensor(t: Tensor): Promise<ArrayBuffer>;
   dispatch(graph: Graph, inputs: Record<string, Tensor>, outputs: Record<string, Tensor>): void;
   destroy(): void;
 }
+
 interface Builder {
   input(name: string, d: Descriptor): object;
   gemm(a: object, b: object, options: { bTranspose: boolean }): object;
@@ -33,11 +38,12 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
   const packed = (args.weights ?? 'packed') === 'packed';
   const perSlab = args.publish === 'slab';
   const deviceType = args.device ?? 'gpu';
-  const ml = (navigator as unknown as { ml?: { createContext(options: { deviceType: string }): Promise<Context> } }).ml;
+  const opt = webnnReplayOptions(args);
+  const ml = (navigator as unknown as { ml?: { createContext(options: { deviceType: string } | GPUDevice): Promise<Context> } }).ml;
   if (!ml) throw new Error('navigator.ml unavailable');
   const gpu = cache.device;
   const records = cache.replayBuffers;
-  const ctx = await ml.createContext({ deviceType });
+  const ctx = await ml.createContext(opt.ctx === 'device' ? gpu : { deviceType });
   const builder = new (globalThis as unknown as { MLGraphBuilder: new (context: Context) => Builder }).MLGraphBuilder(ctx);
   const buffers: GPUBuffer[] = [];
   const tensors: Tensor[] = [];
@@ -48,7 +54,8 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
   };
   const desc = (shape: number[]): Descriptor => ({ dataType: 'float16', shape });
   const tensor = async (shape: number[]) => {
-    const t = await ctx.createExportableTensor(desc(shape), gpu);
+    const t = opt.route === 'export' ? await ctx.createExportableTensor(desc(shape), gpu)
+      : await ctx.createTensor({ ...desc(shape), readable: true, writable: true });
     tensors.push(t);
     return t;
   };
@@ -130,6 +137,21 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
       pass.end();
     });
     const publish = async () => {
+      if (opt.route === 'cpu') {
+        // Through script: read the live weights back and write them into the WebNN tensor(s), padded like the exported copy.
+        const live = new Uint16Array(await read(mlp.useWeights, mlp.useWeights.size));
+        if (packed) {
+          const padded = new Uint16Array(paddedWeights);
+          padded.set(live);
+          ctx.writeTensor(inputs.weights!, padded);
+        } else for (let i = 0; i < layers; i++) {
+          const halves = layerIn(shape, i) * layerOut(shape, i);
+          const layer = new Uint16Array(i + 1 === layers ? halves + shape.width : halves);
+          layer.set(live.subarray(layerOffset(shape, i), layerOffset(shape, i) + halves));
+          ctx.writeTensor(inputs['w' + i]!, layer);
+        }
+        return;
+      }
       if (packed) {
         const dst = await ctx.exportToGPU(inputs.weights!);
         submit(e => {
@@ -147,22 +169,86 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
         dst.destroy();
       }
     };
-    const webnn = async (n: number) => {
-      dispatch(encode, encGroup, n);
-      if (!perSlab) await publish();
+    // Per-phase milliseconds of one replay: timestamps around the awaits the variant already has, never an extra wait.
+    let phase: Record<string, number> = {};
+    let mark = 0;
+    const lap = (name: string) => {
+      const now = performance.now();
+      phase[name] = (phase[name] ?? 0) + now - mark;
+      mark = now;
+    };
+    // `tensors=shared` (the November 19 sequence): one input / output pair, each chunk lent out, copied, returned and run in turn.
+    const sequential = async (n: number) => {
+      if (!perSlab) { await publish(); lap('weights'); }
+      const host = opt.route === 'cpu' ? new Uint8Array(await read(features, Math.ceil(n / rows) * rows * 128)) : undefined;
+      if (host) lap('in');
       for (let offset = 0; offset < n; offset += rows) {
-        if (perSlab) await publish();
-        const x = await ctx.exportToGPU(inputs.x!);
-        submit(e => e.copyBufferToBuffer(features, offset * 128, x, 0, rows * 128));
-        x.destroy();
-        await gpu.queue.onSubmittedWorkDone();
+        if (perSlab) { await publish(); lap('weights'); }
+        if (host) ctx.writeTensor(inputs.x!, host.subarray(offset * 128, (offset + rows) * 128));
+        else {
+          const x = await ctx.exportToGPU(inputs.x!);
+          submit(e => e.copyBufferToBuffer(features, offset * 128, x, 0, rows * 128));
+          x.destroy();
+        }
+        lap('in');
+        if (opt.route === 'export' && opt.sync === 'drain') { await gpu.queue.onSubmittedWorkDone(); lap('wait'); }
         ctx.dispatch(graph!, inputs, { y: output });
-        const out = await ctx.exportToGPU(output);
-        submit(e => e.copyBufferToBuffer(out, 0, halfResult, offset * 8, rows * 8));
-        out.destroy();
+        lap('dispatch');
+        if (host) gpu.queue.writeBuffer(halfResult, offset * 8, await ctx.readTensor(output));
+        else {
+          const out = await ctx.exportToGPU(output);
+          submit(e => e.copyBufferToBuffer(out, 0, halfResult, offset * 8, rows * 8));
+          out.destroy();
+        }
+        lap('out');
       }
+    };
+    // `tensors=chunk`: a tensor pair per chunk, so the whole frame crosses in one batch each way (MLTensor explainer, chained inference).
+    const chunks: { x: Tensor; y: Tensor }[] = [];
+    const weightInputs = Object.fromEntries(Object.entries(inputs).filter(([name]) => name !== 'x'));
+    const batched = async (n: number) => {
+      while (chunks.length < Math.ceil(n / rows)) chunks.push({ x: await tensor([rows, shape.inputs]), y: await tensor([rows, 4]) });
+      const list = chunks.slice(0, Math.ceil(n / rows));
+      await publish();
+      lap('weights');
+      if (opt.route === 'cpu') {
+        const host = new Uint8Array(await read(features, list.length * rows * 128));
+        list.forEach((c, k) => ctx.writeTensor(c.x, host.subarray(k * rows * 128, (k + 1) * rows * 128)));
+        lap('in');
+        for (const c of list) ctx.dispatch(graph!, { ...weightInputs, x: c.x }, { y: c.y });
+        lap('dispatch');
+        const outs = await Promise.all(list.map(c => ctx.readTensor(c.y)));
+        outs.forEach((o, k) => gpu.queue.writeBuffer(halfResult, k * rows * 8, o));
+        lap('out');
+        return;
+      }
+      const xs = await Promise.all(list.map(c => ctx.exportToGPU(c.x)));
+      submit(e => xs.forEach((b, k) => e.copyBufferToBuffer(features, k * rows * 128, b, 0, rows * 128)));
+      for (const b of xs) b.destroy();
+      lap('in');
+      if (opt.sync === 'drain') { await gpu.queue.onSubmittedWorkDone(); lap('wait'); }
+      for (const c of list) ctx.dispatch(graph!, { ...weightInputs, x: c.x }, { y: c.y });
+      lap('dispatch');
+      const ys = await Promise.all(list.map(c => ctx.exportToGPU(c.y)));
+      submit(e => ys.forEach((b, k) => e.copyBufferToBuffer(b, 0, halfResult, k * rows * 8, rows * 8)));
+      for (const b of ys) b.destroy();
+      lap('out');
+    };
+    const webnn = async (n: number) => {
+      phase = {};
+      mark = performance.now();
+      dispatch(encode, encGroup, n);
+      lap('encode');
+      if (opt.tensors === 'chunk') await batched(n);
+      else await sequential(n);
       dispatch(unpack, unpackGroup, n);
       await gpu.queue.onSubmittedWorkDone();
+      lap('finish');
+    };
+    let parityFailures = 0;
+    const parityFail = (message: string) => {
+      if (opt.parity === 'strict') throw new Error(message);
+      parityFailures++;
     };
     let count = 0;
     let priorWeights: Float32Array | undefined;
@@ -197,14 +283,16 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
       if (priorWeights) {
         const ratio = Math.sqrt(correctError / Math.max(staleError, 1e-30));
         metrics[`snapshot${sample}_current_over_stale_error`] = ratio;
-        if (!(ratio < 0.5)) throw new Error('Could not distinguish consecutive live weight snapshots: ' + ratio);
+        if (!(ratio < 0.5)) parityFail('Could not distinguish consecutive live weight snapshots: ' + ratio);
       }
       priorWeights = w;
       const relativeRms = Math.sqrt(squared / Math.max(energy, 1e-20));
       Object.assign(metrics, { [`snapshot${sample}_rows`]: count, [`snapshot${sample}_rrms`]: relativeRms, [`snapshot${sample}_max_relative`]: worst, [`snapshot${sample}_cpu_max_relative`]: cpuWorst });
-      if (!(relativeRms < 0.01 && cpuWorst < 0.08)) throw new Error('WebNN consecutive snapshot parity failed: ' + JSON.stringify(metrics));
+      if (!(relativeRms < 0.01 && cpuWorst < 0.08)) parityFail('WebNN consecutive snapshot parity failed: ' + JSON.stringify(metrics));
     }
+    metrics.parity_failures = parityFailures;
     const wgslTimes: number[] = [], nnTimes: number[] = [];
+    const phaseRuns: Record<string, number>[] = [];
     for (let i = 0; i < repeats + 2; i++) {
       let t = performance.now();
       submit(records.infer);
@@ -212,7 +300,16 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
       if (i >= 2) wgslTimes.push(performance.now() - t);
       t = performance.now();
       await webnn(count);
-      if (i >= 2) nnTimes.push(performance.now() - t);
+      if (i >= 2) {
+        nnTimes.push(performance.now() - t);
+        phaseRuns.push(phase);
+      }
+    }
+    if (opt.breakdown) {
+      for (const name of new Set(phaseRuns.flatMap(p => Object.keys(p)))) {
+        const v = phaseRuns.map(p => p[name] ?? 0).sort((a, b) => a - b);
+        metrics[`webnn_phase_${name}_p50_ms`] = v[Math.ceil(v.length * .5) - 1]!;
+      }
     }
     for (const [prefix, times] of [['webnn', nnTimes], ['wgsl', wgslTimes]] as const) {
       times.sort((a, b) => a - b);
