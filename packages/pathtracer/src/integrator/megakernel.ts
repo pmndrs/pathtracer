@@ -19,7 +19,7 @@
  *     pt.setCamera(cam0);  encode(1);  ...  pt.nextFrame(cam1);  pt.encode(encoder, 1);     // the old camera is the previous one (motion)
  *     const { accum, planes } = pt.frameBuffers;                                              // or: const frame = await pt.readFrame();
  */
-import { ptRenderUntil, type PtRenderUntilResult, type PtStopOptions } from './render-until.ts';
+import { ptRenderAllocated, ptRenderUntil, type PtAllocatedOptions, type PtAllocatedResult, type PtRenderUntilResult, type PtStopOptions } from './render-until.ts';
 import { loadBlueNoise, rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, sceneFormatOf, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings, rtSetResourceTable, rtUsesResourceTable } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { BlueNoiseTexture, Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout, RtResourceTable } from '@pmndrs/raytracer';
@@ -720,6 +720,24 @@ export class PtMegakernel {
    * and stops when the target is met or `maxSamples` is reached. Continues from the current accumulator (call `reset` + `setSeed` first for a fresh image). Needs
    * `integrator.volumes.outputs`. Targets: `meanRelSe` (relative standard error of the image mean) and/or `pixelRelSe` (a quantile of the per-pixel relative error); see `PtStopOptions`.
    */
+  /** Clears the image and starts the next one on `seed` (V2.5c: the fresh render of `renderAllocated` must not reuse the pilot's samples). */
+  async restartFresh(seed: number): Promise<void> {
+    const encoder = this.device.createCommandEncoder({ label: 'pt restart' });
+    this.reset(encoder);
+    this.device.queue.submit([encoder.finish()]);
+    this.setSeed(seed);
+    await this.device.queue.onSubmittedWorkDone();
+  }
+
+  /**
+   * V2.5c: unbiased adaptive sampling ("allocate, then render fresh"): a uniform pilot sets per-pixel budgets, then a fresh image on `options.seed` spends them.
+   * Needs `integrator.volumes.outputs` and `volumes.adaptive`. The stopping-rule `renderUntil({ adaptive: true })` is biased low (-0.65..-0.82% measured); this is not (+0.03% +- 0.09%).
+   */
+  async renderAllocated(options: PtAllocatedOptions): Promise<PtAllocatedResult> {
+    if (!this.options.integrator?.volumes?.adaptive) throw new Error('PtMegakernel.renderAllocated: the kernel was built without integrator.volumes.adaptive');
+    return ptRenderAllocated({ renderUntil: (o) => this.renderUntil(o), restart: (seed) => this.restartFresh(seed) }, options);
+  }
+
   async renderUntil(options: PtStopOptions): Promise<PtRenderUntilResult> {
     if (!this.options.integrator?.volumes?.outputs) throw new Error('PtMegakernel.renderUntil: the kernel was built without integrator.volumes.outputs');
     const perSubmit = Math.max(1, options.passesPerSubmit ?? 8);
