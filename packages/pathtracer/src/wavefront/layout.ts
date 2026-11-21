@@ -124,6 +124,11 @@ export function ptwfRecordsPerSample(maxDepth: number): number {
   return 1 + maxDepth + 1;
 }
 
+/** Params ring size for a sample of `records` records: the default ring, or exactly one sample's worth when that is more (a ring that wraps inside one encoder keeps only the last records). */
+export function ptwfRingSlots(records: number): number {
+  return Math.max(PTWF_PARAM_SLOTS, records);
+}
+
 /** Dispatches one sample pass encodes: camera + init, then per iteration intersect, shade and (except the last) args + shadow. */
 export function ptwfDispatchesPerSample(maxDepth: number): number {
   return 2 + 2 * (maxDepth + 1) + 2 * maxDepth;

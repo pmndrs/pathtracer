@@ -36,7 +36,7 @@ import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
 import { PT_VOLUME_BINDING, PT_VOLUME_INDIRECTION_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_MEDIA_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid, ptVolumeMediaCompatible, ptVolumeMediaData } from '../volume/volume-wgsl.ts';
 import { createBlueNoiseTexture, createMajorantTexture, createSpectralTexture, createVolumeAtlasTextures, createVolumeSampler, createVolumeTexture, ptNeedsRayMasks, ptRaytracerModuleOptions, ptSecondaryIntegratorOptions, ptShadingModulesWgsl, validateBlueNoise, type PtImage, type PtLimits, type PtMegakernelOptions } from '../integrator/megakernel.ts';
-import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfStateBytes } from './layout.ts';
+import { PTWF_ARGS_BYTES, PTWF_ARGS_MAIN, PTWF_STRIDE, PTWF_WORKGROUP, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_HIT_VEC4, PTWF_INIT, PTWF_COUNT_IDLE, PTWF_COUNTERS, PTWF_PARAM_SLOTS, PTWF_RECORDS_PER_ENCODE, PTWF_SHADOW_VEC4, PTWF_START_ITER, ptwfBufferBytes, ptwfRecordsPerSample, ptwfRingSlots, ptwfStateBytes } from './layout.ts';
 import { PTWF_BINDING, ptwfArgsWgsl, ptwfCameraWgsl, ptwfIntersectWgsl, ptwfPrimaryWgsl, ptwfShadeWgsl, ptwfShadowWgsl, ptwfSortWgsl, ptwfUnsupported, ptwfVoFinishWgsl, type PtwfConfig } from './wavefront-wgsl.ts';
 
 const STORAGE = 0x80;
@@ -239,7 +239,9 @@ export class PtWavefront {
   private readonly pipelineSecondary: GPUComputePipeline | null;
   private readonly lodDepth: number;
   private readonly layouts: PtwfLayouts;
-  private readonly paramsBuffer: GPUBuffer;
+  private paramsBuffer: GPUBuffer;
+  /** Slots in the params ring: `PTWF_PARAM_SLOTS`, grown (`ensureRing`) when one sample needs more records than that (deep paths). */
+  private ringSlots = PTWF_PARAM_SLOTS;
   private readonly argsBuffer: GPUBuffer;
   private readonly fuzzTable: GPUBuffer | null;
   /** P2.32b: the `albedoCorrection: 'texture'` table (shade kernel, group 2 binding `PT_LAYER_CORR_BINDING`). */
@@ -383,7 +385,7 @@ export class PtWavefront {
     if (extra.volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
     if (extra.volumeMedia && resolved.volumes) {
       const data = ptVolumeMediaData(resolved.volumes);
-      kernel.mediaBuffer = device.createBuffer({ label: `${label} media`, size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      kernel.mediaBuffer = device.createBuffer({ label: `${label} media`, size: data.byteLength, usage: UNIFORM | COPY_DST });
       device.queue.writeBuffer(kernel.mediaBuffer, 0, data);
       kernel.mediaNow = resolved.volumes;
     }
@@ -585,6 +587,26 @@ export class PtWavefront {
     return Math.max(1, Math.floor(PTWF_PARAM_SLOTS / ptwfRecordsPerSample(this.iterDepth())));
   }
 
+  /**
+   * Makes the params ring hold at least `records` slots. The records of one encoder are all written (`queue.writeBuffer`) before it is submitted, so a ring that wraps
+   * inside one sample pass leaves only the last records (black image at maxDepth 4096). A deeper path therefore gets a bigger ring (256 B per slot: 1 MiB at 4096,
+   * 4 MiB at 16384) instead of a chunked submit; the dynamic offsets stay inside the same one-record binding. Depths <= `PTWF_PARAM_SLOTS - 2` never reallocate.
+   */
+  private ensureRing(records: number): void {
+    const want = ptwfRingSlots(records);
+    if (want <= this.ringSlots) return;
+    records = want;
+    const max = this.device.limits.maxBufferSize;
+    if (records * this.slotBytes > max) throw new RangeError(`PtWavefront.encode: ${records} params records of ${this.slotBytes} B exceed maxBufferSize ${max}: lower maxDepth or use refill`);
+    this.paramsBuffer.destroy();
+    this.frameParamsBuffer?.destroy();
+    this.ringSlots = records;
+    this.paramsBuffer = this.device.createBuffer({ label: 'ptwf params', size: this.slotBytes * records, usage: UNIFORM | COPY_DST });
+    if (this.frameParamsBuffer) this.frameParamsBuffer = this.device.createBuffer({ label: 'ptwf frame params', size: this.slotBytes * records, usage: UNIFORM | COPY_DST });
+    this.slot = 0;
+    this.ioGroups = null; // they bind the old buffers
+  }
+
   /** Depth iterations a sample can need: `maxDepth`, plus `maxVolumeDepth` with `volumes.separateDepth` (a medium scatter is an iteration that does not count toward `maxDepth`). */
   private iterDepth(): number {
     return this.options.integrator?.volumes?.separateDepth ? this.limits.maxDepth + Math.min(this.limits.maxVolumeDepth ?? this.limits.maxDepth, 16383) : this.limits.maxDepth;
@@ -623,7 +645,8 @@ export class PtWavefront {
     if (this.options.integrator?.frame && passes !== 1) throw new RangeError('PtWavefront.encode: with integrator.frame one encode is one frame (one sample, one previous camera): passes must be 1');
     // One sample needs maxDepth + 2 uniform records; past the ring the records of a single sample overwrite each other and the image came out black (found
     // by the volumes regression sweep at maxDepth 4096). Refuse instead of rendering nothing; refill mode reuses 4 records and has no such limit.
-    if (ptwfRecordsPerSample(this.iterDepth()) > PTWF_PARAM_SLOTS) throw new RangeError(`PtWavefront.encode: maxDepth ${this.iterDepth()} needs ${ptwfRecordsPerSample(this.iterDepth())} params records per sample, past the ${PTWF_PARAM_SLOTS}-slot ring: use refill (any depth), the megakernel, or maxDepth <= ${PTWF_PARAM_SLOTS - 2}`);
+    // (deep paths: the ring grows to hold one whole sample, see `ensureRing`; one `encode` is then one sample pass)
+    this.ensureRing(ptwfRecordsPerSample(this.iterDepth()));
     if (passes > this.maxPassesPerEncode()) throw new RangeError(`PtWavefront.encode: at most ${this.maxPassesPerEncode()} passes per call at maxDepth ${this.iterDepth()}`);
     this.ioGroups ??= this.makeIoGroups(b);
     this.argsGroup ??= this.device.createBindGroup({ label: 'ptwf args', layout: this.layouts.args, entries: [{ binding: 0, resource: { buffer: this.argsBuffer } }] });
@@ -651,7 +674,7 @@ export class PtWavefront {
     const frame = !!this.options.integrator?.frame;
     const voOut = !!this.options.integrator?.volumes?.outputs;
     const record = (sampleIndex: number, iter: number): void => {
-      offset = (this.slot % PTWF_PARAM_SLOTS) * this.slotBytes;
+      offset = (this.slot % this.ringSlots) * this.slotBytes;
       this.slot++;
       this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(sampleIndex, iter));
       // the previous camera is read by the depth-0 shade only (the motion of the primary hit): one record per frame, at the slot of iteration 0
@@ -744,7 +767,7 @@ export class PtWavefront {
     this.slot += PTWF_RECORDS_PER_ENCODE;
     const offsets: number[] = [];
     for (let i = 0; i < PTWF_RECORDS_PER_ENCODE; i++) {
-      const offset = ((base + i) % PTWF_PARAM_SLOTS) * this.slotBytes;
+      const offset = ((base + i) % this.ringSlots) * this.slotBytes;
       offsets.push(offset);
       this.device.queue.writeBuffer(this.paramsBuffer, offset, this.paramsRecord(this.samples, i)); // iter = 0, 1 (parity), 2, 3 (start | parity)
     }

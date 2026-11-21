@@ -275,3 +275,12 @@ describe('wavefront scheduling twins (P3.3, P3.4, P3.10, R1b)', () => {
     for (let depth = 0; depth < 8; depth++) expect([ptwfLodClass(depth, 1), ptwfLodClass(depth, 3)]).toEqual([depth < 1 ? 'first' : 'second', depth < 3 ? 'first' : 'second']);
   });
 });
+
+import { ptwfRingSlots as ringSlotsFor, ptwfRecordsPerSample as recordsFor, PTWF_PARAM_SLOTS as RING } from './layout.ts';
+import { test as t2, expect as e2 } from 'vitest';
+t2('params ring grows only for samples deeper than it', () => {
+  e2(ringSlotsFor(recordsFor(100))).toBe(RING);
+  e2(ringSlotsFor(recordsFor(RING - 2))).toBe(RING);
+  e2(ringSlotsFor(recordsFor(4096))).toBe(4098);
+  e2(ringSlotsFor(recordsFor(16383 + 16))).toBe(recordsFor(16383 + 16));
+});
