@@ -31,7 +31,7 @@ import { ptFrameAddWgsl, ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } fr
 import { PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL } from '../restir/restir-wgsl.ts';
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
 import { ptSpectralWgsl } from '../spectral/spectral-wgsl.ts';
-import { ptVolumeRatioShadows, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
+import { ptVolPhaseEvalExpr, ptVolPhaseSampleWgsl, ptVolumeRatioShadows, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
 /** Why a scene or option cannot run on the wavefront scheduler yet (slice 1), or null. */
@@ -40,6 +40,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // P5 follow-up (V270): `integrator.volumes` (the intersect kernel runs free flight and the interface skips, shade handles the scatter vertex, the shadow kernel the transmittance) and
   // `integrator.spectral` (the wavelengths are recomputed from pixel and sample in shade; one hero bit in the path state) run on the wavefront.
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
+  if (o.volumes?.outputs) return 'integrator.volumes.outputs (the order split, primary transmittance and second moment are megakernel only: P5.v15 / P5.v16)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
   if (o.restir && o.restirShared) return 'integrator.restir.sharedHit (the shared primary hit joins the wavefront camera kernel: TASKS P4.2a follow-up)';
@@ -739,10 +740,7 @@ ${ind}ptwfQueue[2u * n + ss] = path;
             if (ld.valid) {
 ${shadowQueue('                ')}            }
         }
-        let gM = ptVolMedium(curMed).g;
-        let wiM = ptHgSample(woM, gM, ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION)));
-        prevPdf = ptHgPhase(dot(woM, wiM), gM);
-        if (rrStart > 0u && depth >= rrStart) {
+${ptVolPhaseSampleWgsl(o.volumes as NonNullable<typeof o.volumes>, '        ', 'curMed', 'woM', 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION))', 'wiM', 'prevPdf')}        if (rrStart > 0u && depth >= rrStart) {
             let rrBeta = beta * etaScale;
             let m = ptMax3(rrBeta);
             if (m < 1.0) {
@@ -846,7 +844,7 @@ fn ptwfSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex:
     if (!li.valid || !(li.pdf > 0.0)) {
         return none;
     }
-    let ph = ptHgPhase(dot(wo, li.wi), ptVolMedium(id).g);
+    let ph = ${ptVolPhaseEvalExpr(o.volumes as NonNullable<typeof o.volumes>, 'id', 'dot(wo, li.wi)')};
     if (!(ph > 0.0)) {
         return none;
     }

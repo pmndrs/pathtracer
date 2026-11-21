@@ -2,6 +2,7 @@ import { gridDensity, gridWorldToIndex, slabSingleScatter } from '@pmndrs/pathtr
 import { compose, rotationX, scaling, translation } from '../geometry.ts';
 import type { MediumDesc, MeshDesc, SceneDesc } from '../schema.ts';
 import { cornell } from '../tier0/cornell.ts';
+import { cloudScenes } from './clouds.ts';
 
 /**
  * Participating-media scenes (P5, docs/internal/design/volumes.md).
@@ -238,4 +239,4 @@ export const volVdbSmoke: SceneDesc = {
 
 export const volumeCheckScenes: readonly SceneDesc[] = [volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud, volVdbSmoke];
-export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes];
+export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes, ...cloudScenes];

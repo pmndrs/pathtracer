@@ -9,6 +9,7 @@
  */
 import type { PtMedium, PtVolumeOptions } from './volume.ts';
 import { ptMediumMajorant } from './volume.ts';
+import { ptPhaseValidate } from './phase.ts';
 
 export const PT_VOLUME_BINDING = 16;
 /** The coarse majorant grid of `majorant: 'brick'` (`r32float` 3D texture, one texel per 8^3 voxels). */
@@ -19,6 +20,9 @@ const f32Lit = (v: number): string => {
   if (!Number.isFinite(f)) throw new RangeError(`volume table value ${v} is not finite`);
   return Number.isInteger(f) && Math.abs(f) < 1e9 ? `${f}.0` : String(f);
 };
+
+/** True when a medium has a second phase lobe (P5.v14): the media table gets a 7th row per medium and the phase calls go through `ptVolPhase` / `ptVolPhaseSample`. */
+export const ptVolumeHasLobes = (v: PtVolumeOptions | null | undefined): boolean => !!v && v.media.some((m) => !!m.lobes && m.lobes.w > 0);
 
 /** True when the options have a grid medium (the kernel needs the 3D texture binding). */
 export const ptVolumeHasGrid = (v: PtVolumeOptions | null | undefined): boolean => !!v && v.media.some((m) => m.grid);
@@ -31,6 +35,10 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
     if (!(m.g > -1 && m.g < 1)) throw new RangeError(`integrator.volumes: medium ${i} g ${m.g} is outside (-1, 1)`);
     if (m.grid && !(m.grid.densityMax >= 0)) throw new RangeError(`integrator.volumes: medium ${i} has an invalid grid densityMax`);
     if (m.grid && !(Math.max(...m.sigmaT) > 0)) throw new RangeError(`integrator.volumes: grid medium ${i} has no extinction (sigmaT is 0)`);
+    if (m.lobes) {
+      ptPhaseValidate(m.lobes, `integrator.volumes: medium ${i} phase`);
+      if (m.lobes.gA !== m.g) throw new RangeError(`integrator.volumes: medium ${i} has g ${m.g} but its lobe A is ${m.lobes.gA}`);
+    }
   });
   const grids = v.media.filter((m) => m.grid);
   if (grids.length > 1) {
@@ -43,7 +51,7 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
   if (v.cameraMedium && v.media[v.cameraMedium - 1]?.grid) throw new RangeError('integrator.volumes: the camera medium must be homogeneous (a grid medium is bounded by its mesh)');
 }
 
-function mediumVec4s(m: PtMedium): string[] {
+function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
   const mu = ptMediumMajorant(m);
   const grid = m.grid;
   const w = grid ? grid.worldToIndex : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -55,6 +63,7 @@ function mediumVec4s(m: PtMedium): string[] {
     row(w.slice(0, 4)),
     row(w.slice(4, 8)),
     row(w.slice(8, 12)),
+    ...(lobes ? [row(m.lobes && m.lobes.w > 0 ? [m.lobes.gB, m.lobes.w, m.lobes.alpha, 0] : [0, 0, 0, 0])] : []),
   ];
 }
 
@@ -65,8 +74,9 @@ function mediumVec4s(m: PtMedium): string[] {
  * the brick DDA (needs `bind`), `flight` delta tracking (`ptVolSample`), `tr` shadow-ray transmittance (walk, `ptOffsetOrigin`), `nee` next-event estimation at a
  * medium vertex (light sampling, MIS). No argument = all of them, in the order the megakernel appends them.
  */
-export type PtVolumePart = 'seedOf' | 'bind' | 'tables' | 'hg' | 'density' | 'flight' | 'tr' | 'nee';
-export const PT_VOLUME_ALL_PARTS: readonly PtVolumePart[] = ['seedOf', 'bind', 'tables', 'hg', 'density', 'flight', 'tr', 'nee'];
+export type PtVolumePart = 'seedOf' | 'bind' | 'tables' | 'hg' | 'density' | 'flight' | 'tr' | 'nee' | 'outputs';
+/** `outputs` emits text only with `volumes.outputs` (megakernel; the wavefront refuses the option and never asks for the part). */
+export const PT_VOLUME_ALL_PARTS: readonly PtVolumePart[] = ['seedOf', 'bind', 'tables', 'hg', 'density', 'flight', 'tr', 'nee', 'outputs'];
 
 /**
  * True when a shadow ray's transmittance is ESTIMATED (ratio tracking: a grid medium, or `shadowTracking: 'ratio'`), so it draws random numbers. Such a ray then
@@ -81,6 +91,8 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const grid = ptVolumeHasGrid(v);
   const ratio = ptVolumeRatioShadows(v);
   const brick = grid && v.majorant === 'brick';
+  const lobes = ptVolumeHasLobes(v);
+  const stride = lobes ? 7 : 6;
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
   const matRow = (m: (typeof mats)[number]): string => `vec4u(${m.interior}u, ${m.exterior}u, ${m.interior !== 0 || m.exterior !== 0 || m.boundary ? 1 : 0}u, ${m.boundary ? 1 : 0}u)`;
   const chunks: string[] = [];
@@ -101,7 +113,7 @@ fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
 ` : ''}`);
   }
   if (has('tables')) chunks.push(/* wgsl */ `
-var<private> ptVolMedia: array<vec4f, ${v.media.length * 6}> = array<vec4f, ${v.media.length * 6}>(${v.media.flatMap(mediumVec4s).join(', ')});
+var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f, ${v.media.length * stride}>(${v.media.flatMap((m) => mediumVec4s(m, lobes)).join(', ')});
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
 var<private> ptVolState: u32;
 
@@ -122,7 +134,7 @@ struct PtVolEvent {
 }
 
 fn ptVolMedium(id: u32) -> PtVolMedium {
-    let b = (id - 1u) * 6u;
+    let b = (id - 1u) * ${stride}u;
     let a0 = ptVolMedia[b];
     let a1 = ptVolMedia[b + 1u];
     return PtVolMedium(a0.xyz, a0.w, a1.xyz, a1.w, ptVolMedia[b + 2u], ptVolMedia[b + 3u], ptVolMedia[b + 4u], ptVolMedia[b + 5u]);
@@ -168,7 +180,7 @@ fn ptHgSample(wo: vec3f, g: f32, u: vec2f) -> vec3f {
     let phi = 6.283185307179586 * u.y;
     return ptFromLocal(ptFrameFromNormal(wo), vec3f(sinT * cos(phi), sinT * sin(phi), cosT));
 }
-`);
+${lobes ? PT_VOL_LOBES_WGSL(stride) : ''}`);
   if (has('density')) chunks.push(/* wgsl */ `
 fn ptVolDensity(m: PtVolMedium, p: vec3f) -> f32 {
 ${grid ? `    if (m.info.x == 0.0) {
@@ -453,7 +465,7 @@ fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u
     if (!li.valid || !(li.pdf > 0.0)) {
         return vec3f(0.0);
     }
-    let ph = ptHgPhase(dot(wo, li.wi), ptVolMedium(id).g);
+    let ph = ${ptVolPhaseEvalExpr(v, 'id', 'dot(wo, li.wi)')};
     if (!(ph > 0.0)) {
         return vec3f(0.0);
     }
@@ -476,5 +488,156 @@ fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u
     return li.radiance * ph * tr * (w / pl);
 }
 `);
+  if (has('outputs') && v.outputs) chunks.push(/* wgsl */ `
+// P5.v15 / P5.v16 volume outputs (megakernel): per-sample values that ptMain adds to the accumulator tail.
+var<private> ptVoRad01: vec3f;
+var<private> ptVoCaptured: bool;
+var<private> ptVoT: f32;
+var<private> ptVoDist: f32;
+var<private> ptVoHas: f32;
+
+// Transmittance of the camera ray through the media up to the first SOLID surface (interface surfaces pass, a solid one ends the march with the
+// transmittance so far: alpha of the media in front of it). The shadow rays' estimator (closed form or ratio tracking, brick majorant when on) on its own
+// stream, so the path's numbers are those of the kernel without outputs.
+fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
+    ptVoRad01 = vec3f(0.0);
+    ptVoCaptured = false;
+    ptVoDist = 0.0;
+    ptVoHas = 0.0;
+    let keep = ptVolState;
+    ptVolState = ptVolSeedOf(pixelSeed ^ 0x5bd1e995u, sampleIndex ^ 0x27d4eb2fu);
+    var ray = ray0;
+    var med = med0;
+    var tr = vec3f(1.0);
+    for (var i = 0u; i < 256u; i++) {
+        let hit = rtClosest(ray, RT_MASK_ALL);
+        let seg = select(ray.tMax, hit.t, hit.t >= 0.0);
+        if (med != 0u) {
+            tr = tr * ptVolTrSegment(med, ray.origin, ray.direction, seg);
+        }
+        if (hit.t < 0.0 || !(ptMax3(tr) > 0.0)) {
+            break;
+        }
+        let mv = ptVolMat(hit.material);
+        if (mv.w == 0u) {
+            break;
+        }
+        med = select(mv.y, mv.x, dot(ray.direction, hit.normal) < 0.0);
+        ray = RtRay(ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+    }
+    ptVoT = dot(max(tr, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
+    ptVolState = keep;
+}
+
+// Called just before a path's depth goes from 1 to 2: everything added so far is orders 0 and 1.
+fn ptVoCapture(depth: u32, radiance: vec3f) {
+    if (depth == 1u && !ptVoCaptured) {
+        ptVoRad01 = radiance;
+        ptVoCaptured = true;
+    }
+}
+
+fn ptVoEnd(radiance: vec3f) {
+    if (!ptVoCaptured) {
+        ptVoRad01 = radiance;
+    }
+}
+
+fn ptVoAccumulate(index: u32, n: u32, l: vec3f) {
+    ptAccum[n + index] = ptAccum[n + index] + vec4f(ptVoRad01, ptVoT);
+    ptAccum[2u * n + index] = ptAccum[2u * n + index] + vec4f(l * l, ptVoDist);
+    ptAccum[3u * n + index] = ptAccum[3u * n + index] + vec4f(ptVoHas, 0.0, 0.0, 0.0);
+}
+`);
   return chunks.join('');
 }
+
+/** The phase density at a medium vertex as a WGSL expression: one HG lobe (the text every kernel had before P5.v14) or the two-lobe mixture. */
+export function ptVolPhaseEvalExpr(v: PtVolumeOptions, id: string, cosTheta: string): string {
+  return ptVolumeHasLobes(v) ? `ptVolPhase(${id}, ${cosTheta})` : `ptHgPhase(${cosTheta}, ptVolMedium(${id}).g)`;
+}
+
+/**
+ * The phase sample of a medium vertex (both schedulers): declares `wiName` and sets `pdfTarget` (the MIS pdf of the next hit). Without lobes this is the
+ * exact text the kernels had before P5.v14 (`gM`, `ptHgSample`, `ptHgPhase`).
+ */
+export function ptVolPhaseSampleWgsl(v: PtVolumeOptions, indent: string, med: string, wo: string, u: string, wiName: string, pdfTarget: string): string {
+  if (!ptVolumeHasLobes(v)) return `${indent}let gM = ptVolMedium(${med}).g;\n${indent}let ${wiName} = ptHgSample(${wo}, gM, ${u});\n${indent}${pdfTarget} = ptHgPhase(dot(${wo}, ${wiName}), gM);\n`;
+  return `${indent}let ${wiName} = ptVolPhaseSample(${med}, ${wo}, ${u});\n${indent}${pdfTarget} = ptVolPhase(${med}, dot(${wo}, ${wiName}));\n`;
+}
+
+/**
+ * Two-lobe phase (P5.v14, twin of `phase.ts`): `(1 - w) HG(gA) + w Draine(gB, alpha)`, gA in row 1 (`m.g`), (gB, w, alpha) in row 6 of the medium. `u` in the
+ * lobe functions is the cosine with the FORWARD direction (-wo). HG is sampled in a form of 1 - u that does not cancel at a sub-degree forward peak (the Mie
+ * fit's HG lobe has g 0.995 at 20 um); the Draine lobe by the exact CDF inversion of Jendersie and d'Eon 2023 (supplemental Eq. 6). The g = 0 Draine lobe (Cardano in the TS twin) is not compiled
+ * (kernel size: grid + brick + lobes is at the 50 KB class); `ptPhaseValidate` refuses |gB| < 0.01 with alpha > 0.
+ */
+const PT_VOL_LOBES_WGSL = (stride: number): string => /* wgsl */ `
+fn ptVolLobe(id: u32) -> vec4f {
+    return ptVolMedia[(id - 1u) * ${stride}u + 6u];
+}
+
+fn ptVolDraine(u: f32, g: f32, a: f32) -> f32 {
+    let g2 = g * g;
+    let fac = 1.0 + g2 - 2.0 * g * u;
+    return 0.07957747154594767 * (1.0 - g2) * (1.0 + a * u * u) / ((1.0 + a * (1.0 + 2.0 * g2) / 3.0) * fac * sqrt(max(fac, 1.0e-30)));
+}
+
+fn ptVolPhase(id: u32, cosTheta: f32) -> f32 {
+    let l = ptVolLobe(id);
+    let u = -cosTheta;
+    return (1.0 - l.y) * ptVolDraine(u, ptVolMedium(id).g, 0.0) + l.y * ptVolDraine(u, l.x, l.z);
+}
+
+fn ptVolCbrt(x: f32) -> f32 {
+    return sign(x) * pow(abs(x), 0.3333333333333333);
+}
+
+// 1 - u of a Draine sample (alpha > 0, |g| >= 0.01: ptPhaseValidate), u = cosine with the forward direction.
+fn ptVolDraineOneMinusU(g: f32, a: f32, xi: f32) -> f32 {
+    let g2 = g * g;
+    let g4 = g2 * g2;
+    let t0 = a - a * g2;
+    let t1 = a * g4 - a;
+    let t2 = -3.0 * (4.0 * (g4 - g2) + t1 * (1.0 + g2));
+    let t3 = g * (2.0 * xi - 1.0);
+    let t4 = 3.0 * g2 * (1.0 + t3) + a * (2.0 + g2 * (1.0 + (1.0 + 2.0 * g2) * t3));
+    let t5 = t0 * (t1 * t2 + t4 * t4) + t1 * t1 * t1;
+    let t6 = t0 * 4.0 * (g4 - g2);
+    let t7 = ptVolCbrt(t5 + sqrt(max(0.0, t5 * t5 - t6 * t6 * t6)));
+    let t8 = 2.0 * (t1 + t6 / t7 + t7) / t0;
+    let t9 = sqrt(max(0.0, 6.0 * (1.0 + g2) + t8));
+    let r = sqrt(max(0.0, 6.0 * (1.0 + g2) - t8 + 8.0 * t4 / (t0 * t9))) - t9;
+    return 1.0 - clamp(g * 0.5 + 0.5 / g - r * r / (8.0 * g), -1.0, 1.0);
+}
+
+fn ptVolHgOneMinusU(g: f32, xi: f32) -> f32 {
+    if (abs(g) < 1.0e-3) {
+        return 2.0 - 2.0 * xi;
+    }
+    let den = 1.0 - g + 2.0 * g * xi;
+    let t = (1.0 - g * g) / den;
+    return (1.0 - g) * (1.0 - xi) * (t + 1.0 - g) / den;
+}
+
+fn ptVolPhaseSample(id: u32, wo: vec3f, u2: vec2f) -> vec3f {
+    let l = ptVolLobe(id);
+    var xi = u2.x;
+    var x = 0.0;
+    if (xi < l.y) {
+        xi = min(xi / l.y, 0.99999994);
+        if (l.z < 1.0e-3) {
+            x = ptVolHgOneMinusU(l.x, xi);
+        } else {
+            x = ptVolDraineOneMinusU(l.x, l.z, xi);
+        }
+    } else {
+        xi = min((xi - l.y) / (1.0 - l.y), 0.99999994);
+        x = ptVolHgOneMinusU(ptVolMedium(id).g, xi);
+    }
+    x = clamp(x, 0.0, 2.0);
+    let sinT = sqrt(max(0.0, x * (2.0 - x)));
+    let phi = 6.283185307179586 * u2.y;
+    return ptFromLocal(ptFrameFromNormal(-wo), vec3f(sinT * cos(phi), sinT * sin(phi), 1.0 - x));
+}
+`;

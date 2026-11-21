@@ -39,6 +39,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   volumeShadow?: 'analytic' | 'ratio';
   /** P5 grid media: `global` (default) or `brick` majorant (V243 A/B). */
   volumeMajorant?: 'global' | 'brick';
+  /** P5.v15 / P5.v16: `volumes.outputs` (megakernel): uploads `vol_order01`, `vol_orders2plus`, `vol_transmittance`, `vol_stderr`, `vol_first_scatter` next to the image. */
+  volumeOutputs?: boolean;
   /** maxDepth override (the scene's own otherwise). */
   maxDepth?: number;
   /** rrStartDepth override: a number, or 0 for off; the scene's own otherwise. */
@@ -265,6 +267,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.alphaShadow && settings.alphaShadow !== 'policy' ? { alphaShadow: settings.alphaShadow, ...(settings.alphaShadow === 'roulette' ? { alphaRoulette: settings.alphaRoulette ?? 0.25 } : {}), ...(settings.alphaShadow === 'firstK' ? { alphaFirstK: settings.alphaFirstK ?? 1 } : {}), ...(settings.alphaShadow === 'transmit' ? { alphaTransmit: settings.alphaTransmit ?? 0.5 } : {}) } : {}),
         ...(settings.volumeShadow ? { volumeShadow: settings.volumeShadow } : {}),
         ...(settings.volumeMajorant ? { volumeMajorant: settings.volumeMajorant } : {}),
+        ...(settings.volumeOutputs ? { volumeOutputs: 1 } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         ...(settings.bvh && Object.keys(settings.bvh).length ? { bvh: settings.bvh } : {}),
@@ -438,7 +441,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const volumes = sceneVolumes(scene, input, densityFiles);
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
     if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;
@@ -545,6 +548,24 @@ export class PtMegakernelAdapter implements RendererAdapter {
       plane('aov_normal', aovs.normal, 3, aovs.width, aovs.height);
       plane('aov_depth', viewDepth, 1, aovs.width, aovs.height);
       this.outputStats.aov_coverage = aovs.coverage.reduce((a, b) => a + b, 0) / Math.max(1, aovs.coverage.length);
+    }
+    if (this.settings.volumeOutputs && kernel instanceof PtMegakernel) {
+      const v = await kernel.readVolumeOutputs();
+      const rest = v.radiance.map((x, i) => x - (v.order01[i] as number));
+      plane('vol_order01', v.order01, 3, v.width, v.height);
+      plane('vol_orders2plus', rest, 3, v.width, v.height);
+      plane('vol_transmittance', v.transmittance, 1, v.width, v.height);
+      plane('vol_stderr', v.stdError, 3, v.width, v.height);
+      plane('vol_first_scatter', v.firstScatterDistance, 1, v.width, v.height);
+      const mean = (a: Float32Array) => a.reduce((s, x) => s + x, 0) / Math.max(1, a.length);
+      this.outputStats.vol_order01_mean = mean(v.order01);
+      this.outputStats.vol_orders2plus_mean = mean(rest);
+      this.outputStats.vol_transmittance_mean = mean(v.transmittance);
+      this.outputStats.vol_scatter_fraction = mean(v.scatterFraction);
+      // standard error of the IMAGE mean from the per-pixel errors (pixels independent): sqrt(sum se^2) / n, per channel averaged
+      let se2 = 0;
+      for (const x of v.stdError) se2 += x * x;
+      this.outputStats.vol_mean_stderr = Math.sqrt(se2 / 3) / (v.width * v.height);
     }
     if (this.settings.counters) {
       const counters = await kernel.readCounters();

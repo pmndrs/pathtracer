@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabTransmittance, transmittance } from './volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -143,6 +143,24 @@ describe('closed forms', () => {
   });
   it('an absorber slab has no scatter term', () => {
     expect(slabSingleScatter(1.5, 0, 0.4, 0.7, 0.8, 1, 50)).toBeCloseTo(Math.exp((-1.5 * 0.7) / 0.8), 10);
+    expect(slabSingleScatterPhase(1.5, 0, (c) => hgPhase(c, 0.4), 0.7, 0.8)).toBeCloseTo(Math.exp((-1.5 * 0.7) / 0.8), 12);
+  });
+  it('the peak-resolved quadrature agrees with a fine run of the uniform one at moderate g', () => {
+    // the uniform-cosine quadrature converges slowly (at its defaults it reads 0.8491005 here, 5e-5 low); refined to (400, 2000, 64) steps it reads
+    // 0.8491434 (normal) and 0.7491730 (cos 0.6), the values below (that run takes 8 s, so its result is pinned instead)
+    expect(slabSingleScatterPhase(0.4, 0.8, (c) => hgPhase(c, 0.5), 1, 1)).toBeCloseTo(0.8491434, 6);
+    expect(slabSingleScatterPhase(0.4, 0.8, (c) => hgPhase(c, 0.5), 1, 0.6)).toBeCloseTo(0.749173, 6);
+  });
+  it('is converged at the forward peak of g 0.99 and conserves energy in a thin non-absorbing slab', () => {
+    const coarse = slabSingleScatterPhase(0.4, 0.8, (c) => hgPhase(c, 0.99), 1, 0.6, 1, 1024, 128);
+    const fine = slabSingleScatterPhase(0.4, 0.8, (c) => hgPhase(c, 0.99), 1, 0.6, 1, 4096, 512);
+    expect(Math.abs(coarse - fine)).toBeLessThan(1e-6);
+    for (const g of [0, 0.85, 0.99]) {
+      // the deficit is the multiple scattering, O(tau^2): 1.9e-7 for isotropic at tau 2e-4
+      const v = slabSingleScatterPhase(0.0002, 1, (c) => hgPhase(c, g), 1, 1);
+      expect(v).toBeGreaterThan(1 - 1e-6);
+      expect(v).toBeLessThanOrEqual(1 + 1e-7);
+    }
   });
 });
 
@@ -195,5 +213,27 @@ describe('brick majorants and the DDA twin', () => {
   it('a ray outside the support box has no segments', () => {
     expect(ddaSegments(mj.resolution, [-50, 5, 5], [0, 1, 0], 100)).toEqual([]);
     expect(ddaSegments(mj.resolution, [5, 5, 5], [1, 0, 0], 0)).toEqual([]);
+  });
+});
+
+describe('volume outputs decoding (P5.v15 / P5.v16)', () => {
+  it('averages the planes, derives the standard error and the conditional first-scatter distance', () => {
+    const w = 2, h = 1, n = w * h, N = 4;
+    const sums = new Float32Array(n * 4 * (1 + PT_VOLUME_OUTPUT_VEC4));
+    // pixel 0: samples 1, 1, 3, 3 in every channel: mean 2, E[L^2] 5, variance 1, se = sqrt(1 / 3)
+    for (let c = 0; c < 3; c++) { sums[c] = 8; sums[(2 * n) * 4 + c] = 20; sums[n * 4 + c] = 4; }
+    sums[3] = N;
+    sums[n * 4 + 3] = 2; // transmittance sum
+    sums[(2 * n) * 4 + 3] = 30; // first-scatter distance sum over the 3 samples that scattered
+    sums[(3 * n) * 4] = 3;
+    const v = ptDecodeVolumeOutputs(sums, w, h, N);
+    expect(v.radiance[0]).toBeCloseTo(2, 6);
+    expect(v.order01[0]).toBeCloseTo(1, 6);
+    expect(v.stdError[0]).toBeCloseTo(Math.sqrt(1 / 3), 6);
+    expect(v.transmittance[0]).toBeCloseTo(0.5, 6);
+    expect(v.firstScatterDistance[0]).toBeCloseTo(10, 6);
+    expect(v.scatterFraction[0]).toBeCloseTo(0.75, 6);
+    expect(v.firstScatterDistance[1]).toBe(0);
+    expect(() => ptDecodeVolumeOutputs(new Float32Array(8), w, h, N)).toThrow(RangeError);
   });
 });

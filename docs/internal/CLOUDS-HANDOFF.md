@@ -132,4 +132,9 @@ _(nothing yet)_
 
 ## Requests back to clouds
 
-_(none yet)_
+- **2026-11-21, Mie fit constants (affects the clouds runtime today).** In the paper's large-particle fit (supplemental, Eqs. 8 and 10) the constants
+  0.428934 and 0.665888 sit INSIDE the exponent: `gD = exp(-2.20679 / (d + 3.91029) - 0.428934)`, `wD = exp(-0.599085 / (d - 0.641583) - 0.665888)`.
+  Checked against the supplemental PDF (pdftotext of research.nvidia.com/labs/rtr/approximate-mie/publications/approximate-mie-supplemental.pdf, section 3.1)
+  and Blender Cycles (`phase_mie_fitted_parameters`, volume_util.h), which agree. `docs/research/approximate-mie.md` lines 23, 25, 90, 92 and
+  `packages/runtime/src/runtime.ts:651, 653` subtract them OUTSIDE. At d = 20 um that gives gD 0.483 instead of 0.594 and wD 0.304 instead of 0.498
+  (mixture mean cosine 0.896 instead of 0.879). Please fix both, and re-check any fit or tuning done against the HG + Draine option.

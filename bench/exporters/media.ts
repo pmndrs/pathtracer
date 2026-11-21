@@ -27,6 +27,7 @@ const vec = (v: readonly number[]): string => v.map(num).join(' ');
 
 /** pbrt `MakeNamedMedium` lines (an `AttributeBegin` block sets the medium frame for a grid). */
 export function pbrtMedium(name: string, m: MediumDesc, transform: Mat4 | undefined, assetsDir: string): string[] {
+  if (m.phase) throw new Error(`pbrt: medium '${name}' has a ${m.phase.type} phase function; pbrt-v4 only has one HG lobe (P5.v14 references: Mitsuba blendphase for hg2, Cycles for Draine / Mie)`);
   const common = `"rgb sigma_a" [ ${vec(m.sigmaA)} ] "rgb sigma_s" [ ${vec(m.sigmaS)} ] "float scale" ${num(m.scale ?? 1)} "float g" ${num(m.g ?? 0)}`;
   if (m.type === 'homogeneous') return [`MakeNamedMedium "${name}" "string type" "homogeneous" ${common}`];
   const [nx, ny, nz] = m.resolution;
@@ -59,7 +60,11 @@ export function mitsubaMedium(name: string, m: MediumDesc, transform: Mat4 | und
   const scale = m.scale ?? 1;
   const sigmaT = [0, 1, 2].map((i) => (m.sigmaA[i] as number) + (m.sigmaS[i] as number));
   const albedo = sigmaT.map((t, i) => (t > 0 ? (m.sigmaS[i] as number) / t : 0));
-  const phase = `<phase type="hg"><float name="g" value="${num(m.g ?? 0)}"/></phase>`;
+  if (m.phase && m.phase.type !== 'hg2') throw new Error(`mitsuba: medium '${name}' has a ${m.phase.type} phase function; Mitsuba 3 has no Draine lobe (use Cycles)`);
+  // blendphase `weight` is the weight of the SECOND child
+  const phase = m.phase
+    ? `<phase type="blendphase"><float name="weight" value="${num(m.phase.w2)}"/><phase type="hg"><float name="g" value="${num(m.phase.g1)}"/></phase><phase type="hg"><float name="g" value="${num(m.phase.g2)}"/></phase></phase>`
+    : `<phase type="hg"><float name="g" value="${num(m.g ?? 0)}"/></phase>`;
   const sMax = Math.max(...sigmaT);
   if (m.type === 'homogeneous') {
     // `rgb` on a spectrum-typed medium parameter is a reflectance in [0, 1]: sigma_t = scale * rgb with rgb = sigma / max(sigma)

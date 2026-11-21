@@ -89,3 +89,42 @@ describe('integrator.volumes (P5)', () => {
     expect(ptwfUnsupported({ volumes: homog })).toBeNull();
   });
 });
+
+describe('P5.v14 phase lobes and P5.v15 / P5.v16 outputs at the kernel-text level', () => {
+  const lobes = { gA: 0.2, gB: 0.85, w: 0.4, alpha: 0 };
+  const twoLobe: PtVolumeOptions = { ...gridded, media: [{ ...gridded.media[0]!, g: 0.2, lobes }] };
+  const withOut: PtVolumeOptions = { ...gridded, outputs: true };
+
+  it('a lobe with weight 0 is one HG lobe: the text of the plain kernel', () => {
+    expect(build({ ...gridded, media: [{ ...gridded.media[0]!, lobes: { gA: 0.3, gB: 0.9, w: 0, alpha: 0 } }] })).toBe(build(gridded));
+  });
+  it('two lobes add a 7th table row per medium and route the phase sample and the NEE density through the mixture', () => {
+    const text = build(twoLobe);
+    for (const needle of ['fn ptVolPhaseSample(', 'fn ptVolDraineOneMinusU(', 'ptVolPhaseSample(curMed, woM,', 'prevPdf = ptVolPhase(curMed,', 'let ph = ptVolPhase(id, dot(wo, li.wi));', 'array<vec4f, 7>', '(id - 1u) * 7u']) expect(text).toContain(needle);
+    expect(text).not.toContain('let gM = ');
+    expect(balanced(text)).toBe(true);
+    expect([...declaredIdentifiers(ptVolumeWgsl(twoLobe))].filter((n) => RESERVED.has(n))).toEqual([]);
+    const { code } = ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: { ...twoLobe, majorant: 'brick' } } });
+    expect(code.length).toBeLessThan(50_000);
+  });
+  it('the wavefront shade kernel takes the lobes too', () => {
+    expect(ptwfUnsupported({ volumes: twoLobe })).toBeNull();
+  });
+  it('lobe A must be the medium g, lobes are validated', () => {
+    expect(() => ptVolumeValidate({ ...gridded, media: [{ ...gridded.media[0]!, g: 0.3, lobes }] })).toThrow(/lobe A/);
+    expect(() => ptVolumeValidate({ ...gridded, media: [{ ...gridded.media[0]!, g: 0.2, lobes: { ...lobes, w: 1.5 } }] })).toThrow(/weight/);
+  });
+  it('outputs add the order capture, the primary transmittance march and the tail writes, megakernel only', () => {
+    const text = build(withOut);
+    for (const needle of ['ptVoBegin(ray, curMed, pixelSeed, sampleIndex);', 'ptVoCapture(depth, radiance);', 'ptVoEnd(radiance);', 'ptVoAccumulate(index, dims.x * dims.y, l.xyz);']) expect(text).toContain(needle);
+    // both depth increments are preceded by the capture
+    expect(text.split('ptVoCapture(depth, radiance);').length - 1).toBe(2);
+    expect(balanced(text)).toBe(true);
+    expect(ptVolumeWgsl(withOut, ['seedOf', 'tables', 'hg'])).not.toContain('ptVoBegin');
+    expect(ptwfUnsupported({ volumes: withOut })).toMatch(/megakernel only/);
+    expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: withOut, accumulate: false } })).toThrow(/needs accumulate/);
+    // grid + brick + outputs is 50.5 KB, with the two-lobe phase 51.5 KB: just over the ~50 KB DXC class (a Windows compile-time concern; these are reference kernels)
+    expect(ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: { ...withOut, majorant: 'brick' } } }).code.length).toBeLessThan(51_000);
+    expect(ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: { ...withOut, majorant: 'brick', media: twoLobe.media } } }).code.length).toBeLessThan(52_000);
+  });
+});

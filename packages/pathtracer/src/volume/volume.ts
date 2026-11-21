@@ -15,6 +15,8 @@
  *  - Phase: the HG density is sampled exactly, so the throughput weight of a phase-sampled bounce is 1.
  */
 
+import type { PtPhaseLobes } from './phase.ts';
+
 export type VolRgb = readonly [number, number, number];
 
 /** A dense density grid in the medium's own space: `worldToIndex` is the row-major 3x4 matrix taking a world point to index space (voxel centres at integer coordinates). */
@@ -30,9 +32,11 @@ export interface PtMedium {
   sigmaT: VolRgb;
   /** sigma_s / sigma_t per channel (0 where sigma_t is 0). */
   albedo: VolRgb;
-  /** Henyey-Greenstein mean cosine in (-1, 1). */
+  /** Henyey-Greenstein mean cosine in (-1, 1) (lobe A when `lobes` is set: then `g` must equal `lobes.gA`). */
   g: number;
   grid?: PtMediumGrid;
+  /** A two-lobe phase function (P5.v14, `phase.ts`): `(1 - w) HG(gA) + w Draine(gB, alpha)`. Absent or `w` 0 = one HG lobe of mean cosine `g` (the kernel text is then unchanged). */
+  lobes?: PtPhaseLobes;
 }
 
 /** What one material id means to the integrator (0 = no medium, otherwise `medium index + 1`). */
@@ -60,6 +64,63 @@ export interface PtVolumeOptions {
    * `volumeGrid.majorant` = `brickMajorants(...)`, group 2 binding `PT_VOLUME_MAJORANT_BINDING`). Same estimator, fewer null collisions in a sparse grid; the A/B of V243.
    */
   majorant?: 'global' | 'brick';
+  /**
+   * P5.v15 / P5.v16 (megakernel only): extra per-pixel sums in the accumulator tail (`PT_VOLUME_OUTPUT_VEC4` vec4 per pixel after the radiance; layout in
+   * `ptDecodeVolumeOutputs`): the radiance of scattering orders 0 and 1 (the light of paths with at most one scatter or bounce vertex, the expectation of a
+   * `maxDepth` 1 render), the primary ray's transmittance through the media up to the first solid surface (ratio tracking on its own stream, so the beauty image
+   * is bit-identical to the kernel without outputs), the per-sample second moment of the radiance (a standard error from one render) and the distance to the
+   * camera ray's first scatter event. Default off (the kernel text is unchanged).
+   */
+  outputs?: boolean;
+}
+
+/** vec4 per pixel the volume outputs add to the accumulator (after the `width * height` radiance sums). */
+export const PT_VOLUME_OUTPUT_VEC4 = 3;
+
+/** The volume outputs averaged over `samples` (per pixel, row 0 = top, like `readImage`). */
+export interface PtVolumeOutputs {
+  width: number;
+  height: number;
+  samples: number;
+  /** Mean radiance (rgb per pixel), the beauty image. */
+  radiance: Float32Array;
+  /** Orders 0 and 1 (rgb); `radiance - order01` is orders 2 and above. */
+  order01: Float32Array;
+  /** Transmittance of the primary ray through the media (1 - alpha), one value per pixel. */
+  transmittance: Float32Array;
+  /** Per-pixel standard error of the mean radiance (rgb): sqrt((E[L^2] - E[L]^2) / (N - 1)). */
+  stdError: Float32Array;
+  /** Mean distance from the camera to the camera ray's first scatter event, over the samples that had one (0 where none did). */
+  firstScatterDistance: Float32Array;
+  /** Fraction of samples whose camera ray scattered in a medium before reaching a surface or escaping. */
+  scatterFraction: Float32Array;
+}
+
+/**
+ * Decodes the accumulator of a kernel built with `volumes.outputs` (`sums` = the whole buffer: n radiance vec4, then plane p of n vec4 at offset (1 + p) n):
+ * plane 0 = (orders 0-1 rgb, transmittance), plane 1 = (radiance^2 rgb, first-scatter distance), plane 2 = (first scatter happened 0/1, 0, 0, 0).
+ */
+export function ptDecodeVolumeOutputs(sums: Float32Array, width: number, height: number, samples: number): PtVolumeOutputs {
+  const n = width * height;
+  if (sums.length < n * 4 * (1 + PT_VOLUME_OUTPUT_VEC4)) throw new RangeError(`ptDecodeVolumeOutputs: ${sums.length} floats for ${width} x ${height} pixels`);
+  const N = Math.max(1, samples);
+  const radiance = new Float32Array(n * 3), order01 = new Float32Array(n * 3), stdError = new Float32Array(n * 3);
+  const transmittance = new Float32Array(n), firstScatterDistance = new Float32Array(n), scatterFraction = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = i * 4, p0 = (n + i) * 4, p1 = (2 * n + i) * 4, p2 = (3 * n + i) * 4;
+    for (let c = 0; c < 3; c++) {
+      const mean = (sums[r + c] as number) / N;
+      radiance[i * 3 + c] = mean;
+      order01[i * 3 + c] = (sums[p0 + c] as number) / N;
+      const m2 = (sums[p1 + c] as number) / N;
+      stdError[i * 3 + c] = N > 1 ? Math.sqrt(Math.max(0, m2 - mean * mean) / (N - 1)) : 0;
+    }
+    transmittance[i] = (sums[p0 + 3] as number) / N;
+    const hits = sums[p2] as number;
+    scatterFraction[i] = hits / N;
+    firstScatterDistance[i] = hits > 0 ? (sums[p1 + 3] as number) / hits : 0;
+  }
+  return { width, height, samples, radiance, order01, transmittance, stdError, firstScatterDistance, scatterFraction };
 }
 
 /** Medium from the bench's coefficients. */
@@ -289,6 +350,62 @@ export function slabSingleScatter(sigmaT: number, albedo: number, g: number, thi
     acc += wDepth * inner;
   }
   return unscattered + L * acc;
+}
+
+/**
+ * The same single-scattering slab as `slabSingleScatter`, for any phase function and peaked ones in particular (P5.v13: HG g 0.85 and up, droplet lobes).
+ * `phase(cosTheta)` is the density of the angle between wo (towards the camera) and wi (towards the light), pbrt's convention: forward scattering is cosTheta = -1.
+ * The depth integral is analytic (the scatter depth z enters only through two exponentials), so only the sphere of incident directions is a quadrature, in polar
+ * coordinates around the FORWARD direction -wo with a quadratic warp alpha = pi t^2 (dense at the peak: g 0.99 has a half width of about 0.6 degrees).
+ */
+export function slabSingleScatterPhase(sigmaT: number, albedo: number, phase: (cosTheta: number) => number, thickness: number, mu: number, L = 1, nAlpha = 4096, nPhi = 256): number {
+  const unscattered = L * Math.exp((-sigmaT * thickness) / mu);
+  const s = Math.sqrt(Math.max(0, 1 - mu * mu));
+  const f = [0, -s, -mu] as const; // forward = -wo, wo = (0, s, mu) points back to the camera
+  // an orthonormal frame around f
+  const e1 = Math.abs(f[2]) < 0.9 ? normalize3(cross3(f, [0, 0, 1])) : normalize3(cross3(f, [1, 0, 0]));
+  const e2 = cross3(f, e1);
+  const T = thickness, st = sigmaT;
+  // integral over the scatter depth z in [0, T] of (sigma_t albedo / mu) exp(-st z / mu) exp(-st dist(z, c)) dz
+  const depthFactor = (c: number): number => {
+    if (Math.abs(c) < 1e-12) return 0; // grazing incidence: the light travels an infinite distance inside an infinite slab
+    if (c > 0) {
+      const k = 1 / mu + 1 / c;
+      return (-Math.expm1(-st * T * k)) / (st * k * mu);
+    }
+    const ac = -c;
+    const k = 1 / mu - 1 / ac;
+    // exp(-st T / ac) (1 - exp(-st T k)) / (st k) = (exp(-st T / ac) - exp(-st T / mu)) / (st k), written so that neither factor overflows near grazing
+    const x = st * T * k;
+    if (Math.abs(x) < 1e-6) return (Math.exp((-st * T) / ac) * T * (1 - x / 2)) / mu;
+    return (Math.exp((-st * T) / ac) - Math.exp((-st * T) / mu)) / (st * k * mu);
+  };
+  let acc = 0;
+  for (let a = 0; a < nAlpha; a++) {
+    const t = (a + 0.5) / nAlpha;
+    const alpha = Math.PI * t * t;
+    const dAlpha = 2 * Math.PI * t / nAlpha;
+    const ca = Math.cos(alpha), sa = Math.sin(alpha);
+    // cosTheta between wo and wi = -cos(alpha) (wi at angle alpha from forward)
+    const p = phase(-ca);
+    let ring = 0;
+    for (let b = 0; b < nPhi; b++) {
+      const phi = ((b + 0.5) / nPhi) * 2 * Math.PI;
+      const cp = Math.cos(phi), sp = Math.sin(phi);
+      const wiz = ca * f[2] + sa * (cp * (e1[2] as number) + sp * (e2[2] as number));
+      ring += depthFactor(wiz);
+    }
+    acc += p * ring * ((2 * Math.PI) / nPhi) * sa * dAlpha;
+  }
+  return unscattered + L * st * albedo * acc;
+}
+
+function cross3(a: readonly number[], b: readonly number[]): [number, number, number] {
+  return [(a[1] as number) * (b[2] as number) - (a[2] as number) * (b[1] as number), (a[2] as number) * (b[0] as number) - (a[0] as number) * (b[2] as number), (a[0] as number) * (b[1] as number) - (a[1] as number) * (b[0] as number)];
+}
+function normalize3(v: readonly number[]): [number, number, number] {
+  const l = Math.hypot(v[0] as number, v[1] as number, v[2] as number);
+  return [(v[0] as number) / l, (v[1] as number) / l, (v[2] as number) / l];
 }
 
 /** Fraction of a sphere of radius R (interface boundary, uniform sky, albedo 1, any phase) that reaches the camera: 1 (energy conservation); the radiance equals the sky. */

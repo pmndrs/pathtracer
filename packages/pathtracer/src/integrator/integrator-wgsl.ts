@@ -15,7 +15,7 @@ import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dimensions.ts';
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
-import { ptVolumeWgsl } from '../volume/volume-wgsl.ts';
+import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
 import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
@@ -275,6 +275,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   if (o.volumes) {
     const clash = o.restir ? 'restir' : o.frame ? 'frame' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : o.aovs ? 'aovs' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
+    if (o.volumes.outputs && o.accumulate === false) throw new Error('integrator.volumes.outputs needs accumulate (the outputs are sums over samples)');
   }
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
   const alphaTransmit = o.alphaTransmit ?? 0.5;
@@ -542,6 +543,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const stochastic = layered && (mats?.layered?.layering ?? 'albedo') === 'stochastic';
   const medium = !!mats?.features.medium;
   const vol = !!o.volumes;
+  const volOut = vol && !!o.volumes!.outputs;
   const aniso = !!mats?.features.aniso;
   const fuzz = !!mats?.features.fuzz;
   const film = !!mats?.features.thinFilm;
@@ -599,16 +601,18 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
                     break;
                 }
                 let vertex = depth;
-                depth += 1u;
+${volOut ? `                ptVoCapture(depth, radiance);
+` : ''}                depth += 1u;
                 let pm = ray.origin + ray.direction * ev.t;
-                let woM = -ray.direction;
+${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
+                    ptVoDist = length(pm - origin);
+                    ptVoHas = 1.0;
+                }
+` : ''}                let woM = -ray.direction;
                 if (PT_NEE) {
                     radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
                 }
-                let gM = ptVolMedium(curMed).g;
-                let wiM = ptHgSample(woM, gM, ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION)));
-                prevPdf = ptHgPhase(dot(woM, wiM), gM);
-                specularBounce = false;
+${ptVolPhaseSampleWgsl(o.volumes!, '                ', 'curMed', 'woM', 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION))', 'wiM', 'prevPdf')}                specularBounce = false;
                 prevP = pm;
                 ray = RtRay(pm, 0.0, wiM, PT_FAR);
 ${rrMedium}                continue;
@@ -772,7 +776,8 @@ ${medium ? `    var sigma = vec3f(0.0);
 ` : ''}${vol ? `    var curMed = ${o.volumes!.cameraMedium ?? 0}u;
     var ifaceSkips = 0u;
     ptVolSeed(pixelSeed, sampleIndex);
-` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
+${volOut ? `    ptVoBegin(ray, curMed, pixelSeed, sampleIndex);
+` : ''}` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
 ${vbHit ? `    var primary = true;
 ` : ''}    loop {
@@ -876,7 +881,8 @@ ${counters ? `            termReason = select(2u, 1u, ${black});
 ` : ''}            break;
         }
         let vertex = depth;
-        depth += 1u;
+${volOut ? `        ptVoCapture(depth, radiance);
+` : ''}        depth += 1u;
 ${layered ? `        ptLayerSeed = pixelSeed ^ (sampleIndex * 2654435761u) ^ (vertex * 2246822519u);
 ` : ''}
 ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
@@ -938,6 +944,7 @@ ${counters ? `                    termReason = 3u;
     }
 ${counters ? `    ptCountEnd(pxIndex, depth, termReason);
 ` : ''}${frame ? `    ptFramePlanes(pxIndex, dims.x * dims.y, radiance, ${emit ? 'vec3f(0.0), fEmit' : 'fDirect, vec3f(0.0)'}, fBounce, fSeen, fIsSpec, fNormal, fViewZ, fMotion, fRough, fAlbedo, fSpec);
+` : ''}${volOut ? `    ptVoEnd(radiance);
 ` : ''}    return PtRadiance(${spec ? 'ptSpecToRgb(radiance)' : emit ? 'radiance + fEmit' : 'radiance'}, 0.0);
 }
 
@@ -949,7 +956,8 @@ fn ptMain(@builtin(global_invocation_id) id: vec3u) {
     }
     let l = ptPath(id.xy, dims.z);
     let index = id.y * dims.x + id.x;
-    ptAccum[index] = ${o.accumulate ? 'ptAccum[index] + ' : ''}vec4f(l.xyz, 1.0);
+    ptAccum[index] = ${o.accumulate ? 'ptAccum[index] + ' : ''}vec4f(l.xyz, 1.0);${volOut ? `
+    ptVoAccumulate(index, dims.x * dims.y, l.xyz);` : ''}
 }
 `;
 }
