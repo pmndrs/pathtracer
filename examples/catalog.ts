@@ -249,12 +249,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     title: 'Interval queries',
     summary: 'rtClosestInterval splits each ray into radiance-cascade intervals with no gap and no overlap.',
     description:
-      'Cascade n owns the distances (t0 · growth^(n-1), t0 · growth^n]. From each first hit, cosine rays walk the cascades in order and take the colour of the interval their first hit is in, ' +
-      'so the colours add up to the full occlusion. Or look at one cascade on its own, or at the camera ray\'s own distance bands. Change the first interval and the growth.',
+      'Cascade n owns the distances (t0 · growth^(n-1), t0 · growth^n]. The final view lights each surface by the sky it can see, tracing every sky ray interval by interval with `rtClosestInterval`; the reference traces the same rays whole with `rtClosest`, and the two match exactly. ' +
+      'The broken view shortens each interval at both ends, the classic off-by-epsilon bug exaggerated: whatever lies in a gap is missed and light leaks in.',
     brief: {
       kind: "feature",
       shows: "Interval queries split a ray into consecutive distance ranges with no gap and no overlap, the building block of radiance cascades. The final image is sky light gathered cascade by cascade, and it matches one full-length ray exactly.",
-      tryThis: ["Compare Final (cascades) with One full ray: the same image", "Switch to Naive intervals (with a gap): light leaks through the gaps as bright bands", "Show one cascade alone, or which cascade each ray hit in"],
+      tryThis: ["Compare Final with Reference (one full-length ray): the same image, pixel for pixel", "Switch Show to Broken: naive intervals with gaps let the sky leak onto the back wall and into the corners", "Switch to the Pieces views: which cascade each ray hit in, or one cascade alone"],
       compare: "Naive intervals with a small gap between cascades, and one full-length ray as the reference",
     },
     category: 'raytracer',
