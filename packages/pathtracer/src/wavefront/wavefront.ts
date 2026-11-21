@@ -128,6 +128,7 @@ export function ptWavefrontBuild(caps: Caps, options: Pick<PtWavefrontOptions, '
     const why = ptRestirUnsupported({ ...options, integrator: options.integrator });
     if (why) throw new Error(`PtWavefront: ${why}`);
   }
+  if (requested.volumes?.adaptive) throw new Error('PtWavefront: integrator.volumes.adaptive is megakernel only (the wavefront kernels do not read the done flags)');
   if (requested.volumes?.outputs && wf.refill) throw new Error('PtWavefront: integrator.volumes.outputs needs the plain scheduler (refill: false, layers: 1): the per-sample second moment is the square of the sample total, which a refill slot (reused when its path ends, with shadow rays still pending) cannot flush');
   if (resolveIntegratorOptions(options.integrator ?? {}).primary === 'vbuffer') {
     if (wf.refill) throw new Error("PtWavefront: integrator.primary 'vbuffer' does not support refill / layers (a slot starts its next sample at its own time; a V-buffer is one frame)");

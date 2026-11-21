@@ -47,6 +47,11 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
   v.media.forEach((m, i) => {
     if (m.sigmaT.some((s) => !(s >= 0) || !Number.isFinite(s))) throw new RangeError(`integrator.volumes: medium ${i} has an invalid sigmaT`);
     if (!(m.g > -1 && m.g < 1)) throw new RangeError(`integrator.volumes: medium ${i} g ${m.g} is outside (-1, 1)`);
+    if (m.height) {
+      if (m.grid) throw new RangeError(`integrator.volumes: medium ${i} has both a grid and a height profile`);
+      if (!(m.height.H > 0) || !Number.isFinite(m.height.H) || !Number.isFinite(m.height.y0)) throw new RangeError(`integrator.volumes: medium ${i} has an invalid height profile (H must be > 0)`);
+      if (v.forcedNee || v.equiangular) throw new RangeError('integrator.volumes: a height medium cannot be combined with forcedNee / equiangular (they assume a homogeneous medium)');
+    }
     if (m.grid && !(m.grid.densityMax >= 0)) throw new RangeError(`integrator.volumes: medium ${i} has an invalid grid densityMax`);
     if (m.grid && !(Math.max(...m.sigmaT) > 0)) throw new RangeError(`integrator.volumes: grid medium ${i} has no extinction (sigmaT is 0)`);
     if (m.lobes) {
@@ -63,7 +68,6 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
   const n = v.media.length;
   for (const mv of v.materials) if (mv.interior > n || mv.exterior > n || mv.interior < 0 || mv.exterior < 0) throw new RangeError('integrator.volumes: a material names a medium that does not exist');
   if ((v.cameraMedium ?? 0) > n) throw new RangeError('integrator.volumes: cameraMedium does not exist');
-  if (v.cameraMedium && v.media[v.cameraMedium - 1]?.grid) throw new RangeError('integrator.volumes: the camera medium must be homogeneous (a grid medium is bounded by its mesh)');
 }
 
 function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
@@ -75,7 +79,7 @@ function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
   return [
     row([...(k === 1 ? m.sigmaT : m.sigmaT.map((x) => x * k)), mu]),
     row([...m.albedo, m.g]),
-    row(grid ? [Math.max(...m.sigmaT) * k, ...grid.resolution] : [0, 0, 0, 0]),
+    row(grid ? [Math.max(...m.sigmaT) * k, ...grid.resolution] : m.height ? [0, m.height.H, m.height.y0, 0] : [0, 0, 0, 0]),
     row(w.slice(0, 4)),
     row(w.slice(4, 8)),
     row(w.slice(8, 12)),
@@ -115,6 +119,7 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const alive = v.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0';
   const residual = brick && (v.shadowTracking === 'residual' || tele);
   const lobes = ptVolumeHasLobes(v);
+  const height = v.media.some((m) => m.height); // V4.5: closed-form exponential fog; the code below is emitted only then
   const stride = lobes ? 7 : 6;
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
   const matRow = (m: (typeof mats)[number]): string => `vec4u(${m.interior}u, ${m.exterior}u, ${m.interior !== 0 || m.exterior !== 0 || m.boundary ? 1 : 0}u, ${m.boundary ? 1 : 0}u)`;
@@ -214,6 +219,31 @@ fn ptHgSample(wo: vec3f, g: f32, u: vec2f) -> vec3f {
     return ptFromLocal(ptFrameFromNormal(wo), vec3f(sinT * cos(phi), sinT * sin(phi), cosT));
 }
 ${lobes ? PT_VOL_LOBES_WGSL(stride) : ''}`);
+  if (has('density') && height) chunks.push(/* wgsl */ `
+// V4.5 height fog (info = (0, H, y0, 0)): sigma_t(p) = sigmaT * exp(-(p.y - y0) / H). Unit optical depth G of o + t d over [0, L], inversion, and free flight (volume.ts heightTrack).
+fn ptVolIsHeight(m: PtVolMedium) -> bool {
+    return m.info.x == 0.0 && m.info.y > 0.0;
+}
+
+fn ptVolHeightPhi(x: f32) -> f32 {
+    if (abs(x) < 0.05) {
+        return 1.0 - x * 0.5 + x * x * (1.0 / 6.0) - x * x * x * (1.0 / 24.0) + x * x * x * x * (1.0 / 120.0);
+    }
+    return (1.0 - exp(min(-x, 80.0))) / x;
+}
+
+fn ptVolHeightPsi(c: f32) -> f32 {
+    if (abs(c) < 0.05) {
+        return 1.0 + c * 0.5 + c * c * (1.0 / 3.0) + c * c * c * 0.25 + c * c * c * c * 0.2;
+    }
+    return -log(1.0 - c) / c;
+}
+
+fn ptVolHeightG(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> f32 {
+    let a = clamp((o.y - m.info.z) / m.info.y, -60.0, 60.0);
+    return min(exp(-a) * len * ptVolHeightPhi(len * d.y / m.info.y), 1.0e30);
+}
+`);
   if (has('density')) chunks.push(/* wgsl */ `
 fn ptVolDensity(m: PtVolMedium, p: vec3f) -> f32 {
 ${grid ? `    if (m.info.x == 0.0) {
@@ -478,7 +508,25 @@ fn ptVolSample(id: u32, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f
     if (!(m.mu > 0.0)) {
         return PtVolEvent(tmax, 0u);
     }
-${brick ? `    if (m.info.x != 0.0) {
+${height ? `    if (ptVolIsHeight(m)) {
+        let ss = m.sigmaT * m.albedo;
+        let r = ptMax3(ss);
+        let gm = ptVolHeightG(m, o, d, tmax);
+        let xi = select(3.0e38, -log(1.0 - ptVolRand()) / r, r > 0.0);
+        if (xi < gm) {
+            let a = clamp((o.y - m.info.z) / m.info.y, -60.0, 60.0);
+            let ea = exp(a);
+            let c = min(xi * d.y * ea / m.info.y, 0.9999999);
+            *beta = *beta * (ss * exp(-(m.sigmaT - vec3f(r)) * xi) / r);
+            if (!(ptMax3(*beta) > 0.0)) {
+                return PtVolEvent(xi * ea * ptVolHeightPsi(c), 2u);
+            }
+            return PtVolEvent(xi * ea * ptVolHeightPsi(c), 1u);
+        }
+        *beta = *beta * exp(-(m.sigmaT - vec3f(r)) * gm);
+        return PtVolEvent(tmax, 0u);
+    }
+` : ''}${brick ? `    if (m.info.x != 0.0) {
         return ptVolSampleBrick(m, o, d, tmax, beta);
     }
 ` : ''}    var t = 0.0;
@@ -507,7 +555,10 @@ ${brick ? `    if (m.info.x != 0.0) {
 // Transmittance estimate over a segment of length len: closed form (homogeneous) or ratio tracking (grid).
 fn ptVolTrSegment(id: u32, o: vec3f, d: vec3f, len: f32) -> vec3f {
     let m = ptVolMedium(id);
-${brick ? `    if (m.info.x != 0.0) {
+${height ? `    if (ptVolIsHeight(m)) {
+        return exp(-m.sigmaT * ptVolHeightG(m, o, d, len));
+    }
+` : ''}${brick ? `    if (m.info.x != 0.0) {
         return ptVolTrBrick(m, o, d, len);
     }
 ` : ''}${ratio ? `    if (${grid && v.shadowTracking !== 'ratio' ? 'm.info.x != 0.0' : 'true'}) {

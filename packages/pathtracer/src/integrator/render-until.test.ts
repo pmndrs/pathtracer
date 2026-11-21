@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ptRenderUntil, ptStopBatches, ptStopMeasure, ptStopMet } from './render-until.ts';
+import { ptAdaptiveFlags, ptPerPixelStats, ptRenderUntil, ptStopBatches, ptStopMeasure, ptStopMet } from './render-until.ts';
 import { ptDecodeVolumeOutputs, type PtVolumeOutputs } from '../volume/volume.ts';
 
 /** A flat image of `n` pixels, radiance `m` in every channel, per-sample std `sd` (iid): se = sd / sqrt(N). */
@@ -8,7 +8,7 @@ function fake(n: number, m: number, sd: number, samples: number): PtVolumeOutput
   return {
     width: n, height: 1, samples,
     radiance: new Float32Array(n * 3).fill(m), order01: new Float32Array(n * 3), transmittance: new Float32Array(n),
-    stdError: new Float32Array(n * 3).fill(se), firstScatterDistance: new Float32Array(n), scatterFraction: new Float32Array(n),
+    stdError: new Float32Array(n * 3).fill(se), firstScatterDistance: new Float32Array(n), scatterFraction: new Float32Array(n), sampleCount: new Float32Array(n).fill(samples),
   };
 }
 
@@ -108,5 +108,50 @@ describe('ptRenderUntil', () => {
   });
   it('refuses a call without a target', async () => {
     await expect(ptRenderUntil(make(1).driver, {})).rejects.toThrow();
+  });
+});
+
+describe('adaptive sampling (V2.5b)', () => {
+  it('flags a pixel only after minSamples and below the target; flags are sticky', () => {
+    const o = fake(4, 1, 1, 100); // se = 0.1 per channel, rel 0.1
+    const t = { pixelRelSe: { below: 0.2 } };
+    expect(ptAdaptiveFlags(o, t, 200).count).toBe(0); // 100 samples < minSamples
+    const f = ptAdaptiveFlags(o, t, 64);
+    expect(f.count).toBe(4);
+    const noisy = fake(4, 1, 1, 100);
+    for (let c = 0; c < 3; c++) noisy.stdError[c] = 5; // pixel 0 now noisy but was done
+    expect(ptAdaptiveFlags(noisy, t, 64, f.done).count).toBe(4);
+    expect(ptAdaptiveFlags(noisy, t, 64).count).toBe(3);
+  });
+  it('decodes per-pixel counts (and equals the global decode when counts are equal)', () => {
+    const n = 2, sums = new Float32Array(n * 4 * 4);
+    sums.set([4, 4, 4, 4], 0); sums.set([2, 2, 2, 2], 4); // radiance sums, counts 4 and 2
+    const a = ptDecodeVolumeOutputs(sums, 2, 1, 4, true);
+    expect(Array.from(a.radiance.slice(0, 6))).toEqual([1, 1, 1, 1, 1, 1]);
+    expect(Array.from(a.sampleCount)).toEqual([4, 2]);
+    const g = ptDecodeVolumeOutputs(sums, 2, 1, 4);
+    expect(g.radiance[3]).toBe(0.5);
+    const eq = new Float32Array(sums); eq[7] = 4;
+    expect(Array.from(ptDecodeVolumeOutputs(eq, 2, 1, 4, true).radiance)).toEqual(Array.from(ptDecodeVolumeOutputs(eq, 2, 1, 4).radiance));
+  });
+  it('the loop stops pixels individually, saves samples, and reports per-pixel statistics', async () => {
+    // pixel 0 is quiet (sd 0.2), pixel 1 noisy (sd 2): se = sd / sqrt(count) -> below 0.1 at 4 vs 400 samples
+    const sd = [0.2, 2], count = [0, 0], done = [0, 0];
+    const mk = (): PtVolumeOutputs => ({
+      width: 2, height: 1, samples: 0, radiance: new Float32Array(6).fill(1), order01: new Float32Array(6), transmittance: new Float32Array(2),
+      stdError: Float32Array.from([0, 1].flatMap((p) => [0, 1, 2].map(() => sd[p]! / Math.sqrt(Math.max(1, count[p]!))))),
+      firstScatterDistance: new Float32Array(2), scatterFraction: new Float32Array(2), sampleCount: Float32Array.from(count),
+    });
+    const r = await ptRenderUntil({
+      run: async (n) => { for (let p = 0; p < 2; p++) if (!done[p]) count[p]! += n; },
+      read: async () => mk(),
+      markDone: async (d) => { for (let p = 0; p < 2; p++) done[p] = d[p]!; },
+    }, { pixelRelSe: { below: 0.1, quantile: 1 }, adaptive: true, minSamples: 64, maxSamples: 4096 });
+    expect(r.met).toBe(true);
+    expect(count[0]).toBe(64); // quiet pixel stops at the minimum
+    expect(count[1]).toBe(448); // 2 / sqrt(n) < 0.1 -> n > 400, on the 64-sample grid
+    expect(r.perPixel!.total).toBe(64 + 448);
+    expect(r.perPixel!.min).toBe(64);
+    expect(r.perPixel!.max).toBe(448);
   });
 });

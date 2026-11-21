@@ -280,6 +280,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     if ((o.volumes.forcedNee || o.volumes.equiangular) && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee / equiangular cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
     if ((o.volumes.forcedNee || o.volumes.equiangular) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
+    if (o.volumes.adaptive && !o.volumes.outputs) throw new Error('integrator.volumes.adaptive needs integrator.volumes.outputs (the done flag lives in its accumulator tail)');
     if (o.volumes.outputs && o.accumulate === false) throw new Error('integrator.volumes.outputs needs accumulate (the outputs are sums over samples)');
   }
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
@@ -559,6 +560,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const medium = !!mats?.features.medium;
   const vol = !!o.volumes;
   const volOut = vol && !!o.volumes!.outputs;
+  const volAdaptive = volOut && !!o.volumes!.adaptive;
   const sd = vol && !!o.volumes!.separateDepth;
   const equi = vol && !!o.volumes!.equiangular;
   const forced = vol && (!!o.volumes!.forcedNee || equi);
@@ -994,7 +996,10 @@ fn ptMain(@builtin(global_invocation_id) id: vec3u) {
     if (id.x >= dims.x || id.y >= dims.y) {
         return;
     }
-    let l = ptPath(id.xy, dims.z);
+${volAdaptive ? `    if (ptAccum[3u * dims.x * dims.y + id.y * dims.x + id.x].y != 0.0) {
+        return;
+    }
+` : ''}    let l = ptPath(id.xy, dims.z);
     let index = id.y * dims.x + id.x;
     ptAccum[index] = ${o.accumulate ? 'ptAccum[index] + ' : ''}vec4f(l.xyz, 1.0);${volOut ? `
     ptVoAccumulate(index, dims.x * dims.y, l.xyz);` : ''}

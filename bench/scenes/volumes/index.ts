@@ -136,6 +136,47 @@ export const volGridSlab: SceneDesc = (() => {
   };
 })();
 
+// --- the camera inside a grid medium (V3.3) ---------------------------------------------------------------------------------------------------------------------
+/** 32 layers over z in [-4, 4] (an 8 m box, the camera at its centre), an emitter 3 m ahead: pixel = L exp(-sigma integral_0^3 density(0, 0, -z) dz). */
+const CAM_LAYERS = 32;
+const camGridDensity = (k: number): number => 0.2 + 0.5 * Math.abs(Math.sin(0.4 + k * 0.45));
+function camGrid(): { resolution: [number, number, number]; density: number[]; bounds: [[number, number, number], [number, number, number]] } {
+  const density: number[] = [];
+  for (let k = 0; k < CAM_LAYERS; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) density.push(camGridDensity(k));
+  return { resolution: [4, 4, CAM_LAYERS], density, bounds: [[-4, -4, -4], [4, 4, 4]] };
+}
+function camGridExpected(): number[] {
+  const g = camGrid();
+  const grid = { resolution: g.resolution, worldToIndex: gridWorldToIndex(g.resolution, g.bounds), densityMax: Math.max(...g.density) };
+  const dens = gridDensity(grid, g.density);
+  let tau = 0;
+  const n = 20000;
+  for (let i = 0; i < n; i++) tau += (3 * dens(0, 0, -3 * ((i + 0.5) / n))) / n;
+  return CAM_SIGMA.map((s) => LB[CAM_SIGMA.indexOf(s)]! * Math.exp(-s * tau));
+}
+const camGridScene = (name: string, explicit: boolean): SceneDesc => {
+  const g = camGrid();
+  return {
+    version: 1,
+    name,
+    purpose: `Camera inside an absorbing GRID medium (density in 32 layers along the view axis, 8 m box), an emitter 3 m ahead: pixel = L exp(-sigma integral of the trilinear density)${explicit ? ' (explicit cameraMedium)' : ' (cameraMedium detected from the boundary mesh)'} (V3.3).`,
+    tier: 1,
+    camera: NARROW([0, 0, 0], [0, 0, -1]),
+    film: FILM,
+    integrator: { maxDepth: 8 },
+    materials: { boundary: { type: 'interface' }, back: { type: 'black' } },
+    media: { layers: { type: 'grid', resolution: g.resolution, density: g.density, bounds: g.bounds, sigmaA: CAM_SIGMA, sigmaS: [0, 0, 0] } },
+    ...(explicit ? { cameraMedium: 'layers' } : {}),
+    meshes: [
+      { name: 'box', geometry: { type: 'box', size: [8, 8, 8] }, material: 'boundary', medium: { interior: 'layers' } },
+      { name: 'emitter', geometry: { type: 'quad', size: [8, 8] }, material: 'back', transform: facingCamera(-3), emission: LB },
+    ],
+    expected: { type: 'mean', value: camGridExpected() as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
+  };
+};
+export const volCameraGrid: SceneDesc = camGridScene('vol-camera-grid', true);
+export const volCameraGridAuto: SceneDesc = camGridScene('vol-camera-grid-auto', false);
+
 // --- reference scenes ------------------------------------------------------------------------------------------------------------------------------------
 /** Smoke cube in the Cornell box (0.22 m cube where the short block stood). sigma_t 10 / m (tau 2.2 across), albedo 0.9, g 0.3: grey, so pbrt's spectral uplift is exact. */
 export const volCornellSmoke: SceneDesc = {
@@ -237,6 +278,6 @@ export const volVdbSmoke: SceneDesc = {
   environment: { type: 'uniform', radiance: [0.4, 0.4, 0.4] },
 };
 
-export const volumeCheckScenes: readonly SceneDesc[] = [volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab];
+export const volumeCheckScenes: readonly SceneDesc[] = [volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud, volVdbSmoke];
 export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes, ...cloudScenes];

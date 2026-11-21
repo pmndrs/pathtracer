@@ -128,7 +128,7 @@ describe('integrator.volumes (P5)', () => {
     expect(() => ptVolumeValidate({ media: [], materials: [] })).toThrow(/no media/);
     expect(() => ptVolumeValidate({ ...homog, media: [{ ...homog.media[0]!, g: 1 }] })).toThrow(/outside/);
     expect(() => ptVolumeValidate({ ...homog, materials: [{ interior: 2, exterior: 0, boundary: false }] })).toThrow(/does not exist/);
-    expect(() => ptVolumeValidate({ ...gridded, cameraMedium: 1 })).toThrow(/homogeneous/);
+    expect(() => ptVolumeValidate({ ...gridded, cameraMedium: 1 })).not.toThrow(); // V3.3: a camera inside a grid medium
     expect(() => build({ ...homog, cameraMedium: 1 })).not.toThrow();
     expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, restir: {} as never } })).toThrow(/cannot be combined/);
     expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, counters: true } })).toThrow(/cannot be combined/);
@@ -172,5 +172,23 @@ describe('P5.v14 phase lobes and P5.v15 / P5.v16 outputs at the kernel-text leve
     // grid + brick + outputs is 50.5 KB, with the two-lobe phase 51.5 KB: just over the ~50 KB DXC class (a Windows compile-time concern; these are reference kernels)
     expect(ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: { ...withOut, majorant: 'brick' } } }).code.length).toBeLessThan(52_500);
     expect(ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: { ...withOut, majorant: 'brick', media: twoLobe.media } } }).code.length).toBeLessThan(54_000);
+  });
+});
+
+describe('height fog (V4.5)', () => {
+  const heightOpts: PtVolumeOptions = { ...homog, media: [{ ...homog.media[0]!, height: { y0: 0, H: 1.5 } }] };
+  it('is emitted only when a height medium exists', () => {
+    expect(build(homog)).not.toContain('ptVolHeight');
+    expect(build(heightOpts)).toContain('ptVolHeightG');
+    expect(ptVolumeWgsl(heightOpts)).toContain('ptVolIsHeight');
+  });
+  it('is refused with a grid, a bad H, forced NEE', () => {
+    expect(() => ptVolumeValidate({ ...heightOpts, media: [{ ...heightOpts.media[0]!, grid }] })).toThrow(/grid and a height/);
+    expect(() => ptVolumeValidate({ ...heightOpts, media: [{ ...heightOpts.media[0]!, height: { y0: 0, H: 0 } }] })).toThrow(/height/);
+    expect(() => ptVolumeValidate({ ...heightOpts, forcedNee: true })).toThrow(/forcedNee/);
+  });
+  it('declares legal names', () => {
+    const names = declaredIdentifiers(ptVolumeWgsl(heightOpts));
+    for (const n of names) expect(RESERVED.has(n)).toBe(false);
   });
 });

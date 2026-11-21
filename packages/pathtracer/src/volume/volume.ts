@@ -29,6 +29,14 @@ export interface PtMediumGrid {
   densityScale?: number;
 }
 
+/** V4.5: parameters of an exponential height-fog medium. */
+export interface PtMediumHeight {
+  /** Height (world y) where the density is 1. */
+  y0: number;
+  /** Scale height H in metres: the density falls by e per H. */
+  H: number;
+}
+
 export interface PtMedium {
   /** Per metre, already multiplied by the medium's `scale`. */
   sigmaT: VolRgb;
@@ -37,6 +45,11 @@ export interface PtMedium {
   /** Henyey-Greenstein mean cosine in (-1, 1) (lobe A when `lobes` is set: then `g` must equal `lobes.gA`). */
   g: number;
   grid?: PtMediumGrid;
+  /**
+   * V4.5 height fog (exponential atmosphere): `sigma_t(x) = sigmaT * exp(-(x.y - y0) / H)` in WORLD space (`sigmaT` is the extinction at height `y0`; H > 0 in metres). Free flight and shadow
+   * transmittance use the closed-form optical depth (no majorant, no tracking); mutually exclusive with `grid`; refused with `forcedNee` / `equiangular`.
+   */
+  height?: PtMediumHeight;
   /** A two-lobe phase function (P5.v14, `phase.ts`): `(1 - w) HG(gA) + w Draine(gB, alpha)`. Absent or `w` 0 = one HG lobe of mean cosine `g` (the kernel text is then unchanged). */
   lobes?: PtPhaseLobes;
 }
@@ -105,6 +118,12 @@ export interface PtVolumeOptions {
    */
   outputs?: boolean;
   /**
+   * V2.5b (megakernel, needs `outputs`): per-pixel adaptive sampling. `ptMain` returns at once for a pixel whose DONE flag (lane y of accumulator plane 3, written by
+   * `PtMegakernel.renderUntil({ adaptive: true })` between batches) is set, so converged pixels stop costing samples. The decoders then divide each pixel by ITS OWN count
+   * (accumulator .w). Default false: the kernel text is unchanged.
+   */
+  adaptive?: boolean;
+  /**
    * V4.2 (megakernel only): forced in-scatter next-event estimation in HOMOGENEOUS media (grid media are left alone). Every free-flight segment in a homogeneous medium adds one light
    * sample at a distance drawn from the truncated exponential on the segment, and a real collision of that segment no longer samples a light itself (the estimate is replaced, not
    * added): unbiased, and in thin media (most rays never scatter) it turns god rays from noise into a smooth estimate. Derivation and twin: `volume/forced-wgsl.ts`. Needs `nee`;
@@ -139,20 +158,26 @@ export interface PtVolumeOutputs {
   firstScatterDistance: Float32Array;
   /** Fraction of samples whose camera ray scattered in a medium before reaching a surface or escaping. */
   scatterFraction: Float32Array;
+  /** Samples each pixel received (all equal to `samples` unless the kernel is `adaptive`). */
+  sampleCount: Float32Array;
 }
 
 /**
  * Decodes the accumulator of a kernel built with `volumes.outputs` (`sums` = the whole buffer: n radiance vec4, then plane p of n vec4 at offset (1 + p) n):
  * plane 0 = (orders 0-1 rgb, transmittance), plane 1 = (radiance^2 rgb, first-scatter distance), plane 2 = (first scatter happened 0/1, 0, 0, 0).
  */
-export function ptDecodeVolumeOutputs(sums: Float32Array, width: number, height: number, samples: number): PtVolumeOutputs {
+export function ptDecodeVolumeOutputs(sums: Float32Array, width: number, height: number, samples: number, perPixel = false): PtVolumeOutputs {
   const n = width * height;
   if (sums.length < n * 4 * (1 + PT_VOLUME_OUTPUT_VEC4)) throw new RangeError(`ptDecodeVolumeOutputs: ${sums.length} floats for ${width} x ${height} pixels`);
-  const N = Math.max(1, samples);
+  const N0 = Math.max(1, samples);
   const radiance = new Float32Array(n * 3), order01 = new Float32Array(n * 3), stdError = new Float32Array(n * 3);
+  const sampleCount = new Float32Array(n);
   const transmittance = new Float32Array(n), firstScatterDistance = new Float32Array(n), scatterFraction = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const r = i * 4, p0 = (n + i) * 4, p1 = (2 * n + i) * 4, p2 = (3 * n + i) * 4;
+    // `perPixel` (volumes.adaptive): each pixel's own count is the accumulator's w; otherwise the global one (the same number, so results are unchanged).
+    const N = perPixel ? Math.max(1, sums[r + 3] as number) : N0;
+    sampleCount[i] = perPixel ? (sums[r + 3] as number) : N0;
     for (let c = 0; c < 3; c++) {
       const mean = (sums[r + c] as number) / N;
       radiance[i * 3 + c] = mean;
@@ -165,14 +190,14 @@ export function ptDecodeVolumeOutputs(sums: Float32Array, width: number, height:
     scatterFraction[i] = hits / N;
     firstScatterDistance[i] = hits > 0 ? (sums[p1 + 3] as number) / hits : 0;
   }
-  return { width, height, samples, radiance, order01, transmittance, stdError, firstScatterDistance, scatterFraction };
+  return { width, height, samples, radiance, order01, transmittance, stdError, firstScatterDistance, scatterFraction, sampleCount };
 }
 
 /** Medium from the bench's coefficients. */
-export function ptMediumFrom(sigmaA: VolRgb, sigmaS: VolRgb, g = 0, scale = 1, grid?: PtMediumGrid): PtMedium {
+export function ptMediumFrom(sigmaA: VolRgb, sigmaS: VolRgb, g = 0, scale = 1, grid?: PtMediumGrid, height?: PtMediumHeight): PtMedium {
   const sigmaT = [0, 1, 2].map((i) => ((sigmaA[i] as number) + (sigmaS[i] as number)) * scale) as unknown as [number, number, number];
   const albedo = [0, 1, 2].map((i) => ((sigmaT[i] as number) > 0 ? ((sigmaS[i] as number) * scale) / (sigmaT[i] as number) : 0)) as unknown as [number, number, number];
-  return { sigmaT, albedo, g, ...(grid ? { grid } : {}) };
+  return { sigmaT, albedo, g, ...(grid ? { grid } : {}), ...(height ? { height } : {}) };
 }
 
 /** The scalar majorant of delta tracking. */
@@ -205,8 +230,59 @@ export interface VolEvent {
 /** Density at a point; a homogeneous medium is 1 everywhere. `density` is the grid lookup (the TS twin of the texture fetch). */
 export type DensityFn = (x: number, y: number, z: number) => number;
 
+/** phi(x) = (1 - exp(-x)) / x (1 at 0), the shape factor of the optical depth; series below |x| 0.05, the exponent clamped so a long downward ray gives a large finite value. */
+function heightPhi(x: number): number {
+  if (Math.abs(x) < 0.05) return 1 - x / 2 + (x * x) / 6 - (x * x * x) / 24 + (x * x * x * x) / 120;
+  return (1 - Math.exp(Math.min(-x, 80))) / x;
+}
+
+/** psi(c) = -ln(1 - c) / c (1 at 0), the inverse shape factor; series below |c| 0.05. */
+function heightPsi(c: number): number {
+  if (Math.abs(c) < 0.05) return 1 + c / 2 + (c * c) / 3 + (c * c * c) / 4 + (c * c * c * c) / 5;
+  return -Math.log(1 - c) / c;
+}
+
+/**
+ * V4.5: the unit optical depth of the height fog along o + t d over [0, L]: `G = integral of exp(-(y(t) - y0) / H) dt = e^{-a} L phi(L d.y / H)`, `a = (o.y - y0) / H`
+ * (`d` unit; `tau_c = sigmaT_c * G`). Closed form `e^{-a} H / d.y (1 - exp(-L d.y / H))`; the `d.y -> 0` limit `e^{-a} L` is the series of `phi`.
+ */
+export function heightOpticalDepth(h: PtMediumHeight, o: VolRgb, d: VolRgb, L: number): number {
+  const a = Math.min(Math.max((o[1] - h.y0) / h.H, -60), 60);
+  return Math.exp(-a) * L * heightPhi((L * d[1]) / h.H);
+}
+
+/** V4.5: the distance t with `heightOpticalDepth(.., t) = xi` (exact inversion), for `xi` below the depth to infinity (`xi * d.y * e^a / H < 1`); the caller tests `xi < G(tmax)` first. */
+export function heightDistance(h: PtMediumHeight, o: VolRgb, d: VolRgb, xi: number): number {
+  const a = Math.min(Math.max((o[1] - h.y0) / h.H, -60), 60);
+  const A = Math.exp(a);
+  const c = Math.min((xi * d[1] * A) / h.H, 1 - 1e-7);
+  return xi * A * heightPsi(c);
+}
+
+/**
+ * V4.5 free flight in a height medium. One scalar rate `r = max_c(albedo_c sigmaT_c)` drives the sampling: `xi = -ln(1 - u) / r` in optical-depth-per-sigma units, a collision happens
+ * at t with `G(t) = xi` if `xi < G(tmax)`. The collision is a scatter with weight `albedo_c sigmaT_c exp(-(sigmaT_c - r) xi) / r` (pdf `r e^{-r xi}` per unit G; the
+ * absorbed share is not sampled, as in V240); reaching `tmax` has probability `exp(-r G)` and weight `exp(-(sigmaT_c - r) G)`. Pure absorption (`r = 0`) never collides and
+ * the pass weight is the exact transmittance (zero variance). A chromatic medium whose smallest channel has `sigmaT_c < r / 2` has unbounded weight variance.
+ */
+export function heightTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand: () => number): VolEvent {
+  const h = m.height as PtMediumHeight;
+  const ss = [0, 1, 2].map((c) => (m.sigmaT[c] as number) * (m.albedo[c] as number));
+  const r = Math.max(ss[0] as number, ss[1] as number, ss[2] as number);
+  const G = heightOpticalDepth(h, o, d, tmax);
+  const xi = r > 0 ? -Math.log(1 - rand()) / r : Infinity;
+  if (xi < G) {
+    const w = [0, 1, 2].map((c) => ((ss[c] as number) * Math.exp(-((m.sigmaT[c] as number) - r) * xi)) / r) as [number, number, number];
+    const t = heightDistance(h, o, d, xi);
+    return Math.max(w[0], w[1], w[2]) > 0 ? { kind: 'scatter', t, weight: w } : { kind: 'killed', t, weight: w };
+  }
+  const Gc = Math.min(G, 1e30);
+  return { kind: 'pass', t: tmax, weight: [0, 1, 2].map((c) => Math.exp(-((m.sigmaT[c] as number) - r) * Gc)) as [number, number, number] };
+}
+
 /** One free-flight segment of a path (`ptVolSample` in WGSL). `rand` returns uniform numbers in [0, 1). */
 export function deltaTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand: () => number, density: DensityFn = () => 1): VolEvent {
+  if (m.height) return heightTrack(m, o, d, tmax, rand);
   const mu = ptMediumMajorant(m);
   const w: [number, number, number] = [1, 1, 1];
   if (!(mu > 0)) return { kind: 'pass', t: tmax, weight: w };
@@ -228,6 +304,10 @@ export function deltaTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand
 
 /** Transmittance estimate over a segment (`ptVolTrSegment`): closed form for a homogeneous medium, ratio tracking for a grid. */
 export function transmittance(m: PtMedium, o: VolRgb, d: VolRgb, len: number, rand: () => number, density: DensityFn = () => 1, roulette = false): [number, number, number] {
+  if (m.height) {
+    const G = Math.min(heightOpticalDepth(m.height, o, d, len), 1e30);
+    return m.sigmaT.map((s) => Math.exp(-s * G)) as [number, number, number];
+  }
   if (!m.grid) return m.sigmaT.map((s) => Math.exp(-s * len)) as [number, number, number];
   const mu = ptMediumMajorant(m);
   const tr: [number, number, number] = [1, 1, 1];

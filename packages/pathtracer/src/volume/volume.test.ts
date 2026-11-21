@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -536,5 +536,85 @@ describe('sparse brick atlas (V3.2)', () => {
       expect(atlasDensityAtIndex(atlas, x, 8, 16)).toBe(dense(x, 8, 16));
       expect(atlasDensityAtIndex(atlas, 5, x, 3)).toBe(dense(5, x, 3));
     }
+  });
+});
+
+describe('height fog (V4.5)', () => {
+  const h = { y0: 0.5, H: 2 };
+  const sig = [0.3, 0.5, 0.8] as const;
+  const med = ptMediumFrom([0, 0, 0], sig, 0, 1, undefined, h);
+  const numericG = (o: readonly number[], d: readonly number[], L: number): number => {
+    const n = 20000;
+    let s = 0;
+    for (let i = 0; i < n; i++) s += Math.exp(-((o[1] as number) + (d[1] as number) * ((i + 0.5) / n) * L - h.y0) / h.H);
+    return (s * L) / n;
+  };
+  const dirs: [number, number, number][] = [[0.6, 0.8, 0], [0.6, -0.8, 0], [1, 0, 0], [0.99999, 0.0001, Math.sqrt(1 - 0.99999 ** 2 - 1e-8)], [0.36, -0.48, 0.8]];
+  for (const d of dirs) {
+    for (const L of [0.1, 2, 9]) {
+      it(`optical depth matches the numeric integral (d.y ${d[1].toFixed(4)}, L ${L})`, () => {
+        const o = [0.2, 1.7, -0.4] as const;
+        expect(heightOpticalDepth(h, o, d, L) / numericG(o, d, L)).toBeCloseTo(1, 5);
+      });
+    }
+    it(`distance inverts the optical depth (d.y ${d[1].toFixed(4)})`, () => {
+      const o = [0, 1.2, 0] as const;
+      for (const t of [0.01, 0.5, 3, 12]) expect(heightDistance(h, o, d, heightOpticalDepth(h, o, d, t)) / t).toBeCloseTo(1, 4);
+    });
+  }
+  it('transmittance is the closed form exp(-sigma G)', () => {
+    const o = [0, 3, 0] as const, d = [0.6, -0.8, 0] as const;
+    const tr = transmittance(med, o, d, 4, () => 0.5);
+    const G = (Math.exp(-(3 - 0.5) / 2) * 2) / -0.8 * (1 - Math.exp((-4 * -0.8) / 2));
+    sig.forEach((s, c) => expect(tr[c]).toBeCloseTo(Math.exp(-s * G), 10));
+  });
+  it('sampled collision distances follow p(t) = sigma(t) exp(-tau(t)) (grey medium, albedo 1)', () => {
+    const g = ptMediumFrom([0, 0, 0], [0.7, 0.7, 0.7], 0, 1, undefined, h);
+    const o = [0, 4, 0] as const, d = [0.6, -0.8, 0] as const, tmax = 6;
+    const r = rng(11);
+    const bins = 12, count = new Array<number>(bins).fill(0);
+    const n = 400000;
+    let passed = 0;
+    for (let i = 0; i < n; i++) {
+      const ev = deltaTrack(g, o, d, tmax, r);
+      expect(ev.weight[0]).toBeCloseTo(1, 12);
+      if (ev.kind === 'pass') passed++;
+      else count[Math.min(bins - 1, Math.floor((ev.t / tmax) * bins))]!++;
+    }
+    const cdf = (t: number): number => 1 - Math.exp(-0.7 * heightOpticalDepth(h, o, d, t));
+    for (let b = 0; b < bins; b++) {
+      const p = cdf(((b + 1) / bins) * tmax) - cdf((b / bins) * tmax);
+      expect(count[b]! / n).toBeCloseTo(p, 2);
+    }
+    expect(passed / n).toBeCloseTo(1 - cdf(tmax), 2);
+  });
+  it('chromatic flight is unbiased: the mean pass weight is the transmittance and the scatter weights integrate to the single scatter', () => {
+    const m = ptMediumFrom([0.1, 0.2, 0.1], [0.3, 0.3, 0.7], 0, 1, undefined, h);
+    const o = [0, 2, 0] as const, d = [0.6, 0.8, 0] as const, tmax = 5;
+    const r = rng(5);
+    const n = 300000;
+    const pass = [0, 0, 0], scat = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const ev = deltaTrack(m, o, d, tmax, r);
+      const into = ev.kind === 'pass' ? pass : ev.kind === 'scatter' ? scat : null;
+      if (into) for (let c = 0; c < 3; c++) into[c]! += ev.weight[c]!;
+    }
+    const G = heightOpticalDepth(h, o, d, tmax);
+    for (let c = 0; c < 3; c++) {
+      expect(pass[c]! / n).toBeCloseTo(Math.exp(-m.sigmaT[c]! * G), 2);
+      // expected number of scatters of channel c over [0, tmax]: integral of sigma_s T over t = albedo (1 - T)
+      expect(scat[c]! / n).toBeCloseTo(m.albedo[c]! * (1 - Math.exp(-m.sigmaT[c]! * G)), 2);
+    }
+  });
+  it('a purely absorbing height fog never collides and passes with the exact transmittance', () => {
+    const m = ptMediumFrom([0.3, 0.5, 0.8], [0, 0, 0], 0, 1, undefined, h);
+    const o = [0, 1, 0] as const, d = [0, 1, 0] as const;
+    const ev = deltaTrack(m, o, d, 3, () => 0.3);
+    const G = heightOpticalDepth(h, o, d, 3);
+    expect(ev.kind).toBe('pass');
+    for (let c = 0; c < 3; c++) expect(ev.weight[c]).toBeCloseTo(Math.exp(-m.sigmaT[c]! * G), 12);
+  });
+  it('an infinite upward ray has a finite depth H e^{-a} / d.y', () => {
+    expect(heightOpticalDepth(h, [0, 0.5, 0], [0, 1, 0], 1e9)).toBeCloseTo(2, 6);
   });
 });

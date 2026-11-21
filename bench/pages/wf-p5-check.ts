@@ -46,9 +46,13 @@ const CASES: Record<string, Case> = {
   // media: closed forms and scenes (docs/internal/design/volumes.md)
   'vol-absorb-slab': { scene: 'vol-absorb-slab' },
   'vol-camera-medium': { scene: 'vol-camera-medium' },
+  'vol-height-absorb': { scene: 'vol-height-absorb' },
+  'vol-height-furnace': { scene: 'vol-height-furnace' },
   'vol-furnace-sphere': { scene: 'vol-furnace-sphere' },
   'vol-slab-single': { scene: 'vol-slab-single' },
   'vol-grid-slab': { scene: 'vol-grid-slab' },
+  'vol-camera-grid': { scene: 'vol-camera-grid' },
+  'vol-camera-grid-auto': { scene: 'vol-camera-grid-auto' },
   'vol-grid-slab-brick': { scene: 'vol-grid-slab', settings: { volumeMajorant: 'brick' } },
   'vol-cornell-smoke': { scene: 'vol-cornell-smoke' },
   'vol-cornell-smoke-ratio': { scene: 'vol-cornell-smoke', settings: { volumeShadow: 'ratio' } },

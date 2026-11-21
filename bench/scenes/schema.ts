@@ -160,6 +160,12 @@ export type MaterialDesc =
  */
 export type MediumDesc = ({ type: 'homogeneous' } | {
   /**
+   * V4.5 height fog (exponential atmosphere): `sigma_t(x) = (sigmaA + sigmaS) * scale * exp(-(x.y - y0) / H)` in WORLD y (`sigmaA` / `sigmaS` are the coefficients at height `y0`). Closed-form
+   * free flight and transmittance in our kernels; pbrt-v4 and Mitsuba 3 have no exponential medium (the exporters throw). Bound it by a closed interface mesh, or use it as `cameraMedium`.
+   */
+  type: 'height'; y0: number; H: number;
+} | {
+  /**
    * Density on a dense grid over a box: the coefficients are multiplied by the trilinearly interpolated value (voxel centres at (i + 0.5) / n
    * across `bounds`, zero outside; pbrt `uniformgrid` / Mitsuba `gridvolume` convention). `density` is x fastest, then y, then z (nx * ny * nz values).
    * The box is in the coordinate frame of the mesh that bounds the medium (its object space, so the mesh transform moves the grid with it).

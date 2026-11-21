@@ -651,9 +651,11 @@ export class PtMegakernel {
     staging.unmap();
     staging.destroy();
     const resolved = resolveIntegratorOptions(this.options.integrator ?? {});
-    const n = resolved.accumulate ? Math.max(1, this.samples) : 1;
+    const n0 = resolved.accumulate ? Math.max(1, this.samples) : 1;
+    const adaptive = !!this.options.integrator?.volumes?.adaptive;
     const data = new Float32Array(sums.length);
     for (let i = 0; i < sums.length; i += 4) {
+      const n = adaptive ? Math.max(1, sums[i + 3] as number) : n0; // volumes.adaptive: each pixel's own sample count
       data[i] = (sums[i] as number) / n;
       data[i + 1] = (sums[i + 1] as number) / n;
       data[i + 2] = (sums[i + 2] as number) / n;
@@ -687,7 +689,7 @@ export class PtMegakernel {
     if (!this.accum) throw new Error('PtMegakernel: nothing rendered');
     if (!this.options.integrator?.volumes?.outputs) throw new Error('PtMegakernel.readVolumeOutputs: the kernel was built without integrator.volumes.outputs');
     const sums = new Float32Array(await this.readBuffer(this.accum, 0, this.width * this.height * 16 * (1 + PT_VOLUME_OUTPUT_VEC4)));
-    return ptDecodeVolumeOutputs(sums, this.width, this.height, this.samples);
+    return ptDecodeVolumeOutputs(sums, this.width, this.height, this.samples, !!this.options.integrator?.volumes?.adaptive);
   }
 
   /**
@@ -711,10 +713,26 @@ export class PtMegakernel {
           }
         },
         read: () => this.readVolumeOutputs(),
+        ...(options.adaptive ? { markDone: (done: Uint8Array) => this.writeDoneFlags(done) } : {}),
       },
       options,
       this.samples,
     );
+  }
+
+  /**
+   * V2.5b: writes the per-pixel DONE flags (`volumes.adaptive`): lane y of accumulator plane 3 (the first-scatter plane, lanes y / z / w are free). Reads the plane back and
+   * writes it whole (the GPU is idle between batches), so lane x (the scatter counter) is kept. Outside any timed region.
+   */
+  async writeDoneFlags(done: Uint8Array): Promise<void> {
+    if (!this.accum) throw new Error('PtMegakernel: nothing rendered');
+    if (!this.options.integrator?.volumes?.adaptive) throw new Error('PtMegakernel.writeDoneFlags: the kernel was built without integrator.volumes.adaptive');
+    const n = this.width * this.height;
+    if (done.length !== n) throw new RangeError(`PtMegakernel.writeDoneFlags: ${done.length} flags for ${n} pixels`);
+    const offset = 3 * n * 16;
+    const plane = new Float32Array(await this.readBuffer(this.accum, offset, n * 16));
+    for (let i = 0; i < n; i++) plane[i * 4 + 1] = done[i] ? 1 : 0;
+    this.device.queue.writeBuffer(this.accum, offset, plane);
   }
 
   /** `integrator.frame`: the last frame's beauty and guide planes, read back (outside any timed region). The GPU buffers themselves: `frameBuffers`. */

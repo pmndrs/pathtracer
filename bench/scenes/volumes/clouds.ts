@@ -293,4 +293,65 @@ export const volLampFog: SceneDesc = {
   ],
   environment: { type: 'uniform', radiance: [0, 0, 0] },
 };
-export const cloudScenes: readonly SceneDesc[] = [volThinFogSun, volLampFog, ...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];
+/**
+ * V4.5 height fog closed forms. A 40 m interface box holds exponential fog `sigma_t = sigma0 exp(-(y - y0) / H)` (y0 = 0, H = 4); a camera outside looks through it along a slanted ray
+ * (0.2 degree field of view = one direction) at a unit sky. Absorbing (albedo 0): pixel = exp(-sigma0 G), `G = e^{-a} H / d.y (1 - exp(-L d.y / H))` over the chord L inside the box
+ * (deterministic: no collisions are sampled). `vol-height-furnace`: the same fog with albedo 1, wide view, maxDepth 400: every pixel is 1. No pbrt / Mitsuba reference (neither has an exponential medium).
+ */
+const HEIGHT = { y0: 0, H: 4 } as const;
+const heightChord = (pos: readonly [number, number, number], dir: readonly [number, number, number], half: number): number => {
+  let tIn = 0, tOut = Infinity;
+  for (let a = 0; a < 3; a++) {
+    if (Math.abs(dir[a]!) < 1e-12) continue;
+    const t0 = (-half - pos[a]!) / dir[a]!, t1 = (half - pos[a]!) / dir[a]!;
+    tIn = Math.max(tIn, Math.min(t0, t1));
+    tOut = Math.min(tOut, Math.max(t0, t1));
+  }
+  return tOut - tIn;
+};
+const heightAbsorb = (name: string, dy: number): SceneDesc => {
+  const pos = [0, 1, 30] as const;
+  const n = Math.hypot(dy, 1);
+  const dir = [0, dy / n, -1 / n] as const;
+  const half = 20;
+  // chord and entry point of the camera ray with the box
+  let tIn = 0;
+  for (let a = 0; a < 3; a++) if (Math.abs(dir[a]!) > 1e-12) tIn = Math.max(tIn, Math.min((-half - pos[a]!) / dir[a]!, (half - pos[a]!) / dir[a]!));
+  const L = heightChord(pos, dir, half);
+  const sigma = [0.02, 0.05, 0.1] as const;
+  const yEntry = pos[1] + dir[1] * tIn;
+  const x = (L * dir[1]) / HEIGHT.H;
+  const G = Math.exp(-(yEntry - HEIGHT.y0) / HEIGHT.H) * L * (Math.abs(x) < 1e-9 ? 1 : (1 - Math.exp(-x)) / x);
+  return {
+    version: 1,
+    name,
+    purpose: `Absorbing exponential height fog (sigma0 0.02/0.05/0.1, H 4 m) in a 40 m interface box, slanted camera ray (d.y ${(dir[1]).toFixed(3)}) at a unit sky: pixel = exp(-sigma0 G) with the closed-form depth G = ${G.toFixed(4)} (V4.5).`,
+    tier: 1,
+    camera: { type: 'perspective', position: pos, target: [pos[0] + dir[0], pos[1] + dir[1], pos[2] + dir[2]], up: [0, 1, 0], yFovDeg: 0.2 },
+    film: { width: 32, height: 32, filter: 'box' },
+    integrator: { maxDepth: 8 },
+    materials: { boundary: { type: 'interface' } },
+    media: { fog: { type: 'height', ...HEIGHT, sigmaA: sigma, sigmaS: [0, 0, 0] } },
+    meshes: [{ name: 'box', geometry: { type: 'box', size: [40, 40, 40] }, material: 'boundary', medium: { interior: 'fog' } }],
+    environment: { type: 'uniform', radiance: [1, 1, 1] },
+    expected: { type: 'mean', value: sigma.map((s) => Math.exp(-s * G)) as unknown as [number, number, number], tolerance: 2e-4, pixelwise: true },
+  };
+};
+export const volHeightAbsorb: SceneDesc = heightAbsorb('vol-height-absorb', 0.3);
+export const volHeightAbsorbDown: SceneDesc = heightAbsorb('vol-height-absorb-down', -0.12);
+export const volHeightFurnace: SceneDesc = {
+  version: 1,
+  name: 'vol-height-furnace',
+  purpose: 'Non-absorbing exponential height fog (sigma_s0 0.3, H 4 m, g 0.5) in a 20 m interface box under a unit sky, maxDepth 400: every pixel is 1 (V4.5 scatter weights, NEE through the medium).',
+  tier: 1,
+  camera: { type: 'perspective', position: [0, 3, 30], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+  film: { width: 48, height: 48, filter: 'box' },
+  integrator: { maxDepth: 400 },
+  materials: { boundary: { type: 'interface' } },
+  media: { fog: { type: 'height', ...HEIGHT, sigmaA: [0, 0, 0], sigmaS: [0.3, 0.3, 0.3], g: 0.5 } },
+  meshes: [{ name: 'box', geometry: { type: 'box', size: [20, 20, 20] }, material: 'boundary', medium: { interior: 'fog' } }],
+  environment: { type: 'uniform', radiance: [1, 1, 1] },
+  expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.01, pixelwise: false },
+};
+export const cloudHeightScenes: readonly SceneDesc[] = [volHeightAbsorb, volHeightAbsorbDown, volHeightFurnace];
+export const cloudScenes: readonly SceneDesc[] = [volThinFogSun, volLampFog, ...cloudHeightScenes, ...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];
