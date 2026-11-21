@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Build an intuition for a multilayer perceptron, train a tiny network, and trace how the Classroom renderer learns indirect light.">
+  <title>From one neuron to a radiance cache · pathtracer</title>
+  <link rel="icon" href="../../shared/pmndrs-logo.svg"><link rel="stylesheet" href="./guide.css">
+</head>
+<body>
+<a class="skip" href="#one-neuron">Skip to walkthrough</a>
+<header><div class="bar"><a class="brand" href="../../"><img src="../../shared/pmndrs-logo.svg" width="32" height="32" alt="">pathtracer <span>/</span> <small>Field guides</small></a><a class="demo-link" data-classroom href="../../showcase/classroom/">Classroom demo ↗</a></div></header>
+<main>
+<div class="hero">
+  <div class="intro"><p class="kicker">Graphics programming · Interactive guide</p><h1>From one neuron to a <em>radiance cache.</em></h1><p>Train a function with two hidden neurons. Then follow a ray through Classroom to see how a bigger version learns the light that bounces back.</p><a class="start" href="#one-neuron">Start the walkthrough <span aria-hidden="true">↓</span></a></div>
+  <figure class="cover"><img src="./classroom.webp" width="960" height="540" alt="Afternoon sunlight crosses the desks in our rendered Blender Classroom. The shadowed sides of the desks still receive bounced light."><figcaption><span>Classroom</span><span>NRC + denoising + upscaling</span></figcaption></figure>
+</div>
+<div class="layout">
+<nav class="contents" aria-label="Walkthrough chapters"><p class="kicker">In this guide</p><a href="#one-neuron">One forward pass</a><a href="#training">Teach it a curve</a><a href="#light-path">Follow the light</a><a href="#reuse">Design your own</a></nav>
+<div class="chapters">
+<section id="one-neuron"><p class="kicker">The model</p><h2>One forward pass</h2>
+<p>A <strong>multilayer perceptron (MLP)</strong> is a function made of layers. You supply numbers, each layer computes new numbers, and the last layer returns a prediction. If you can write a dot product and a loop, you can run one. The weights are ordinary numbers shared across calls. Learning means changing those numbers using examples.</p>
+<p>Start with a sensor dial. Its input <code>x</code> goes from 0 to 1. We want to predict the instrument’s measured response. A single neuron multiplies the input by a <strong>weight</strong>, adds a <strong>bias</strong>, then applies an <strong>activation</strong>. Here the activation is <code>ReLU(z) = max(0, z)</code>. The bias moves the point where the neuron switches on. At the starting dial value of 0.75, neuron B computes <code>max(0, 1 × 0.75 − 0.50) = 0.25</code>.</p>
+<div class="lab"><div class="lab-head"><h3>Inside a tiny MLP</h3><span>1 → 2 → 1</span></div>
+<svg class="network" viewBox="0 0 560 175" role="img" aria-labelledby="net-title net-desc"><title id="net-title">One input, two hidden neurons and one output</title><desc id="net-desc">The input feeds both hidden neurons. Each hidden value feeds the output. Move the slider to inspect their values.</desc>
+<g class="wire"><path d="M86 86 C148 86 165 42 231 42 M86 86 C148 86 165 132 231 132 M320 42 C388 42 401 86 463 86 M320 132 C388 132 401 86 463 86"/></g>
+<g class="node"><rect x="14" y="62" width="81" height="49" rx="12"/><rect x="229" y="17" width="96" height="49" rx="12"/><rect x="229" y="108" width="96" height="49" rx="12"/><rect class="out" x="461" y="62" width="88" height="49" rx="12"/></g>
+<g class="node-label"><text x="54" y="82">input x</text><text x="277" y="37">hidden A</text><text x="277" y="128">hidden B</text><text x="505" y="82">prediction</text></g>
+<g class="value"><text id="vx" x="54" y="101">0.750</text><text id="va" x="277" y="56">0.750</text><text id="vb" x="277" y="147">0.250</text><text id="vy" x="505" y="101">0.350</text></g></svg>
+<label class="slider">Sensor input <input id="dial" type="range" min="0" max="1" step="0.01" value="0.75"><output for="dial" id="dial-value">0.75</output></label>
+<pre id="formula">A = ReLU(1.00 × x + 0.00)
+B = ReLU(1.00 × x − 0.50)
+y = 0.40 × A − 0.60 × B + 0.20</pre></div>
+<p><strong>Try it.</strong> With the starting weights, set the dial to 0.25. Hidden B goes to zero. Cross 0.50 and B begins subtracting from the output. Two straight segments meet at a bend. Without an activation, stacking weighted sums would still give you a straight line.</p>
+<p>That calculation is <strong>inference</strong>. A dense layer with several inputs does the same thing with a vector. Each output gets its own weighted sum of the previous layer. “Hidden” means the layer’s values are computed inside the function. Here is the whole forward pass in JavaScript for any number of inputs:</p>
+<pre class="shape">function neuron(inputs, weights, bias) {
+  return inputs.reduce((sum, x, i) =&gt; sum + x * weights[i], bias)
+}
+
+function predict(inputs, hiddenLayer, output) {
+  const hidden = hiddenLayer.map(({ weights, bias }) =&gt;
+    Math.max(0, neuron(inputs, weights, bias)))
+  return neuron(hidden, output.weights, output.bias)
+}</pre>
+<p>A hidden layer builds a set of reusable features. The output mixes them. For RGB, use three output neurons with their own weights and the same hidden values.</p>
+</section>
+<section id="training"><p class="kicker">The learning loop</p><h2>Teach it a curve</h2>
+<p>The lab generates nine synthetic calibration readings from a fixed curve. Each is a pair <code>(dial, measured response)</code>. We know the desired output at those points. Training adjusts the weights and biases until the predictions get closer. The chart uses the very same network as the diagram above.</p>
+<div class="lab"><div class="lab-head"><h3>Calibration bench</h3><span id="steps">0 updates</span></div>
+<div class="legend"><span>━ Prediction</span><span>● Training reading</span><span>× Held-out reading</span></div>
+<svg id="plot" viewBox="0 0 520 210" role="img" aria-label="Predicted instrument response against training and held-out readings. Error is reported below."><g class="axes"><path d="M36 12V179H504 M36 96H504"/></g><g class="axis-text"><text x="8" y="17">1</text><text x="9" y="181">0</text><text x="36" y="200">0</text><text x="218" y="200">sensor input</text><text x="497" y="200">1</text></g><g id="samples"></g><path id="curve" fill="none"/><circle id="probe" r="4"/></svg>
+<div class="actions"><button id="train">Train 100 steps</button><button id="reset">Reset weights</button></div><div class="metrics" role="status"><span>Training MSE <b id="loss"></b></span><span>Held-out MSE <b id="test-loss"></b></span></div></div>
+<ol class="steps"><li><b>Predict.</b> Run the nine dial values through the network using the current weights.</li><li><b>Score.</b> For each reading, square the difference between prediction and target. Average those squares to get mean squared error (MSE).</li><li><b>Assign credit.</b> Backpropagation uses the chain rule to find how much each weight affects that loss. For one reading, the output weight on A has gradient <code>2 × (prediction − target) × A</code>. If the prediction is low and A is positive, raising that weight helps.</li><li><b>Update.</b> Subtract a small multiple of each gradient from its weight or bias. One click repeats this cycle 100 times. Return to the neuron diagram to inspect the learned coefficients.</li></ol>
+<p><strong>Check the crosses.</strong> Those eight readings fall between the training points and never enter the updates. Lower error there is evidence the model can interpolate on this dial. It tells us little about a different sensor or inputs outside this range. For a real one-dimensional calibration, a lookup table with interpolation makes an excellent baseline.</p>
+</section>
+<section id="light-path"><p class="kicker">The renderer</p><h2>Follow the light</h2>
+<p>Look underneath a desk in Classroom. Even where the sun is blocked, light can bounce off the floor and reach the wood. A path tracer estimates that indirect contribution by tracing more rays. A <strong>neural radiance cache (NRC)</strong> learns a function that estimates the remaining contribution at a surface hit. Many paths can share what the weights have learned.</p>
+<figure class="path-figure"><h3>One displayed path</h3>
+<svg viewBox="0 0 550 163" role="img" aria-labelledby="path-title"><title id="path-title">The camera ray hits the desk, bounces to the floor, then queries the cache for the remaining light.</title>
+<path class="surface" d="M89 33H229 M255 115H398"/><path class="traced" d="M33 107L158 36L325 111"/><path class="estimated" d="M325 111Q383 65 457 52"/><circle class="hit" cx="158" cy="36" r="5"/><circle class="hit" cx="325" cy="111" r="5"/><text x="12" y="132">Camera</text><text x="116" y="23">Desk hit</text><text x="282" y="143">Floor hit</text><text x="425" y="38">Cache RGB</text></svg>
+<figcaption>The solid segments are traced. The dashed segment represents the light estimated at the floor hit.</figcaption></figure>
+<h3>What goes into the cache?</h3>
+<p>The Classroom preset traces one bounce before the cache query. It encodes the hit position, normal, reflected view direction, roughness, and material color information into 64 numbers. Position uses triangle waves at four active frequency bands per axis, giving the network signals that vary at several spatial scales. Reflected direction helps distinguish two views of the same glossy floor.</p>
+<pre class="shape">64 features → 32 ReLU → 32 ReLU → 32 ReLU → 3 linear outputs</pre>
+<p>Those three outputs estimate indirect red, green, and blue in linear radiance units. This compact implementation uses weight matrices without biases. The tracer keeps emission and direct-light samples already gathered. It multiplies the predicted remainder by <strong>throughput</strong>, the accumulated path weight, before adding it to the pixel.</p>
+<p>For one color channel, suppose the path has gathered <code>0.30</code>, its throughput is <code>0.50</code>, and the cache predicts <code>0.24</code> at the query. The pixel sample becomes <code>0.30 + 0.50 × 0.24 = 0.42</code>. Predicting the whole pixel here would count some light twice.</p>
+<h3>Where do the answers come from?</h3>
+<p>Selected training paths continue deeper. For an earlier hit, the tracer gathers the contributions after that hit up to the training boundary. If the path reaches that boundary, it uses the cache’s current estimate for the remaining tail. It divides this sum by the earlier hit’s throughput, channel by channel, to build a target in the same units as the network output. A path that ends naturally supplies its traced remainder.</p>
+<div class="loop" aria-label="Online learning loop"><span>Trace selected paths</span><i>→</i><span>Build RGB targets</span><i>→</i><span>Update weights</span><i>→</i><span>Query again</span></div>
+<p>The compact preset trains inline using a depth-four training boundary. It uses Adam to scale weight updates and a relative loss that accounts for brightness. Display inference can use a moving average of the trained weights. Each frame provides fresh examples, so changing the sun changes the targets even when the camera stays still. Bootstrapping from the cache saves work and can also reinforce a bad estimate where training paths rarely go.</p>
+<div class="exercise"><h3>Try it in Classroom</h3><p>Choose <b>Plain PT / NRC</b> and <b>Raw radiance</b>. Let the cache warm up, turn off <b>Train every frame</b>, then rotate the sun. Watch a shadowed desk as you turn training back on. Direct sunlight can react immediately while the learned indirect color takes updates to catch up. Switch to <b>Final output</b> to see what denoising and upscaling add. The image can keep accumulating with the weights frozen.</p><a data-classroom href="../../showcase/classroom/">Open Classroom ↗</a></div>
+</section>
+<section id="reuse"><p class="kicker">Beyond rendering</p><h2>Design your own</h2>
+<p>Write down the function signature first. What can you measure at prediction time? Who supplies a trustworthy target during training? What variation must survive the approximation? Here are three different answers.</p>
+<div class="recipes">
+<details open><summary>Approximate a material response</summary><p><b>Inputs</b> Roughness, viewing angle, and lighting angle for one fixed material family. <b>Target</b> Reflectance from a slow numerical integration. Generate examples offline and concentrate some near grazing angles.</p><p><b>Test</b> Hold out entire roughness values. Inspect highlight width and energy, then time a batch of queries against an interpolated lookup table. A smooth image can still have the wrong highlight.</p></details>
+<details><summary>Predict animation corrections</summary><p><b>Inputs</b> Joint rotations for a particular rig. <b>Target</b> Corrective blendshape weights from an artist-approved rig evaluation. Train offline, then infer weights for each animated pose.</p><p><b>Test</b> Hold out whole motion clips. Compare elbow and shoulder silhouettes with the original rig and a nearest-pose baseline. If the correction depends on motion history, two identical poses can need different answers. Add velocity or history, or narrow the task.</p></details>
+<details><summary>Extend lighting into a courtyard</summary><p><b>Inputs</b> Surface and direction features in a stable coordinate system. <b>Target</b> Indirect light sampled from the streamed geometry. Keep tracing during warm-up as new surfaces enter view. A shared model can accept new points immediately, but it needs evidence about their lighting.</p><p><b>Test</b> Walk outside, wait, then revisit the first room. Watch for forgotten lighting and new-region bias. If streaming changes the scene bounds, renormalizing the same world point changes its input. Compare fixed bounds or region-local caches against the current setup.</p></details></div>
+<p><strong>A first prototype.</strong> Pick one expensive function you already trust. Record inputs and outputs, reserve a separate test set, and train a small model offline. Measure the largest error that matters to the application and total time including feature encoding and data movement. Online learning earns its cost when the target changes and you can keep collecting good examples.</p>
+<h3>Read the implementation</h3><div class="sources"><a href="https://github.com/pmndrs/pathtracer/blob/main/packages/mlp/src/config.ts">Network shapes and loss ↗</a><a href="https://github.com/pmndrs/pathtracer/blob/main/bench/nrc/phase10.ts">Classroom cache preset ↗</a><a href="https://github.com/pmndrs/pathtracer/blob/main/bench/nrc/cache.ts">Query and training hooks ↗</a><a href="https://research.nvidia.com/publication/2021-06_real-time-neural-radiance-caching-path-tracing">Original NRC paper ↗</a><a href="https://d2l.ai/chapter_multilayer-perceptrons/mlp.html">Dive into Deep Learning · MLPs ↗</a></div>
+</section></div></div></main>
+<footer><a href="#one-neuron">Back to the first lesson ↑</a><a href="../../">Pathtracer examples ↗</a></footer>
+<script type="module" src="./guide.ts"></script>
+</body></html>

@@ -17,6 +17,11 @@ export function setupHero() {
   const footer = document.createElement('footer');
   footer.className = 'hero-footer';
   footer.innerHTML = '<div class="hero-controls"><div><label for="stageSel">Pipeline stage</label></div><div><label for="view">Comparison</label></div><div><label for="exposure">Exposure</label></div><div class="hero-actions"></div></div><p class="hero-help">Drag to look · WASD to move · Q / E for height · Shift-drag the split</p><p class="hero-credit"></p> <a class="quality-link" href="./nrc-classroom-quality.html">Classroom quality bench ↗</a>';
+  const guide = document.createElement('a');
+  guide.className = 'quality-link';
+  guide.href = 'https://pmndrs.github.io/pathtracer/examples/learn/nrc/';
+  guide.textContent = 'How the radiance cache learns ↗';
+  footer.append(guide);
   app.prepend(header);
   app.append(footer);
   function select(id: string, options: [string, string][], target: Element) {
