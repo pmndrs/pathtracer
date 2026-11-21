@@ -33,6 +33,18 @@ export interface PtStopOptions extends PtStopTarget {
   adaptive?: boolean;
   /** Fewest samples a pixel gets before it may be flagged done (adaptive only, default 64). */
   minSamples?: number;
+  /**
+   * V2.5c (adaptive only): the relative-SE test must hold for this many consecutive batches before a pixel is flagged (default 1). A heavy-tailed pixel that has not yet seen its rare
+   * contribution reads a low SE for a batch or two, so waiting longer lets the rare event arrive (reduces, does not remove, the stopping bias).
+   */
+  consecutive?: number;
+  /** V2.5c (adaptive only): a pixel is also held back while its largest single-batch luminance mean exceeds `maxBatchRatio` x its running mean (default off). A tail event makes one batch stand out. */
+  maxBatchRatio?: number;
+  /**
+   * V2.5c (adaptive only): per-pixel sample budgets instead of the SE test: a pixel is flagged once it has `budgets[i]` samples. Unbiased when the budgets come from an INDEPENDENT pilot
+   * (`ptAllocateBudgets`), because the stop no longer depends on the samples that form the estimate. `ptRenderAllocated` does pilot + fresh render.
+   */
+  budgets?: ArrayLike<number>;
 }
 
 export interface PtStopMeasure {
@@ -84,9 +96,11 @@ export function ptPerPixelStats(out: PtVolumeOutputs, done?: Uint8Array): PtPerP
  * The adaptive flag logic (V2.5b, pure): a pixel is done once it has `minSamples` samples and its relative SE (the `measure` of `ptStopMeasure`: luminance se / max(mean, floor), or the
  * worst channel) is below `below`. Flags are sticky (`prev`). Returns the flags and how many are set.
  */
-export function ptAdaptiveFlags(out: PtVolumeOutputs, target: PtStopTarget, minSamples: number, prev?: Uint8Array): { done: Uint8Array; count: number } {
+export function ptAdaptiveFlags(out: PtVolumeOutputs, target: PtStopTarget, minSamples: number, prev?: Uint8Array, rule?: PtAdaptiveRule): { done: Uint8Array; count: number } {
   const q = target.pixelRelSe;
   if (!q) throw new Error('ptAdaptiveFlags: needs pixelRelSe');
+  const need = Math.max(1, Math.floor(rule?.consecutive ?? 1));
+  const st = rule?.state;
   const n = out.width * out.height;
   const worst = target.measure === 'worst-channel';
   const floor = q.floor ?? 1e-3;
@@ -95,6 +109,7 @@ export function ptAdaptiveFlags(out: PtVolumeOutputs, target: PtStopTarget, minS
   for (let i = 0; i < n; i++) {
     if (!done[i] && (out.sampleCount[i] as number) >= minSamples) {
       let mL = 0, sL = 0, worstPx = 0;
+      const cnt = out.sampleCount[i] as number;
       for (let c = 0; c < 3; c++) {
         const m = out.radiance[i * 3 + c] as number, s = out.stdError[i * 3 + c] as number;
         mL += (W[c] as number) * m;
@@ -102,11 +117,141 @@ export function ptAdaptiveFlags(out: PtVolumeOutputs, target: PtStopTarget, minS
         worstPx = Math.max(worstPx, s / Math.max(m, floor));
       }
       const rel = worst ? worstPx : sL / Math.max(mL, floor);
-      if (rel < q.below) done[i] = 1;
+      let ok = rel < q.below;
+      if (st) {
+        // luminance mean of the samples added since the last call (batch mean)
+        const added = cnt - st.prevCount[i]!;
+        if (added > 0) {
+          const bm = (mL * cnt - st.prevSum[i]!) / added;
+          if (bm > st.maxBatch[i]!) st.maxBatch[i] = bm;
+        }
+        st.prevSum[i] = mL * cnt;
+        st.prevCount[i] = cnt;
+        if (ok && rule?.maxBatchRatio !== undefined && st.maxBatch[i]! > rule.maxBatchRatio * Math.max(mL, floor)) ok = false;
+        st.streak[i] = ok ? Math.min(255, st.streak[i]! + 1) : 0;
+        ok = st.streak[i]! >= need;
+      }
+      if (ok) done[i] = 1;
     }
     if (done[i]) count++;
   }
   return { done, count };
+}
+
+/** V2.5c: per-pixel memory of the robust stopping rule (`consecutive`, `maxBatchRatio`). */
+export interface PtAdaptiveState { streak: Uint8Array; maxBatch: Float32Array; prevSum: Float32Array; prevCount: Float32Array }
+export interface PtAdaptiveRule { consecutive?: number; maxBatchRatio?: number; state?: PtAdaptiveState }
+export function ptAdaptiveState(n: number): PtAdaptiveState {
+  return { streak: new Uint8Array(n), maxBatch: new Float32Array(n), prevSum: new Float32Array(n), prevCount: new Float32Array(n) };
+}
+
+/** Flags for a per-pixel budget: done once the pixel has `budgets[i]` samples. */
+export function ptBudgetFlags(out: PtVolumeOutputs, budgets: ArrayLike<number>): { done: Uint8Array; count: number } {
+  const n = out.width * out.height;
+  if (budgets.length !== n) throw new RangeError(`ptBudgetFlags: ${budgets.length} budgets for ${n} pixels`);
+  const done = new Uint8Array(n);
+  let count = 0;
+  for (let i = 0; i < n; i++) if ((out.sampleCount[i] as number) >= (budgets[i] as number)) { done[i] = 1; count++; }
+  return { done, count };
+}
+
+export interface PtAllocateOptions {
+  /** The relative standard error each pixel should reach (the `pixelRelSe.below` of the target). */
+  below: number;
+  /** Mean floor of the relative error (default 1e-3). */
+  floor?: number;
+  /** Budget limits in samples per pixel (default 16 .. 4096). */
+  min?: number;
+  max?: number;
+  /** Samples per pixel of the pilot (`out.samples` when omitted). */
+  pilotSamples?: number;
+  /** Grow each pixel's error estimate to the max over its 3 x 3 neighbourhood (default true): a pilot pixel that has not yet seen its rare bright sample reads a low variance, its neighbours usually have seen it. */
+  dilate?: boolean;
+  /** Round budgets up to a multiple of this (the batch size the fresh render uses; default 1). */
+  grid?: number;
+}
+
+/**
+ * V2.5c (pure): the sample budget of every pixel from an independent PILOT: relative SE scales as 1/sqrt(n), so reaching `below` takes n = P (rse_P / below)^2 samples.
+ * The budget depends only on the pilot's samples, never on those of the render that uses it, so the render has no stopping bias (only the efficiency of the allocation is at stake).
+ */
+export function ptAllocateBudgets(pilot: PtVolumeOutputs, o: PtAllocateOptions): Float32Array {
+  const w = pilot.width, h = pilot.height, n = w * h;
+  const P = o.pilotSamples ?? pilot.samples;
+  const floor = o.floor ?? 1e-3, lo = o.min ?? 16, hi = Math.max(lo, o.max ?? 4096), grid = Math.max(1, Math.floor(o.grid ?? 1));
+  const rse = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let mL = 0, sL = 0;
+    for (let c = 0; c < 3; c++) { mL += (W[c] as number) * (pilot.radiance[i * 3 + c] as number); sL += (W[c] as number) * (pilot.stdError[i * 3 + c] as number); }
+    rse[i] = sL / Math.max(mL, floor);
+  }
+  let src = rse;
+  if (o.dilate ?? true) {
+    src = new Float32Array(n);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let m = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx >= 0 && yy >= 0 && xx < w && yy < h) m = Math.max(m, rse[yy * w + xx] as number);
+      }
+      src[y * w + x] = m;
+    }
+  }
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = (src[i] as number) / o.below;
+    const b = Math.min(hi, Math.max(lo, Number.isFinite(r) ? P * r * r : hi));
+    out[i] = Math.ceil(b / grid) * grid;
+  }
+  return out;
+}
+
+/** What `ptRenderAllocated` needs from a kernel: `renderUntil` and a way to start a fresh image with a new seed. */
+export interface PtAllocKernel {
+  renderUntil(options: PtStopOptions): Promise<PtRenderUntilResult>;
+  restart(seed: number): Promise<void>;
+}
+
+export interface PtAllocatedOptions extends PtStopOptions {
+  /** Pilot samples per pixel (default 64). */
+  pilotSamples?: number;
+  /** Budget limits (default minSamples .. maxSamples). */
+  minSamples?: number;
+  dilate?: boolean;
+  /** Seed of the fresh render (the pilot runs on whatever seed the kernel has; this one must differ). */
+  seed: number;
+  /** Multiplier on the allocated budgets (default 1; > 1 buys margin against a pilot that under-reads the tails). */
+  budgetScale?: number;
+}
+
+export interface PtAllocatedResult extends PtRenderUntilResult {
+  pilotSamplesPerPixel: number;
+  /** Fresh-render samples traced (sum over pixels) + the pilot's, per pixel count = film size x pilotSamples. */
+  totalWithPilot: number;
+  budgets: Float32Array;
+}
+
+/**
+ * V2.5c: "allocate, then render fresh". A pilot pass (uniform, `pilotSamples` per pixel) measures each pixel's variance; budgets follow (`ptAllocateBudgets`); the kernel is restarted on a new
+ * seed and rendered with per-pixel budgets. The returned image uses only the fresh samples, so it is independent of the budgets (no stopping bias). Needs a kernel built with `volumes.adaptive`.
+ */
+export async function ptRenderAllocated(kernel: PtAllocKernel, options: PtAllocatedOptions): Promise<PtAllocatedResult> {
+  const q = options.pixelRelSe;
+  if (!q) throw new Error('ptRenderAllocated: needs pixelRelSe');
+  const P = Math.max(2, Math.floor(options.pilotSamples ?? 64));
+  const lo = Math.max(2, Math.floor(options.minSamples ?? 16));
+  const hi = options.maxSamples ?? 4096;
+  const batch = Math.max(1, Math.floor(options.firstBatch ?? 16));
+  const pilot = await kernel.renderUntil({ pixelRelSe: { below: 0, ...(q.floor !== undefined ? { floor: q.floor } : {}) }, firstBatch: P, maxSamples: P });
+  const px = pilot.outputs.width * pilot.outputs.height;
+  const raw = ptAllocateBudgets(pilot.outputs, { below: q.below, ...(q.floor !== undefined ? { floor: q.floor } : {}), min: lo, max: hi, pilotSamples: P, ...(options.dilate !== undefined ? { dilate: options.dilate } : {}), grid: batch });
+  const scale = options.budgetScale ?? 1;
+  const budgets = scale === 1 ? raw : raw.map((b) => Math.min(Math.ceil((hi) / batch) * batch, Math.ceil((b * scale) / batch) * batch));
+  await kernel.restart(options.seed);
+  let maxBudget = 0;
+  for (const b of budgets) if (b > maxBudget) maxBudget = b;
+  const r = await kernel.renderUntil({ pixelRelSe: q, adaptive: true, budgets, minSamples: 2, firstBatch: batch, maxSamples: maxBudget, ...(options.measure ? { measure: options.measure } : {}), ...(options.passesPerSubmit ? { passesPerSubmit: options.passesPerSubmit } : {}) });
+  return { ...r, pilotSamplesPerPixel: P, totalWithPilot: (r.perPixel?.total ?? 0) + P * px, budgets };
 }
 
 const W = [0.2126, 0.7152, 0.0722] as const;
@@ -217,6 +362,8 @@ async function ptRenderUntilAdaptive(driver: PtStopDriver, options: PtStopOption
   let out: PtVolumeOutputs | null = null;
   let m: PtStopMeasure = { meanRelSe: Infinity, pixelRelSe: NaN };
   let met = false;
+  let rule: PtAdaptiveRule | undefined;
+  const robust = (options.consecutive ?? 1) > 1 || options.maxBatchRatio !== undefined;
   while (samples < max) {
     const n = Math.min(batch, max - samples);
     const t0 = now();
@@ -226,9 +373,10 @@ async function ptRenderUntilAdaptive(driver: PtStopDriver, options: PtStopOption
     out = await driver.read();
     m = ptStopMeasure(out, options);
     history.push({ samples, ...m, batchMs });
-    const f = ptAdaptiveFlags(out, options, minSamples, done);
+    if (robust && !rule) rule = { ...(options.consecutive !== undefined ? { consecutive: options.consecutive } : {}), ...(options.maxBatchRatio !== undefined ? { maxBatchRatio: options.maxBatchRatio } : {}), state: ptAdaptiveState(out.width * out.height) };
+    const f = options.budgets ? ptBudgetFlags(out, options.budgets) : ptAdaptiveFlags(out, options, minSamples, done, rule);
     done = f.done;
-    if (f.count / Math.max(1, done.length) >= quantile) { met = true; break; }
+    if (f.count / Math.max(1, done.length) >= (options.budgets ? 1 : quantile)) { met = true; break; }
     await driver.markDone(done);
   }
   if (!out) throw new Error('renderUntil: nothing rendered');

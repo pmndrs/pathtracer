@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ptAdaptiveFlags, ptPerPixelStats, ptRenderUntil, ptStopBatches, ptStopMeasure, ptStopMet } from './render-until.ts';
+import { ptAdaptiveFlags, ptAdaptiveState, ptAllocateBudgets, ptBudgetFlags, ptRenderAllocated, ptPerPixelStats, ptRenderUntil, ptStopBatches, ptStopMeasure, ptStopMet } from './render-until.ts';
 import { ptDecodeVolumeOutputs, type PtVolumeOutputs } from '../volume/volume.ts';
 
 /** A flat image of `n` pixels, radiance `m` in every channel, per-sample std `sd` (iid): se = sd / sqrt(N). */
@@ -153,5 +153,59 @@ describe('adaptive sampling (V2.5b)', () => {
     expect(r.perPixel!.total).toBe(64 + 448);
     expect(r.perPixel!.min).toBe(64);
     expect(r.perPixel!.max).toBe(448);
+  });
+});
+
+describe('stopping bias fixes (V2.5c)', () => {
+  it('consecutive batches delay the flag; a batch spike holds a pixel back', () => {
+    const t = { pixelRelSe: { below: 0.2 } };
+    const state = ptAdaptiveState(2);
+    const rule = { consecutive: 2, state };
+    const o1 = fake(2, 1, 1, 100);
+    expect(ptAdaptiveFlags(o1, t, 64, undefined, rule).count).toBe(0);
+    const o2 = fake(2, 1, 1, 200);
+    expect(ptAdaptiveFlags(o2, t, 64, undefined, rule).count).toBe(2);
+    // spike: pixel 0 got one batch of mean 10 (batch mean 10 vs running mean 5.5)
+    const st2 = ptAdaptiveState(2);
+    const a = fake(2, 1, 1, 100);
+    ptAdaptiveFlags(a, t, 64, undefined, { maxBatchRatio: 2, state: st2 });
+    const b = fake(2, 1, 1, 200);
+    b.radiance[0] = b.radiance[1] = b.radiance[2] = 1 + 9 * 0.5; // batch mean 10
+    expect(ptAdaptiveFlags(b, t, 64, undefined, { maxBatchRatio: 1.5, state: st2 }).done[0]).toBe(0);
+    expect(ptAdaptiveFlags(b, t, 64, undefined, { maxBatchRatio: 1.5, state: st2 }).done[1]).toBe(1);
+  });
+  it('budgets follow variance / mean^2 / target^2 within the limits, and the budget flags are exact', () => {
+    const o = fake(3, 1, 1, 64); // rse = 1/8 per pixel
+    o.stdError[3] = o.stdError[4] = o.stdError[5] = 0.25; // pixel 1: rse 0.25
+    o.stdError[6] = o.stdError[7] = o.stdError[8] = 0; // pixel 2: none
+    const b = ptAllocateBudgets(o, { below: 0.0625, min: 16, max: 1000, dilate: false });
+    expect(Array.from(b)).toEqual([256, 1000, 16]); // 64 * (0.125/0.0625)^2, clamp (64 * 16 = 1024), floor
+    const d = ptAllocateBudgets(o, { below: 0.0625, min: 16, max: 1000, dilate: true });
+    expect(Array.from(d)).toEqual([1000, 1000, 1000]);
+    const c = fake(3, 1, 1, 256);
+    expect(ptBudgetFlags(c, b).count).toBe(2);
+  });
+  it('allocate then render fresh: the final image uses only fresh samples and budgets are met', async () => {
+    const sd = [0.1, 1], count = [0, 0], done = [0, 0];
+    let restarts = 0;
+    const mk = (): PtVolumeOutputs => ({
+      width: 2, height: 1, samples: 0, radiance: new Float32Array(6).fill(1), order01: new Float32Array(6), transmittance: new Float32Array(2),
+      stdError: Float32Array.from([0, 1].flatMap((p) => [0, 1, 2].map(() => sd[p]! / Math.sqrt(Math.max(1, count[p]!))))),
+      firstScatterDistance: new Float32Array(2), scatterFraction: new Float32Array(2), sampleCount: Float32Array.from(count),
+    });
+    const kernel = {
+      restart: async () => { restarts++; count.fill(0); done.fill(0); },
+      renderUntil: (o: Parameters<typeof ptRenderUntil>[1]) => ptRenderUntil({
+        run: async (n) => { for (let p = 0; p < 2; p++) if (!done[p]) count[p]! += n; },
+        read: async () => mk(),
+        markDone: async (d) => { for (let p = 0; p < 2; p++) done[p] = d[p]!; },
+      }, o),
+    };
+    const r = await ptRenderAllocated(kernel, { pixelRelSe: { below: 0.05 }, pilotSamples: 64, minSamples: 16, maxSamples: 4096, firstBatch: 16, seed: 9, dilate: false });
+    expect(restarts).toBe(1);
+    expect(Array.from(r.budgets)).toEqual([16, 400]); // pilot rse 0.0125 -> 4 -> min 16; 0.125 -> 64 * 2.5^2 = 400
+    expect(count).toEqual([16, 400]);
+    expect(r.perPixel!.total).toBe(416);
+    expect(r.totalWithPilot).toBe(416 + 64 * 2);
   });
 });
