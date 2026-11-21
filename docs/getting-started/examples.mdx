@@ -38,10 +38,11 @@ The smallest complete programs: a first image, a glTF model.
 
 | Example | What it shows | Status |
 | --- | --- | --- |
-| [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) | rtClosest and rtSurface in your own compute shader: normals, uvs, materials and distances of the first hit. |  |
+| [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) | A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record. |  |
 | [Ambient occlusion](https://pmndrs.github.io/pathtracer/examples/raytracer/ao/) | rtVisible, the cheapest query: cosine rays over the hemisphere ask only whether anything is within a radius. |  |
 | [One-bounce shading](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/) | rtShade at the first hit: emission and one light sample with its shadow ray, the lighting a reflection or GI effect needs. |  |
 | [Batch tracing](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/) | RtBatchTracer: camera rays and shadow rays from GPU buffers, hits and visibility back into GPU buffers, five passes and no readback. |  |
+| [Interval queries](https://pmndrs.github.io/pathtracer/examples/raytracer/intervals/) | rtClosestInterval splits each ray into radiance-cascade intervals with no gap and no overlap. | **Experimental** |
 
 ## Path tracer
 
@@ -50,10 +51,30 @@ The smallest complete programs: a first image, a glTF model.
 | Example | What it shows | Status |
 | --- | --- | --- |
 | [Megakernel or wavefront](https://pmndrs.github.io/pathtracer/examples/pathtracer/schedulers/) | The same estimator scheduled two ways: one kernel per sample, or kernels connected by GPU queues. Same image, different time. |  |
+| [Material explorer](https://pmndrs.github.io/pathtracer/examples/pathtracer/materials/) | Every OpenPBR lobe of one material on a sphere: base, specular, transmission, coat, fuzz, thin film, emission. |  |
+| [BVH formats](https://pmndrs.github.io/pathtracer/examples/pathtracer/bvh/) | One scene in four @pmndrs/bvh node formats: build time, memory and a 64 spp benchmark per format on your GPU. |  |
 | [Alpha cutouts](https://pmndrs.github.io/pathtracer/examples/pathtracer/cutouts/) | Leaf cards with alpha-masked textures: exact cutout shadows, and the faster settings that trade bias or noise for speed. |  |
 | [Many lights](https://pmndrs.github.io/pathtracer/examples/pathtracer/lights/) | 64 coloured lamps, a sun and a sky: light selection strategies for next-event estimation, and ReSTIR DI. |  |
 | [Fog and clouds](https://pmndrs.github.io/pathtracer/examples/pathtracer/volumes/) | Participating media: homogeneous fog filling the Cornell box, or a cloud read from a 3D density grid. | **Experimental** |
 | [Spectral rendering and dispersion](https://pmndrs.github.io/pathtracer/examples/pathtracer/spectral/) | Paths that carry wavelengths: glass whose index of refraction depends on the wavelength splits white bars into colour fringes. | **Experimental** |
 | [MaterialX](https://pmndrs.github.io/pathtracer/examples/pathtracer/materialx/) | MaterialX documents as path tracer materials: graphs compiled to WGSL per hit, or baked into textures. | **Experimental** |
+
+## Real time
+
+One sample per pixel per frame, denoised and upscaled.
+
+| Example | What it shows | Status |
+| --- | --- | --- |
+| [Real-time frames](https://pmndrs.github.io/pathtracer/examples/realtime/frame/) | One sample per pixel per frame with the planes a denoiser takes: demodulated diffuse and specular, albedo, normals, depth, motion. |  |
+| [ReSTIR DI in real time](https://pmndrs.github.io/pathtracer/examples/realtime/restir/) | 64 lamps at one sample per pixel per frame: plain next-event estimation against reservoir resampling with temporal and spatial reuse. | **Experimental** |
+
+## Lab
+
+Tools for checking images and GPUs.
+
+| Example | What it shows | Status |
+| --- | --- | --- |
+| [Convergence](https://pmndrs.github.io/pathtracer/examples/lab/convergence/) | Error against a reference as samples accumulate, log-log: Owen-Sobol against independent random numbers, and the 1/spp line. |  |
+| [GPU report](https://pmndrs.github.io/pathtracer/examples/lab/caps/) | What this browser and GPU offer the libraries: tier, optional features, limits, and which examples run here. |  |
 
 **Experimental**: Works and is checked, but the API or its defaults can still change. **Research**: A study from one of our research tracks, not a supported feature. It may move or go away.

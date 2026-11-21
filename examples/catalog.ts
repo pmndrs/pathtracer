@@ -45,10 +45,16 @@ export interface ExampleEntry {
   network?: boolean;
   /** Heavy on the GPU (a laptop fan will notice). */
   heavy?: boolean;
-  /** Card image under examples/ (16:9, e.g. `start/hello/thumb.webp`); a generated pattern when absent. */
+  /** Card image under examples/ when it is not `<path>thumb.webp` (16:9, 640 x 360 webp); a generated pattern when there is none. */
   thumbnail?: string;
   /** Built by another build (not this Vite app); the gallery links it only in the deployed site. `dev` says how to run it locally. */
   external?: { dev: string };
+  /**
+   * `scripts/examples-smoke.mjs`: extra query for the headless check (`?offscreen=1` is always added; the check prefers scenes that
+   * need no network), the samples or frames to wait for, and `image: false` for a page that draws nothing to its canvas. `thumbQuery` /
+   * `thumbSamples` are used instead when capturing the card image (`--thumbs`): a nicer scene, more samples.
+   */
+  check?: { query?: string; samples?: number; image?: boolean; thumbQuery?: string; thumbSamples?: number };
 }
 
 export const CATEGORIES: readonly Category[] = [
@@ -120,10 +126,10 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     slug: 'hits',
     path: 'raytracer/hits/',
     title: 'Hit inspector',
-    summary: 'rtClosest and rtSurface in your own compute shader: normals, uvs, materials and distances of the first hit.',
+    summary: 'A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record.',
     description:
-      'One camera ray per pixel per frame through `rtClosest`, then `rtSurface` decodes what was hit. Pick the property to show: shading or geometric normal, ' +
-      'front or back face, distance bands, texture coordinates, barycentrics, material and instance ids, or the base colour with its texture. No path tracer is involved.',
+      'Every pixel is a ray traced through the BVH each frame, nothing is rasterised. The first hit of a camera ray is the surface a rasteriser would draw, so its data (base colour, normals, uv, ids) has no noise and looks like a raster G-buffer; noise only comes with lighting. ' +
+      'Pick the property to show, and click a pixel: a second entry point traces the ray through it and lists the hit record (distance, instance, triangle, material, barycentrics, uv, position, normals).',
     category: 'raytracer',
     status: 'stable',
     tags: ['rtClosest', 'rtSurface', 'inline WGSL'],
@@ -167,13 +173,28 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     title: 'Batch tracing',
     summary: 'RtBatchTracer: camera rays and shadow rays from GPU buffers, hits and visibility back into GPU buffers, five passes and no readback.',
     description:
-      'Each frame: our kernel writes camera rays into a buffer, `RtBatchTracer` (closest) turns them into hit records, our kernel builds shadow rays towards the sun, ' +
-      '`RtBatchTracer` (visible) answers them, and a last kernel composes base colour, sun and sky. The trace core never appears in our shaders\u2019 text: the batch tracer owns the walk.',
+      'Every pixel is ray traced, nothing is rasterised: per frame, one camera ray (`RtBatchTracer` closest hit) and one shadow ray toward the sun (`RtBatchTracer` visible), each a buffer of rays in and a buffer of results out. ' +
+      'There is no denoiser. With a point sun and a constant sky only the anti-aliasing jitter is random, so the image is clean within a second; a larger **sun radius** (the default is the real sun\'s quarter degree) makes every shadow ray a random sample of a wide disc: soft, grainy penumbrae that converge, and **stop at** 1 or **pixel jitter** off shows the jagged single-ray edges.',
     category: 'raytracer',
     status: 'stable',
     tags: ['RtBatchTracer', 'shadow rays', 'GPU buffers'],
     docs: 'raytracer/batch-tracer',
     source: 'examples/raytracer/batch',
+    network: true,
+  },
+  {
+    slug: 'intervals',
+    path: 'raytracer/intervals/',
+    title: 'Interval queries',
+    summary: 'rtClosestInterval splits each ray into radiance-cascade intervals with no gap and no overlap.',
+    description:
+      'Cascade n owns the distances (t0 · growth^(n-1), t0 · growth^n]. From each first hit, cosine rays walk the cascades in order and take the colour of the interval their first hit is in, ' +
+      'so the colours add up to the full occlusion. Or look at one cascade on its own, or at the camera ray\'s own distance bands. Change the first interval and the growth.',
+    category: 'raytracer',
+    status: 'experimental',
+    tags: ['rtClosestInterval', 'radiance cascades', 'inline WGSL'],
+    docs: 'raytracer/interval-queries',
+    source: 'examples/raytracer/intervals',
     network: true,
   },
   {
@@ -190,6 +211,35 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     tags: ['PtMegakernel', 'PtWavefront', 'ptwfAutoPolicy'],
     docs: 'concepts/schedulers',
     source: 'examples/pathtracer/schedulers',
+    network: true,
+  },
+  {
+    slug: 'materials',
+    path: 'pathtracer/materials/',
+    title: 'Material explorer',
+    summary: 'Every OpenPBR lobe of one material on a sphere: base, specular, transmission, coat, fuzz, thin film, emission.',
+    description:
+      'Start from a preset (gold, glass, car paint, velvet, a soap bubble) and change any parameter. The kernel is compiled once with every lobe switched on, ' +
+      'so a slider only rewrites the scene copy (`buildSceneCopy` + `writeSceneCopy`) and the image restarts at once. The studio environment is an HDR map generated on the page.',
+    category: 'pathtracer',
+    status: 'stable',
+    tags: ['openpbr', 'coat', 'fuzz', 'thin film', 'transmission', 'env map'],
+    docs: 'concepts/materials',
+    source: 'examples/pathtracer/materials',
+  },
+  {
+    slug: 'bvh',
+    path: 'pathtracer/bvh/',
+    title: 'BVH formats',
+    summary: 'One scene in four @pmndrs/bvh node formats: build time, memory and a 64 spp benchmark per format on your GPU.',
+    description:
+      '`buildGpuScene(device, input, { nodeFormat })` builds a quantized or f32 binary tree, or a 4-wide or compressed 8-wide one (both experimental); the kernel compiles the matching walk. ' +
+      'The images agree; build time, memory and speed differ by GPU. Benchmark each format here and compare them on this machine.',
+    category: 'pathtracer',
+    status: 'stable',
+    tags: ['bvh', 'bvh4', 'cwbvh8', 'benchmark'],
+    docs: 'concepts/scenes',
+    source: 'examples/pathtracer/bvh',
     network: true,
   },
   {
@@ -262,6 +312,67 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     tags: ['MaterialX', 'codegen', 'bake'],
     docs: 'pathtracer/materialx',
     source: 'examples/pathtracer/materialx',
+  },
+  {
+    slug: 'realtime-frame',
+    path: 'realtime/frame/',
+    title: 'Real-time frames',
+    summary: 'One sample per pixel per frame with the planes a denoiser takes: demodulated diffuse and specular, albedo, normals, depth, motion.',
+    description:
+      '`mode: \'realtime\'` renders one blue-noise sample per pixel per frame at two bounces. Step through the frame planes, check that diffuse x albedo + specular x factor + emission ' +
+      'gives back the beauty, average the frames while the camera is still, and compare blue noise with Owen-Sobol on a single frame.',
+    category: 'realtime',
+    status: 'stable',
+    tags: ['realtime', 'frame planes', 'blue noise', 'motion vectors'],
+    docs: 'pathtracer/realtime',
+    source: 'examples/realtime/frame',
+    network: true,
+    check: { samples: 8 },
+  },
+  {
+    slug: 'realtime-restir',
+    path: 'realtime/restir/',
+    title: 'ReSTIR DI in real time',
+    summary: '64 lamps at one sample per pixel per frame: plain next-event estimation against reservoir resampling with temporal and spatial reuse.',
+    description:
+      'Plain next-event estimation picks one light per pixel and frame; ReSTIR DI draws several candidates, keeps one by its contribution and reuses good picks from the previous frame and from neighbours. ' +
+      'Compare single frames, switch between unbiased and biased reuse, and turn the temporal and spatial passes off one at a time.',
+    category: 'realtime',
+    status: 'experimental',
+    tags: ['ReSTIR DI', 'realtime', 'many lights'],
+    docs: 'pathtracer/restir',
+    source: 'examples/realtime/restir',
+    check: { samples: 8, thumbQuery: 'accumulate=1', thumbSamples: 64 },
+  },
+  {
+    slug: 'convergence',
+    path: 'lab/convergence/',
+    title: 'Convergence',
+    summary: 'Error against a reference as samples accumulate, log-log: Owen-Sobol against independent random numbers, and the 1/spp line.',
+    description:
+      'The page renders a reference, then renders the same view again from scratch and measures the relMSE against the reference at 1, 2, 4, ... samples per pixel. ' +
+      'Monte Carlo error falls as 1/spp; Owen-scrambled Sobol points are stratified and fall faster at low counts. Near the reference\'s own sample count the curve flattens: its noise is the floor.',
+    category: 'lab',
+    status: 'stable',
+    tags: ['relMSE', 'sampling', 'owen-sobol', 'pcg'],
+    docs: 'concepts/sampling',
+    source: 'examples/lab/convergence',
+    check: { query: 'ref=16', samples: 4 },
+  },
+  {
+    slug: 'caps',
+    path: 'lab/caps/',
+    title: 'GPU report',
+    summary: 'What this browser and GPU offer the libraries: tier, optional features, limits, and which examples run here.',
+    description:
+      '`detectCaps(adapter)` as the libraries see it: the adapter, the optional WebGPU features and what each is used for, the device limits against the adapter\'s maximum, ' +
+      'and which examples this machine can run. Copy the report into a bug report.',
+    category: 'lab',
+    status: 'stable',
+    tags: ['caps', 'webgpu features', 'limits'],
+    docs: 'raytracer/capabilities',
+    source: 'examples/lab/caps',
+    check: { image: false },
   },
 ];
 

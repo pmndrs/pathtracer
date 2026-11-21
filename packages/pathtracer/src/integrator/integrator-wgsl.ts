@@ -22,14 +22,14 @@ import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
-  /** `'owen-sobol'` (reference), `'pcg'` (debug) or `'bluenoise'` (P4.1, real-time frames: needs `PtMegakernelOptions.blueNoise`, megakernel only; `dimensions.ts`). */
+  /** `'owen-sobol'` (reference), `'pcg'` (debug) or `'bluenoise'` (P4.1, real-time frames: the `blueNoise` option, default the package's `gf-vec2-64` via `loadBlueNoise`; both schedulers, the wavefront without refill / layers; `dimensions.ts`). */
   sampler?: PtSamplerKind;
   /** `sampler: 'bluenoise'`: how many leading pairs read the texture (default 6, at most 15). */
   blueNoisePairs?: number;
   /** `sampler: 'bluenoise'`: the per-frame shift (`'owen'` default, `'kronecker'`; P4.1 A/B, `docs/internal/design/realtime.md`). */
   blueNoiseShift?: PtBlueNoiseShift;
   /**
-   * Per-frame guide outputs for a temporal denoiser / upscaler (P4.1, real-time mode; megakernel only; docs/internal/design/realtime.md): the kernel writes ONE sample per pixel per
+   * Per-frame guide outputs for a temporal denoiser / upscaler (P4.1, real-time mode; both schedulers, the wavefront without refill / layers, where the planes live in the accumulator's tail; docs/internal/design/realtime.md): the kernel writes ONE sample per pixel per
    * dispatch (no accumulation: `accumulate` defaults to false with it) plus 7 planes in `ptFrame`: diffuse and specular radiance demodulated, world normal + viewZ, motion
    * + roughness, the demodulation factors, the emission that bypasses them (`frameEmission`). Default false: no frame code at all (the kernel text is unchanged).
    */
@@ -152,13 +152,14 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   /** First scattering depth that uses the reduced material (`materialLod: 'secondary'`). Default 1 (the hits of indirect rays); 0 reduces every vertex (debug / furnace checks). */
   materialLodDepth?: number;
   /**
-   * ReSTIR DI at the first scattering vertex (P4, real-time mode, megakernel only; restir/restir-wgsl.ts). Setting it compiles the shade side here (read the final
+   * ReSTIR DI at the first scattering vertex (P4, real-time mode; both schedulers, the wavefront without refill / layers; restir/restir-wgsl.ts). Setting it compiles the shade side here (read the final
    * reservoir, regenerate the light sample, one shadow ray; no MIS weight on emission after that vertex) and makes `PtMegakernel` run the G-buffer / candidate /
-   * temporal / spatial passes before every sample dispatch. Default null: no ReSTIR code at all (the kernel text is unchanged). Needs `nee`, no textures, legacy materials.
+   * temporal / spatial passes before every sample dispatch. Default null: no ReSTIR code at all (the kernel text is unchanged). Needs `nee`, no hooks; textures and OpenPBR materials work, except anisotropy, fuzz, thin film and
+   * stochastic layering (`ptRestirUnsupported` says which).
    */
   restir?: PtRestirOptions | null;
   /**
-   * Participating media (P5, megakernel only; docs/internal/design/volumes.md): homogeneous and dense-grid media bounded by closed meshes, delta tracking for free flight,
+   * Participating media (P5, both schedulers; docs/internal/design/volumes.md): homogeneous and dense-grid media bounded by closed meshes, delta tracking for free flight,
    * Henyey-Greenstein scattering with next-event estimation and MIS, transmittance on shadow rays, medium-boundary ("interface") surfaces that rays pass through.
    * Default null: no volume code at all (the kernel text is unchanged). Cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, `alphaMask`, hooks or the
    * `materials.features.medium` absorber (`materials` may be set for other lobes).
@@ -168,7 +169,7 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    * Spectral transport (P5, `docs/internal/design/spectral.md`): paths carry three wavelengths (hero sampling) in the lanes of the vec3 throughput; every RGB reflectance,
    * conductor eta / k, transmission / coat / sheen colour is uplifted to its sigmoid-polynomial spectrum (Jakob and Hanika 2019, as pbrt-v4), emission and the
    * environment / sun to the same times D65, and the sample is converted to linear Rec.709 by the CIE 1931 matching functions. Opt-in (default off: the kernel text is
-   * unchanged). Needs the table texture (`PtMegakernelOptions.spectralTable`, group 2 binding `PT_SPEC_BINDING`); megakernel only; no hooks / frame / AOVs / ReSTIR.
+   * unchanged). Needs the table texture (`PtMegakernelOptions.spectralTable`, group 2 binding `PT_SPEC_BINDING`); both schedulers; no hooks / frame / AOVs / ReSTIR.
    * `true` = `{ res: 64, dispersion: true }`; with dispersion a dielectric with `RtMaterial.dispersion > 0` follows a Cauchy law and keeps only the hero wavelength.
    */
   spectral?: boolean | PtSpectralOptions;

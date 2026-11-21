@@ -9,7 +9,7 @@ nav: 23
 
 An interval query traces only one segment of a ray: the closest hit with `t` in `(t0, t1]`, or whether anything lies in that range. The bounds are exact in f32, so consecutive intervals `(a, b]` and `(b, c]` split `(a, c]` with no gap and no overlap: every hit lands in exactly one of them.
 
-That is what radiance cascades need. Cascade `n` owns the distances `(t_{n-1}, t_n]`, and a hit must belong to exactly one cascade. The same holds for any probe scheme that splits a ray into near and far parts.
+That is what radiance cascades need ([interval queries example](https://pmndrs.github.io/pathtracer/examples/raytracer/intervals/)). Cascade `n` owns the distances `(t_{n-1}, t_n]`, and a hit must belong to exactly one cascade. The same holds for any probe scheme that splits a ray into near and far parts.
 
 ## Inline
 

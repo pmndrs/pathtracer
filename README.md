@@ -88,8 +88,10 @@ pnpm examples
 ```
 
 - Getting started: [Hello, path tracer](https://pmndrs.github.io/pathtracer/examples/start/hello/) · [glTF models](https://pmndrs.github.io/pathtracer/examples/start/gltf/)
-- Ray tracer: [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) · [Ambient occlusion](https://pmndrs.github.io/pathtracer/examples/raytracer/ao/) · [One-bounce shading](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/) · [Batch tracing](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/)
-- Path tracer: [Megakernel or wavefront](https://pmndrs.github.io/pathtracer/examples/pathtracer/schedulers/) · [Alpha cutouts](https://pmndrs.github.io/pathtracer/examples/pathtracer/cutouts/) · [Many lights](https://pmndrs.github.io/pathtracer/examples/pathtracer/lights/) · [Fog and clouds](https://pmndrs.github.io/pathtracer/examples/pathtracer/volumes/) · [Spectral](https://pmndrs.github.io/pathtracer/examples/pathtracer/spectral/) · [MaterialX](https://pmndrs.github.io/pathtracer/examples/pathtracer/materialx/)
+- Ray tracer: [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) · [Ambient occlusion](https://pmndrs.github.io/pathtracer/examples/raytracer/ao/) · [One-bounce shading](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/) · [Batch tracing](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/) · [Interval queries](https://pmndrs.github.io/pathtracer/examples/raytracer/intervals/)
+- Path tracer: [Megakernel or wavefront](https://pmndrs.github.io/pathtracer/examples/pathtracer/schedulers/) · [Material explorer](https://pmndrs.github.io/pathtracer/examples/pathtracer/materials/) · [BVH formats](https://pmndrs.github.io/pathtracer/examples/pathtracer/bvh/) · [Alpha cutouts](https://pmndrs.github.io/pathtracer/examples/pathtracer/cutouts/) · [Many lights](https://pmndrs.github.io/pathtracer/examples/pathtracer/lights/) · [Fog and clouds](https://pmndrs.github.io/pathtracer/examples/pathtracer/volumes/) · [Spectral](https://pmndrs.github.io/pathtracer/examples/pathtracer/spectral/) · [MaterialX](https://pmndrs.github.io/pathtracer/examples/pathtracer/materialx/)
+- Real time: [Real-time frames](https://pmndrs.github.io/pathtracer/examples/realtime/frame/) · [ReSTIR DI in real time](https://pmndrs.github.io/pathtracer/examples/realtime/restir/)
+- Lab: [GPU report](https://pmndrs.github.io/pathtracer/examples/lab/caps/)
 
 ## Status
 

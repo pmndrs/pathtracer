@@ -261,7 +261,11 @@ fn rtCascadeEnd(n: u32, t0: f32, growth: f32) -> f32 {
 }
 
 fn rtCascadeStart(n: u32, t0: f32, growth: f32) -> f32 {
-    return select(0.0, rtCascadeEnd(n - 1u, t0, growth), n > 0u);
+    // Not select(): WGSL evaluates both of its arguments, and rtCascadeEnd(0u - 1u) is a loop of 2^32 multiplies (a GPU hang at n = 0).
+    if (n == 0u) {
+        return 0.0;
+    }
+    return rtCascadeEnd(n - 1u, t0, growth);
 }
 
 // The cascade whose (start, end] holds t, or count when t is beyond the last one.
