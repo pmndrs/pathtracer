@@ -154,4 +154,8 @@ a denoiser for volume frames. If item 4's second moment lands, a variance-guided
   (1e-3 on `vol-cl-sph-g85-a99-t50`: 1024 spp, 11 s). Also new and opt-in: `volumes.trRoulette` (about 1.8x per sample on a 256^3 cloud, unbiased), `volumes.densityFilter:
   'hardware'`, `volumeGrid.format: 'r8unorm'` (`ptQuantizeGridR8`: your 437 MB grid in 109 MB, -0.02% image change), `volumes.separateDepth` + `maxVolumeDepth`,
   `integrator.aovs` with media (OIDN guides). Details: TASKS V1.1-V5.1a, docs/internal/design/volumes.md section 5b.
+- **2026-11-22, sun disc for peaked phases (V2.6):** with a Mie (10 / 20 um) or g >= 0.99 phase, a finite sun disc (`sun.angularRadius` 0.00465 rad instead of 0) cut the
+  64 spp error about 3.6x and the worst fireflies about 2x on `vol-cl-sph-mie20-a99-t50` at no cost; the mean moves by +0.2% (inside noise); HG g 0.9 is unaffected (3 seeds,
+  provisional). It is a slightly different light: use it only if the realtime lighting fit models the same disc (please confirm), and keep the delta sun for comparisons
+  against pbrt / Mitsuba.
 
