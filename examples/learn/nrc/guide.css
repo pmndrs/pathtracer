@@ -92,3 +92,10 @@ footer { border-top:1px solid var(--line); padding:22px 0; justify-content:space
  .chapters p:not(.kicker), .steps {font-size:16px;}
 }
 @media (max-width:420px) { .brand small,.brand span {display:none;} .legend,.metrics {font-size:11px;} }
+
+#first-neuron .lab p {margin:12px 0;}
+#first-neuron .slider {display:grid;grid-template-columns:7ch 1fr 5ch;margin:6px 0;}
+#first-neuron .slider output {text-align:right;}
+#neuron-reset {margin-top:12px;background:transparent;border-color:#748375;}
+#training .actions {flex-wrap:wrap;}
+#training .lab .update-note {font:13px/1.6 var(--mono);color:#d3dfcc;margin-top:10px;}

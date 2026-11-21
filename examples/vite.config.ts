@@ -57,6 +57,7 @@ export default defineConfig({
       input: {
         index: resolve(root, 'index.html'),
         nrcGuide: resolve(root, 'learn/nrc/index.html'),
+        elbowGuide: resolve(root, 'learn/nrc/elbow/index.html'),
         ...Object.fromEntries(local.map((e) => [e.slug, resolve(root, e.path, 'index.html')])),
       },
     },

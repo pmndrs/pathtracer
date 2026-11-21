@@ -25,9 +25,28 @@ function trainStep() {
   }
   weights = weights.map((w, i) => w - 0.12 * gradient[i]!);
   updates++;
+  return gradient[4]!;
 }
 
 const el = (id: string) => document.getElementById(id)!;
+const neuronInputs = ['nx', 'nw', 'nb'].map(id => el(id) as HTMLInputElement);
+function showArithmetic() {
+  const [x, w, b] = neuronInputs.map(field => field.valueAsNumber) as [number, number, number];
+  neuronInputs.forEach(field => { el(field.id + '-value').textContent = field.valueAsNumber.toFixed(2); });
+  const product = w * x, z = product + b;
+  el('arithmetic').textContent = [
+    `Multiply   w × x        = ${w.toFixed(2)} × ${x.toFixed(2)} = ${product.toFixed(2)}`,
+    `Add bias   z            = ${product.toFixed(2)} ${b < 0 ? '−' : '+'} ${Math.abs(b).toFixed(2)} = ${z.toFixed(2)}`,
+    `ReLU       y = max(0,z) = ${Math.max(0, z).toFixed(2)}`,
+  ].join('\n');
+}
+neuronInputs.forEach(field => field.addEventListener('input', showArithmetic));
+el('neuron-reset').addEventListener('click', () => {
+  neuronInputs.forEach(field => { field.value = field.defaultValue; });
+  showArithmetic();
+});
+showArithmetic();
+
 const dial = el('dial') as HTMLInputElement;
 const svg = 'http://www.w3.org/2000/svg';
 const px = (x: number) => 36 + x * 468;
@@ -65,8 +84,16 @@ function draw() {
   }
 }
 dial.addEventListener('input', draw);
-el('train').addEventListener('click', () => { for (let i = 0; i < 100; i++) trainStep(); draw(); });
-el('reset').addEventListener('click', () => { weights = [...initial]; updates = 0; draw(); });
+function runUpdates(count: number) {
+  for (let i = 1; i < count; i++) trainStep();
+  const before = weights[4]!;
+  const gradient = trainStep();
+  el('weight-update').textContent = `Update ${updates}, output weight on A: ${before.toFixed(5)} − 0.12 × (${gradient.toFixed(5)}) = ${weights[4]!.toFixed(5)}. Here 0.12 is the learning rate. The gradient combines all nine training readings.`;
+  draw();
+}
+el('train-one').addEventListener('click', () => runUpdates(1));
+el('train').addEventListener('click', () => runUpdates(100));
+el('reset').addEventListener('click', () => { weights = [...initial]; updates = 0; el('weight-update').textContent = ''; draw(); });
 draw();
 
 const sections = [...document.querySelectorAll<HTMLElement>('.chapters section')];

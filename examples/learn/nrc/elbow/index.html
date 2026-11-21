@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Train an elbow correction · pathtracer field guides</title>
+<meta name="description" content="Choose pose inputs, record a labeled rig, train an MLP, and measure its error on a separate animation clip.">
+<link rel="icon" href="../../../shared/pmndrs-logo.svg"><link rel="stylesheet" href="../guide.css"><link rel="stylesheet" href="./workshop.css">
+</head><body>
+<a class="skip" href="#capture">Skip to the rig lab</a>
+<header><div class="bar"><a class="brand" href="../../../"><img src="../../../shared/pmndrs-logo.svg" width="32" height="32" alt="">pathtracer <span>/</span> <small>Field guides</small></a><a class="demo-link" href="../#first-neuron">MLP basics ↗</a></div></header>
+<main class="workshop">
+<div class="work-intro"><p class="kicker">Animation workshop</p><h1>Train an <em>elbow correction.</em></h1><p>When a character bends an arm, a corrective shape can restore volume near the joint. Build a small network that predicts how strongly to apply that shape, then watch what happens on a motion it has never seen.</p></div>
+<section id="capture"><p class="kicker">Step 1 / Collect examples</p><h2>Give the network an answer key</h2>
+<p>A <strong>blendshape</strong> stores offsets for mesh vertices. Its <strong>drive</strong> is a number between 0 and 1. On this rig a drive of 0.50 moves our elbow marker 10 mm along its correction direction. “Drive” is the <em>answer</em> for one pose. The MLP also has internal weights, which stay the same as you scrub between poses.</p>
+<p>In a production rig, pose the character, let the artist set the corrective drive, and export the joint angles and approved drive together. Here a small synthetic rig stands in for the artist. Click each sweep to capture 13 labeled poses, from 0° to 120° of bend in 10° increments. Each sweep holds a different forearm twist.</p>
+<div class="lab"><div class="lab-head"><h3>Record three curls</h3><span id="count">0 training poses</span></div>
+<div class="actions captures"><button data-twist="-60">Capture −60° twist</button><button data-twist="0">Capture neutral</button><button data-twist="60">Capture +60° twist</button></div>
+<table aria-label="Captured training rows at 90 degrees"><caption>One row from each sweep at 90° bend</caption><thead><tr><th>Bend</th><th>Twist</th><th>Rig drive</th><th>Offset</th></tr></thead><tbody id="rows"><tr><td colspan="4">Capture a sweep to inspect its label.</td></tr></tbody></table></div>
+<details><summary>See the synthetic rig that supplies the labels</summary><pre class="shape">flex = max(0, (bendDegrees − 20) / 100)
+targetDrive = flex × (0.65 + 0.35 × twistDegrees / 60)
+targetOffsetMm = 20 × targetDrive</pre><p>This generates the training rows and the reference for scoring. The network receives only the input columns you choose. For this exact synthetic rig, calling the formula directly is the simplest solution. A learned replacement becomes interesting when the reference is expensive or consists of artist-authored examples.</p></details>
+</section>
+<section id="features"><p class="kicker">Step 2 / Choose the inputs</p><h2>What can the model see?</h2><p>Read the 90° rows. If the input is just <code>[90]</code>, those poses look identical to the network even though the labels differ. More training cannot tell it which answer you meant. Forearm twist is available on the skeleton at playback time, so it is a candidate second input.</p>
+<fieldset class="choice"><legend>Build the input vector</legend><label><input type="radio" name="features" value="bend" checked>Bend only</label><label><input type="radio" name="features" value="both">Bend + twist</label></fieldset>
+<pre class="shape" id="wiring">x = [bend / 120]
+1 input → 8 ReLU neurons → 1 drive
+25 trainable parameters</pre>
+<p>Dividing bend by 120 and twist by 60 keeps the numbers small. The two-input model needs eight extra weights, one connection from twist to each hidden neuron. Neither the frame number nor the rig’s answer is an input. For a different rig, think about whether two poses with identical inputs could need different corrections.</p></section>
+<section id="fit"><p class="kicker">Step 3 / Fit the model</p><h2>Learn from the captured curls</h2><p>Start with <strong>bend only</strong> and all three sweeps. Train 500 steps. At each step, the model predicts each captured drive, averages the squared errors, and adjusts every weight and bias using the loss gradient. Switch to <strong>bend + twist</strong> and train for the same number of steps. Each input choice has its own model. Switch back to revisit its predictions. Both models train on the same captured data.</p>
+<div class="lab"><div class="lab-head"><h3>Training run</h3><span id="updates">0 updates</span></div><div class="actions"><button id="fit-model" disabled>Train 500 steps</button><button id="reset-model">Reset this model</button></div><p id="training-status" role="status">Capture a sweep to enable training.</p></div>
+<details class="code-exercise"><summary>Build the same experiment in code</summary>
+<p>In a checkout of this repository, save this as <code>try-elbow.mjs</code> next to <code>examples/learn/nrc/elbow/model.ts</code>. From that folder run <code>node --experimental-strip-types try-elbow.mjs</code> with Node 22.22 or newer. Try changing the inputs or removing a sweep and predict which frames will get worse.</p>
+<pre class="shape">import { makeModel, reach, recordSweep } from './model.ts'
+
+const training = [-60, 0, 60].flatMap(recordSweep)
+const model = makeModel('both') // try 'bend' next
+model.train(training, 500)
+
+const errors = reach.map(pose =&gt; {
+  const drive = model.predict(pose)
+  return 20 * Math.abs(drive - pose.target) // mm
+})
+console.log('Worst reach error in mm', Math.max(...errors))</pre>
+<p>To use your own data, replace the generated sweeps with exported rows like <code>{ bend: 90, twist: 60, target: 0.70 }</code>. Keep the same angle units and joint coordinate system during playback. At runtime the call is just <code>model.predict({ bend, twist })</code>. Apply that drive to the corrective shape.</p></details>
+</section>
+<section id="evaluate"><p class="kicker">Step 4 / Check the result</p><h2>Test a different movement</h2><p>The evaluation clip is a 61-frame reach. Bend and twist change together, passing through twists between the captured sweeps. Every frame stays out of training. Holding out a whole movement gives you a stronger check than shuffling neighboring frames from one clip into both sets.</p>
+<div class="lab"><div class="lab-head"><h3>Scrub the held-out reach</h3><span id="angles"></span></div>
+<svg viewBox="0 0 420 156" class="arm" role="img" aria-labelledby="arm-title"><title id="arm-title">Side view of the arm with a target elbow marker and a predicted marker. Their separation is magnified.</title>
+<path d="M36 92H153" class="limb"/><path id="forearm" class="limb"/><path d="M36 92H153" class="bone"/><path id="bone" class="bone"/><circle cx="153" cy="92" r="6" fill="#dde7d6"/>
+<path id="offset-line" class="bone"/><circle id="target-dot" r="5" fill="#ffb894"/><circle id="pred-dot" r="8" fill="none" stroke="#c9ed86" stroke-width="2.4"/></svg>
+<div class="legend"><span>○ MLP marker</span><span>● Reference marker</span></div>
+<label class="slider">Frame <input id="frame" type="range" min="0" max="60" value="19"><output id="frame-value" for="frame">19</output></label>
+<pre id="pose-readout"></pre><p class="lab-note">The bones show bend in side view. The markers show the effect of bend and twist on the skin. Their offsets are enlarged so you can see the difference.</p></div>
+<h3>Compare on the same clip</h3><p>Each error below measures distance from the reference marker in millimeters after limiting the drive to [0, 1]. <b>Mean</b> tells you about a typical frame. <b>Worst</b> catches a bad pose the average can hide. Click the current model’s worst frame to inspect it.</p>
+<div class="score-scroll"><table class="scores"><caption>Latest runs on the current captured data</caption><thead><tr><th>Predictor</th><th>Steps</th><th>Train mean</th><th>Reach mean</th><th>Reach worst</th></tr></thead><tbody id="scores"></tbody></table></div>
+<p id="verdict" role="status"></p>
+<p><strong>Decide whether to use it.</strong> For this exercise, give the rig a 2 mm worst-frame budget. Does the model beat an interpolated bend table and stay within budget? Scrub around the worst frame for a visible pop. Before shipping a real rig, use additional untouched clips, inspect the whole mesh, and time the model against the original rig. If you tune repeatedly against this reach, it has become a validation clip and you need a fresh final test.</p>
+<details><summary>Try a data-coverage experiment</summary><p>Clear the captures. Record only the neutral sweep, choose both inputs and train. That sweep never varies twist, so it cannot teach the effect of twist. Add both twisted sweeps, retrain, and compare the reach error. Capturing new data clears previous scores so every row in the table uses the same training set.</p></details>
+<div class="actions"><button id="clear-data">Clear captures and start over</button></div>
+</section></main><footer><a href="../#first-neuron">← How a neuron works</a><a href="https://github.com/pmndrs/pathtracer/blob/main/examples/learn/nrc/elbow/model.ts">Read the model code ↗</a></footer>
+<script type="module" src="./workshop.ts"></script></body></html>
