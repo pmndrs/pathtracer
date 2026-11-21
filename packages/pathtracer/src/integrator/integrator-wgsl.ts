@@ -273,8 +273,9 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaCoverage = o.alphaCoverage ?? [];
   if ((alphaShadow === 'coverage' || alphaShadow === 'stochastic') && alphaCoverage.length === 0) throw new RangeError(`integrator.alphaShadow '${alphaShadow}' needs alphaCoverage (one fraction per material)`);
   if (o.volumes) {
-    const clash = o.restir ? 'restir' : o.frame ? 'frame' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : o.aovs ? 'aovs' : '';
+    const clash = o.restir ? 'restir' : o.frame ? 'frame' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
+    if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     if (o.volumes.outputs && o.accumulate === false) throw new Error('integrator.volumes.outputs needs accumulate (the outputs are sums over samples)');
   }
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
@@ -619,6 +620,12 @@ ${volOut ? `                ptVoCapture(depth, radiance);
 ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptVoDist = length(pm - origin);
                     ptVoHas = 1.0;
+                }
+` : ''}${aovs ? `                if (vertex == 0u) {
+                    // AOV guides at a first-vertex medium scatter: albedo = single-scattering albedo, normal -ray.direction (world, OIDN-converted; 0 also works but denoises worse), viewZ of the scatter point.
+                    ptAovPrimary(pxIndex, dims.x * dims.y, -dot(pm - origin, normalize(ptParams.forward.xyz)));
+                    ptAovGuide(pxIndex, dims.x * dims.y, ptVolMedium(curMed).albedo, -ray.direction);
+                    aovDone = true;
                 }
 ` : ''}                let woM = -ray.direction;
                 if (PT_NEE) {

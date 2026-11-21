@@ -1,6 +1,7 @@
 import { buildCaps } from '@pmndrs/raytracer';
 import { describe, expect, it } from 'vitest';
 import { ptWavefrontBuild } from '../wavefront/wavefront.ts';
+import { ptwfUnsupported } from '../wavefront/wavefront-wgsl.ts';
 import { PT_AOV_VEC4, PT_COUNTER, PT_COUNTER_WORDS, PT_TERM_NAMES, ptCounterImage, ptDecodeAovs, ptHookIsUpdate, ptHooksWgsl, ptOutputsWgsl, ptSummarizeCounters } from './outputs-wgsl.ts';
 import { ptMegakernelWgsl } from './megakernel.ts';
 
@@ -14,6 +15,16 @@ describe('optional integrator outputs (R10 hooks, R4 counters, AOVs)', () => {
     const plain = mk();
     expect(mk({ hooks: null, counters: false, aovs: false })).toBe(plain);
     for (const name of ['PtPathVertex', 'ptOnVertex', 'ptCounters', 'ptCountRay', 'ptAovGuide', 'ptAovAlbedo']) expect(plain).not.toContain(name);
+  });
+
+  it('volumes + aovs (V5.1a): the first-vertex scatter writes the guides; with volumes.outputs it is refused; the wavefront refuses it', () => {
+    const volumes = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
+    const k = mk({ volumes, aovs: true }, false);
+    expect(k).toContain('ptVolMedium(curMed).albedo, -ray.direction');
+    expect(k).toContain('ptAovGuide');
+    expect(mk({ volumes }, false)).not.toContain('ptAovGuide');
+    expect(() => mk({ volumes: { ...volumes, outputs: true }, aovs: true })).toThrow(/aovs.*volumes.outputs/);
+    expect(ptwfUnsupported({ volumes, aovs: true } as never)).toMatch(/volumes with integrator.aovs/);
   });
 
   it('hooks: both functions are called after NEE and before the BSDF sample, in both schedulers', () => {
