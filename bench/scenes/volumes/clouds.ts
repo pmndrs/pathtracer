@@ -152,4 +152,106 @@ export const volClCloud256: SceneDesc = {
   environment: SKY_04,
 };
 
-export const cloudScenes: readonly SceneDesc[] = [...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, volClCloud256];
+// --- P5.v17 a ground under the medium ---------------------------------------------------------------------------------------------------------------------------
+/** E_3(tau) = integral over mu in (0, 1] of mu exp(-tau / mu): the sky irradiance through an absorbing slab is 2 pi L E_3(tau). */
+export function expIntegral3(tau: number, n = 200000): number {
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const mu = (i + 0.5) / n;
+    acc += mu * Math.exp(-tau / mu);
+  }
+  return acc / n;
+}
+
+/**
+ * `vol-cl-ground-furnace`: a non-absorbing slab (tau 5, g 0.85) 0.5 m above a white two-sided ground (reflectance 1), unit sky: every surface is lossless and the
+ * medium has albedo 1, so the radiance is 1 everywhere whatever the geometry (light reaches the ground through the medium and bounces back into it).
+ */
+export const volClGroundFurnace: SceneDesc = {
+  version: 1,
+  name: 'vol-cl-ground-furnace',
+  purpose: 'Non-absorbing slab (tau 5, HG g 0.85) 0.5 m above a white ground (reflectance 1) under a unit sky: lossless surfaces and albedo 1, every pixel is 1 (P5.v17).',
+  tier: 1,
+  camera: { type: 'perspective', position: [0, 4, 3], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+  film: { width: 32, height: 32, filter: 'box' },
+  integrator: { maxDepth: 4096 },
+  materials: { boundary: { type: 'interface' }, white: { type: 'diffuse', reflectance: [1, 1, 1] } },
+  media: { deck: grey(5, 1, 0.85) },
+  meshes: [
+    { name: 'ground', geometry: { type: 'quad', size: [60, 60] }, material: 'white' },
+    { name: 'slab', geometry: { type: 'box', size: [40, 1, 40] }, material: 'boundary', transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1], medium: { interior: 'deck' } },
+  ],
+  environment: { type: 'uniform', radiance: [1, 1, 1] },
+  expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.003, pixelwise: false },
+};
+
+const GA = { tau: 0.5, rho: 0.5, sunE: 3, sky: 0.4, sunCos: Math.cos((30 * Math.PI) / 180) } as const;
+const groundAbsorbExpected = (): number =>
+  Math.exp(-GA.tau) * (GA.rho / Math.PI) * (GA.sunE * GA.sunCos * Math.exp(-GA.tau / GA.sunCos) + 2 * Math.PI * GA.sky * expIntegral3(GA.tau));
+/**
+ * `vol-cl-ground-absorb`: an absorbing slab (tau 0.5) lying 1 cm above a Lambert ground (reflectance 0.5), sun 30 degrees off the zenith (irradiance 3) plus a sky of 0.4,
+ * camera straight down: L = exp(-tau) rho / pi (E cos exp(-tau / cos) + 2 pi L_sky E_3(tau)). The slab is 1 km wide so no sky slips in under its edges.
+ */
+export const volClGroundAbsorb: SceneDesc = {
+  version: 1,
+  name: 'vol-cl-ground-absorb',
+  purpose: `Absorbing slab (tau 0.5) over a Lambert ground (0.5) under the sun (30 degrees, 3) and a sky of 0.4, camera straight down: pixel = ${groundAbsorbExpected().toFixed(6)} (P5.v17).`,
+  tier: 1,
+  camera: { type: 'perspective', position: [0, 5, 0.0001], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 1 },
+  film: { width: 32, height: 32, filter: 'box' },
+  integrator: { maxDepth: 8 },
+  materials: { boundary: { type: 'interface' }, ground: { type: 'diffuse', reflectance: [GA.rho, GA.rho, GA.rho] } },
+  media: { gas: { type: 'homogeneous', sigmaA: [GA.tau, GA.tau, GA.tau], sigmaS: [0, 0, 0] } },
+  meshes: [
+    { name: 'ground', geometry: { type: 'quad', size: [2000, 2000] }, material: 'ground' },
+    { name: 'slab', geometry: { type: 'box', size: [1000, 1, 1000] }, material: 'boundary', transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0.51, 0, 1], medium: { interior: 'gas' } },
+  ],
+  lights: [{ type: 'directional', direction: [-0.5, -GA.sunCos, 0], irradiance: [GA.sunE, GA.sunE, GA.sunE] }],
+  environment: { type: 'uniform', radiance: [GA.sky, GA.sky, GA.sky] },
+  expected: { type: 'mean', value: [groundAbsorbExpected(), groundAbsorbExpected(), groundAbsorbExpected()], tolerance: 0.002, pixelwise: false },
+};
+
+/** `vol-cl-ground-sph-g85-a99-t50`: the cloud-regime sphere 1 m above a grey ground (0.3), sun + sky: the cloud lights the ground and the ground lights the cloud's base (references). */
+export const volClGroundSphere: SceneDesc = (() => {
+  const base = sphere(0.85, 0.99, 50);
+  return {
+    ...base,
+    name: 'vol-cl-ground-sph-g85-a99-t50',
+    purpose: 'Cloud-regime sphere (tau 50, albedo 0.99, g 0.85) 1 m above a grey ground (0.3), sun + sky of 0.4, maxDepth 512: ground lit through the medium and back into it (P5.v17).',
+    camera: { type: 'perspective', position: [0, 0.2, 3.2], target: [0, -0.6, 0], up: [0, 1, 0], yFovDeg: 40 },
+    materials: { ...base.materials, ground: { type: 'diffuse', reflectance: [0.3, 0.3, 0.3] } },
+    meshes: [...base.meshes, { name: 'ground', geometry: { type: 'quad', size: [30, 30] }, material: 'ground', transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1.5, 0, 1] }],
+  };
+})();
+/** Diagnostic splits of `vol-cl-ground-absorb`: sun only, sky only, and the slab 0.5 m above the ground instead of 1 cm (the sky then also reaches the ground under the slab's edge: not a closed form). */
+const groundAbsorbVariant = (tag: 'sun' | 'sky' | 'gap', ): SceneDesc => {
+  const sun = GA.sunE * GA.sunCos * Math.exp(-GA.tau / GA.sunCos), sky = 2 * Math.PI * GA.sky * expIntegral3(GA.tau);
+  const e = tag === 'sun' ? sun : tag === 'sky' ? sky : sun + sky;
+  const v = Math.exp(-GA.tau) * (GA.rho / Math.PI) * e;
+  return {
+    ...volClGroundAbsorb,
+    name: `vol-cl-ground-absorb-${tag}`,
+    purpose: `vol-cl-ground-absorb, ${tag === 'sun' ? 'sun only' : tag === 'sky' ? 'sky only' : 'slab 0.5 m above the ground'}: pixel = ${v.toFixed(6)} (P5.v17 diagnostic).`,
+    ...(tag === 'sun' ? { environment: { type: 'uniform', radiance: [0, 0, 0] } } : {}),
+    ...(tag === 'sky' ? { lights: [] } : {}),
+    ...(tag === 'gap' ? { meshes: [volClGroundAbsorb.meshes[0]!, { ...volClGroundAbsorb.meshes[1]!, transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1] }] } : {}),
+    expected: { type: 'mean', value: [v, v, v], tolerance: 0.002, pixelwise: false },
+  };
+};
+/** Diagnostic: sky only, slab of tau 50 at 0.5 m, camera in the gap looking down at the ground: the ground sees essentially no sky (E_3(50) ~ 1e-23), so the pixel is ~0; anything else is light that bypassed the medium. */
+const volClGroundLeak: SceneDesc = {
+  ...groundAbsorbVariant('sky'),
+  name: 'vol-cl-ground-leak',
+  purpose: 'Sky only, a tau 50 absorbing slab 0.5 m above a Lambert ground (0.5), camera in the gap looking down: pixel ~0 (only sky slipping under the 1 km slab edge, < 1e-6); P5.v17 diagnostic.',
+  camera: { type: 'perspective', position: [0, 0.3, 0.0001], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 1 },
+  media: { gas: { type: 'homogeneous', sigmaA: [50, 50, 50], sigmaS: [0, 0, 0] } },
+  meshes: [volClGroundAbsorb.meshes[0]!, { ...volClGroundAbsorb.meshes[1]!, transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1] }],
+  expected: { type: 'mean', value: [0, 0, 0], tolerance: 1e-4, pixelwise: false },
+};
+/** The leak scene with a 40 m slab (the sky slipping under its edges is about 0.2 (0.5 / 20)^2 = 1.3e-4): a leak far above that is not geometry. */
+const volClGroundLeak40: SceneDesc = { ...volClGroundLeak, name: 'vol-cl-ground-leak-40', purpose: `${volClGroundLeak.purpose.replace('1 km', '40 m')} (40 m slab: about 1.3e-4 slips under the edges)`, meshes: [volClGroundLeak.meshes[0]!, { ...volClGroundLeak.meshes[1]!, geometry: { type: 'box', size: [40, 1, 40] } }], expected: { type: 'mean', value: [1.3e-4, 1.3e-4, 1.3e-4], tolerance: 1, pixelwise: false } };
+/** The 40 m leak scene with an opaque black box instead of the medium: separates a trace miss (geometry) from a medium-state bug. */
+const volClGroundOccluder: SceneDesc = { ...volClGroundLeak40, name: 'vol-cl-ground-occluder', purpose: 'vol-cl-ground-leak-40 with an opaque black box in place of the medium slab: pixel about 1.3e-4 (sky under the edges); P5.v17 diagnostic.', materials: { ...volClGroundLeak40.materials, black: { type: 'diffuse', reflectance: [0, 0, 0] } }, media: {}, meshes: [volClGroundLeak40.meshes[0]!, { name: 'slab', geometry: { type: 'box', size: [40, 1, 40] }, material: 'black', transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1] }] };
+export const cloudGroundScenes: readonly SceneDesc[] = [volClGroundFurnace, volClGroundAbsorb, groundAbsorbVariant('sun'), groundAbsorbVariant('sky'), groundAbsorbVariant('gap'), volClGroundLeak, volClGroundLeak40, volClGroundOccluder, volClGroundSphere];
+
+export const cloudScenes: readonly SceneDesc[] = [...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];

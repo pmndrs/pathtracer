@@ -410,3 +410,65 @@ function normalize3(v: readonly number[]): [number, number, number] {
 
 /** Fraction of a sphere of radius R (interface boundary, uniform sky, albedo 1, any phase) that reaches the camera: 1 (energy conservation); the radiance equals the sky. */
 export const FURNACE_RADIANCE = 1;
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// r16float grids (P5.v18)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const F16_VIEW = new DataView(new ArrayBuffer(4));
+/** IEEE half bits of an f32 value, round to nearest even (subnormals and infinities included). */
+export function f32ToF16Bits(v: number): number {
+  F16_VIEW.setFloat32(0, v);
+  const x = F16_VIEW.getUint32(0);
+  const sign = (x >>> 16) & 0x8000;
+  const exp = (x >>> 23) & 0xff;
+  let mant = x & 0x7fffff;
+  if (exp === 0xff) return sign | 0x7c00 | (mant ? 0x200 : 0);
+  let e = exp - 127 + 15;
+  if (e >= 0x1f) return sign | 0x7c00;
+  if (e <= 0) {
+    if (e < -10) return sign;
+    mant |= 0x800000;
+    const shift = 14 - e;
+    const half = 1 << (shift - 1);
+    let m = mant >>> shift;
+    const rest = mant & ((1 << shift) - 1);
+    if (rest > half || (rest === half && (m & 1))) m++;
+    return sign | m;
+  }
+  let m = mant >>> 13;
+  const rest = mant & 0x1fff;
+  if (rest > 0x1000 || (rest === 0x1000 && (m & 1))) {
+    m++;
+    if (m === 0x400) { m = 0; e++; if (e >= 0x1f) return sign | 0x7c00; }
+  }
+  return sign | (e << 10) | m;
+}
+
+export function f16BitsToF32(h: number): number {
+  const sign = h & 0x8000 ? -1 : 1;
+  const e = (h >>> 10) & 0x1f;
+  const m = h & 0x3ff;
+  if (e === 0) return sign * m * 2 ** -24;
+  if (e === 0x1f) return m ? NaN : sign * Infinity;
+  return sign * (1 + m / 1024) * 2 ** (e - 15);
+}
+
+/** The grid with every value rounded to the nearest f16 (as f32): compute `densityMax` and `brickMajorants` from THIS array before uploading it as `r16float`. */
+export function ptRoundGridF16(density: ArrayLike<number>): Float32Array {
+  const out = new Float32Array(density.length);
+  for (let i = 0; i < density.length; i++) out[i] = f16BitsToF32(f32ToF16Bits(density[i] as number));
+  return out;
+}
+
+/** The half bits of a grid; with `exact`, throws on the first value f16 cannot hold exactly (round with `ptRoundGridF16` first). */
+export function ptF16Bits(density: ArrayLike<number>, exact = false): Uint16Array {
+  const out = new Uint16Array(density.length);
+  for (let i = 0; i < density.length; i++) {
+    const v = density[i] as number;
+    const h = f32ToF16Bits(v);
+    if (exact && f16BitsToF32(h) !== Math.fround(v)) throw new RangeError(`volumeGrid r16float: value ${v} at ${i} is not an f16 value; round the grid with ptRoundGridF16 and compute densityMax / the brick majorants from the rounded grid`);
+    out[i] = h;
+  }
+  return out;
+}

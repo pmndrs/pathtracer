@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, frameEmission: 'none', accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false, restirShared: false, restirGi: false, volumes: null, spectral: null, mtlx: false, mtlxNormal: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, frameEmission: 'none', accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false, restirShared: false, restirGi: false, volumes: null, originOffset: 0, spectral: null, mtlx: false, mtlxNormal: false });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -319,5 +319,17 @@ describe('integrator WGSL', () => {
       expect(size(all, { layering: 'stochastic' })).toBeLessThan(50_850);
       expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(53_650);
     });
+  });
+});
+
+describe('integrator.originOffset (P5.v17, V302)', () => {
+  it('0 / absent keeps the kernel text; a floor shifts every origin along the side normal before the ulp offset', () => {
+    expect(ptIntegratorWgsl({ originOffset: 0 })).toBe(ptIntegratorWgsl({}));
+    const text = ptIntegratorWgsl({ originOffset: 0.001953125 });
+    expect(text).toContain('const PT_ORIGIN_FLOOR: f32 = 0.001953125;');
+    expect(text).toContain('let p = p0 + PT_ORIGIN_FLOOR * n;');
+    expect(text.split('fn ptOffsetOrigin(').length - 1).toBe(1);
+    expect(() => resolveIntegratorOptions({ originOffset: -1 })).toThrow(RangeError);
+    expect(() => resolveIntegratorOptions({ originOffset: Number.NaN })).toThrow(RangeError);
   });
 });

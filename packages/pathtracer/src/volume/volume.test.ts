@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -235,5 +235,21 @@ describe('volume outputs decoding (P5.v15 / P5.v16)', () => {
     expect(v.scatterFraction[0]).toBeCloseTo(0.75, 6);
     expect(v.firstScatterDistance[1]).toBe(0);
     expect(() => ptDecodeVolumeOutputs(new Float32Array(8), w, h, N)).toThrow(RangeError);
+  });
+});
+
+describe('r16float grids (P5.v18)', () => {
+  it('rounds to the nearest f16, keeps exact values and refuses inexact ones at upload', () => {
+    for (const v of [0, 1, 0.5, 65504, 2 ** -24, 1 + 2 ** -10, -3.25]) expect(f16BitsToF32(f32ToF16Bits(v))).toBe(v);
+    expect(f16BitsToF32(f32ToF16Bits(1 + 2 ** -11))).toBe(1); // tie to even
+    expect(f16BitsToF32(f32ToF16Bits(1 + 3 * 2 ** -11))).toBe(1 + 2 ** -9);
+    expect(f16BitsToF32(f32ToF16Bits(1e6))).toBe(Infinity);
+    const g = Float32Array.from([0.1, 0.33333334, 0.7, 1]);
+    const r = ptRoundGridF16(g);
+    for (let i = 0; i < g.length; i++) expect(Math.abs((r[i] as number) - (g[i] as number))).toBeLessThanOrEqual((g[i] as number) * 2 ** -11);
+    expect(() => ptF16Bits(g, true)).toThrow(/ptRoundGridF16/);
+    expect(() => ptF16Bits(r, true)).not.toThrow();
+    // the majorant must come from the rounded grid: 0.7 rounds UP (to 0.70020), past the f32 value
+    expect(r[2]).toBeGreaterThan(g[2] as number);
   });
 });

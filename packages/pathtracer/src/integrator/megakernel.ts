@@ -34,7 +34,7 @@ import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
-import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, type PtVolumeOutputs } from '../volume/volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptF16Bits, type PtVolumeOutputs } from '../volume/volume.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
@@ -86,7 +86,7 @@ export interface PtMegakernelOptions {
    */
   blueNoise?: BlueNoiseTexture;
   /** `integrator.volumes` with a grid medium (P5): the density, x fastest then y then z, uploaded as an `r32float` 3D texture at group 2 binding `PT_VOLUME_BINDING`. */
-  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array } };
+  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** P5.v18: `'r16float'` halves the memory (a 504x352x616 cloud: 437 -> 218 MB); `density` must then hold f16-exact values (`ptRoundGridF16`) and `densityMax` / the brick majorants must come from those values. Default `'r32float'`. */ format?: 'r32float' | 'r16float'; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array } };
   /**
    * `integrator.spectral` only (P5): the RGB -> spectrum table (`buildRgb2SpecTable(res)`, `res` = `integrator.spectral.res`, default 64). Omitted: `defaultRgb2SpecTable(res)`
    * (fitted on first use and kept; res 64 takes ~4 s in Node, res 32 ~0.5 s), so a page builds it once and passes it here.
@@ -209,12 +209,15 @@ export function createBlueNoiseTexture(device: GPUDevice, tex: BlueNoiseTexture,
   return texture;
 }
 
-/** `r32float` 3D texture of a density grid (textureLoad, `unfilterable-float`); x fastest. */
+/** `r32float` (or `r16float`, P5.v18) 3D texture of a density grid (textureLoad, `unfilterable-float`); x fastest. */
 export function createVolumeTexture(device: GPUDevice, grid: NonNullable<PtMegakernelOptions['volumeGrid']>, label: string): GPUTexture {
   const [nx, ny, nz] = grid.resolution;
   if (grid.density.length !== nx * ny * nz) throw new RangeError(`volumeGrid: ${grid.density.length} values for a ${nx} x ${ny} x ${nz} grid`);
-  const texture = device.createTexture({ label: `${label} volume density`, size: [nx, ny, nz], dimension: '3d', format: 'r32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
-  device.queue.writeTexture({ texture }, grid.density as unknown as GPUAllowSharedBufferSource, { bytesPerRow: nx * 4, rowsPerImage: ny }, [nx, ny, nz]);
+  const half = grid.format === 'r16float';
+  const texture = device.createTexture({ label: `${label} volume density`, size: [nx, ny, nz], dimension: '3d', format: half ? 'r16float' : 'r32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
+  // r16float: refuse values f16 cannot hold exactly, so the majorant the caller computed from `density` bounds what the GPU reads (round with ptRoundGridF16 first)
+  const data = half ? ptF16Bits(grid.density, true) : grid.density;
+  device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: nx * (half ? 2 : 4), rowsPerImage: ny }, [nx, ny, nz]);
   return texture;
 }
 

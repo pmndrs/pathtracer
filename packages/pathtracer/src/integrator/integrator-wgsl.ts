@@ -166,6 +166,13 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   volumes?: PtVolumeOptions | null;
   /**
+   * A floor (metres) for the self-intersection offset of every secondary ray origin, added along the side normal before the ulp offset (Waechter and Binder).
+   * The ulp offset alone assumes the hit point is accurate to a few ulps of ITSELF; a point near the origin on a large triangle (a 2 km ground under the camera)
+   * carries the error of its far vertices instead (~2e-7 x their magnitude), so bounce and shadow rays re-hit the surface from behind (P5.v17: the ground
+   * under an opaque box received 100x the sky light pbrt does). Set it to about 2^-19 x the scene's largest coordinate. Default 0: off, the kernel text is unchanged.
+   */
+  originOffset?: number;
+  /**
    * Spectral transport (P5, `docs/internal/design/spectral.md`): paths carry three wavelengths (hero sampling) in the lanes of the vec3 throughput; every RGB reflectance,
    * conductor eta / k, transmission / coat / sheen colour is uplifted to its sigmoid-polynomial spectrum (Jakob and Hanika 2019, as pbrt-v4), emission and the
    * environment / sun to the same times D65, and the sample is converted to linear Rec.709 by the CIE 1931 matching functions. Opt-in (default off: the kernel text is
@@ -251,6 +258,8 @@ export interface ResolvedIntegratorOptions {
   restirShared: boolean;
   /** P5 participating media (`PtIntegratorOptions.volumes`). */
   volumes: PtVolumeOptions | null;
+  /** `PtIntegratorOptions.originOffset` (0 = off). */
+  originOffset: number;
   /** Spectral transport (P5), or null. */
   spectral: ResolvedSpectralOptions | null;
   /** ReSTIR GI on top of DI (`PtRestirOptions.gi`, P5): the shade ends the path at the first non-delta vertex and adds the final GI reservoir's contribution. */
@@ -283,7 +292,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const spectral = resolveSpectralOptions(o.spectral);
   if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
   if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, originOffset: ptOriginOffset(o.originOffset), spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -314,6 +323,12 @@ struct PtParams {
  * The pieces of the integrator the wavefront scheduler (`../wavefront/`) shares with the megakernel, so both compile the same text:
  * constants, ray-origin offset, MIS weight and the escaped-ray (environment / sun) term. Moving them here left the megakernel's text byte-identical.
  */
+function ptOriginOffset(v: number | undefined): number {
+  if (v === undefined || v === 0) return 0;
+  if (!(v > 0 && Number.isFinite(v))) throw new RangeError(`integrator.originOffset must be a finite number >= 0 (metres), got ${v}`);
+  return Math.fround(v);
+}
+
 export function ptCommonHeadWgsl(o: ResolvedIntegratorOptions): string {
   const tex = o.textures;
   const mask = o.alphaMask;
@@ -330,7 +345,10 @@ const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
 ` : ''}${o.lod !== 'off' ? `const PT_LOD_DEPTH: u32 = ${o.lodDepth}u;
 ${tex ? `const PT_LOD_TEX_BIAS: f32 = ${PT_LOD_TEX_BIAS};
 ` : ''}` : ''}
-fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
+${o.originOffset > 0 ? `const PT_ORIGIN_FLOOR: f32 = ${o.originOffset};
+
+fn ptOffsetOrigin(p0: vec3f, n: vec3f) -> vec3f {
+    let p = p0 + PT_ORIGIN_FLOOR * n;` : `fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {`}
     let ofs = vec3i(PT_INT_SCALE * n);
     let pi = bitcast<vec3f>(bitcast<vec3i>(p) + select(ofs, -ofs, p < vec3f(0.0)));
     return select(pi, p + PT_FLOAT_SCALE * n, abs(p) < vec3f(PT_ORIGIN));

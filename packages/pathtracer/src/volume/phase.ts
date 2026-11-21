@@ -6,7 +6,7 @@
  *  - `hgDraine`: HG plus a Draine lobe (Draine 2003, ApJ 598; alpha = 1 is Cornette-Shanks).
  *  - `mie`: the water-droplet fit of Jendersie and d'Eon 2023 ("An Approximate Mie Scattering Function for Fog and Cloud Rendering", SIGGRAPH Talks; supplemental
  *    section 3.1, Eqs. 7-10, large particles, diameter 5 to 50 um), resolved to `hgDraine` by `ptMieFit`. Note the constants 0.428934 and 0.665888 sit INSIDE the
- *    exponent (checked against the supplemental text and Blender Cycles' `phase_mie_fitted_parameters`). No clamp of the forward peak (V300).
+ *    exponent (checked against the supplemental text and Blender Cycles' `phase_mie_fitted_parameters`). No clamp of the forward peak (V298).
  *
  * Convention: `cosTheta = dot(wo, wi)` with wo towards the previous vertex, so forward scattering is cosTheta = -1 (pbrt's, as `hgPhase`). The papers write
  * u = cos(scattering angle) = -cosTheta; the lobe functions below take that `u`.
