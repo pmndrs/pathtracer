@@ -81,11 +81,17 @@ Mitsuba 3 code was not read for the BSDFs.
 (<https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/>), a published formula used across engines. Cited in the
 shader; examples only, not part of the packages.
 
+### 1.7 Blender Cycles (Blender Foundation), Apache-2.0
+
+| Our file | Source | Licence | Notes |
+|---|---|---|---|
+| `packages/pathtracer/src/volume/volume-wgsl.ts` (`ptVolTele`), `volume.ts` (`telescopingTransmittance`) | Blender Cycles `intern/cycles/kernel/integrator/shade_volume.h` (`volume_transmittance`) and `kernel/sample/mapping.h` (`sample_geometric_distribution`), after Misso, Bitterli, Georgiev, Jarosz 2022 (local clone `research/sources/native/cycles` (2026-11-11)) | Apache-2.0 (Blender Foundation; SPDX header) | Re-implementation of the structure (order distribution r = 0.9, cut-off at order 4, interleaved-half debiasing term) per brick DDA cell with the analytic minorant; k capped at 64; the shared order uniform is a hash of (sample index, cell). Opt-in `shadowTracking: 'telescoping'` (V2.3) |
+
 ### 1.4 Clean-room status
 
 - NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC, NRD): nothing ported. NRD code never opened.
 - mutracer: nothing ported (see section 2).
-- Third-party clones under `research/sources/` are read-only and git-ignored; no code from them is in the tree.
+- Third-party clones under `research/sources/` are read-only and git-ignored; the only code derived from them is the Apache-2.0 Cycles re-implementation in section 1.7 (attributed above), written as our own WGSL / TypeScript, not copied files.
 
 ## 2. Run, not copied (competitor and dependency packages)
 

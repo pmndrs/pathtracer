@@ -52,9 +52,9 @@ Gate: equal-time relMSE on `vol-cl-cloud256` (and one dense homogeneous sphere) 
 |---|---|---|
 | ✅ V2.1 ★ | Minorant per brick (brick texture rg = min, max) | TS twin: min <= every density sample in the cell |
 | ✅ V2.2 (not a win) ★ | Residual ratio tracking for shadow rays against the minorant (verify the residual-tracking patent status first) | TS twin unbiased; `vol-grid-slab`; 256 spp within SE |
-| V2.3 ★ | Misso 2022 telescoping transmittance, port of Cycles `volume_transmittance` (Apache-2.0, attribution), A/B vs ratio tracking | TS twin unbiased; equal-spp variance on `vol-cl-cloud256` |
+| ✅ V2.3 (not a win) ★ | Misso 2022 telescoping transmittance, port of Cycles `volume_transmittance` (Apache-2.0, attribution), A/B vs ratio tracking | TS twin unbiased; equal-spp variance on `vol-cl-cloud256` |
 | V2.4 | Decomposition tracking for free flight (control part analytic, residual majorant) | `vol-grid-slab`; lookup counter |
-| V2.5 ★ | Adaptive sampling per tile from the second moment (stop when SE < target) | spp saved at equal SE on `vol-cl-cloud256` |
+| 🟨 V2.5 ★ (V2.5a ✅ variance-guided stop) | Adaptive sampling per tile from the second moment (stop when SE < target) | spp saved at equal SE on `vol-cl-cloud256` |
 | V2.6 | Finite sun disc A/B against the delta sun for peaked phases (agree with the clouds side first) | `vol-cl-sph-mie20` 64 spp firefly count |
 
 ### ⬜ V3 — Memory and scale
@@ -63,7 +63,7 @@ Gate: the clouds' 504x352x616 grid fits in <= 128 MB with an image same-seed equ
 
 | id | task | check |
 |---|---|---|
-| V3.1 ★ | r8unorm grids with a per-medium scale | same-seed relMSE vs r16 |
+| ✅ V3.1 ★ | r8unorm grids with a per-medium scale | same-seed relMSE vs r16 |
 | V3.2 ★ | Sparse brick atlas: indirection texture at brick resolution + atlas of occupied 8^3 bricks with a 1-voxel apron (one texture, no storage buffer); gives several grids per kernel | same-seed image vs dense on `vol-cl-cloud256`; memory printout |
 | V3.3 | Camera inside a grid medium; auto-detect the camera medium | `vol-camera-medium` grid twin |
 | V3.4 | Browser `.vdb` loader (WebVDB `parseVdb` in a worker -> dense / atlas; licence check of WebVDB / NanoVDB first) | `vol-vdb-smoke` from the browser = from Node |

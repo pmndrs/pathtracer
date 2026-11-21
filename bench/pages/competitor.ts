@@ -6,7 +6,7 @@
  * Args: renderer=<tgpt-wavefront|tgpt-megakernel|mutracer>  scene=<any bench scene name>  spp=N  snapshots=a,b,c
  *       budget=N (tgpt frame budget, path steps per call)  bounces=N (maxBounces override, for calibration)  emitters=rect|mesh (tgpt: RectAreaLight, default, or emissive mesh)  mt_candidates/mt_sampler/mt_bevel/mt_dispersion/mt_offset (mutracer experiments, P0.26)  force=1 (render even if the scene is not exact for this renderer)
  *
- *       pt-megakernel (ours): pt_volume_shadow=analytic|ratio|residual  pt_volume_majorant=global|brick pt_tr_roulette=1 pt_volume_outputs=1 pt_volume_grid=r32float|r16float (P5 media; outputs = order split, transmittance, standard error, P5.v15-16)
+ *       pt-megakernel (ours): pt_volume_shadow=analytic|ratio|residual|telescoping  pt_volume_majorant=global|brick pt_tr_roulette=1 pt_volume_outputs=1 pt_volume_grid=r32float|r16float|r8unorm (P5 media; outputs = order split, transmittance, standard error, P5.v15-16)
  *       pt-megakernel (ours): pt_sampler=owen-sobol|pcg|bluenoise  pt_nee=0|1  pt_env=uniform|importance|none  pt_sun_visible=0|1  pt_positions=barycentric|ray  pt_vndf=standard|cap
  *       pt_transport=radiance|importance  pt_sun_radius=R (radians, 0 = delta sun)  pt_light_selection=pbrt|power|kind|cap:0.25  pt_mode=reference|preview (D31 cutouts; realtime needs frame stepping)  pt_texture_lod=0|cone  pt_texture_cone_scale=auto|N  pt_layering=albedo|stochastic  pt_albedo_base=openpbr|internal  pt_albedo_correction=none|lut|texture  pt_exit_mis=pbrt|none  pt_layer_depth=N  pt_layer_thickness=T  pt_tint=0|1  pt_coverage=0|1  pt_maxdepth=N  pt_rr=N (0 = off)  pt_seed=N  pt_passes=N (sample passes per submit)  pt_refill=0|1|inline|batch|ordered pt_refill_threshold=F pt_layers=N (wavefront only: refill, slots per pixel; P3.2, ordered = P3.10)  pt_appends=atomic|subgroup|auto (P3.3)  pt_sort=none|material|octant|both (P3.4)  pt_alpha_policy=exact|opaqueShadow|opaqueIndirect|opaqueSecondary (alpha MASK scenes; BIASED unless exact, R2)  pt_packing=split|packed (scene copy as two storage buffers or one; P3.11)  pt_mips=cpu|gpu (texture mips from @pmndrs/downsampler, X5)  pt_tex_binding=arrays|table (texture arrays or the resource table, P1.4c2; Tier 3, megakernel)  pt_bvh=quantized|f32|bvh4|cwbvh8 pt_bvh_decode=exact|folded pt_bvh_walk=nested|single (bvh node format; the wide ones are experimental, X1.i)  pt_primary=trace|vbuffer (primary hits: traced camera rays, or a bench-rasterised visibility buffer; P3.6)  pt_aovs=0|1 (albedo/normal/depth extra images)  pt_counters=0|1 (counter heatmaps, row INVALID for timing)  pt_denoise=oidn (extra `denoised` image; raw stays the result)  pt_spectral=1|nodisp pt_spectral_res=N (P5 spectral transport: 3 hero wavelengths, sigmoid-polynomial uplift, dispersion; megakernel only) pt_lod=full|secondary (R1, biased) pt_lod_depth=N  pt_restir=1 (ReSTIR DI at the first vertex, P4, megakernel; one sample pass = one frame: static scene, accumulated mean) pt_restir_m=N pt_restir_temporal=0|1 pt_restir_spatial=K pt_restir_radius=PX pt_restir_bias=biased|unbiased pt_restir_vis=0|1 pt_restir_cap=N pt_restir_nb=random|fixed pt_restir_tpick=random|nearest
  *
@@ -67,13 +67,13 @@ try {
   const pt = {
     ...(args['pt_sampler'] ? { sampler: args['pt_sampler'] as 'owen-sobol' | 'pcg' | 'bluenoise' } : {}),
     ...(args['pt_nee'] ? { nee: args['pt_nee'] !== '0' } : {}),
-    ...(args['pt_volume_shadow'] ? { volumeShadow: args['pt_volume_shadow'] as 'analytic' | 'ratio' | 'residual' } : {}),
+    ...(args['pt_volume_shadow'] ? { volumeShadow: args['pt_volume_shadow'] as 'analytic' | 'ratio' | 'residual' | 'telescoping' } : {}),
     ...(args['pt_volume_majorant'] ? { volumeMajorant: args['pt_volume_majorant'] as 'global' | 'brick' } : {}),
     ...(args['pt_tr_roulette'] === '1' ? { volumeTrRoulette: true } : {}),
     ...(args['pt_forced_nee'] === '1' ? { volumeForcedNee: true } : {}),
     ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : {}),
     ...(args['pt_volume_outputs'] === '1' ? { volumeOutputs: true } : {}),
-    ...(args['pt_volume_grid'] ? { volumeGridFormat: args['pt_volume_grid'] as 'r32float' | 'r16float' } : {}),
+    ...(args['pt_volume_grid'] ? { volumeGridFormat: args['pt_volume_grid'] as 'r32float' | 'r16float' | 'r8unorm' } : {}),
     ...(args['pt_env'] ? { envSampling: args['pt_env'] as 'uniform' | 'importance' | 'none' } : {}),
     ...(args['pt_sun_visible'] ? { sunVisible: args['pt_sun_visible'] === '1' } : {}),
     ...(args['pt_sun_radius'] !== undefined ? { sunAngularRadius: numberArg(args, 'pt_sun_radius', 0) } : {}),

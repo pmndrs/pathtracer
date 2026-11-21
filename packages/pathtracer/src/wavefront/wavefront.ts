@@ -315,7 +315,7 @@ export class PtWavefront {
     const resolved = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
     const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi, ...(ptVolumeHasGrid(resolved.volumes) ? { volumeGrid: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.densityFilter === 'hardware' ? { volumeHw: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.majorant === 'brick' ? { volumeMajorant: true } : {}), ...(resolved.spectral ? { spectral: true } : {}) };
     if (extra.volumeGrid && !options.volumeGrid) throw new Error('PtWavefront: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
-    if (extra.volumeHw && options.volumeGrid?.format !== 'r16float' && !device.features.has('float32-filterable')) throw new Error("PtWavefront: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
+    if (extra.volumeHw && (options.volumeGrid?.format ?? 'r32float') === 'r32float' && !device.features.has('float32-filterable')) throw new Error("PtWavefront: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
     if (extra.volumeMajorant && !options.volumeGrid?.majorant) throw new Error("PtWavefront: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
     const specTable = resolved.spectral ? (options.spectralTable ?? defaultRgb2SpecTable(resolved.spectral.res)) : null;
     if (resolved.spectral && specTable && specTable.res !== resolved.spectral.res) throw new Error(`PtWavefront: integrator.spectral.res is ${resolved.spectral.res} but the spectral table has res ${specTable.res} (pass \`spectral: { res: ${specTable.res} }\`)`);
@@ -365,8 +365,8 @@ export class PtWavefront {
     if (extra.volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>, label);
     if (extra.volumeMajorant) {
       const mj = (options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>).majorant as { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array };
-      if (resolved.volumes?.shadowTracking === 'residual' && !mj.minima) throw new Error("PtWavefront: integrator.volumes.shadowTracking 'residual' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
-      kernel.majorantTexture = createMajorantTexture(device, mj, label);
+      if ((resolved.volumes?.shadowTracking === 'residual' || resolved.volumes?.shadowTracking === 'telescoping') && !mj.minima) throw new Error("PtWavefront: integrator.volumes.shadowTracking 'residual' / 'telescoping' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
+      kernel.majorantTexture = createMajorantTexture(device, mj, label, options.volumeGrid?.format === 'r8unorm' ? options.volumeGrid.scale : 1);
     }
     if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);
     return kernel;

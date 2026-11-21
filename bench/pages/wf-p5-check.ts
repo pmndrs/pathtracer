@@ -60,7 +60,9 @@ const CASES: Record<string, Case> = {
   'vol-vdb-smoke-brick': { scene: 'vol-vdb-smoke', settings: { volumeMajorant: 'brick' } },
   'vol-grid-cloud-roulette': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeTrRoulette: true } },
   'vol-grid-cloud-residual': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'residual', volumeTrRoulette: true } },
+  'vol-grid-cloud-telescoping': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'telescoping' } },
   'vol-grid-cloud-hw': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeDensityFilter: 'hardware' } },
+  'vol-grid-cloud-r8': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r8unorm' } },
   // spectral transport
   cornell: { scene: 'cornell', settings: SPECTRAL },
   'swatches-refl': { scene: 'spectral-swatches-refl', settings: SPECTRAL },

@@ -25,6 +25,8 @@ export interface PtMediumGrid {
   worldToIndex: readonly number[];
   /** Largest density value in the grid (the majorant is this times the largest sigmaT channel). */
   densityMax: number;
+  /** V3.1 (`volumeGrid.format: 'r8unorm'`): the grid's density is `texel * densityScale` (texel in 0..1). The table folds the scale into sigma_t (exact: `texel * (scale * sigmaT)`), so the kernel text is unchanged; `densityMax` and the majorants stay in density units. Default 1. */
+  densityScale?: number;
 }
 
 export interface PtMedium {
@@ -58,9 +60,10 @@ export interface PtVolumeOptions {
    * Transmittance of a shadow ray through a HOMOGENEOUS medium: `'analytic'` (default, `exp(-sigma_t d)`, no noise) or `'ratio'` (ratio tracking against the majorant, what pbrt does:
    * same mean, more variance; the A/B of V241). A grid medium always uses ratio tracking. V2.2 `'residual'` (grid media with `majorant: 'brick'` and `volumeGrid.majorant`
    * built with `brickMajorants(.., .., { minima: true })`): residual ratio tracking (Novak et al. 2014), per DDA cell the analytic transmittance of the cell's minorant
-   * times a ratio-tracking estimate of the residual (majorant - minorant); homogeneous media stay analytic. Same mean, fewer lookups in a smooth dense grid.
+   * times a ratio-tracking estimate of the residual (majorant - minorant); homogeneous media stay analytic. Same mean, fewer lookups in a smooth dense grid. V2.3 `'telescoping'` (same grid requirements as `'residual'`): Blender Cycles' estimator (Misso et al. 2022), per cell the analytic minorant times a
+   * jittered-marching estimate of the residual optical depth with a randomly ordered debiasing term (see `telescopingTransmittance`); the estimate can be negative or above 1.
    */
-  shadowTracking?: 'analytic' | 'ratio' | 'residual';
+  shadowTracking?: 'analytic' | 'ratio' | 'residual' | 'telescoping';
   /**
    * Majorant of a grid medium: `'global'` (default; densityMax x max sigma_t everywhere, V243) or `'brick'` (the largest density per 8^3 voxels, walked by a DDA; needs
    * `volumeGrid.majorant` = `brickMajorants(...)`, group 2 binding `PT_VOLUME_MAJORANT_BINDING`). Same estimator, fewer null collisions in a sparse grid; the A/B of V243.
@@ -351,6 +354,50 @@ export function residualTransmittance(
   return { tr, lookups };
 }
 
+/**
+ * V2.3 twin of the WGSL telescoping transmittance (Blender Cycles `volume_transmittance`, after Misso, Bitterli, Georgiev, Jarosz 2022 "Unbiased and consistent rendering
+ * using biased estimators"; Cycles is Apache-2.0). Per DDA cell: the minorant is analytic, the residual optical depth (sigmaT (density - min)) is estimated by jittered
+ * marching with k = clamp(round(sigma_c len), 1, 64) steps, sigma_c = sigmaT (max - min), plus a debiasing term of random order n (P(n) = 0.9 0.1^n, the tail lumped into
+ * n = 4: N = 2^n independent k-step estimators averaged, plus (T_{Nk} - mean of the two interleaved halves T_{Nk/2}) / pmf). `shared(cell)` is the order's uniform: the
+ * same for every pixel of a sample (GPU coherence), a function of the sample index and the cell number. The estimate is the exact expectation of T with Nk = 16 k steps (the cut-off
+ * at order 4 drops the terms beyond it: bias = the jittered-marching error at 16 k steps), and may be negative or above 1.
+ */
+export function telescopingTransmittance(
+  cells: readonly { t0: number; t1: number; max: number; min: number }[], density: (t: number) => number, sigmaT: number, rand: () => number, shared: (cell: number) => number, cutOff = 4,
+): { tr: number; lookups: number } {
+  let tr = 1, lookups = 0;
+  cells.forEach((c, ci) => {
+    const len = c.t1 - c.t0;
+    tr *= Math.exp(-sigmaT * c.min * len);
+    const sc = sigmaT * (c.max - c.min);
+    if (!(sc > 0)) return;
+    const k = Math.min(64, Math.max(1, Math.round(sc * len)));
+    const nf = Math.floor(Math.log(Math.max(shared(ci), 1e-7)) / Math.log(0.1));
+    const n = Math.min(nf, cutOff);
+    const pmf = n === cutOff ? 0.1 ** n : 0.9 * 0.1 ** n;
+    const N = 2 ** n, step = len / (N * k), off = rand();
+    const tau = (s: number): number => { lookups++; return step * sigmaT * (density(c.t0 + (off + s) * step) - c.min); };
+    if (N === 1) {
+      let tk = 0;
+      for (let i = 0; i < k; i++) tk += tau(i);
+      tr *= Math.exp(-tk);
+      return;
+    }
+    const tj: number[] = [0, 0];
+    let tj1 = 0, Tk = 0;
+    for (let m = 0; m < N; m++) {
+      let tk = 0;
+      for (let i = 0; i < k; i++) {
+        const s = i * N + m, t = tau(s);
+        tk += t * N; tj[s % 2]! += t * 2; tj1 += t;
+      }
+      Tk += Math.exp(-tk);
+    }
+    tr *= Tk / N + (Math.exp(-tj1) - 0.5 * (Math.exp(-tj[0]!) + Math.exp(-tj[1]!))) / pmf;
+  });
+  return { tr, lookups };
+}
+
 export interface DdaSegment { t0: number; t1: number; cell: [number, number, number] }
 
 /** The coarse cells a ray crosses inside the grid's support box, in order, with the parametric range of each (twin of `ptDdaInit` / `ptDdaNext`). `a`, `b`: the ray in index space (point and direction per unit t). */
@@ -543,6 +590,38 @@ export function ptRoundGridF16(density: ArrayLike<number>): Float32Array {
 }
 
 /** The half bits of a grid; with `exact`, throws on the first value f16 cannot hold exactly (round with `ptRoundGridF16` first). */
+// r8unorm grids (V3.1)
+const dequantR8 = (byte: number, scale: number): number => Math.fround((byte / 255) * scale);
+
+/** Quantise a density grid to r8unorm with a per-grid scale (the maximum), round to nearest: `bytes` are the texels, `dequantized` the values the GPU reads (compute `densityMax` and `brickMajorants` from THAT array, and put `scale` in `PtMediumGrid.densityScale` and `volumeGrid.scale`). */
+export function ptQuantizeGridR8(density: ArrayLike<number>): { bytes: Uint8Array; scale: number; dequantized: Float32Array } {
+  let scale = 0;
+  for (let i = 0; i < density.length; i++) { const v = density[i] as number; if (!(v >= 0) || !Number.isFinite(v)) throw new RangeError(`ptQuantizeGridR8: value ${v} at ${i} is not a finite non-negative density`); if (v > scale) scale = v; }
+  scale = Math.fround(scale);
+  const bytes = new Uint8Array(density.length);
+  const dequantized = new Float32Array(density.length);
+  if (scale > 0) for (let i = 0; i < density.length; i++) { const b = Math.min(255, Math.round(((density[i] as number) / scale) * 255)); bytes[i] = b; dequantized[i] = dequantR8(b, scale); }
+  return { bytes, scale: scale > 0 ? scale : 1, dequantized };
+}
+
+/** The r8unorm bytes of a grid with the given scale; throws on the first value that is not on the r8 grid (`ptQuantizeGridR8` first). */
+export function ptR8Bytes(density: ArrayLike<number>, scale: number): Uint8Array {
+  if (!(scale > 0) || !Number.isFinite(scale)) throw new RangeError(`volumeGrid r8unorm: scale ${scale} must be positive`);
+  const out = new Uint8Array(density.length);
+  for (let i = 0; i < density.length; i++) {
+    const v = density[i] as number;
+    const b = Math.max(0, Math.min(255, Math.round((v / scale) * 255)));
+    if (dequantR8(b, scale) !== Math.fround(v)) throw new RangeError(`volumeGrid r8unorm: value ${v} at ${i} is not on the r8 grid of scale ${scale}; use ptQuantizeGridR8 and compute densityMax / the brick majorants from its \`dequantized\` array`);
+    out[i] = b;
+  }
+  return out;
+}
+
+const F32_BITS = new DataView(new ArrayBuffer(4));
+const nextF32 = (v: number, up: boolean): number => { if (v === 0) return up ? 1.4e-45 : 0; F32_BITS.setFloat32(0, v); F32_BITS.setUint32(0, F32_BITS.getUint32(0) + (up === v > 0 ? 1 : -1)); return F32_BITS.getFloat32(0); };
+/** A majorant (or, with `up = false`, a minorant) in density units to the texel units the GPU reads (divide by the scale; one f32 ulp outward so a rounded quotient still bounds). */
+export function ptTexelBound(v: number, scale: number, up = true): number { return v > 0 ? nextF32(Math.fround(v / scale), up) : 0; }
+
 export function ptF16Bits(density: ArrayLike<number>, exact = false): Uint16Array {
   const out = new Uint16Array(density.length);
   for (let i = 0; i < density.length; i++) {

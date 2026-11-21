@@ -19,6 +19,7 @@
  *     pt.setCamera(cam0);  encode(1);  ...  pt.nextFrame(cam1);  pt.encode(encoder, 1);     // the old camera is the previous one (motion)
  *     const { accum, planes } = pt.frameBuffers;                                              // or: const frame = await pt.readFrame();
  */
+import { ptRenderUntil, type PtRenderUntilResult, type PtStopOptions } from './render-until.ts';
 import { loadBlueNoise, rtLightSampleWgsl, rtModuleWgsl, rtOwenSobolWgsl, rtPackSceneAccess, DEFAULT_SCENE_PACKING, type SceneCopyPacking, rtSceneCopyBindGroupEntries, rtSceneCopyLayoutEntries, rtMinifyWgsl, rtCreateComputePipelineAsync, rtSceneBindGroupEntries, sceneFormatOf, rtTransformWgsl, rtWalkEntries, stripWgslComments, withBindings, rtSetResourceTable, rtUsesResourceTable } from '@pmndrs/raytracer';
 import type { RtWgslBuild } from '@pmndrs/raytracer';
 import type { BlueNoiseTexture, Caps, SceneCopyBuffers, SceneFormat, SurfaceLayout, TextureLayout, RtResourceTable } from '@pmndrs/raytracer';
@@ -34,7 +35,7 @@ import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
-import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptF16Bits, type PtVolumeOutputs } from '../volume/volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptF16Bits, ptR8Bytes, ptTexelBound, type PtVolumeOutputs } from '../volume/volume.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
@@ -88,7 +89,7 @@ export interface PtMegakernelOptions {
    */
   blueNoise?: BlueNoiseTexture;
   /** `integrator.volumes` with a grid medium (P5): the density, x fastest then y then z, uploaded as an `r32float` 3D texture at group 2 binding `PT_VOLUME_BINDING`. */
-  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** P5.v18: `'r16float'` halves the memory (a 504x352x616 cloud: 437 -> 218 MB); `density` must then hold f16-exact values (`ptRoundGridF16`) and `densityMax` / the brick majorants must come from those values. Default `'r32float'`. */ format?: 'r32float' | 'r16float'; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array; /** V2.1 (`volumes.shadowTracking: 'residual'`): the per-cell minorant of `brickMajorants(.., .., { minima: true })`; the majorant texture is then `rg32float` (r = max, g = min). */ minima?: Float32Array } };
+  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** P5.v18: `'r16float'` halves the memory (a 504x352x616 cloud: 437 -> 218 MB); `density` must then hold f16-exact values (`ptRoundGridF16`) and `densityMax` / the brick majorants must come from those values. Default `'r32float'`. */ format?: 'r32float' | 'r16float' | 'r8unorm'; /** V3.1: `'r8unorm'` (a quarter of r32float): `scale` is the grid's scale (`ptQuantizeGridR8`), `density` must be its `dequantized` array, `PtMediumGrid.densityScale` the same number; the brick majorants (density units) are divided by it at upload. */ scale?: number; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array; /** V2.1 (`volumes.shadowTracking: 'residual'`): the per-cell minorant of `brickMajorants(.., .., { minima: true })`; the majorant texture is then `rg32float` (r = max, g = min). */ minima?: Float32Array } };
   /**
    * `integrator.spectral` only (P5): the RGB -> spectrum table (`buildRgb2SpecTable(res)`, `res` = `integrator.spectral.res`, default 64). Omitted: `defaultRgb2SpecTable(res)`
    * (fitted on first use and kept; res 64 takes ~4 s in Node, res 32 ~0.5 s), so a page builds it once and passes it here.
@@ -216,15 +217,18 @@ export function createVolumeTexture(device: GPUDevice, grid: NonNullable<PtMegak
   const [nx, ny, nz] = grid.resolution;
   if (grid.density.length !== nx * ny * nz) throw new RangeError(`volumeGrid: ${grid.density.length} values for a ${nx} x ${ny} x ${nz} grid`);
   const half = grid.format === 'r16float';
-  const texture = device.createTexture({ label: `${label} volume density`, size: [nx, ny, nz], dimension: '3d', format: half ? 'r16float' : 'r32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
+  const r8 = grid.format === 'r8unorm';
+  const texture = device.createTexture({ label: `${label} volume density`, size: [nx, ny, nz], dimension: '3d', format: r8 ? 'r8unorm' : half ? 'r16float' : 'r32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
   // r16float: refuse values f16 cannot hold exactly, so the majorant the caller computed from `density` bounds what the GPU reads (round with ptRoundGridF16 first)
-  const data = half ? ptF16Bits(grid.density, true) : grid.density;
-  device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: nx * (half ? 2 : 4), rowsPerImage: ny }, [nx, ny, nz]);
+  // r8unorm: the same rule against the r8 grid of `scale` (bytesPerRow needs no 256 alignment for writeTexture)
+  const data = r8 ? ptR8Bytes(grid.density, grid.scale ?? 0) : half ? ptF16Bits(grid.density, true) : grid.density;
+  device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: nx * (r8 ? 1 : half ? 2 : 4), rowsPerImage: ny }, [nx, ny, nz]);
   return texture;
 }
 
 /** The brick majorant texture (`volumeGrid.majorant`): `r32float` (max), or `rg32float` (max, min; V2.1) when `minima` is given. */
-export function createMajorantTexture(device: GPUDevice, mj: { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array }, label: string): GPUTexture {
+export function createMajorantTexture(device: GPUDevice, mj: { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array }, label: string, scale = 1): GPUTexture {
+  if (scale !== 1) mj = { resolution: mj.resolution, values: mj.values.map((v) => ptTexelBound(v, scale)), ...(mj.minima ? { minima: mj.minima.map((v) => ptTexelBound(v, scale, false)) } : {}) }; // V3.1: density units -> r8 texel units
   if (!mj.minima) return createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
   const [nx, ny, nz] = mj.resolution;
   if (mj.values.length !== nx * ny * nz || mj.minima.length !== mj.values.length) throw new RangeError(`volumeGrid.majorant: ${mj.values.length} maxima / ${mj.minima.length} minima for a ${nx} x ${ny} x ${nz} grid`);
@@ -333,7 +337,8 @@ export class PtMegakernel {
     const volumeGrid = ptVolumeHasGrid(options.integrator?.volumes);
     if (volumeGrid && !options.volumeGrid) throw new Error('PtMegakernel: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
     const volumeHw = volumeGrid && options.integrator?.volumes?.densityFilter === 'hardware';
-    if (volumeHw && options.volumeGrid?.format !== 'r16float' && !device.features.has('float32-filterable')) throw new Error("PtMegakernel: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
+    if (volumeHw && (options.volumeGrid?.format ?? 'r32float') === 'r32float' && !device.features.has('float32-filterable')) throw new Error("PtMegakernel: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
+    if (volumeGrid && options.volumeGrid?.format === 'r8unorm') for (const m of options.integrator?.volumes?.media ?? []) if (m.grid && Math.fround(m.grid.densityScale ?? 1) !== Math.fround(options.volumeGrid.scale ?? 0)) throw new Error("PtMegakernel: volumeGrid.format 'r8unorm' needs every grid medium's `densityScale` to equal `volumeGrid.scale`");
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick' && !options.volumeGrid?.majorant) throw new Error("PtMegakernel: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
     const resolvedOptions = resolveIntegratorOptions(options.integrator ?? {});
@@ -381,8 +386,8 @@ export class PtMegakernel {
     if (volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
       const mj = options.volumeGrid!.majorant!;
-      if (options.integrator?.volumes?.shadowTracking === 'residual' && !mj.minima) throw new Error("PtMegakernel: integrator.volumes.shadowTracking 'residual' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
-      kernel.majorantTexture = createMajorantTexture(device, mj, label);
+      if ((options.integrator?.volumes?.shadowTracking === 'residual' || options.integrator?.volumes?.shadowTracking === 'telescoping') && !mj.minima) throw new Error("PtMegakernel: integrator.volumes.shadowTracking 'residual' / 'telescoping' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
+      kernel.majorantTexture = createMajorantTexture(device, mj, label, options.volumeGrid!.format === 'r8unorm' ? options.volumeGrid!.scale : 1);
     }
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);
@@ -656,6 +661,33 @@ export class PtMegakernel {
     if (!this.options.integrator?.volumes?.outputs) throw new Error('PtMegakernel.readVolumeOutputs: the kernel was built without integrator.volumes.outputs');
     const sums = new Float32Array(await this.readBuffer(this.accum, 0, this.width * this.height * 16 * (1 + PT_VOLUME_OUTPUT_VEC4)));
     return ptDecodeVolumeOutputs(sums, this.width, this.height, this.samples);
+  }
+
+  /**
+   * V2.5a: renders sample passes in geometrically growing batches (`firstBatch`, then 2x, 4x, ...), reads the volume outputs after each batch (outside any timed region)
+   * and stops when the target is met or `maxSamples` is reached. Continues from the current accumulator (call `reset` + `setSeed` first for a fresh image). Needs
+   * `integrator.volumes.outputs`. Targets: `meanRelSe` (relative standard error of the image mean) and/or `pixelRelSe` (a quantile of the per-pixel relative error); see `PtStopOptions`.
+   */
+  async renderUntil(options: PtStopOptions): Promise<PtRenderUntilResult> {
+    if (!this.options.integrator?.volumes?.outputs) throw new Error('PtMegakernel.renderUntil: the kernel was built without integrator.volumes.outputs');
+    const perSubmit = Math.max(1, options.passesPerSubmit ?? 8);
+    return ptRenderUntil(
+      {
+        run: async (n) => {
+          for (let left = n; left > 0; ) {
+            const c = Math.min(perSubmit, left);
+            const encoder = this.device.createCommandEncoder({ label: 'pt renderUntil' });
+            this.encode(encoder, c);
+            this.device.queue.submit([encoder.finish()]);
+            left -= c;
+            await this.device.queue.onSubmittedWorkDone();
+          }
+        },
+        read: () => this.readVolumeOutputs(),
+      },
+      options,
+      this.samples,
+    );
   }
 
   /** `integrator.frame`: the last frame's beauty and guide planes, read back (outside any timed region). The GPU buffers themselves: `frameBuffers`. */

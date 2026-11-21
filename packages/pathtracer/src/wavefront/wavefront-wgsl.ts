@@ -595,8 +595,9 @@ fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index
     let r2 = ptwfShadowRay[2u * n + path];
     let info = ptwfShadowRay[3u * n + path];
 ${ratio ? `    ptVolState = info.y;
+` : ''}${v.shadowTracking === 'telescoping' ? `    ptVolSampleIdx = info.z;
 ` : ''}    let tr = ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(RtRay(ptwfF3(r0), bitcast<f32>(r0.w), ptwfF3(r1), bitcast<f32>(r1.w)), info.x);
-    if (ptMax3(tr) > 0.0) {
+    if (${v.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0'}) {
         ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2) * tr, 0.0);
     }
 }
@@ -728,7 +729,7 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
     `${ind}ptwfShadowRay[path] = vec4u(bitcast<vec3u>(ld.ray.origin), bitcast<u32>(ld.ray.tMin));
 ${ind}ptwfShadowRay[n + path] = vec4u(bitcast<vec3u>(ld.ray.direction), bitcast<u32>(ld.ray.tMax));
 ${ind}ptwfShadowRay[2u * n + path] = vec4u(bitcast<vec3u>(${spec ? 'ptSpecToRgb(beta * ld.contrib)' : 'beta * ld.contrib'}), 0u);
-${vol ? `${ind}ptwfShadowRay[3u * n + path] = vec4u(ld.med, ${volRatio ? 'ptVolFork()' : '0u'}, 0u, 0u);
+${vol ? `${ind}ptwfShadowRay[3u * n + path] = vec4u(ld.med, ${volRatio ? 'ptVolFork()' : '0u'}, ${o.volumes?.shadowTracking === 'telescoping' ? 'sampleIndex' : '0u'}, 0u);
 ` : ''}${onRadiance ? `${ind}ptwfShadowRay[3u * n + path] = vec4u(vertex, ptHookFlags, sampleIndex, path);
 ` : ''}${wf.subgroup ? `${ind}ptwfWantShadow = true;
 ` : `${ind}let ss = atomicAdd(&ptwfCount[2u + (iter & 1u)], 1u);

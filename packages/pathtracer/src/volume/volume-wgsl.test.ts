@@ -59,6 +59,18 @@ describe('integrator.volumes (P5)', () => {
     expect(ptVolumeRatioShadows(residual)).toBe(true);
   });
 
+  it("V2.3 shadowTracking 'telescoping' needs a brick grid, reads the minorant, carries the sample index, and leaves other texts unchanged", () => {
+    const tele: PtVolumeOptions = { ...bricked, shadowTracking: 'telescoping' };
+    const text = build(tele);
+    expect(text).toContain('fn ptVolTele(');
+    expect(text).toContain('ptVolSampleIdx');
+    expect(text).toContain('ptMax3(abs(tr)) > 0.0');
+    expect(build(bricked)).not.toContain('ptVolTele');
+    expect(build({ ...bricked, shadowTracking: 'residual' })).not.toContain('ptVolSampleIdx');
+    expect(() => ptVolumeValidate({ ...gridded, shadowTracking: 'telescoping' })).toThrow(/brick/);
+    expect(balanced(ptVolumeWgsl(tele))).toBe(true);
+  });
+
   it('majorant brick adds the coarse texture and the DDA; global and the analytic shadow do not', () => {
     const text = build(bricked);
     expect(text).toMatch(/@group\(2\) @binding\(17\) var ptVolMaj: texture_3d<f32>/);

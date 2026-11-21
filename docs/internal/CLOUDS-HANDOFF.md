@@ -148,3 +148,10 @@ a denoiser for volume frames. If item 4's second moment lands, a variance-guided
 - **2026-11-21, new options the reference page can use:** `volumes.outputs: true` + `readVolumeOutputs()` replaces the second seed (standard error) and the page's own
   alpha march (transmittance); `volumeGrid.format: 'r16float'` (round the bake with `ptRoundGridF16` first) halves the 437 MB grid; `media[i].lobes` (`ptPhaseLobes({ type:
   'mie', diameter })` or `hg2`) for the droplet phase (set `g` to `lobes.gA`).
+- **2026-11-22, variance-guided reference renders (V2.5a):** with `integrator.volumes.outputs` on, replace the fixed spp / two-seed run by
+  `const r = await kernel.renderUntil({ meanRelSe: 1e-3, maxSamples: 16384 })` after `reset` and `setSeed`; log `r.samples` and `r.achieved.meanRelSe`, use `r.outputs`
+  as the final image (no second read). For a per-pixel guarantee add `pixelRelSe: { below: 0.05, quantile: 0.99 }` (both targets must hold). Example: `bench/pages/render-until-check.ts`
+  (1e-3 on `vol-cl-sph-g85-a99-t50`: 1024 spp, 11 s). Also new and opt-in: `volumes.trRoulette` (about 1.8x per sample on a 256^3 cloud, unbiased), `volumes.densityFilter:
+  'hardware'`, `volumeGrid.format: 'r8unorm'` (`ptQuantizeGridR8`: your 437 MB grid in 109 MB, -0.02% image change), `volumes.separateDepth` + `maxVolumeDepth`,
+  `integrator.aovs` with media (OIDN guides). Details: TASKS V1.1-V5.1a, docs/internal/design/volumes.md section 5b.
+

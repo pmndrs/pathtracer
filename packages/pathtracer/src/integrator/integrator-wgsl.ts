@@ -750,7 +750,7 @@ ${restir ? `    if (vertex == 0u) {
     }
 ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
 ` : ''}${vol ? `    let tr = ptVolTr(ray, select(medOut, medIn, dot(li.wi, ng) < 0.0));
-    if (!(ptMax3(tr) > 0.0)) {
+    if (!(${o.volumes?.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0'})) {
         return vec3f(0.0);
     }
 ` : shadowWeighted ? `    let vis = ptShadowWeight(ray, vec3u(pixelSeed, sampleIndex, vertex));

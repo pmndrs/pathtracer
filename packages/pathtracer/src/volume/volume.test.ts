@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, brickDims, brickMajorants, ddaSegments, residualTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -405,4 +405,88 @@ describe('V2.2 residual ratio tracking twin', () => {
     expect(residual.se).toBeLessThan(ratio.se);
     expect(residual.lookups).toBeLessThan(ratio.lookups);
   });
+});
+
+describe('r8unorm grids (V3.1)', () => {
+  const res = [20, 19, 18] as const;
+  const g = new Float32Array(res[0] * res[1] * res[2]).map((_, i) => (i % 7 === 0 ? 0 : 0.3 + 2.2 * Math.abs(Math.sin(i * 0.37))));
+  it('quantises to nearest with scale = max, dequantised values are the on-grid values', () => {
+    const q = ptQuantizeGridR8(g);
+    expect(q.scale).toBe(Math.fround(Math.max(...g)));
+    expect(Math.max(...q.bytes)).toBe(255);
+    for (let i = 0; i < g.length; i++) {
+      expect(Math.abs(q.dequantized[i]! - g[i]!)).toBeLessThanOrEqual(q.scale / 255 / 2 + 1e-6);
+      expect(q.dequantized[i]).toBe(Math.fround((q.bytes[i]! / 255) * q.scale));
+    }
+    expect(ptR8Bytes(q.dequantized, q.scale)).toEqual(q.bytes); // round trip
+    expect(ptQuantizeGridR8(q.dequantized).dequantized).toEqual(q.dequantized); // idempotent
+  });
+  it('refuses data that is not on the r8 grid', () => {
+    const q = ptQuantizeGridR8(g);
+    expect(() => ptR8Bytes(g, q.scale)).toThrow(/ptQuantizeGridR8/);
+    expect(() => ptQuantizeGridR8([1, -1])).toThrow(RangeError);
+  });
+  it('the texel-unit majorant bounds every trilinear sample of the texels, the minorant is bounded below', () => {
+    const q = ptQuantizeGridR8(g);
+    const mm = brickMajorants(res, q.dequantized, { minima: true });
+    const texels = Float32Array.from(q.bytes, (b) => b / 255);
+    const hi = mm.values.map((v) => ptTexelBound(v, q.scale));
+    const lo = mm.minima!.map((v) => ptTexelBound(v, q.scale, false));
+    const dims = brickDims(res);
+    let n = 0;
+    for (let k = 0; k < res[2]; k++) for (let j = 0; j < res[1]; j++) for (let i = 0; i < res[0]; i++) {
+      const t = texels[i + res[0] * (j + res[1] * k)]!;
+      const c = Math.floor(i / 8) + dims[0] * (Math.floor(j / 8) + dims[1] * Math.floor(k / 8));
+      expect(t).toBeLessThanOrEqual(hi[c]!);
+      n++;
+    }
+    expect(n).toBe(g.length);
+    for (let c = 0; c < lo.length; c++) expect(lo[c]!).toBeLessThanOrEqual(mm.minima![c]! / q.scale + 1e-6);
+  });
+});
+
+describe('V2.3 telescoping transmittance twin (Cycles / Misso et al. 2022)', () => {
+  const build = (rough: boolean) => {
+    const res = [24, 24, 24] as const;
+    const data = new Float32Array(res[0] * res[1] * res[2]);
+    const r = rng(99);
+    for (let k = 0; k < res[2]; k++) for (let j = 0; j < res[1]; j++) for (let i = 0; i < res[0]; i++)
+      data[i + res[0] * (j + res[1] * k)] = rough ? r() : 0.55 + 0.4 * Math.sin(i * 0.21) * Math.cos(j * 0.17 + 0.5) * Math.sin(k * 0.13 + 1);
+    const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: Math.max(...data) };
+    const dens = gridDensity(grid, data);
+    const mm = brickMajorants(res, data, { minima: true });
+    const a = [-2, 9.3, 11.1], b = [1, 0.1, 0.05];
+    const along = (t: number) => dens((a[0]! + b[0]! * t + 0.5) / res[0], (a[1]! + b[1]! * t + 0.5) / res[1], (a[2]! + b[2]! * t + 0.5) / res[2]);
+    const cells = ddaSegments(mm.resolution, a as never, b as never, 28).map((sg) => {
+      const i = sg.cell[0] + mm.resolution[0] * (sg.cell[1] + mm.resolution[1] * sg.cell[2]);
+      return { t0: sg.t0, t1: sg.t1, max: mm.values[i]!, min: mm.minima![i]! };
+    });
+    return { along, cells };
+  };
+  for (const rough of [false, true]) for (const sigmaT of [0.08, 0.4]) {
+    it(`${rough ? 'rough' : 'smooth'} grid, sigmaT ${sigmaT}: mean equals the exact line integral (4 SE + the 16k-step marching bias), variance per lookup vs ratio tracking`, () => {
+      const { along, cells } = build(rough);
+      let tau = 0;
+      const sub = 40000;
+      for (const c of cells) for (let i = 0; i < sub / 10; i++) tau += along(c.t0 + ((i + 0.5) / (sub / 10)) * (c.t1 - c.t0)) * ((c.t1 - c.t0) / (sub / 10));
+      const exact = Math.exp(-sigmaT * tau);
+      const n = 100000, r = rng(5);
+      let s1 = 0, q1 = 0, l1 = 0, s2 = 0, q2 = 0, l2 = 0;
+      for (let i = 0; i < n; i++) {
+        const e = telescopingTransmittance(cells, along, sigmaT, r, () => r());
+        s1 += e.tr; q1 += e.tr * e.tr; l1 += e.lookups;
+        let tr = 1, lk = 0;
+        for (const c of cells) {
+          const mu = sigmaT * c.max;
+          if (!(mu > 0)) continue;
+          let t = c.t0;
+          for (let k = 0; k < 4096; k++) { t += -Math.log(1 - r()) / mu; if (t >= c.t1) break; lk++; tr *= 1 - (sigmaT * along(t)) / mu; }
+        }
+        s2 += tr; q2 += tr * tr; l2 += lk;
+      }
+      const m1 = s1 / n, se1 = Math.sqrt((q1 / n - m1 * m1) / n), m2 = s2 / n, se2 = Math.sqrt((q2 / n - m2 * m2) / n);
+      expect(Math.abs(m1 - exact)).toBeLessThan(4 * se1 + 2e-4);
+      expect(Math.abs(m2 - exact)).toBeLessThan(4 * se2 + 1e-9);
+    });
+  }
 });

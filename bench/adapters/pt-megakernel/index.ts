@@ -16,7 +16,7 @@ import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type NodeForma
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
 import { sceneDensityFiles, sceneVolumes } from '../../scenes/volumes.ts';
 import type { Rgb2SpecTable } from '@pmndrs/pathtracer';
-import { brickMajorants, ptRoundGridF16, PtMegakernel, PtWavefront, ptwfAutoPolicy, ptApplyMode, ptMegakernelWgsl, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
+import { brickMajorants, ptRoundGridF16, ptQuantizeGridR8, PtMegakernel, PtWavefront, ptwfAutoPolicy, ptApplyMode, ptMegakernelWgsl, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -36,7 +36,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** `barycentric` (default): hit positions from the triangle's vertices; `ray`: origin + t * direction. P1.8 A/B. */
   positions?: 'barycentric' | 'ray';
   /** P5 media: shadow-ray transmittance through a homogeneous medium, `analytic` (default) or `ratio` (pbrt's ratio tracking; V241 A/B). */
-  volumeShadow?: 'analytic' | 'ratio' | 'residual';
+  volumeShadow?: 'analytic' | 'ratio' | 'residual' | 'telescoping';
   /** P5 grid media: `global` (default) or `brick` majorant (V243 A/B). */
   volumeMajorant?: 'global' | 'brick';
   volumeTrRoulette?: boolean;
@@ -47,7 +47,7 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   /** P5.v15 / P5.v16: `volumes.outputs` (megakernel): uploads `vol_order01`, `vol_orders2plus`, `vol_transmittance`, `vol_stderr`, `vol_first_scatter` next to the image. */
   volumeOutputs?: boolean;
   /** P5.v18: the grid texture format (`r16float` rounds the density to f16 first). */
-  volumeGridFormat?: 'r32float' | 'r16float';
+  volumeGridFormat?: 'r32float' | 'r16float' | 'r8unorm';
   /** maxDepth override (the scene's own otherwise). */
   maxDepth?: number;
   /** V1.3: separate cap for medium scatter events (`integrator.volumes.separateDepth`); surface vertices keep `maxDepth`. Unset = media count toward `maxDepth` as before. */
@@ -455,9 +455,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
     }
     const volumes0 = sceneVolumes(scene, input, densityFiles);
     // P5.v18: r16float grid = the density rounded to f16 everywhere (texture, densityMax, brick majorants), so the majorant bounds what the GPU reads
-    const volumes = volumes0?.grid && this.settings.volumeGridFormat === 'r16float' ? roundVolumesF16(volumes0) : volumes0;
+    const volumes = volumes0?.grid && this.settings.volumeGridFormat === 'r16float' ? roundVolumesF16(volumes0) : volumes0?.grid && this.settings.volumeGridFormat === 'r8unorm' ? quantizeVolumesR8(volumes0) : volumes0; // r8unorm (V3.1): same rule, with the scale in the medium table
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeGridFormat === 'r16float' ? { format: 'r16float' as const } : {}), ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density, this.settings.volumeShadow === 'residual' ? { minima: true } : {}) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.maxVolumeDepth !== undefined ? { separateDepth: true } : {}), ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeTrRoulette ? { trRoulette: true } : {}), ...(this.settings.volumeForcedNee ? { forcedNee: true } : {}), ...(this.settings.volumeDensityFilter === 'hardware' ? { densityFilter: 'hardware' as const } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeGridFormat === 'r16float' ? { format: 'r16float' as const } : this.settings.volumeGridFormat === 'r8unorm' ? { format: 'r8unorm' as const, scale: volumes.options.media.find((m) => m.grid)?.grid?.densityScale } : {}), ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density, (this.settings.volumeShadow === 'residual' || this.settings.volumeShadow === 'telescoping') ? { minima: true } : {}) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.maxVolumeDepth !== undefined ? { separateDepth: true } : {}), ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeTrRoulette ? { trRoulette: true } : {}), ...(this.settings.volumeForcedNee ? { forcedNee: true } : {}), ...(this.settings.volumeDensityFilter === 'hardware' ? { densityFilter: 'hardware' as const } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
     if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;
@@ -627,4 +627,12 @@ function roundVolumesF16(v: NonNullable<ReturnType<typeof sceneVolumes>>): NonNu
   let max = 0;
   for (const x of density) max = Math.max(max, x);
   return { ...v, grid: { ...v.grid!, density }, options: { ...v.options, media: v.options.media.map((m) => (m.grid ? { ...m, grid: { ...m.grid, densityMax: max } } : m)) } };
+}
+
+/** V3.1: the grid density quantised to r8unorm (per-grid scale = max); densityMax, the brick majorants and the medium's `densityScale` follow from the dequantised values. */
+function quantizeVolumesR8(v: NonNullable<ReturnType<typeof sceneVolumes>>): NonNullable<ReturnType<typeof sceneVolumes>> {
+  const q = ptQuantizeGridR8(v.grid!.density);
+  let max = 0;
+  for (const x of q.dequantized) max = Math.max(max, x);
+  return { ...v, grid: { ...v.grid!, density: q.dequantized }, options: { ...v.options, media: v.options.media.map((m) => (m.grid ? { ...m, grid: { ...m.grid, densityMax: max, densityScale: q.scale } } : m)) } };
 }

@@ -42,7 +42,7 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
       if (m.lobes.gA !== m.g) throw new RangeError(`integrator.volumes: medium ${i} has g ${m.g} but its lobe A is ${m.lobes.gA}`);
     }
   });
-  if (v.shadowTracking === 'residual' && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError("integrator.volumes: shadowTracking 'residual' needs a grid medium with majorant 'brick'");
+  if ((v.shadowTracking === 'residual' || v.shadowTracking === 'telescoping') && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError(`integrator.volumes: shadowTracking '${v.shadowTracking}' needs a grid medium with majorant 'brick'`);
   const grids = v.media.filter((m) => m.grid);
   if (grids.length > 1) {
     const [a] = grids;
@@ -57,12 +57,13 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
 function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
   const mu = ptMediumMajorant(m);
   const grid = m.grid;
+  const k = grid?.densityScale ?? 1; // V3.1: r8unorm texels are density / scale; sigma_t x scale is exact, and the brick majorant texture holds texel units
   const w = grid ? grid.worldToIndex : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   const row = (a: number[]): string => `vec4f(${a.map(f32Lit).join(', ')})`;
   return [
-    row([...m.sigmaT, mu]),
+    row([...(k === 1 ? m.sigmaT : m.sigmaT.map((x) => x * k)), mu]),
     row([...m.albedo, m.g]),
-    row(grid ? [Math.max(...m.sigmaT), ...grid.resolution] : [0, 0, 0, 0]),
+    row(grid ? [Math.max(...m.sigmaT) * k, ...grid.resolution] : [0, 0, 0, 0]),
     row(w.slice(0, 4)),
     row(w.slice(4, 8)),
     row(w.slice(8, 12)),
@@ -96,7 +97,10 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const brick = grid && v.majorant === 'brick';
   const hw = grid && v.densityFilter === 'hardware';
   const roulette = v.trRoulette === true;
-  const residual = brick && v.shadowTracking === 'residual';
+  const tele = brick && v.shadowTracking === 'telescoping';
+  // telescoping estimates can be negative (a debiasing term): only an exact zero ends a shadow ray, or the clamp would bias the mean
+  const alive = v.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0';
+  const residual = brick && (v.shadowTracking === 'residual' || tele);
   const lobes = ptVolumeHasLobes(v);
   const stride = lobes ? 7 : 6;
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
@@ -122,7 +126,8 @@ fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
   if (has('tables')) chunks.push(/* wgsl */ `
 var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f, ${v.media.length * stride}>(${v.media.flatMap((m) => mediumVec4s(m, lobes)).join(', ')});
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
-var<private> ptVolState: u32;
+var<private> ptVolState: u32;${tele ? `
+var<private> ptVolSampleIdx: u32;` : ''}
 
 // Free flight starts at the TRUE boundary crossing (V302): an interface skip moves the ray origin q off the surface point p along the side normal n, which would skip
 // dot(q - p, n) / |cos| of the medium. The path carries that distance ("back"); the next flight samples from q - d * back over [0, segment + back].
@@ -158,7 +163,8 @@ fn ptVolMat(material: u32) -> vec4u {
 }
 
 fn ptVolSeed(pixelSeed: u32, sampleIndex: u32) {
-    ptVolState = ptVolSeedOf(pixelSeed, sampleIndex);
+    ptVolState = ptVolSeedOf(pixelSeed, sampleIndex);${tele ? `
+    ptVolSampleIdx = sampleIndex;` : ''}
 }
 
 fn ptVolRand() -> f32 {
@@ -339,7 +345,59 @@ fn ptVolSampleBrick(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32, beta: ptr<fun
     return PtVolEvent(tmax, 0u);
 }
 
-fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
+${tele ? `// V2.3 telescoping transmittance of the residual optical depth of one DDA cell (Blender Cycles volume_transmittance, Apache-2.0, after Misso et al. 2022): jittered
+// marching with k steps plus a debiasing term of random order n (P(n) = 0.9 0.1^n, tail lumped into n = 4) that takes N = 2^n times the samples. The order's uniform is shared
+// by every pixel of one sample (hash of the sample index and the cell number: GPU coherent); the jitter comes from the shadow ray's own stream. The estimate may be < 0 or > 1.
+fn ptVolTele(m: PtVolMedium, o: vec3f, d: vec3f, t0: f32, len: f32, mn: f32, sc: f32, cell: u32) -> vec3f {
+    let k = u32(clamp(round(sc * len), 1.0, 64.0));
+    var h = (ptVolSampleIdx * 2654435761u) ^ (cell * 2246822519u) ^ 0x51ed270bu;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    let order = min(u32(floor(log(max(f32(h >> 8u) * 5.9604644775390625e-8, 1.0e-7)) / -2.302585092994046)), 4u);
+    let nn = 1u << order;
+    let pmf = select(0.9 * pow(0.1, f32(order)), 1.0e-4, order == 4u);
+    let step = len / f32(nn * k);
+    let off = ptVolRand();
+    if (nn == 1u) {
+        var tk = vec3f(0.0);
+        for (var i = 0u; i < 64u; i++) {
+            if (i >= k) {
+                break;
+            }
+            tk += m.sigmaT * (ptVolDensity(m, o + d * (t0 + (off + f32(i)) * step)) - mn);
+        }
+        return exp(-tk * step);
+    }
+    var tj0 = vec3f(0.0);
+    var tj1 = vec3f(0.0);
+    var tja = vec3f(0.0);
+    var tkSum = vec3f(0.0);
+    for (var n = 0u; n < 16u; n++) {
+        if (n >= nn) {
+            break;
+        }
+        var tk = vec3f(0.0);
+        for (var i = 0u; i < 64u; i++) {
+            if (i >= k) {
+                break;
+            }
+            let s = i * nn + n;
+            let tau = step * m.sigmaT * (ptVolDensity(m, o + d * (t0 + (off + f32(s)) * step)) - mn);
+            tk += tau * f32(nn);
+            if ((s & 1u) == 0u) {
+                tj0 += tau * 2.0;
+            } else {
+                tj1 += tau * 2.0;
+            }
+            tja += tau;
+        }
+        tkSum += exp(-tk);
+    }
+    return tkSum / f32(nn) + (exp(-tja) - 0.5 * (exp(-tj0) + exp(-tj1))) / pmf;
+}
+
+` : ''}fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
     var tr = vec3f(1.0);
     var dda = ptDdaInit(m, o, d, len);
     for (var c = 0u; c < 4096u; c++) {
@@ -354,7 +412,9 @@ ${residual ? `        // V2.2 residual ratio tracking: the cell's minorant is a 
 `}        if (!(mu > 0.0)) {
             continue;
         }
-        var t = sg.x;
+${tele ? `        tr = tr * ptVolTele(m, o, d, sg.x, sg.y - sg.x, sg.w, mu, c);
+        continue;
+` : ''}        var t = sg.x;
         for (var i = 0u; i < 4096u; i++) {
             t += -log(1.0 - ptVolRand()) / mu;
             if (t >= sg.y) {
@@ -452,7 +512,7 @@ fn ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(ray0: RtRay, med0: u32) -> vec3f {
         let seg = select(ray.tMax, hit.t, hit.t >= 0.0);
         if (med != 0u) {
             tr = tr * ptVolTrSegment(med, ray.origin - ray.direction * back, ray.direction, seg + back);
-            if (!(ptMax3(tr) > 0.0)) {
+            if (!(${alive})) {
                 return vec3f(0.0);
             }
         }
@@ -514,7 +574,7 @@ fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u
         ray = RtRay(p, 0.0, li.wi, PT_FAR);
     }
     let tr = ptVolTr(ray, id);
-    if (!(ptMax3(tr) > 0.0)) {
+    if (!(${alive})) {
         return vec3f(0.0);
     }
     let pl = pick.pmf * li.pdf;
@@ -553,7 +613,7 @@ fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
         if (med != 0u) {
             tr = tr * ptVolTrSegment(med, ray.origin - ray.direction * back, ray.direction, seg + back);
         }
-        if (hit.t < 0.0 || !(ptMax3(tr) > 0.0)) {
+        if (hit.t < 0.0 || !(${alive})) {
             break;
         }
         let mv = ptVolMat(hit.material);
