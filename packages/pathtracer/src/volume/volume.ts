@@ -56,9 +56,11 @@ export interface PtVolumeOptions {
   cameraMedium?: number;
   /**
    * Transmittance of a shadow ray through a HOMOGENEOUS medium: `'analytic'` (default, `exp(-sigma_t d)`, no noise) or `'ratio'` (ratio tracking against the majorant, what pbrt does:
-   * same mean, more variance; the A/B of V241). A grid medium always uses ratio tracking.
+   * same mean, more variance; the A/B of V241). A grid medium always uses ratio tracking. V2.2 `'residual'` (grid media with `majorant: 'brick'` and `volumeGrid.majorant`
+   * built with `brickMajorants(.., .., { minima: true })`): residual ratio tracking (Novak et al. 2014), per DDA cell the analytic transmittance of the cell's minorant
+   * times a ratio-tracking estimate of the residual (majorant - minorant); homogeneous media stay analytic. Same mean, fewer lookups in a smooth dense grid.
    */
-  shadowTracking?: 'analytic' | 'ratio';
+  shadowTracking?: 'analytic' | 'ratio' | 'residual';
   /**
    * Majorant of a grid medium: `'global'` (default; densityMax x max sigma_t everywhere, V243) or `'brick'` (the largest density per 8^3 voxels, walked by a DDA; needs
    * `volumeGrid.majorant` = `brickMajorants(...)`, group 2 binding `PT_VOLUME_MAJORANT_BINDING`). Same estimator, fewer null collisions in a sparse grid; the A/B of V243.
@@ -91,6 +93,13 @@ export interface PtVolumeOptions {
    * camera ray's first scatter event. Default off (the kernel text is unchanged).
    */
   outputs?: boolean;
+  /**
+   * V4.2 (megakernel only): forced in-scatter next-event estimation in HOMOGENEOUS media (grid media are left alone). Every free-flight segment in a homogeneous medium adds one light
+   * sample at a distance drawn from the truncated exponential on the segment, and a real collision of that segment no longer samples a light itself (the estimate is replaced, not
+   * added): unbiased, and in thin media (most rays never scatter) it turns god rays from noise into a smooth estimate. Derivation and twin: `volume/forced-wgsl.ts`. Needs `nee`;
+   * refused with `outputs`. Default false: the kernel text is unchanged.
+   */
+  forcedNee?: boolean;
 }
 
 /** vec4 per pixel the volume outputs add to the accumulator (after the `width * height` radiance sums). */
@@ -285,19 +294,61 @@ export function brickDims(resolution: readonly [number, number, number]): [numbe
   return [0, 1, 2].map((a) => Math.floor(((resolution[a] as number) + BRICK) / BRICK)) as [number, number, number];
 }
 
-/** The majorant density of every coarse cell: the maximum over the (up to 9^3) voxels its trilinear lookups can read, x fastest. */
-export function brickMajorants(resolution: readonly [number, number, number], data: ArrayLike<number>): { resolution: [number, number, number]; values: Float32Array } {
+/**
+ * The majorant density of every coarse cell: the maximum over the (up to 9^3) voxels its trilinear lookups can read, x fastest.
+ * V2.1 `minima: true` also returns the MINORANT (`minima`): the minimum over the same voxels, where a voxel outside the grid counts as 0 (the lookup is zero there), so every
+ * trilinear density sample inside the cell lies in [minima, values].
+ */
+export function brickMajorants(resolution: readonly [number, number, number], data: ArrayLike<number>, options: { minima?: boolean } = {}): { resolution: [number, number, number]; values: Float32Array; minima?: Float32Array } {
   const [nx, ny, nz] = resolution;
   const dims = brickDims(resolution);
   const out = new Float32Array(dims[0] * dims[1] * dims[2]);
+  const mins = options.minima ? new Float32Array(out.length) : null;
   for (let ck = 0; ck < dims[2]; ck++) for (let cj = 0; cj < dims[1]; cj++) for (let ci = 0; ci < dims[0]; ci++) {
     let m = 0;
+    let lo = Infinity;
+    if (mins && (ci * BRICK - 1 < 0 || ci * BRICK + BRICK > nx - 1 || cj * BRICK - 1 < 0 || cj * BRICK + BRICK > ny - 1 || ck * BRICK - 1 < 0 || ck * BRICK + BRICK > nz - 1)) lo = 0;
     for (let k = Math.max(0, ck * BRICK - 1); k <= Math.min(nz - 1, ck * BRICK + BRICK - 1); k++)
       for (let j = Math.max(0, cj * BRICK - 1); j <= Math.min(ny - 1, cj * BRICK + BRICK - 1); j++)
-        for (let i = Math.max(0, ci * BRICK - 1); i <= Math.min(nx - 1, ci * BRICK + BRICK - 1); i++) m = Math.max(m, data[i + nx * (j + ny * k)] as number);
+        for (let i = Math.max(0, ci * BRICK - 1); i <= Math.min(nx - 1, ci * BRICK + BRICK - 1); i++) {
+          const v = data[i + nx * (j + ny * k)] as number;
+          m = Math.max(m, v);
+          if (v < lo) lo = v;
+        }
     out[ci + dims[0] * (cj + dims[1] * ck)] = m;
+    if (mins) mins[ci + dims[0] * (cj + dims[1] * ck)] = Math.min(lo, m);
   }
-  return { resolution: dims, values: out };
+  return { resolution: dims, values: out, ...(mins ? { minima: mins } : {}) };
+}
+
+/**
+ * V2.2 twin of the WGSL residual ratio tracker over the DDA cells of one ray: `density(t)` is the (trilinear) density along it, `cells` come from `ddaSegments` with
+ * `max` / `min` the cell's majorant / minorant density, `sigmaT` the scalar extinction scale (max channel; the twin is grey), `rand()` uniform in [0, 1).
+ * Per cell: exp(-sigmaT min d) (the control, analytic) x ratio tracking of the residual with majorant sigmaT (max - min) and weights 1 - sigmaT (density - min) / mu.
+ * `lookups` counts the density evaluations. `trRoulette` is the V1.1 rule on the running estimate.
+ */
+export function residualTransmittance(
+  cells: readonly { t0: number; t1: number; max: number; min: number }[], density: (t: number) => number, sigmaT: number, rand: () => number, trRoulette = false,
+): { tr: number; lookups: number } {
+  let tr = 1, lookups = 0;
+  for (const c of cells) {
+    tr *= Math.exp(-sigmaT * c.min * (c.t1 - c.t0));
+    const mu = sigmaT * (c.max - c.min);
+    if (!(mu > 0)) continue;
+    let t = c.t0;
+    for (let i = 0; i < 4096; i++) {
+      t += -Math.log(1 - rand()) / mu;
+      if (t >= c.t1) break;
+      lookups++;
+      tr *= 1 - (sigmaT * (density(t) - c.min)) / mu;
+      if (!(tr > 0)) return { tr: 0, lookups };
+      if (trRoulette && tr < 0.05) {
+        if (rand() < 0.75) return { tr: 0, lookups };
+        tr *= 4;
+      }
+    }
+  }
+  return { tr, lookups };
 }
 
 export interface DdaSegment { t0: number; t1: number; cell: [number, number, number] }

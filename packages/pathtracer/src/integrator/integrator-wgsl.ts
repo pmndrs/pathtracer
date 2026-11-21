@@ -15,6 +15,7 @@ import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dimensions.ts';
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
+import { ptForcedNeeWgsl } from '../volume/forced-wgsl.ts';
 import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
 import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
@@ -276,6 +277,8 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     const clash = o.restir ? 'restir' : o.frame ? 'frame' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
+    if (o.volumes.forcedNee && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
+    if (o.volumes.forcedNee && o.nee === false) throw new Error('integrator.volumes.forcedNee needs integrator.nee');
     if (o.volumes.outputs && o.accumulate === false) throw new Error('integrator.volumes.outputs needs accumulate (the outputs are sums over samples)');
   }
   const alphaMixedMask = o.alphaMixedMask ?? 0x04;
@@ -556,6 +559,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const vol = !!o.volumes;
   const volOut = vol && !!o.volumes!.outputs;
   const sd = vol && !!o.volumes!.separateDepth;
+  const forced = vol && !!o.volumes!.forcedNee;
   const aniso = !!mats?.features.aniso;
   const fuzz = !!mats?.features.fuzz;
   const film = !!mats?.features.thinFilm;
@@ -605,7 +609,13 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
     ? `        if (curMed != 0u) {
             let vo = ray.origin - ray.direction * volBack;
             let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + volBack;
-            let ev = ptVolSample(curMed, vo, ray.direction, segMax, &beta);
+${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogeneous media; the scatter below then skips its own light sample).
+            let fm = ptVolMedium(curMed);
+            let fHomog = fm.info.x == 0.0 && PT_NEE;
+            if (fHomog && ${sd ? 'mdepth < maxVolDepth' : 'depth < maxDepth'}) {
+                radiance += beta * ptVolForcedNee(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
+            }
+` : ''}            let ev = ptVolSample(curMed, vo, ray.direction, segMax, &beta);
             if (ev.kind == 2u) {
                 break;
             }
@@ -628,7 +638,7 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     aovDone = true;
                 }
 ` : ''}                let woM = -ray.direction;
-                if (PT_NEE) {
+                if (PT_NEE${forced ? ' && !fHomog' : ''}) {
                     radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
                 }
 ${ptVolPhaseSampleWgsl(o.volumes!, '                ', 'curMed', 'woM', 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION))', 'wiM', 'prevPdf')}                specularBounce = false;
@@ -671,7 +681,7 @@ ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> pt
 ` : ''}
 ${spec ? `${ptSpectralWgsl(spec)}\n` : ''}${ptCommonHeadWgsl(o)}
 
-${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}
+${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced ? ptForcedNeeWgsl() : ''}
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 

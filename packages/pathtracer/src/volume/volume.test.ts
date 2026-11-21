@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, brickDims, brickMajorants, ddaSegments, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, brickDims, brickMajorants, ddaSegments, residualTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -240,6 +240,32 @@ describe('brick majorants and the DDA twin', () => {
     }
   });
 
+  it('V2.1 minima: every density sample inside a cell is in [min, max] (zero outside the grid counts)', () => {
+    const mm = brickMajorants(res, data, { minima: true });
+    expect(mm.values).toEqual(mj.values);
+    const r = rng(5);
+    let tight = 0;
+    for (let n = 0; n < 300; n++) {
+      const a = [(r() * 1.4 - 0.2) * res[0], (r() * 1.4 - 0.2) * res[1], (r() * 1.4 - 0.2) * res[2]] as const;
+      const dd = [r() - 0.5, r() - 0.5, r() - 0.5];
+      const len = Math.hypot(...dd);
+      const b = dd.map((v) => (v / len) * 3) as unknown as readonly [number, number, number];
+      for (const sg of ddaSegments(mm.resolution, a, b, 40)) {
+        for (let k = 0; k < 6; k++) {
+          const t = sg.t0 + ((k + 0.5) / 6) * (sg.t1 - sg.t0);
+          const d = dens((a[0] + b[0] * t + 0.5) / res[0], (a[1] + b[1] * t + 0.5) / res[1], (a[2] + b[2] * t + 0.5) / res[2]);
+          const i = sg.cell[0] + mm.resolution[0] * (sg.cell[1] + mm.resolution[1] * sg.cell[2]);
+          expect(d).toBeGreaterThanOrEqual(mm.minima![i]! - 1e-6);
+          expect(d).toBeLessThanOrEqual(mm.values[i]! + 1e-6);
+          if (d < mm.minima![i]! + 0.02) tight++;
+        }
+      }
+    }
+    expect(tight).toBeGreaterThan(0); // the bound is reached somewhere (not a vacuous minimum of 0)
+    for (let i = 0; i < mm.values.length; i++) expect(mm.minima![i]!).toBeLessThanOrEqual(mm.values[i]!);
+    expect(brickMajorants(res, data).minima).toBeUndefined();
+  });
+
   it('a ray outside the support box has no segments', () => {
     expect(ddaSegments(mj.resolution, [-50, 5, 5], [0, 1, 0], 100)).toEqual([]);
     expect(ddaSegments(mj.resolution, [5, 5, 5], [1, 0, 0], 0)).toEqual([]);
@@ -311,5 +337,72 @@ describe('V1.2 hardware density lookup twin', () => {
     expect(gridBoundaryFactor(0, 5)).toBe(1);
     expect(gridBoundaryFactor(5, 5)).toBe(0);
     expect(gridBoundaryFactor(2, 5)).toBe(1);
+  });
+});
+
+describe('V2.2 residual ratio tracking twin', () => {
+  // a smooth dense density: the minorant is a good control, so the residual is small
+  const res = [24, 24, 24] as const;
+  const data = new Float32Array(res[0] * res[1] * res[2]);
+  for (let k = 0; k < res[2]; k++) for (let j = 0; j < res[1]; j++) for (let i = 0; i < res[0]; i++)
+    data[i + res[0] * (j + res[1] * k)] = 0.55 + 0.4 * Math.sin(i * 0.21) * Math.cos(j * 0.17 + 0.5) * Math.sin(k * 0.13 + 1);
+  const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: Math.max(...data) };
+  const dens = gridDensity(grid, data);
+  const mm = brickMajorants(res, data, { minima: true });
+  const a = [-2, 9.3, 11.1], b = [1, 0.1, 0.05];
+  const tmax = 28;
+  const along = (t: number) => dens((a[0]! + b[0]! * t + 0.5) / res[0], (a[1]! + b[1]! * t + 0.5) / res[1], (a[2]! + b[2]! * t + 0.5) / res[2]);
+  const sigmaT = 0.08;
+  const cells = ddaSegments(mm.resolution, a as never, b as never, tmax).map((sg) => {
+    const i = sg.cell[0] + mm.resolution[0] * (sg.cell[1] + mm.resolution[1] * sg.cell[2]);
+    return { t0: sg.t0, t1: sg.t1, max: mm.values[i]!, min: mm.minima![i]! };
+  });
+  let tau = 0;
+  const sub = 40000;
+  for (let i = 0; i < sub; i++) tau += along(((i + 0.5) / sub) * tmax) * (tmax / sub);
+  const exact = Math.exp(-sigmaT * tau);
+
+  const run = (kind: 'residual' | 'ratio' | 'residual-roulette', n: number) => {
+    const r = rng(1234);
+    let sum = 0, sq = 0, lookups = 0;
+    for (let i = 0; i < n; i++) {
+      let tr: number;
+      if (kind === 'ratio') {
+        // ratio tracking with the per-cell majorant (what the brick kernel does)
+        tr = 1;
+        for (const c of cells) {
+          const mu = sigmaT * c.max;
+          if (!(mu > 0)) continue;
+          let t = c.t0;
+          for (let k = 0; k < 4096; k++) {
+            t += -Math.log(1 - r()) / mu;
+            if (t >= c.t1) break;
+            lookups++;
+            tr *= 1 - (sigmaT * along(t)) / mu;
+          }
+        }
+      } else {
+        const e = residualTransmittance(cells, along, sigmaT, r, kind === 'residual-roulette');
+        tr = e.tr;
+        lookups += e.lookups;
+      }
+      sum += tr;
+      sq += tr * tr;
+    }
+    return { mean: sum / n, se: Math.sqrt(Math.max(0, sq / n - (sum / n) ** 2) / n), lookups: lookups / n };
+  };
+
+  it('is unbiased against the exact line integral (1e5 trials, 4 SE), also with roulette', () => {
+    for (const kind of ['residual', 'residual-roulette'] as const) {
+      const e = run(kind, 100000);
+      expect(Math.abs(e.mean - exact)).toBeLessThan(4 * e.se + 1e-9);
+    }
+  });
+
+  it('has lower variance and fewer lookups than ratio tracking on a dense smooth grid', () => {
+    const ratio = run('ratio', 100000), residual = run('residual', 100000);
+    expect(Math.abs(ratio.mean - exact)).toBeLessThan(4 * ratio.se);
+    expect(residual.se).toBeLessThan(ratio.se);
+    expect(residual.lookups).toBeLessThan(ratio.lookups);
   });
 });

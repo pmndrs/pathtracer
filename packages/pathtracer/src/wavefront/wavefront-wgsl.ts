@@ -40,6 +40,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // P5 follow-up (V270): `integrator.volumes` (the intersect kernel runs free flight and the interface skips, shade handles the scatter vertex, the shadow kernel the transmittance) and
   // `integrator.spectral` (the wavelengths are recomputed from pixel and sample in shade; one hero bit in the path state) run on the wavefront.
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
+  if (o.volumes?.forcedNee) return 'integrator.volumes.forcedNee (forced in-scatter NEE is megakernel only: V4.2)';
   if (o.volumes?.outputs) return 'integrator.volumes.outputs (the order split, primary transmittance and second moment are megakernel only: P5.v15 / P5.v16)';
   if (o.volumes && o.aovs) return 'integrator.volumes with integrator.aovs (the first-scatter guides are megakernel only: V5.1a)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';

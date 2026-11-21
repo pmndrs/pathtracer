@@ -256,4 +256,19 @@ const volClGroundOccluder: SceneDesc = { ...volClGroundLeak40, name: 'vol-cl-gro
 const volClGroundOccluderTess: SceneDesc = { ...volClGroundOccluder, name: 'vol-cl-ground-occluder-tess', purpose: `${volClGroundOccluder.purpose} Ground tessellated 64 x 64.`, meshes: [{ ...volClGroundOccluder.meshes[0]!, geometry: { type: 'quad', size: [2000, 2000], segments: [64, 64] } }, volClGroundOccluder.meshes[1]!] };
 export const cloudGroundScenes: readonly SceneDesc[] = [volClGroundFurnace, volClGroundAbsorb, groundAbsorbVariant('sun'), groundAbsorbVariant('sky'), groundAbsorbVariant('gap'), volClGroundLeak, volClGroundLeak40, volClGroundOccluder, volClGroundOccluderTess, volClGroundSphere];
 
-export const cloudScenes: readonly SceneDesc[] = [...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];
+/** V4.2: thin fog (tau 0.05, albedo 0.99, g 0.8) in a 1 m slab, black sky, a sun shining toward the camera from slightly off axis, maxDepth 4: almost no camera ray scatters (5 %), so plain delta tracking + NEE is noise; forced in-scatter NEE is the test. No reference render (compare our own 4096 spp). */
+export const volThinFogSun: SceneDesc = {
+  version: 1,
+  name: 'vol-thin-fog-sun',
+  purpose: 'Thin homogeneous fog slab (tau 0.05, albedo 0.99, HG g 0.8) lit by a sun shining toward the camera, black sky, maxDepth 4 (V4.2: forced in-scatter NEE A/B; no pbrt / Mitsuba reference).',
+  tier: 2,
+  camera: { type: 'perspective', position: [0, 0, 5], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+  film: { width: 64, height: 64, filter: 'box' },
+  integrator: { maxDepth: 4 },
+  materials: { boundary: { type: 'interface' } },
+  media: { fog: grey(0.05, 0.99, 0.8) },
+  meshes: [{ name: 'slab', geometry: { type: 'box', size: [40, 40, 1] }, material: 'boundary', medium: { interior: 'fog' } }],
+  lights: [{ type: 'directional', direction: [0.3, 0.2, 1], irradiance: [3, 3, 3] }],
+  environment: { type: 'uniform', radiance: [0, 0, 0] },
+};
+export const cloudScenes: readonly SceneDesc[] = [volThinFogSun, ...cloudFurnaceScenes, ...cloudSingleScenes, ...cloudPhaseSingleScenes, ...cloudSphereScenes, ...cloudPhaseSphereScenes, ...cloudSlabScenes, ...cloudGroundScenes, volClCloud256];

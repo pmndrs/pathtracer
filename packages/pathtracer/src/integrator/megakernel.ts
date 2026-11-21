@@ -88,7 +88,7 @@ export interface PtMegakernelOptions {
    */
   blueNoise?: BlueNoiseTexture;
   /** `integrator.volumes` with a grid medium (P5): the density, x fastest then y then z, uploaded as an `r32float` 3D texture at group 2 binding `PT_VOLUME_BINDING`. */
-  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** P5.v18: `'r16float'` halves the memory (a 504x352x616 cloud: 437 -> 218 MB); `density` must then hold f16-exact values (`ptRoundGridF16`) and `densityMax` / the brick majorants must come from those values. Default `'r32float'`. */ format?: 'r32float' | 'r16float'; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array } };
+  volumeGrid?: { resolution: readonly [number, number, number]; density: Float32Array; /** P5.v18: `'r16float'` halves the memory (a 504x352x616 cloud: 437 -> 218 MB); `density` must then hold f16-exact values (`ptRoundGridF16`) and `densityMax` / the brick majorants must come from those values. Default `'r32float'`. */ format?: 'r32float' | 'r16float'; /** `integrator.volumes.majorant: 'brick'`: `brickMajorants(resolution, density)`, an `r32float` 3D texture at group 2 binding `PT_VOLUME_MAJORANT_BINDING`. */ majorant?: { resolution: readonly [number, number, number]; values: Float32Array; /** V2.1 (`volumes.shadowTracking: 'residual'`): the per-cell minorant of `brickMajorants(.., .., { minima: true })`; the majorant texture is then `rg32float` (r = max, g = min). */ minima?: Float32Array } };
   /**
    * `integrator.spectral` only (P5): the RGB -> spectrum table (`buildRgb2SpecTable(res)`, `res` = `integrator.spectral.res`, default 64). Omitted: `defaultRgb2SpecTable(res)`
    * (fitted on first use and kept; res 64 takes ~4 s in Node, res 32 ~0.5 s), so a page builds it once and passes it here.
@@ -220,6 +220,18 @@ export function createVolumeTexture(device: GPUDevice, grid: NonNullable<PtMegak
   // r16float: refuse values f16 cannot hold exactly, so the majorant the caller computed from `density` bounds what the GPU reads (round with ptRoundGridF16 first)
   const data = half ? ptF16Bits(grid.density, true) : grid.density;
   device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: nx * (half ? 2 : 4), rowsPerImage: ny }, [nx, ny, nz]);
+  return texture;
+}
+
+/** The brick majorant texture (`volumeGrid.majorant`): `r32float` (max), or `rg32float` (max, min; V2.1) when `minima` is given. */
+export function createMajorantTexture(device: GPUDevice, mj: { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array }, label: string): GPUTexture {
+  if (!mj.minima) return createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
+  const [nx, ny, nz] = mj.resolution;
+  if (mj.values.length !== nx * ny * nz || mj.minima.length !== mj.values.length) throw new RangeError(`volumeGrid.majorant: ${mj.values.length} maxima / ${mj.minima.length} minima for a ${nx} x ${ny} x ${nz} grid`);
+  const texture = device.createTexture({ label: `${label} majorant (max, min)`, size: [nx, ny, nz], dimension: '3d', format: 'rg32float', usage: 0x04 | 0x02 /* TEXTURE_BINDING | COPY_DST */ });
+  const data = new Float32Array(mj.values.length * 2);
+  for (let i = 0; i < mj.values.length; i++) { data[2 * i] = mj.values[i] as number; data[2 * i + 1] = mj.minima[i] as number; }
+  device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: nx * 8, rowsPerImage: ny }, [nx, ny, nz]);
   return texture;
 }
 
@@ -369,7 +381,8 @@ export class PtMegakernel {
     if (volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
       const mj = options.volumeGrid!.majorant!;
-      kernel.majorantTexture = createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
+      if (options.integrator?.volumes?.shadowTracking === 'residual' && !mj.minima) throw new Error("PtMegakernel: integrator.volumes.shadowTracking 'residual' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
+      kernel.majorantTexture = createMajorantTexture(device, mj, label);
     }
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
     if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);

@@ -12,7 +12,7 @@ import { ptMediumMajorant } from './volume.ts';
 import { ptPhaseValidate } from './phase.ts';
 
 export const PT_VOLUME_BINDING = 16;
-/** The coarse majorant grid of `majorant: 'brick'` (`r32float` 3D texture, one texel per 8^3 voxels). */
+/** The coarse majorant grid of `majorant: 'brick'` (`r32float` 3D texture, one texel per 8^3 voxels; V2.1: `rg32float` (max, min) with `shadowTracking: 'residual'`). */
 export const PT_VOLUME_MAJORANT_BINDING = 17;
 /** V1.2 `densityFilter: 'hardware'`: the linear clamp-to-edge sampler of the density lookup (group 2; the grid texture is then bound `float`, filterable). */
 export const PT_VOLUME_SAMPLER_BINDING = 20;
@@ -42,6 +42,7 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
       if (m.lobes.gA !== m.g) throw new RangeError(`integrator.volumes: medium ${i} has g ${m.g} but its lobe A is ${m.lobes.gA}`);
     }
   });
+  if (v.shadowTracking === 'residual' && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError("integrator.volumes: shadowTracking 'residual' needs a grid medium with majorant 'brick'");
   const grids = v.media.filter((m) => m.grid);
   if (grids.length > 1) {
     const [a] = grids;
@@ -95,6 +96,7 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const brick = grid && v.majorant === 'brick';
   const hw = grid && v.densityFilter === 'hardware';
   const roulette = v.trRoulette === true;
+  const residual = brick && v.shadowTracking === 'residual';
   const lobes = ptVolumeHasLobes(v);
   const stride = lobes ? 7 : 6;
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
@@ -272,10 +274,10 @@ fn ptDdaInit(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32) -> PtDda {
     return s;
 }
 
-// (t0, t1, majorant density) of the next cell; t1 <= t0 = no more cells.
-fn ptDdaNext(s: ptr<function, PtDda>) -> vec3f {
+// (t0, t1, majorant density${residual ? ', minorant density' : ''}) of the next cell; t1 <= t0 = no more cells.
+fn ptDdaNext(s: ptr<function, PtDda>) -> ${residual ? 'vec4f' : 'vec3f'} {
     if (!(*s).valid) {
-        return vec3f(0.0);
+        return ${residual ? 'vec4f(0.0)' : 'vec3f(0.0)'};
     }
     let t0 = (*s).t;
     let tn = (*s).tNext;
@@ -287,8 +289,10 @@ fn ptDdaNext(s: ptr<function, PtDda>) -> vec3f {
         axis = 2;
     }
     let t1 = min(tn[axis], (*s).tExit);
-    let dens = textureLoad(ptVolMaj, vec3u((*s).cell), 0).x;
-    (*s).t = t1;
+${residual ? `    let mm = textureLoad(ptVolMaj, vec3u((*s).cell), 0);
+    let dens = mm.x;
+` : `    let dens = textureLoad(ptVolMaj, vec3u((*s).cell), 0).x;
+`}    (*s).t = t1;
     if (t1 >= (*s).tExit) {
         (*s).valid = false;
     } else {
@@ -298,7 +302,7 @@ fn ptDdaNext(s: ptr<function, PtDda>) -> vec3f {
             (*s).valid = false;
         }
     }
-    return vec3f(t0, t1, dens);
+    return ${residual ? 'vec4f(t0, t1, dens, mm.y)' : 'vec3f(t0, t1, dens)'};
 }
 
 fn ptVolSampleBrick(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f>) -> PtVolEvent {
@@ -343,8 +347,11 @@ fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
         if (!(sg.y > sg.x)) {
             break;
         }
-        let mu = sg.z * m.info.x;
-        if (!(mu > 0.0)) {
+${residual ? `        // V2.2 residual ratio tracking: the cell's minorant is a control (analytic), the residual (max - min) is ratio tracked
+        tr = tr * exp(-m.sigmaT * (sg.w * (sg.y - sg.x)));
+        let mu = (sg.z - sg.w) * m.info.x;
+` : `        let mu = sg.z * m.info.x;
+`}        if (!(mu > 0.0)) {
             continue;
         }
         var t = sg.x;
@@ -353,7 +360,7 @@ fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
             if (t >= sg.y) {
                 break;
             }
-            tr = tr * (vec3f(1.0) - m.sigmaT * ptVolDensity(m, o + d * t) / mu);
+            tr = tr * (vec3f(1.0) - m.sigmaT * ${residual ? '(ptVolDensity(m, o + d * t) - sg.w)' : 'ptVolDensity(m, o + d * t)'} / mu);
             if (!(ptMax3(tr) > 0.0)) {
                 return vec3f(0.0);
             }

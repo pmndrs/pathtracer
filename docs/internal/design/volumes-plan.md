@@ -50,8 +50,8 @@ Gate: equal-time relMSE on `vol-cl-cloud256` (and one dense homogeneous sphere) 
 
 | id | task | check |
 |---|---|---|
-| V2.1 ★ | Minorant per brick (brick texture rg = min, max) | TS twin: min <= every density sample in the cell |
-| V2.2 ★ | Residual ratio tracking for shadow rays against the minorant (verify the residual-tracking patent status first) | TS twin unbiased; `vol-grid-slab`; 256 spp within SE |
+| ✅ V2.1 ★ | Minorant per brick (brick texture rg = min, max) | TS twin: min <= every density sample in the cell |
+| ✅ V2.2 (not a win) ★ | Residual ratio tracking for shadow rays against the minorant (verify the residual-tracking patent status first) | TS twin unbiased; `vol-grid-slab`; 256 spp within SE |
 | V2.3 ★ | Misso 2022 telescoping transmittance, port of Cycles `volume_transmittance` (Apache-2.0, attribution), A/B vs ratio tracking | TS twin unbiased; equal-spp variance on `vol-cl-cloud256` |
 | V2.4 | Decomposition tracking for free flight (control part analytic, residual majorant) | `vol-grid-slab`; lookup counter |
 | V2.5 ★ | Adaptive sampling per tile from the second moment (stop when SE < target) | spp saved at equal SE on `vol-cl-cloud256` |
@@ -75,7 +75,7 @@ Gate: lamp-lit fog and thin-fog god rays at least 3x better equal-time relMSE th
 | id | task | check |
 |---|---|---|
 | V4.1 | Equiangular + distance MIS for emissive triangles in homogeneous media | new `vol-lamp-fog` (maxDepth 1) vs a 1D quadrature |
-| V4.2 | Forced in-scatter NEE for thin homogeneous media | thin-fog closed form (single scatter) |
+| ✅ V4.2 | Forced in-scatter NEE for thin homogeneous media | thin-fog closed form (single scatter) |
 | V4.3 | Volume scattering probability guiding (VSPG, Cycles) | thin-fog scene equal time |
 | V4.4 | Equiangular in grid media (Cycles' scheme) | `vol-cornell-smoke` grid twin |
 | V4.5 | Height fog (exponential in y, closed-form optical depth and exact distance sampling, no majorant) | closed-form T and single-scatter quadrature |

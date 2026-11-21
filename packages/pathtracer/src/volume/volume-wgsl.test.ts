@@ -47,6 +47,18 @@ describe('integrator.volumes (P5)', () => {
     expect(build({ ...gridded, densityFilter: 'manual' })).toBe(build(gridded));
   });
 
+  it("V2.2 shadowTracking 'residual' reads the minorant (vec4 DDA cell), needs a brick grid, and leaves the brick text unchanged without it", () => {
+    const residual: PtVolumeOptions = { ...bricked, shadowTracking: 'residual' };
+    const text = build(residual);
+    expect(text).toContain('mm.y');
+    expect(text).toContain('exp(-m.sigmaT * (sg.w * (sg.y - sg.x)))');
+    expect(build(bricked)).not.toContain('mm.y');
+    expect(() => ptVolumeValidate({ ...gridded, shadowTracking: 'residual' })).toThrow(/brick/);
+    expect(() => ptVolumeValidate({ ...homog, shadowTracking: 'residual' })).toThrow(/brick/);
+    expect(balanced(ptVolumeWgsl(residual))).toBe(true);
+    expect(ptVolumeRatioShadows(residual)).toBe(true);
+  });
+
   it('majorant brick adds the coarse texture and the DDA; global and the analytic shadow do not', () => {
     const text = build(bricked);
     expect(text).toMatch(/@group\(2\) @binding\(17\) var ptVolMaj: texture_3d<f32>/);
