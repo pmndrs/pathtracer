@@ -4,7 +4,7 @@
  * A medium's coefficients are pbrt's: `sigmaA`, `sigmaS` per metre times `scale`. A `grid` medium lives in the object space of the (single) mesh that has it as its
  * `interior`; its density is looked up through that mesh's transform. One grid medium per scene (one 3D texture per kernel).
  */
-import { gridWorldToIndex, ptDetectCameraMedium, ptMediumFrom, ptPhaseLobes, type PtMedium, type PtMaterialVolume, type PtVolumeOptions } from '@pmndrs/pathtracer';
+import { gridWorldToIndex, ptDetectCameraMedium, ptDetectCameraMediumStack, ptMediumFrom, ptPhaseLobes, type PtMedium, type PtMaterialVolume, type PtVolumeOptions } from '@pmndrs/pathtracer';
 import type { DescSceneCopyInput } from './to-scene-copy.ts';
 import type { SceneDesc } from './schema.ts';
 import { meshToWorld } from './geometry.ts';
@@ -24,7 +24,8 @@ export function sceneDensityFiles(scene: SceneDesc): string[] {
   return Object.values(scene.media ?? {}).flatMap((m) => (m.type === 'grid' && m.densityFile ? [m.densityFile] : []));
 }
 
-export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, 'materialVolumes'>, files: ReadonlyMap<string, Float32Array> = new Map()): SceneVolumes | null {
+/** `mediumStack` (V6.2): nested / overlapping media through the medium stack; `cameraStack` is then every medium containing the camera, outermost first. */
+export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, 'materialVolumes'>, files: ReadonlyMap<string, Float32Array> = new Map(), opts: { mediumStack?: boolean } = {}): SceneVolumes | null {
   if (!sceneHasMedia(scene)) return null;
   const names = Object.keys(scene.media ?? {});
   let grid: SceneVolumes['grid'];
@@ -53,13 +54,26 @@ export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, '
   let cam = scene.cameraMedium ? names.indexOf(scene.cameraMedium) + 1 : 0;
   if (scene.cameraMedium && cam === 0) throw new RangeError(`scene '${scene.name}': unknown cameraMedium '${scene.cameraMedium}'`);
   if (scene.cameraMedium === undefined) cam = detectCameraMedium(scene, names); // V3.3: an explicit `cameraMedium` stays authoritative
-  return { options: { media, materials, ...(cam ? { cameraMedium: cam } : {}) }, ...(grid ? { grid } : {}) };
+  const stack = opts.mediumStack ? (scene.cameraMedium === undefined ? detectCameraStack(scene, names) : cam ? [cam] : []) : undefined;
+  return { options: { media, materials, ...(cam ? { cameraMedium: cam } : {}), ...(stack ? { mediumStack: true, cameraStack: stack } : {}) }, ...(grid ? { grid } : {}) };
 }
 
 /**
  * V3.3: the medium the camera starts in when the scene does not say: the innermost medium boundary mesh (a mesh with `medium.interior`; closed, outward wound) that
  * contains the camera position (`ptDetectCameraMedium`: winding number, nesting by smallest bounding box). 0 = vacuum. File meshes are skipped (loaded by the caller).
  */
+/** V6.2: every medium boundary mesh that contains the camera, outermost first (`ptDetectCameraMediumStack`). */
+export function detectCameraStack(scene: SceneDesc, names: readonly string[]): number[] {
+  const boundaries = scene.meshes.flatMap((m) => {
+    const id = m.medium?.interior ? names.indexOf(m.medium.interior) + 1 : 0;
+    if (id === 0 || m.geometry.type === 'file') return [];
+    const tri = meshToWorld(m);
+    return [{ medium: id, positions: tri.positions, indices: tri.indices }];
+  });
+  const c = scene.camera;
+  return ptDetectCameraMediumStack([c.position[0], c.position[1], c.position[2]], boundaries);
+}
+
 export function detectCameraMedium(scene: SceneDesc, names: readonly string[]): number {
   const boundaries = scene.meshes.flatMap((m) => {
     const id = m.medium?.interior ? names.indexOf(m.medium.interior) + 1 : 0;

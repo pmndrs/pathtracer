@@ -18,7 +18,7 @@ import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './ou
 import { ptForcedNeeWgsl } from '../volume/forced-wgsl.ts';
 import { ptEquiangularWgsl } from '../volume/equiangular-wgsl.ts';
 import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
-import { ptMediumsEmit, type PtVolumeOptions } from '../volume/volume.ts';
+import { ptMediumStackPack, ptMediumsEmit, type PtVolumeOptions } from '../volume/volume.ts';
 import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
@@ -610,9 +610,11 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
                 }
 `;
   // P5: the free-flight segment of the ray in the current medium (before the hit it ends at is looked at), and the medium-boundary handling at that hit.
+  const stack = !!o.volumes?.mediumStack; // V6.2: `curStack` is the medium state, `curMed` its top
   const volSegment = vol
     ? `        if (curMed != 0u) {
-            let vo = ray.origin - ray.direction * volBack;
+${stack ? `            ptVolCurSt = curStack;
+` : ''}            let vo = ray.origin - ray.direction * volBack;
             let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + volBack;
 ${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogeneous media; the scatter below then skips its own light sample).
             let fm = ptVolMedium(curMed);
@@ -667,15 +669,20 @@ ${rrMedium}                continue;
     : '';
   const volSurface = vol
     ? `        let mv = ptVolMat(hit.material);
-        let medIn = select(curMed, mv.x, mv.z != 0u);
+${stack ? `        let enterV = dot(ray.direction, hit.normal) < 0.0;
+        let medIn = ptVolSurfIn(curStack, mv, enterV);
+        let medOut = ptVolSurfOut(curStack, mv, enterV);
+` : `        let medIn = select(curMed, mv.x, mv.z != 0u);
         let medOut = select(curMed, mv.y, mv.z != 0u);
-        if (mv.w != 0u) {
+`}        if (mv.w != 0u) {
             ifaceSkips += 1u;
             if (ifaceSkips > 256u) {
                 break;
             }
-            curMed = select(medOut, medIn, dot(ray.direction, hit.normal) < 0.0);
-            let ptI = ray.origin + ray.direction * hit.t;
+${stack ? `            curStack = ptVolCross(curStack, mv, enterV);
+            curMed = ptVolTop(curStack);
+` : `            curMed = select(medOut, medIn, dot(ray.direction, hit.normal) < 0.0);
+`}            let ptI = ray.origin + ray.direction * hit.t;
             let nsI = ptSideNormal(hit.normal, ray.direction);
             let qI = ptOffsetOrigin(ptI, nsI);
             volBack = ptVolBack(qI, ptI, nsI, ray.direction);
@@ -824,11 +831,13 @@ ${mask ? `    var skips = 0u;
 ` : ''}    var prevP = origin;
     var prevPdf = 0.0;
 ${medium ? `    var sigma = vec3f(0.0);
-` : ''}${vol ? `    var curMed = ${o.volumes!.cameraMedium ?? 0}u;
-    var ifaceSkips = 0u;
+` : ''}${vol ? `${stack ? `    var curStack = ${ptMediumStackPack(o.volumes!.cameraStack ?? (o.volumes!.cameraMedium ? [o.volumes!.cameraMedium] : []))}u;
+    var curMed = ptVolTop(curStack);
+` : `    var curMed = ${o.volumes!.cameraMedium ?? 0}u;
+`}    var ifaceSkips = 0u;
     var volBack = 0.0;
     ptVolSeed(pixelSeed, sampleIndex);
-${volOut ? `    ptVoBegin(ray, curMed, pixelSeed, sampleIndex);
+${volOut ? `    ptVoBegin(ray, ${stack ? 'curStack' : 'curMed'}, pixelSeed, sampleIndex);
 ` : ''}` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
 ${vbHit ? `    var primary = true;
@@ -980,8 +989,10 @@ ${medium ? `            sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.
         let wiWorld = ptFromLocal(frame, s.wi);
         ray = RtRay(ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, wiWorld), surf.positionError), 0.0, wiWorld, PT_FAR);
 ${vol ? `        volBack = 0.0;
-        curMed = select(medOut, medIn, dot(wiWorld, hit.normal) < 0.0);
-` : ''}
+${stack ? `        curStack = select(medOut, medIn, dot(wiWorld, hit.normal) < 0.0);
+        curMed = ptVolTop(curStack);
+` : `        curMed = select(medOut, medIn, dot(wiWorld, hit.normal) < 0.0);
+`}` : ''}
         if (rrStart > 0u && depth >= rrStart) {
             let rrBeta = beta * etaScale;
             let m = ptMax3(rrBeta);

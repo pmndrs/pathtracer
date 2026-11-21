@@ -42,6 +42,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   volumeTrRoulette?: boolean;
   /** V4.2: forced in-scatter NEE in homogeneous media (`integrator.volumes.forcedNee`, megakernel). */
   volumeForcedNee?: boolean;
+  /** V6.2: nested / overlapping media through the medium stack (`integrator.volumes.mediumStack`). */
+  volumeStack?: boolean;
   /** V4.1: equiangular distance sampling for the forced NEE (`integrator.volumes.equiangular`, implies forcedNee, megakernel). */
   volumeEquiangular?: boolean;
   /** V1.2: `'hardware'` reads grid density with one filtered `textureSampleLevel` (default `'manual'`). */
@@ -282,6 +284,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.volumeMajorant ? { volumeMajorant: settings.volumeMajorant } : {}),
         ...(settings.volumeTrRoulette ? { volumeTrRoulette: true } : {}),
         ...(settings.volumeForcedNee ? { volumeForcedNee: true } : {}),
+        ...(settings.volumeStack ? { volumeStack: true } : {}),
         ...(settings.volumeEquiangular ? { volumeEquiangular: true } : {}),
         ...(settings.volumeDensityFilter === 'hardware' ? { volumeDensityFilter: 'hardware' } : {}),
         ...(settings.volumeGridLayout === 'atlas' ? { volumeGridLayout: 'atlas' } : {}),
@@ -459,7 +462,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
       if (!response.ok) throw new Error(`density file ${file}: HTTP ${response.status}. Run: node bench/scenes/volumes/vdb-grid.ts`);
       densityFiles.set(file, new Float32Array(await response.arrayBuffer()));
     }
-    const volumes0 = sceneVolumes(scene, input, densityFiles);
+    const volumes0 = sceneVolumes(scene, input, densityFiles, { mediumStack: !!this.settings.volumeStack });
     // P5.v18: r16float grid = the density rounded to f16 everywhere (texture, densityMax, brick majorants), so the majorant bounds what the GPU reads
     const volumes = volumes0?.grid && this.settings.volumeGridFormat === 'r16float' ? roundVolumesF16(volumes0) : volumes0?.grid && this.settings.volumeGridFormat === 'r8unorm' ? quantizeVolumesR8(volumes0) : volumes0; // r8unorm (V3.1): same rule, with the scale in the medium table
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;

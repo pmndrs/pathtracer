@@ -31,7 +31,7 @@ import { ptFrameAddWgsl, ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } fr
 import { PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL } from '../restir/restir-wgsl.ts';
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
 import { ptSpectralWgsl } from '../spectral/spectral-wgsl.ts';
-import { ptMediumsEmit } from '../volume/volume.ts';
+import { ptMediumStackPack, ptMediumsEmit } from '../volume/volume.ts';
 import { ptVolPhaseEvalExpr, ptVolPhaseSampleWgsl, ptVolumeRatioShadows, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
@@ -125,6 +125,7 @@ function stateWgsl(o: ResolvedIntegratorOptions): string {
   const spec = !!o.spectral;
   const extra = medium || tex || vol;
   const sd = vol && !!o.volumes!.separateDepth;
+  const sk = vol && !!o.volumes!.mediumStack; // V6.2: the medium word is a stack (24 bits), the skip count takes the top byte
   const aovs = o.aovs;
   // P4.5a: `frameEmission: 'mirror'` carries one bit per path: has it left the chain of perfect-mirror bounces from the primary hit? Bit 28 of the depth word (set = impure, so a fresh path's word
   // is unchanged and `(word & 0x1fffffff) == 0` still means depth 0 at the primary), which takes the depth down to 28 bits in such kernels.
@@ -176,8 +177,9 @@ ${sd ? `    p.mdepth = (s2.w >> 14u) & 0x3fffu;
     p.sigma = ${medium ? 'ptwfF3(s4)' : 'vec3f(0.0)'};
     p.coneWidth = ${tex ? 'bitcast<f32>(s4.w)' : '0.0'};
 ${vol ? `    p.volState = s4.x;
-    p.med = s4.y & 0xffffu;
-    p.skips = s4.y >> 16u;
+${sk ? `    p.med = s4.y & 0xffffffu;
+    p.skips = s4.y >> 24u;` : `    p.med = s4.y & 0xffffu;
+    p.skips = s4.y >> 16u;`}
     p.volBack = bitcast<f32>(s4.z);
 ` : ''}${spec ? `    p.hero = ((s2.w >> 30u) & 1u) == 1u;
 ` : ''}    return p;
@@ -188,7 +190,7 @@ fn ptwfStorePath(path: u32, n: u32, p: PtwfPath) {
     ptwfState[n + path] = vec4u(bitcast<vec3u>(p.dir), bitcast<u32>(p.etaScale));
     ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth${sd ? ' | (p.mdepth << 14u)' : ''} | 0x20000000u | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''}${impure ? ' | select(0u, 0x10000000u, p.impure)' : ''}${spec ? ' | select(0u, 0x40000000u, p.hero)' : ''});
     ptwfState[3u * n + path] = vec4u(bitcast<vec3u>(p.prevP), ${tex ? 'bitcast<u32>(p.coneSpread)' : '0u'});
-${extra ? `    ptwfState[4u * n + path] = vec4u(${vol ? 'p.volState, p.med | (p.skips << 16u), bitcast<u32>(p.volBack)' : medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
+${extra ? `    ptwfState[4u * n + path] = vec4u(${vol ? `p.volState, p.med | (p.skips << ${sk ? 24 : 16}u), bitcast<u32>(p.volBack)` : medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
 ` : ''}}
 `;
 }
@@ -226,7 +228,7 @@ ${ptwfStartExtraWgsl(o, 'sampleIndex')}    ptwfStorePath(path, n, p);
 /** P5 start-of-path state (V270): the path's volume random stream and camera medium, the spectral hero flag. Empty without them (the kernel text is unchanged). */
 function ptwfStartExtraWgsl(o: ResolvedIntegratorOptions, sampleIndex: string): string {
   return `${o.volumes ? `    p.volState = ptVolSeedOf(pixelSeed, ${sampleIndex});
-    p.med = ${o.volumes.cameraMedium ?? 0}u;
+    p.med = ${o.volumes.mediumStack ? ptMediumStackPack(o.volumes.cameraStack ?? (o.volumes.cameraMedium ? [o.volumes.cameraMedium] : [])) : (o.volumes.cameraMedium ?? 0)}u;
     p.skips = 0u;
 ` : ''}${o.spectral ? `    p.hero = false;
 ` : ''}`;
@@ -379,6 +381,8 @@ function ptwfIntersectVolWgsl(o: ResolvedIntegratorOptions, wf: PtwfConfig): str
   const v = o.volumes as NonNullable<ResolvedIntegratorOptions['volumes']>;
   // V5.2 `volumes.outputs`: at iteration 0 the intersect kernel runs the megakernel's primary-transmittance march (`ptVoBegin`, its own stream: the same numbers) and adds T to the w lane of plane 1
   const vo = !!v.outputs;
+  const sk = !!v.mediumStack; // V6.2: \`med\` is a stack word; skMed = its top (the current medium id)
+  const skMed = (e: string): string => (sk ? `ptVolTop(${e})` : e);
   const emissive = ptMediumsEmit(v.media); // V4.6: the intersect kernel adds the segments' emission to the accumulator (the shade kernel never sees the flight)
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
@@ -423,9 +427,9 @@ ${vo ? `    if (iter == 0u) {
     var hit: RtHit;
     loop {
         hit = rtClosest(ray, RT_MASK_ALL);
-        if (med != 0u) {
+        if (${skMed('med')} != 0u) {
             let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + back;
-            let ev = ptVolSample(med, ray.origin - ray.direction * back, ray.direction, segMax, &st.beta);
+            let ev = ptVolSample(${skMed('med')}, ray.origin - ray.direction * back, ray.direction, segMax, &st.beta);
 ${emissive ? `            ptAccum[path] = ptAccum[path] + vec4f(ptVolEmitTake(), 0.0);
 ` : ''}            if (ev.kind == 2u) {
                 flag = 3u;
@@ -443,13 +447,13 @@ ${emissive ? `            ptAccum[path] = ptAccum[path] + vec4f(ptVolEmitTake(),
         let mv = ptVolMat(hit.material);
         if (mv.w != 0u) {
             skips += 1u;
-            if (skips > 256u) {
+            if (skips > ${sk ? 255 : 256}u) {
                 flag = 3u;
                 break;
             }
-            let medIn = select(med, mv.x, mv.z != 0u);
+${sk ? `            med = ptVolCross(med, mv, dot(ray.direction, hit.normal) < 0.0);` : `            let medIn = select(med, mv.x, mv.z != 0u);
             let medOut = select(med, mv.y, mv.z != 0u);
-            med = select(medOut, medIn, dot(ray.direction, hit.normal) < 0.0);
+            med = select(medOut, medIn, dot(ray.direction, hit.normal) < 0.0);`}
             let ptI = ray.origin + ray.direction * hit.t;
             let nsI = ptSideNormal(hit.normal, ray.direction);
             let qI = ptOffsetOrigin(ptI, nsI);
@@ -843,7 +847,7 @@ ${sd ? `        next.mdepth = mdepth;
         next.coneWidth = ${tex ? 'st.coneWidth' : '0.0'};
         next.coneSpread = ${tex ? 'st.coneSpread' : '0.0'};
         next.volState = ptVolState;
-        next.med = curMed;
+        next.med = ${o.volumes?.mediumStack ? 'curStack' : 'curMed'};
         next.skips = st.skips;
 ${aovs ? `        next.aovDone = st.aovDone || vertex == 0u;
 ` : ''}        ptwfStorePath(path, n, next);
@@ -939,7 +943,7 @@ fn ptwfSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex:
     if (!li.delta) {
         w = ptMis(pl, ph);
     }
-    return PtwfLd(true, li.radiance * ph * (w / pl), ray, id);
+    return PtwfLd(true, li.radiance * ph * (w / pl), ray, ${o.volumes?.mediumStack ? 'ptVolCurSt' : 'id'});
 }
 ` : ''}
 fn ptwfAddRadiance(path: u32, l: vec3f) {
@@ -1085,8 +1089,11 @@ ${wf.refill ? `    let sampleIndex = ptwfSampleIndex(path);
 ` : ''}
     let st = ptwfLoadPath(path, n);
 ${vol ? `    ptVolState = st.volState;
-    let curMed = st.med;
-` : ''}${spec ? `    ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);
+${o.volumes?.mediumStack ? `    let curStack = st.med;
+    let curMed = ptVolTop(curStack);
+    ptVolCurSt = curStack;
+` : `    let curMed = st.med;
+`}` : ''}${spec ? `    ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);
     ptSpecHero = st.hero;
 ` : ''}    let ray = RtRay(st.origin, 0.0, st.dir, PT_FAR);
     var beta = st.beta;
@@ -1131,9 +1138,12 @@ ${counters ? `        ptCountRay(path, 1u, 0u);
         ptFrameBounce(path, n, hit.t);
     }` : ''}
 ${vol ? `    let mv = ptVolMat(hit.material);
-    let medIn = select(curMed, mv.x, mv.z != 0u);
+${o.volumes?.mediumStack ? `    let enterV = dot(ray.direction, hit.normal) < 0.0;
+    let medIn = ptVolSurfIn(curStack, mv, enterV);
+    let medOut = ptVolSurfOut(curStack, mv, enterV);
+` : `    let medIn = select(curMed, mv.x, mv.z != 0u);
     let medOut = select(curMed, mv.y, mv.z != 0u);
-` : ''}${lodS.decl}${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
+`}` : ''}${lodS.decl}${tex ? `    let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME${aniso ? ' | RT_SURF_TANGENT' : ''});
     let coneW = rtConeAt(cone, hit.t);
     let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001)${lodS.texBias}, PT_TEX_CONE);
     let mat = ${spec ? 'ptSpecMaterial(' : ''}${o.mtlx ? 'ptMtlxApply(' : ''}rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp)${o.mtlx ? ', hit.material, surf.uv, surf.position, surf.shadingNormal, surf.tangent.xyz, fp)' : ''}${spec ? ', hit.material)' : ''};

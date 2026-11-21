@@ -71,6 +71,7 @@ try {
     ...(args['pt_volume_majorant'] ? { volumeMajorant: args['pt_volume_majorant'] as 'global' | 'brick' } : {}),
     ...(args['pt_tr_roulette'] === '1' ? { volumeTrRoulette: true } : {}),
     ...(args['pt_forced_nee'] === '1' ? { volumeForcedNee: true } : {}),
+    ...(args['pt_vol_stack'] === '1' ? { volumeStack: true } : {}),
     ...(args['pt_equiangular'] === '1' ? { volumeEquiangular: true } : {}),
     ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : {}),
     ...(args['pt_grid_layout'] === 'atlas' ? { volumeGridLayout: 'atlas' as const } : {}),

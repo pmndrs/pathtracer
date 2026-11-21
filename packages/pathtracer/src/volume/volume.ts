@@ -76,6 +76,17 @@ export interface PtVolumeOptions {
   /** Medium id (index + 1) the camera starts in; 0 / undefined = vacuum. */
   cameraMedium?: number;
   /**
+   * V6.2: nested / overlapping media through a small medium STACK (default false: "last boundary wins", kernel text unchanged). A path (and each shadow ray) carries up to
+   * `PT_MEDIUM_STACK_DEPTH` (4) medium ids packed 6 bits each into one u32 (so at most 63 media); the current medium is the TOP. Crossing a boundary mesh INTO its interior pushes
+   * the boundary material's `interior` medium (0 pushes nothing), crossing OUT removes that id from wherever it sits (the most recent entry, so overlapping media pop in any
+   * order); an id that is not on the stack is ignored. The material's `exterior` is not read (the stack remembers what was outside). Pushing onto a full stack drops the OUTERMOST
+   * entry (the twin `ptMediumStackPush` reports it). Non-boundary surfaces with a medium pair (glass) push on a transmission inwards and pop on one outwards, reflections change nothing.
+   * The camera starts with `cameraStack` (outermost first), else with `cameraMedium`. Wavefront: the interface-skip count of the path state shrinks to 8 bits (cap 255).
+   */
+  mediumStack?: boolean;
+  /** V6.2: the media (1-based ids) containing the camera, OUTERMOST first (`ptDetectCameraMediumStack`); with `mediumStack` only. */
+  cameraStack?: readonly number[];
+  /**
    * Transmittance of a shadow ray through a HOMOGENEOUS medium: `'analytic'` (default, `exp(-sigma_t d)`, no noise) or `'ratio'` (ratio tracking against the majorant, what pbrt does:
    * same mean, more variance; the A/B of V241). A grid medium always uses ratio tracking. V2.2 `'residual'` (grid media with `majorant: 'brick'` and `volumeGrid.majorant`
    * built with `brickMajorants(.., .., { minima: true })`): residual ratio tracking (Novak et al. 2014), per DDA cell the analytic transmittance of the cell's minorant
@@ -831,4 +842,47 @@ export function atlasDensityAtIndex(atlas: BrickAtlas, gx: number, gy: number, g
     acc += v * (di ? (fr[0] as number) : 1 - (fr[0] as number)) * (dj ? (fr[1] as number) : 1 - (fr[1] as number)) * (dk ? (fr[2] as number) : 1 - (fr[2] as number));
   }
   return acc;
+}
+
+/** V6.2: entries of the medium stack of `mediumStack` (6 bits each in one u32). */
+export const PT_MEDIUM_STACK_DEPTH = 4;
+/** V6.2: the largest medium id a stack entry can hold. */
+export const PT_MEDIUM_STACK_MAX_ID = 63;
+
+/** Packs ids (outermost first) into a stack word; entries beyond the depth drop the OUTERMOST, zeros are skipped. */
+export function ptMediumStackPack(ids: readonly number[]): number {
+  let s = 0;
+  for (const id of ids) s = ptMediumStackPush(s, id).stack;
+  return s;
+}
+
+/** The current medium (top of the stack, 0 = vacuum). */
+export function ptMediumStackTop(stack: number): number {
+  return stack & 63;
+}
+
+/** Entering a boundary of medium `id`: pushes it (0 = nothing); `overflow` is true when the outermost entry fell off. Twin of `ptVolPush`. */
+export function ptMediumStackPush(stack: number, id: number): { stack: number; overflow: boolean } {
+  if (id === 0) return { stack, overflow: false };
+  const overflow = ((stack >>> 18) & 63) !== 0;
+  return { stack: (((stack << 6) & 0xffffff) | id) >>> 0, overflow };
+}
+
+/** Leaving a boundary of medium `id`: removes its most recent entry; an id not on the stack changes nothing. Twin of `ptVolPop`. */
+export function ptMediumStackPop(stack: number, id: number): number {
+  if (id === 0) return stack;
+  for (let k = 0; k < PT_MEDIUM_STACK_DEPTH; k++) {
+    if (((stack >>> (6 * k)) & 63) === id) {
+      const low = stack & ((1 << (6 * k)) - 1);
+      return ((((stack >>> (6 * (k + 1))) << (6 * k)) | low) >>> 0) & 0xffffff;
+    }
+  }
+  return stack;
+}
+
+/** The stack entries, top first (for tests and logs). */
+export function ptMediumStackIds(stack: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < PT_MEDIUM_STACK_DEPTH; k++) { const id = (stack >>> (6 * k)) & 63; if (id) out.push(id); }
+  return out;
 }

@@ -48,6 +48,11 @@ const CASES: Record<string, Case> = {
   'vol-emit-slab': { scene: 'vol-emit-slab' },
   'vol-emit-grid-slab': { scene: 'vol-emit-grid-slab' },
   'vol-camera-medium': { scene: 'vol-camera-medium' },
+  // V6.2: the medium stack (nested / overlapping boundaries without explicit exteriors)
+  'vol-nested-absorb-stack': { scene: 'vol-nested-absorb', settings: { volumeStack: true } },
+  'vol-nested-overlap-stack': { scene: 'vol-nested-overlap', settings: { volumeStack: true } },
+  'vol-nested-camera-stack': { scene: 'vol-nested-camera', settings: { volumeStack: true } },
+  'vol-nested-furnace-stack': { scene: 'vol-nested-furnace', settings: { volumeStack: true } },
   'vol-height-absorb': { scene: 'vol-height-absorb' },
   'vol-height-furnace': { scene: 'vol-height-furnace' },
   'vol-furnace-sphere': { scene: 'vol-furnace-sphere' },

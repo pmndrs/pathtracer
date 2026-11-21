@@ -75,6 +75,9 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
   if (v.outputs && ptMediumsEmit(v.media)) throw new RangeError('integrator.volumes: emission does not combine with volumes.outputs yet (V4.6: the order-0-1 split of the emission term is not defined)');
   const n = v.media.length;
   for (const mv of v.materials) if (mv.interior > n || mv.exterior > n || mv.interior < 0 || mv.exterior < 0) throw new RangeError('integrator.volumes: a material names a medium that does not exist');
+  if (v.mediumStack && n > 63) throw new RangeError('integrator.volumes: mediumStack holds 6-bit ids (at most 63 media)');
+  if (v.cameraStack && !v.mediumStack) throw new RangeError('integrator.volumes: cameraStack needs mediumStack');
+  if (v.cameraStack?.some((id) => !Number.isInteger(id) || id < 0 || id > n)) throw new RangeError('integrator.volumes: cameraStack names a medium that does not exist');
   if ((v.cameraMedium ?? 0) > n) throw new RangeError('integrator.volumes: cameraMedium does not exist');
 }
 
@@ -165,6 +168,8 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const height = v.media.some((m) => m.height); // V4.5: closed-form exponential fog; the code below is emitted only then
   const emissive = ptMediumsEmit(v.media); // V4.6
   const stride = 6 + (lobes ? 1 : 0) + (emissive ? 1 : 0);
+  const top = (e: string): string => (v.mediumStack ? `ptVolTop(${e})` : e); // V6.2: the current medium id of a medium state (the id itself without the stack)
+  const cross = v.mediumStack ? 'ptVolCross(med, mv, dot(ray.direction, hit.normal) < 0.0)' : 'select(mv.y, mv.x, dot(ray.direction, hit.normal) < 0.0)';
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
   const matRow = (m: (typeof mats)[number]): string => `vec4u(${m.interior}u, ${m.exterior}u, ${m.interior !== 0 || m.exterior !== 0 || m.boundary ? 1 : 0}u, ${m.boundary ? 1 : 0}u)`;
   const chunks: string[] = [];
@@ -197,7 +202,37 @@ var<private> ptVolSampleIdx: u32;` : ''}
 fn ptVolBack(q: vec3f, p: vec3f, n: vec3f, d: vec3f) -> f32 {
     return dot(q - p, n) / max(abs(dot(d, n)), 0.015625);
 }
-
+${v.mediumStack ? `
+// V6.2 medium stack: 4 ids x 6 bits in the low 24 bits of one u32 (slot 0 = top = the current medium; twin: \`ptMediumStack*\` in volume.ts).
+var<private> ptVolCurSt: u32;
+fn ptVolTop(s: u32) -> u32 {
+    return s & 63u;
+}
+fn ptVolPush(s: u32, id: u32) -> u32 {
+    return select(((s << 6u) & 0xffffffu) | id, s, id == 0u);
+}
+fn ptVolPop(s: u32, id: u32) -> u32 {
+    var out = s;
+    for (var k = 0u; k < 4u; k++) {
+        if (((s >> (6u * k)) & 63u) == id) {
+            out = ((s >> (6u * (k + 1u))) << (6u * k)) | (s & ((1u << (6u * k)) - 1u));
+            break;
+        }
+    }
+    return select(out, s, id == 0u);
+}
+// A boundary (interface) crossing: entering (the ray goes against the outward normal) pushes the interior medium, leaving pops it.
+fn ptVolCross(s: u32, mv: vec4u, enter: bool) -> u32 {
+    return select(ptVolPop(s, mv.x), ptVolPush(s, mv.x), enter);
+}
+// A non-boundary surface with a medium pair (glass): the stack of a ray that goes to the inside (in) / outside (out) of the surface, whichever side the incoming ray was on.
+fn ptVolSurfIn(s: u32, mv: vec4u, enter: bool) -> u32 {
+    return select(s, select(s, ptVolPush(s, mv.x), enter), mv.z != 0u);
+}
+fn ptVolSurfOut(s: u32, mv: vec4u, enter: bool) -> u32 {
+    return select(s, select(ptVolPop(s, mv.x), s, enter), mv.z != 0u);
+}
+` : ''}
 struct PtVolMedium {
     sigmaT: vec3f,
     mu: f32,
@@ -659,8 +694,8 @@ fn ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(ray0: RtRay, med0: u32) -> vec3f {
     for (var i = 0u; i < 64u; i++) {
         let hit = rtClosest(ray, RT_MASK_ALL);
         let seg = select(ray.tMax, hit.t, hit.t >= 0.0);
-        if (med != 0u) {
-            tr = tr * ptVolTrSegment(med, ray.origin - ray.direction * back, ray.direction, seg + back);
+        if (${top('med')} != 0u) {
+            tr = tr * ptVolTrSegment(${top('med')}, ray.origin - ray.direction * back, ray.direction, seg + back);
             if (!(${alive})) {
                 return vec3f(0.0);
             }
@@ -672,7 +707,7 @@ fn ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(ray0: RtRay, med0: u32) -> vec3f {
         if (mv.w == 0u) {
             return vec3f(0.0);
         }
-        med = select(mv.y, mv.x, dot(ray.direction, hit.normal) < 0.0);
+        med = ${cross};
         let pt = ray.origin + ray.direction * hit.t;
         let ns = ptSideNormal(hit.normal, ray.direction);
         let p = ptOffsetOrigin(pt, ns);
@@ -722,7 +757,7 @@ fn ptSampleLdMedium(p: vec3f, wo: vec3f, id: u32, pixelSeed: u32, sampleIndex: u
     } else {
         ray = RtRay(p, 0.0, li.wi, PT_FAR);
     }
-    let tr = ptVolTr(ray, id);
+    let tr = ptVolTr(ray, ${v.mediumStack ? 'ptVolCurSt' : 'id'});
     if (!(${alive})) {
         return vec3f(0.0);
     }
@@ -759,8 +794,8 @@ fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
     for (var i = 0u; i < 256u; i++) {
         let hit = rtClosest(ray, RT_MASK_ALL);
         let seg = select(ray.tMax, hit.t, hit.t >= 0.0);
-        if (med != 0u) {
-            tr = tr * ptVolTrSegment(med, ray.origin - ray.direction * back, ray.direction, seg + back);
+        if (${top('med')} != 0u) {
+            tr = tr * ptVolTrSegment(${top('med')}, ray.origin - ray.direction * back, ray.direction, seg + back);
         }
         if (hit.t < 0.0 || !(${alive})) {
             break;
@@ -769,7 +804,7 @@ fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
         if (mv.w == 0u) {
             break;
         }
-        med = select(mv.y, mv.x, dot(ray.direction, hit.normal) < 0.0);
+        med = ${cross};
         let pt = ray.origin + ray.direction * hit.t;
         let ns = ptSideNormal(hit.normal, ray.direction);
         let q = ptOffsetOrigin(pt, ns);

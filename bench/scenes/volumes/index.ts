@@ -345,6 +345,81 @@ export const volEmitSphere: SceneDesc = {
   environment: BLACK,
 };
 
+// V6.2 nested media (the `volumes.mediumStack` option; pass `pt_vol_stack=1`). No explicit exteriors anywhere: without the stack, leaving the inner boundary sets the medium to vacuum.
+const NEST_A = [0.3, 0.5, 0.2] as const;
+const NEST_B = [1.0, 0.4, 0.7] as const;
+const BOUNDARY = { boundary: { type: 'interface' as const } };
+const stackExpect = (l: readonly [number, number, number], a: number, b: number) => ({ type: 'mean' as const, value: l.map((x, i) => x * Math.exp(-(a * NEST_A[i]! + b * NEST_B[i]!))) as unknown as [number, number, number], tolerance: 0.01, pixelwise: false });
+export const volNestedAbsorb: SceneDesc = {
+  version: 1,
+  name: 'vol-nested-absorb',
+  purpose: 'An absorbing sphere (radius 1, sigma_b) inside an absorbing box (4 m, sigma_a), no explicit exteriors, unit sky, camera outside along the axis: pixel = exp(-(sigma_a 2 + sigma_b 2)) (V6.2, needs the medium stack).',
+  tier: 1,
+  camera: NARROW([0, 0, 6]),
+  film: FILM,
+  integrator: { maxDepth: 8 },
+  materials: BOUNDARY,
+  media: { outer: { type: 'homogeneous', sigmaA: NEST_A, sigmaS: [0, 0, 0] }, inner: { type: 'homogeneous', sigmaA: NEST_B, sigmaS: [0, 0, 0] } },
+  meshes: [
+    { name: 'box', geometry: { type: 'box', size: [4, 4, 4] }, material: 'boundary', medium: { interior: 'outer' } },
+    { name: 'ball', geometry: { type: 'sphere', radius: 1, segments: 128, rings: 64 }, material: 'boundary', medium: { interior: 'inner' } },
+  ],
+  environment: SKY,
+  expected: stackExpect([1, 1, 1], 2, 2),
+};
+export const volNestedOverlap: SceneDesc = {
+  version: 1,
+  name: 'vol-nested-overlap',
+  purpose: 'Two overlapping absorbing boxes along the axis (b: z in [0, 2], a: z in [-1, 1]), unit sky: the most recently entered medium wins in the overlap, pixel = exp(-(sigma_b 1 + sigma_a 2)) (V6.2, needs the medium stack).',
+  tier: 1,
+  camera: NARROW([0, 0, 6]),
+  film: FILM,
+  integrator: { maxDepth: 8 },
+  materials: BOUNDARY,
+  media: { a: { type: 'homogeneous', sigmaA: NEST_A, sigmaS: [0, 0, 0] }, b: { type: 'homogeneous', sigmaA: NEST_B, sigmaS: [0, 0, 0] } },
+  meshes: [
+    { name: 'boxA', geometry: { type: 'box', size: [4, 4, 2] }, material: 'boundary', medium: { interior: 'a' } },
+    { name: 'boxB', geometry: { type: 'box', size: [4, 4, 2] }, material: 'boundary', medium: { interior: 'b' }, transform: translation(0, 0, 1) },
+  ],
+  environment: SKY,
+  expected: { type: 'mean', value: NEST_A.map((a, i) => Math.exp(-(NEST_B[i]! * 1 + a * 2))) as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
+};
+export const volNestedCamera: SceneDesc = {
+  version: 1,
+  name: 'vol-nested-camera',
+  purpose: 'The camera inside an absorbing box (40 m, sigma_a) that holds an absorbing sphere (radius 1 at z = -2, sigma_b) and an emitter at z = -4: pixel = L exp(-(sigma_a 2 + sigma_b 2)) (V6.2, camera stack).',
+  tier: 1,
+  camera: NARROW([0, 0, 0], [0, 0, -1]),
+  film: FILM,
+  integrator: { maxDepth: 8 },
+  materials: { ...BOUNDARY, back: { type: 'black' } },
+  media: { outer: { type: 'homogeneous', sigmaA: NEST_A, sigmaS: [0, 0, 0] }, inner: { type: 'homogeneous', sigmaA: NEST_B, sigmaS: [0, 0, 0] } },
+  meshes: [
+    { name: 'box', geometry: { type: 'box', size: [40, 40, 40] }, material: 'boundary', medium: { interior: 'outer' } },
+    { name: 'ball', geometry: { type: 'sphere', radius: 1, segments: 128, rings: 64 }, material: 'boundary', medium: { interior: 'inner' }, transform: translation(0, 0, -2) },
+    { name: 'emitter', geometry: { type: 'quad', size: [8, 8] }, material: 'back', transform: facingCamera(-4), emission: LB },
+  ],
+  expected: stackExpect(LB, 2, 2),
+};
+export const volNestedFurnace: SceneDesc = {
+  version: 1,
+  name: 'vol-nested-furnace',
+  purpose: 'A scattering, non-absorbing sphere (albedo 1) inside a scattering, non-absorbing box (albedo 1), no explicit exteriors, unit sky, maxDepth 400: every pixel is 1 (V6.2: with the stack a path that leaves the sphere is back in the box medium; without it, in vacuum).',
+  tier: 1,
+  camera: { type: 'perspective', position: [0, 0, 8], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 25 },
+  film: { width: 48, height: 48, filter: 'box' },
+  integrator: { maxDepth: 400 },
+  materials: BOUNDARY,
+  media: { outer: { type: 'homogeneous', sigmaA: [0, 0, 0], sigmaS: [0.4, 0.4, 0.4], g: 0.3 }, inner: { type: 'homogeneous', sigmaA: [0, 0, 0], sigmaS: [1.5, 1.5, 1.5], g: -0.4 } },
+  meshes: [
+    { name: 'box', geometry: { type: 'box', size: [4, 4, 4] }, material: 'boundary', medium: { interior: 'outer' } },
+    { name: 'ball', geometry: { type: 'sphere', radius: 1, segments: 64, rings: 32 }, material: 'boundary', medium: { interior: 'inner' } },
+  ],
+  environment: SKY,
+  expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.01, pixelwise: false },
+};
+
 export const volumeCheckScenes: readonly SceneDesc[] = [volEmitSlab, volEmitGridSlab, volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud, volVdbSmoke];
-export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes, volEmitSphere, ...cloudScenes];
+export const volumeStackScenes: readonly SceneDesc[] = [volNestedAbsorb, volNestedOverlap, volNestedCamera, volNestedFurnace];
+export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, ...cloudScenes];

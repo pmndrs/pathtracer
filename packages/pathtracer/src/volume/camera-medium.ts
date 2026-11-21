@@ -52,3 +52,25 @@ export function ptDetectCameraMedium(point: readonly [number, number, number], b
   }
   return best;
 }
+
+/**
+ * V6.2: ALL media containing `point`, OUTERMOST first (largest bounding box first; a tie keeps the entry order), for `volumes.cameraStack`. The same winding-number test as
+ * `ptDetectCameraMedium` (whose result is the last entry). The same medium id listed twice (two boundary meshes of one medium) appears once.
+ */
+export function ptDetectCameraMediumStack(point: readonly [number, number, number], boundaries: readonly PtMediumBoundary[]): number[] {
+  const found: { medium: number; volume: number; order: number }[] = [];
+  boundaries.forEach((m, order) => {
+    if (m.medium <= 0 || m.positions.length < 9) return;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < m.positions.length; i += 3) for (let k = 0; k < 3; k++) {
+      const v = m.positions[i + k] as number;
+      if (v < lo[k]!) lo[k] = v;
+      if (v > hi[k]!) hi[k] = v;
+    }
+    if ([0, 1, 2].some((k) => point[k]! < lo[k]! || point[k]! > hi[k]!)) return;
+    if (ptWindingNumber(point, m.positions, m.indices) <= 0.5) return;
+    found.push({ medium: m.medium, volume: (hi[0]! - lo[0]!) * (hi[1]! - lo[1]!) * (hi[2]! - lo[2]!), order });
+  });
+  found.sort((a, b) => b.volume - a.volume || a.order - b.order);
+  return [...new Set(found.map((f) => f.medium))];
+}
