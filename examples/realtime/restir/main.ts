@@ -102,6 +102,7 @@ defineExample(async (ctx) => {
     neeView.restart();
     restirView.restart();
     reference.restart();
+    resetReadings();
   };
 
   const build = async (restirOptions: PtRestirOptions | null): Promise<Arm> => {
@@ -118,6 +119,7 @@ defineExample(async (ctx) => {
       stats.set('kernels', `NEE ${((nee?.pt.wgslBytes ?? 0) / 1024).toFixed(1)} KB · ReSTIR ${(next.pt.wgslBytes / 1024).toFixed(1)} KB`);
       const old = restir;
       restir = next;
+      resetReadings();
       ctx.progress(null);
       await device.queue.onSubmittedWorkDone();
       old?.pt.destroy();
@@ -151,7 +153,16 @@ defineExample(async (ctx) => {
 
   // Error per frame. A separate readback about once a second: its copies are submitted between two frames (the frame loop records and
   // submits synchronously), so they see one frame of each kernel and the reference after that same frame. Not a timing.
-  let lastError: { nee: number; restir: number; referenceFrames: number } | null = null;
+  // One frame's error jumps from reading to reading (ReSTIR's more than NEE's: its reuse varies), so the numbers shown are the mean of
+  // the readings since the camera stopped or the ReSTIR settings changed; `last` is the latest reading.
+  let lastError: { nee: number; restir: number; readings: number; referenceFrames: number; last: { nee: number; restir: number } } | null = null;
+  const readings = { nee: 0, restir: 0, n: 0, epoch: 0, frame: -1 };
+  const resetReadings = () => {
+    readings.nee = readings.restir = readings.n = 0;
+    readings.frame = -1;
+    readings.epoch++; // a reading in flight across the reset is dropped
+    lastError = null;
+  };
   const readBuffer = (buffer: GPUBuffer, bytes: number): Promise<Float32Array> => {
     const staging = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
     const encoder = device.createCommandEncoder({ label: 'restir error readback' });
@@ -171,14 +182,20 @@ defineExample(async (ctx) => {
     }
     const [w, h] = nee.size;
     if (w !== restir.size[0] || h !== restir.size[1] || w === 0) return;
-    const referenceFrames = reference.count;
+    const referenceFrames = reference.count, epoch = readings.epoch, frame = frames;
+    if (frame === readings.frame) return; // no new frame since the last reading (a slow GPU)
     // All three copies are submitted before the first await: the same frame for each.
     const pending = [reference.read(w, h), readBuffer(nee.pt.frameBuffers.accum, w * h * 16), readBuffer(restir.pt.frameBuffers.accum, w * h * 16)];
     const [ref, a, b] = await Promise.all(pending);
-    if (reference.count < referenceFrames) return; // the camera moved while reading
-    lastError = { nee: relMse(a!, ref!), restir: relMse(b!, ref!), referenceFrames };
+    if (epoch !== readings.epoch) return; // the camera moved (or the ReSTIR kernel changed) while reading
+    const last = { nee: relMse(a!, ref!), restir: relMse(b!, ref!) };
+    readings.nee += last.nee;
+    readings.restir += last.restir;
+    readings.n++;
+    readings.frame = frame;
+    lastError = { nee: readings.nee / readings.n, restir: readings.restir / readings.n, readings: readings.n, referenceFrames, last };
     const ratio = lastError.nee / Math.max(lastError.restir, 1e-12);
-    stats.set('error per frame', `NEE ${lastError.nee.toFixed(2)} · ReSTIR ${lastError.restir.toFixed(2)} (${ratio.toFixed(1)}× lower)`);
+    stats.set('error per frame', `NEE ${lastError.nee.toFixed(2)} · ReSTIR ${lastError.restir.toFixed(2)} (${ratio.toFixed(1)}× lower, ${readings.n} readings)`);
     stats.set('reference', `mean of ${referenceFrames} NEE frames${referenceFrames >= REFERENCE_MAX ? ' (full)' : ''}`);
   };
   const measureLoop = () => {
