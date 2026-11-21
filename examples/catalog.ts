@@ -162,11 +162,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
   {
     slug: 'hits',
     path: 'raytracer/hits/',
-    title: 'Hit inspector',
-    summary: 'A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record.',
+    title: 'Rays from your own shader',
+    summary: 'What ray tracing adds to a raster pass: shadow, reflection and AO rays traced from every hit in your own compute shader. Click a pixel to see its rays.',
     description:
-      'Every pixel is a ray traced through the BVH each frame, nothing is rasterised. The first hit of a camera ray is the surface a rasteriser would draw, so its data (base colour, normals, uv, ids) has no noise and looks like a raster G-buffer; noise only comes with lighting. ' +
-      'Pick the property to show, and click a pixel: a second entry point traces the ray through it and lists the hit record (distance, instance, triangle, material, barycentrics, uv, position, normals).',
+      'Each pixel shoots one camera ray (`rtClosest`) and decodes its hit (`rtSurface`); that first hit is exactly what a rasteriser draws. From the hit the shader traces a shadow ray to the sun, a mirror reflection ray and a few AO rays against the whole scene, ' +
+      'including what is off screen. Clicking a pixel runs a second entry point that traces its rays once more; the page draws them over the image with each hit. The G-buffer views show what the first hit carries.',
     brief: {
       kind: "educational",
       shows: "What ray tracing adds to a raster pass. The first hit of each camera ray is exactly what a rasteriser draws, so that view alone looks like raster. The rays traced from each hit (shadows, reflections, ambient occlusion) are what raster cannot do without extra passes or screen-space tricks.",
