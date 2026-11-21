@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, brickDims, brickMajorants, ddaSegments, deltaTrack, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, brickDims, brickMajorants, ddaSegments, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -281,5 +281,35 @@ describe('r16float grids (P5.v18)', () => {
     expect(() => ptF16Bits(r, true)).not.toThrow();
     // the majorant must come from the rounded grid: 0.7 rounds UP (to 0.70020), past the f32 value
     expect(r[2]).toBeGreaterThan(g[2] as number);
+  });
+});
+
+describe('V1.2 hardware density lookup twin', () => {
+  it('boundary factor x clamp-to-edge trilinear equals the zero-outside manual trilinear (incl. outside the box)', () => {
+    const [nx, ny, nz] = [5, 4, 3] as const;
+    const r = rng(7);
+    const data = new Float32Array(nx * ny * nz).map(() => r());
+    const grid = { resolution: [nx, ny, nz] as [number, number, number], worldToIndex: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0] } as unknown as Parameters<typeof gridDensity>[0];
+    const manual = gridDensity(grid, data);
+    const clamped = (gx: number, gy: number, gz: number): number => {
+      const at = (i: number, j: number, k: number) => data[Math.min(Math.max(i, 0), nx - 1) + nx * (Math.min(Math.max(j, 0), ny - 1) + ny * Math.min(Math.max(k, 0), nz - 1))] as number;
+      const i0 = Math.floor(gx), j0 = Math.floor(gy), k0 = Math.floor(gz);
+      const fx = gx - i0, fy = gy - j0, fz = gz - k0;
+      let acc = 0;
+      for (let c = 0; c < 8; c++) {
+        const di = c & 1, dj = (c >> 1) & 1, dk = (c >> 2) & 1;
+        acc += at(i0 + di, j0 + dj, k0 + dk) * (di ? fx : 1 - fx) * (dj ? fy : 1 - fy) * (dk ? fz : 1 - fz);
+      }
+      return acc;
+    };
+    for (let t = 0; t < 2000; t++) {
+      const gx = r() * (nx + 4) - 2, gy = r() * (ny + 4) - 2, gz = r() * (nz + 4) - 2;
+      const hw = gridBoundaryFactor(gx, nx) * gridBoundaryFactor(gy, ny) * gridBoundaryFactor(gz, nz) * clamped(gx, gy, gz);
+      expect(hw).toBeCloseTo(manual(gx, gy, gz), 12);
+    }
+    expect(gridBoundaryFactor(-1, 5)).toBe(0);
+    expect(gridBoundaryFactor(0, 5)).toBe(1);
+    expect(gridBoundaryFactor(5, 5)).toBe(0);
+    expect(gridBoundaryFactor(2, 5)).toBe(1);
   });
 });

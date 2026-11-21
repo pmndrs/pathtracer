@@ -70,6 +70,7 @@ try {
     ...(args['pt_volume_shadow'] ? { volumeShadow: args['pt_volume_shadow'] as 'analytic' | 'ratio' } : {}),
     ...(args['pt_volume_majorant'] ? { volumeMajorant: args['pt_volume_majorant'] as 'global' | 'brick' } : {}),
     ...(args['pt_tr_roulette'] === '1' ? { volumeTrRoulette: true } : {}),
+    ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : {}),
     ...(args['pt_volume_outputs'] === '1' ? { volumeOutputs: true } : {}),
     ...(args['pt_volume_grid'] ? { volumeGridFormat: args['pt_volume_grid'] as 'r32float' | 'r16float' } : {}),
     ...(args['pt_env'] ? { envSampling: args['pt_env'] as 'uniform' | 'importance' | 'none' } : {}),

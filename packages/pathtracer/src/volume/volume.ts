@@ -77,6 +77,13 @@ export interface PtVolumeOptions {
    */
   separateDepth?: boolean;
   /**
+   * V1.2: how a grid medium's density is read. `'manual'` (default): eight `textureLoad`s blended in the shader, exact, zero outside the grid. `'hardware'`: one
+   * `textureSampleLevel` with a linear clamp-to-edge sampler (group 2 binding `PT_VOLUME_SAMPLER_BINDING`) times a per-axis boundary factor that restores the zero
+   * outside (`gridBoundaryFactor`); the grid texture is then bound as filterable, so `r32float` needs the `float32-filterable` device feature (`r16float` does not).
+   * Hardware filter weights are 8-bit, so the image differs slightly from `'manual'` (not bit-equal). Default `'manual'`: kernel text unchanged.
+   */
+  densityFilter?: 'manual' | 'hardware';
+  /**
    * P5.v15 / P5.v16 (megakernel only): extra per-pixel sums in the accumulator tail (`PT_VOLUME_OUTPUT_VEC4` vec4 per pixel after the radiance; layout in
    * `ptDecodeVolumeOutputs`): the radiance of scattering orders 0 and 1 (the light of paths with at most one scatter or bounce vertex, the expectation of a
    * `maxDepth` 1 render), the primary ray's transmittance through the media up to the first solid surface (ratio tracking on its own stream, so the beauty image
@@ -233,6 +240,13 @@ export function gridDensity(grid: PtMediumGrid, data: ArrayLike<number>): Densit
     return acc;
   };
 }
+
+/**
+ * V1.2: the boundary factor of the hardware density lookup for ONE axis: a clamp-to-edge trilinear filter returns the edge texel outside the grid, the manual lookup
+ * blends with zero there. The filter is separable, so `manual = clampedTrilinear * fx * fy * fz` with `f = clamp(g + 1, 0, 1) * clamp(n - g, 0, 1)` per axis
+ * (g = index-space coordinate, n = resolution on that axis): 1 inside [0, n - 1], linear to 0 over [-1, 0] and [n - 1, n], 0 beyond.
+ */
+export const gridBoundaryFactor = (g: number, n: number): number => Math.min(Math.max(g + 1, 0), 1) * Math.min(Math.max(n - g, 0), 1);
 
 /** World-to-index matrix (row-major 3x4) of a grid with `bounds` in medium space under the medium-to-world matrix `toWorld` (column-major 4x4; identity when omitted). */
 export function gridWorldToIndex(resolution: readonly [number, number, number], bounds: readonly [VolRgb, VolRgb], toWorld?: readonly number[]): number[] {

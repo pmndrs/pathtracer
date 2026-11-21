@@ -14,6 +14,8 @@ import { ptPhaseValidate } from './phase.ts';
 export const PT_VOLUME_BINDING = 16;
 /** The coarse majorant grid of `majorant: 'brick'` (`r32float` 3D texture, one texel per 8^3 voxels). */
 export const PT_VOLUME_MAJORANT_BINDING = 17;
+/** V1.2 `densityFilter: 'hardware'`: the linear clamp-to-edge sampler of the density lookup (group 2; the grid texture is then bound `float`, filterable). */
+export const PT_VOLUME_SAMPLER_BINDING = 20;
 
 const f32Lit = (v: number): string => {
   const f = Math.fround(v);
@@ -91,6 +93,7 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const grid = ptVolumeHasGrid(v);
   const ratio = ptVolumeRatioShadows(v);
   const brick = grid && v.majorant === 'brick';
+  const hw = grid && v.densityFilter === 'hardware';
   const roulette = v.trRoulette === true;
   const lobes = ptVolumeHasLobes(v);
   const stride = lobes ? 7 : 6;
@@ -110,6 +113,7 @@ fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
   }
   if (has('bind')) {
     chunks.push(`${grid ? `@group(2) @binding(${PT_VOLUME_BINDING}) var ptVolGrid: texture_3d<f32>;
+` : ''}${hw ? `@group(2) @binding(${PT_VOLUME_SAMPLER_BINDING}) var ptVolSampler: sampler;
 ` : ''}${brick ? `@group(2) @binding(${PT_VOLUME_MAJORANT_BINDING}) var ptVolMaj: texture_3d<f32>;
 ` : ''}`);
   }
@@ -194,7 +198,10 @@ ${grid ? `    if (m.info.x == 0.0) {
         return 1.0;
     }
     let gx = vec3f(dot(m.w0.xyz, p) + m.w0.w, dot(m.w1.xyz, p) + m.w1.w, dot(m.w2.xyz, p) + m.w2.w);
-    let dims = vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w));
+${hw ? `    let nf = vec3f(m.info.y, m.info.z, m.info.w);
+    let bf = clamp(gx + vec3f(1.0), vec3f(0.0), vec3f(1.0)) * clamp(nf - gx, vec3f(0.0), vec3f(1.0));
+    return bf.x * bf.y * bf.z * textureSampleLevel(ptVolGrid, ptVolSampler, (gx + vec3f(0.5)) / nf, 0.0).x;
+` : `    let dims = vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w));
     let fl = floor(gx);
     let fr = gx - fl;
     let i0 = vec3i(fl);
@@ -208,7 +215,7 @@ ${grid ? `    if (m.info.x == 0.0) {
         acc += v * w;
     }
     return acc;
-` : `    return 1.0;
+`}` : `    return 1.0;
 `}}
 
 ${brick ? `

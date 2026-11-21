@@ -33,7 +33,7 @@ import { ptCameraBasis, type PtLookAtCamera } from './camera.ts';
 import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
-import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import { PT_VOLUME_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
 import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptF16Bits, type PtVolumeOutputs } from '../volume/volume.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
@@ -223,6 +223,11 @@ export function createVolumeTexture(device: GPUDevice, grid: NonNullable<PtMegak
   return texture;
 }
 
+/** V1.2 (`volumes.densityFilter: 'hardware'`): the linear clamp-to-edge sampler of the density grid. */
+export function createVolumeSampler(device: GPUDevice, label: string): GPUSampler {
+  return device.createSampler({ label: `${label} volume density sampler`, magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', addressModeW: 'clamp-to-edge' });
+}
+
 /** The spectral mode's `rgba32float` table texture (`rgb2SpecTexture`; textureLoad, `unfilterable-float`). */
 export function createSpectralTexture(device: GPUDevice, table: Rgb2SpecTable, label: string): GPUTexture {
   const { width, height, data } = rgb2SpecTexture(table);
@@ -246,6 +251,7 @@ export class PtMegakernel {
   private corrTexture: GPUTexture | null = null;
   /** P5: the density grid of a grid medium (group 2 binding `PT_VOLUME_BINDING`). */
   private volumeTexture: GPUTexture | null = null;
+  private volumeSampler: GPUSampler | null = null;
   private majorantTexture: GPUTexture | null = null;
   private readonly hookLayout: GPUBindGroupLayout | null;
   private hookGroup: GPUBindGroup | null = null;
@@ -314,6 +320,8 @@ export class PtMegakernel {
     const { code, map } = ptMegakernelBuild(caps, options);
     const volumeGrid = ptVolumeHasGrid(options.integrator?.volumes);
     if (volumeGrid && !options.volumeGrid) throw new Error('PtMegakernel: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
+    const volumeHw = volumeGrid && options.integrator?.volumes?.densityFilter === 'hardware';
+    if (volumeHw && options.volumeGrid?.format !== 'r16float' && !device.features.has('float32-filterable')) throw new Error("PtMegakernel: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick' && !options.volumeGrid?.majorant) throw new Error("PtMegakernel: integrator.volumes.majorant 'brick' needs `volumeGrid.majorant` (brickMajorants)");
     const corrTexture = !!options.integrator?.materials?.features.layered && ptLayerCorrNeedsTexture(options.integrator.materials.layered);
     const resolvedOptions = resolveIntegratorOptions(options.integrator ?? {});
@@ -338,7 +346,8 @@ export class PtMegakernel {
           ...(sharedHit ? [{ binding: PT_RESTIR_HIT_BINDING, visibility: COMPUTE, buffer: { type: 'read-only-storage' as const } }] : []),
           ...(bn ? [{ binding: PT_BLUENOISE_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(volumeGrid && options.integrator?.volumes?.majorant === 'brick' ? [{ binding: PT_VOLUME_MAJORANT_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
-          ...(volumeGrid ? [{ binding: PT_VOLUME_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '3d' as const } }] : []),
+          ...(volumeGrid ? [{ binding: PT_VOLUME_BINDING, visibility: COMPUTE, texture: { sampleType: (volumeHw ? 'float' : 'unfilterable-float') as 'float' | 'unfilterable-float', viewDimension: '3d' as const } }] : []),
+          ...(volumeHw ? [{ binding: PT_VOLUME_SAMPLER_BINDING, visibility: COMPUTE, sampler: { type: 'filtering' as const } }] : []),
           ...(spectral ? [{ binding: PT_SPEC_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
@@ -357,6 +366,7 @@ export class PtMegakernel {
     if (options.integrator?.restir) kernel.restir = await PtRestirPasses.create(device, caps, options, layouts[0] as GPUBindGroupLayout, layouts[1] as GPUBindGroupLayout);
     if (corrTexture) kernel.corrTexture = ptLayerCorrCreateTexture(device, label);
     if (volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid!, label);
+    if (volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
       const mj = options.volumeGrid!.majorant!;
       kernel.majorantTexture = createVolumeTexture(device, { resolution: mj.resolution, density: mj.values }, `${label} majorant`);
@@ -540,6 +550,7 @@ export class PtMegakernel {
         ...(this.restir?.hitBuffer ? [{ binding: PT_RESTIR_HIT_BINDING, resource: { buffer: this.restir.hitBuffer } }] : []),
         ...(this.blueTexture ? [{ binding: PT_BLUENOISE_BINDING, resource: this.blueView() as GPUTextureView }] : []),
         ...(this.volumeTexture ? [{ binding: PT_VOLUME_BINDING, resource: this.volumeTexture.createView({ dimension: '3d' }) }] : []),
+        ...(this.volumeSampler ? [{ binding: PT_VOLUME_SAMPLER_BINDING, resource: this.volumeSampler }] : []),
         ...(this.majorantTexture ? [{ binding: PT_VOLUME_MAJORANT_BINDING, resource: this.majorantTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.specTexture ? [{ binding: PT_SPEC_BINDING, resource: this.specTexture.createView() }] : []),
         ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),

@@ -12,6 +12,7 @@ const layout = { normals: true, uvs: false, positions: true };
 const grid = { resolution: [8, 8, 8] as const, worldToIndex: [8, 0, 0, 3.5, 0, 8, 0, 3.5, 0, 0, 8, 3.5], densityMax: 1 };
 const homog: PtVolumeOptions = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
 const gridded: PtVolumeOptions = { ...homog, media: [{ ...homog.media[0]!, grid }] };
+const hardware: PtVolumeOptions = { ...gridded, densityFilter: 'hardware' };
 const bricked: PtVolumeOptions = { ...gridded, majorant: 'brick' };
 const ratio: PtVolumeOptions = { ...homog, shadowTracking: 'ratio' };
 const build = (volumes?: PtVolumeOptions) => ptMegakernelBuild(caps, { format: {}, layout, ...(volumes ? { integrator: { volumes } } : {}), shortenNames: false, minify: false }).code;
@@ -34,6 +35,16 @@ describe('integrator.volumes (P5)', () => {
     const text = build(gridded);
     expect(text).toMatch(/@group\(2\) @binding\(16\) var ptVolGrid: texture_3d<f32>/);
     expect(text).toContain('textureLoad(ptVolGrid');
+  });
+
+  it("densityFilter 'hardware' samples once through a sampler at binding 20; 'manual' text has neither", () => {
+    const text = build(hardware);
+    expect(text).toMatch(/@group\(2\) @binding\(20\) var ptVolSampler: sampler/);
+    expect(text).toContain('textureSampleLevel(ptVolGrid');
+    expect(text).not.toContain('textureLoad(ptVolGrid');
+    expect(balanced(text)).toBe(true);
+    expect(build(gridded)).not.toContain('ptVolSampler');
+    expect(build({ ...gridded, densityFilter: 'manual' })).toBe(build(gridded));
   });
 
   it('majorant brick adds the coarse texture and the DDA; global and the analytic shadow do not', () => {
