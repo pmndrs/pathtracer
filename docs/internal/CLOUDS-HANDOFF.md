@@ -143,8 +143,8 @@ a denoiser for volume frames. If item 4's second moment lands, a variance-guided
   `packages/runtime/src/runtime.ts:651, 653` subtract them OUTSIDE. At d = 20 um that gives gD 0.483 instead of 0.594 and wD 0.304 instead of 0.498
   (mixture mean cosine 0.896 instead of 0.879). Please fix both, and re-check any fit or tuning done against the HG + Draine option.
 - **2026-11-21, a ground under the cloud: tessellate it.** A single large ground quad near the world origin self-intersects with the default (quantized) BVH nodes
-  (V302: the ground under an opaque box read 100x pbrt's sky light). Split it (e.g. 64 x 64 quads) or keep triangles near the camera small; or pass
-  `integrator.originOffset` (2^-19 x the largest coordinate; safe for a grid with a zero border).
+  (V302: the ground under an opaque box read 100x pbrt's sky light). Fixed (2026-11-21): `rtSurface` carries a per-hit position
+  error bound and the secondary origins use it (DIVERGES V302); `integrator.originOffset` no longer exists. No need to tessellate.
 - **2026-11-21, new options the reference page can use:** `volumes.outputs: true` + `readVolumeOutputs()` replaces the second seed (standard error) and the page's own
   alpha march (transmittance); `volumeGrid.format: 'r16float'` (round the bake with `ptRoundGridF16` first) halves the 437 MB grid; `media[i].lobes` (`ptPhaseLobes({ type:
   'mie', diameter })` or `hg2`) for the droplet phase (set `g` to `lobes.gA`).

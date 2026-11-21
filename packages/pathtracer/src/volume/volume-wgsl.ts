@@ -117,6 +117,12 @@ var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f,
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
 var<private> ptVolState: u32;
 
+// Free flight starts at the TRUE boundary crossing (V302): an interface skip moves the ray origin q off the surface point p along the side normal n, which would skip
+// dot(q - p, n) / |cos| of the medium. The path carries that distance ("back"); the next flight samples from q - d * back over [0, segment + back].
+fn ptVolBack(q: vec3f, p: vec3f, n: vec3f, d: vec3f) -> f32 {
+    return dot(q - p, n) / max(abs(dot(d, n)), 0.015625);
+}
+
 struct PtVolMedium {
     sigmaT: vec3f,
     mu: f32,
@@ -413,11 +419,12 @@ fn ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(ray0: RtRay, med0: u32) -> vec3f {
     var ray = ray0;
     var med = med0;
     var tr = vec3f(1.0);
+    var back = 0.0;
     for (var i = 0u; i < 64u; i++) {
         let hit = rtClosest(ray, RT_MASK_ALL);
         let seg = select(ray.tMax, hit.t, hit.t >= 0.0);
         if (med != 0u) {
-            tr = tr * ptVolTrSegment(med, ray.origin, ray.direction, seg);
+            tr = tr * ptVolTrSegment(med, ray.origin - ray.direction * back, ray.direction, seg + back);
             if (!(ptMax3(tr) > 0.0)) {
                 return vec3f(0.0);
             }
@@ -430,7 +437,10 @@ fn ${ratio ? 'ptVolTrCore' : 'ptVolTr'}(ray0: RtRay, med0: u32) -> vec3f {
             return vec3f(0.0);
         }
         med = select(mv.y, mv.x, dot(ray.direction, hit.normal) < 0.0);
-        let p = ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction));
+        let pt = ray.origin + ray.direction * hit.t;
+        let ns = ptSideNormal(hit.normal, ray.direction);
+        let p = ptOffsetOrigin(pt, ns);
+        back = ptVolBack(p, pt, ns, ray.direction);
         ray = RtRay(p, 0.0, ray.direction, ray.tMax - length(p - ray.origin));
         if (ray.tMax <= 0.0) {
             return tr;
@@ -509,11 +519,12 @@ fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
     var ray = ray0;
     var med = med0;
     var tr = vec3f(1.0);
+    var back = 0.0;
     for (var i = 0u; i < 256u; i++) {
         let hit = rtClosest(ray, RT_MASK_ALL);
         let seg = select(ray.tMax, hit.t, hit.t >= 0.0);
         if (med != 0u) {
-            tr = tr * ptVolTrSegment(med, ray.origin, ray.direction, seg);
+            tr = tr * ptVolTrSegment(med, ray.origin - ray.direction * back, ray.direction, seg + back);
         }
         if (hit.t < 0.0 || !(ptMax3(tr) > 0.0)) {
             break;
@@ -523,7 +534,11 @@ fn ptVoBegin(ray0: RtRay, med0: u32, pixelSeed: u32, sampleIndex: u32) {
             break;
         }
         med = select(mv.y, mv.x, dot(ray.direction, hit.normal) < 0.0);
-        ray = RtRay(ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+        let pt = ray.origin + ray.direction * hit.t;
+        let ns = ptSideNormal(hit.normal, ray.direction);
+        let q = ptOffsetOrigin(pt, ns);
+        back = ptVolBack(q, pt, ns, ray.direction);
+        ray = RtRay(q, 0.0, ray.direction, PT_FAR);
     }
     ptVoT = dot(max(tr, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
     ptVolState = keep;

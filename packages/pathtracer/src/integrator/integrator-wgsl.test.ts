@@ -14,7 +14,7 @@ function declared(wgsl: string): string[] {
 
 describe('integrator WGSL', () => {
   it('resolves defaults: Owen-Sobol, NEE on, uniform env sampling, sun invisible to camera', () => {
-    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, frameEmission: 'none', accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false, restirShared: false, restirGi: false, volumes: null, originOffset: 0, spectral: null, mtlx: false, mtlxNormal: false });
+    expect(resolveIntegratorOptions()).toEqual({ sampler: 'owen-sobol', blueNoise: {}, frame: false, frameEmission: 'none', accumulate: true, nee: true, envSampling: 'uniform', envMap: false, sunVisible: false, textures: false, textureLod: 0, alphaMask: false, alphaPolicy: 'exact', alphaShadow: 'exact', alphaRoulette: 0.25, alphaFirstK: 1, alphaCoverage: [], alphaMixedMask: 4, alphaTransmit: 0.5, materials: null, hooks: null, counters: false, aovs: false, primary: 'trace', lod: 'off', lodDepth: 1, restir: false, restirShared: false, restirGi: false, volumes: null, spectral: null, mtlx: false, mtlxNormal: false });
   });
 
   it('bakes the settings in as module constants', () => {
@@ -93,12 +93,12 @@ describe('integrator WGSL', () => {
     expect(minified).toBeLessThan(plain);
     // Hard ceiling so the size cannot creep (P2.10: 40.4 KB with pruning + short names; the bvh walk is ~14 KB of it and is not
     // ours to cut). Windows DXC compile time grows with size: the kernel stays under the 50 KB class.
-    expect(minified).toBeLessThan(41_500);
-    expect(plain).toBeLessThan(51_000);
+    expect(minified).toBeLessThan(42_000);
+    expect(plain).toBeLessThan(52_000);
     // The A/B baselines (everything on the page, long names) stay available and are the pre-P2.10 sizes.
     const raw = ptMegakernelWgsl(caps, { format: {}, layout, prune: false, shortenNames: false }).length;
     expect(raw).toBeGreaterThan(52_000);
-    expect(raw).toBeLessThan(54_000);
+    expect(raw).toBeLessThan(55_000);
   });
 
   it('an environment-map scene adds the map code (about 2.8 KB minified) and stays under 44.5 KB; uniform sampling of a map is the A/B baseline', () => {
@@ -215,7 +215,7 @@ describe('integrator WGSL', () => {
       const textured = build().length;
       expect(textured - plain).toBeGreaterThan(2_000);
       expect(textured).toBeLessThan(45_500);
-      expect(build({ integrator: { envMap: true, envSampling: 'importance' } }).length).toBeLessThan(47_500);
+      expect(build({ integrator: { envMap: true, envSampling: 'importance' } }).length).toBeLessThan(48_000);
     });
 
     it('textures need a surface layout with uvs and positions', () => {
@@ -313,23 +313,22 @@ describe('integrator WGSL', () => {
       expect(size({ medium: true })).toBeLessThan(legacy + 400);
       // Caps raised by 150 B (P-W1): the constant-bounded walk loops (rtBoundWalkLoops) add ~130 B to every kernel with both walks.
       // D32: the default albedo layering carries the `texture` correction (+0.8 KB of text) and the scene copy is packed (-0.1 KB).
-      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(49_600);
-      expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(50_050);
-      expect(size(all, { layering: 'albedo' })).toBeLessThan(50_400);
-      expect(size(all, { layering: 'stochastic' })).toBeLessThan(50_850);
-      expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(53_650);
+      expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(50_600);
+      expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(50_750);
+      expect(size(all, { layering: 'albedo' })).toBeLessThan(51_100);
+      expect(size(all, { layering: 'stochastic' })).toBeLessThan(51_550);
+      expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(54_350);
     });
   });
 });
 
-describe('integrator.originOffset (P5.v17, V302)', () => {
-  it('0 / absent keeps the kernel text; a floor shifts every origin along the side normal before the ulp offset', () => {
-    expect(ptIntegratorWgsl({ originOffset: 0 })).toBe(ptIntegratorWgsl({}));
-    const text = ptIntegratorWgsl({ originOffset: 0.001953125 });
-    expect(text).toContain('const PT_ORIGIN_FLOOR: f32 = 0.001953125;');
-    expect(text).toContain('let p = p0 + PT_ORIGIN_FLOOR * n;');
-    expect(text.split('fn ptOffsetOrigin(').length - 1).toBe(1);
-    expect(() => resolveIntegratorOptions({ originOffset: -1 })).toThrow(RangeError);
-    expect(() => resolveIntegratorOptions({ originOffset: Number.NaN })).toThrow(RangeError);
+describe('per-hit position error bound (P5.v19, V302)', () => {
+  it('the offset takes the surface position error along the side normal before the ulp step; plain origins keep a zero-error wrapper', () => {
+    const text = ptIntegratorWgsl({});
+    expect(text).toContain('fn ptOffsetOriginErr(p0: vec3f, n: vec3f, err: vec3f) -> vec3f {');
+    expect(text).toContain('let p = p0 + dot(abs(n), err) * n;');
+    expect(text).toContain('ptOffsetOriginErr(p, n, vec3f(0.0))');
+    expect(text).toContain('ptSampleLd(surf.position, surf.positionError, hit.normal');
+    expect(text).not.toContain('PT_ORIGIN_FLOOR');
   });
 });

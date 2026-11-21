@@ -95,7 +95,11 @@ Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match
   (512 vs 8192 differ by 6e-5); at albedo 1 depth 512 is 4-7% dark and 2048 still 0.4-0.6%.
 - **r16float grids** (`volumeGrid.format`, V301): the same kernel text (`textureLoad` returns f32), half the memory; the data must be f16-exact (`ptRoundGridF16`), so
   densityMax and the brick majorants computed from it bound what the GPU reads.
-- **Origin offset floor** (`integrator.originOffset`, V302): see CLAUDE.md Traps (large grounds near the origin self-intersect with quantized BVH nodes).
+- **Self-intersection on large triangles** (V302, P5.v19): the stopgap `integrator.originOffset` (a scene-global floor that skipped `floor / cos` of medium at every boundary) is gone. `rtSurface` returns a
+  per-hit `positionError` (pbrt-v4 bound, largest axis; CLAUDE.md Traps) that `ptOffsetOriginErr` applies to bounce / NEE / mask-skip origins, and free flight after a medium interface skip starts at the
+  TRUE crossing: the path carries `volBack` = (normal offset) / max(|cos|, 1/64) and the next segment samples over `[0, segment + volBack]` from `origin - dir * volBack` (megakernel `volSegment`,
+  `ptVolTrCore`, `ptVoBegin`, wavefront intersect; the wavefront keeps it in path-state section 4, lane z). Reset to 0 after a scatter or a surface vertex (a glass boundary reached as a surface vertex
+  still skips its offset).
 
 ## 6. Open problems
 

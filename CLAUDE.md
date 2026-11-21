@@ -882,10 +882,12 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - Approximate Mie (Jendersie and d'Eon 2023): the constants 0.428934 (gD) and 0.665888 (wD) are INSIDE the exponent (supplemental Eqs. 8, 10; Cycles agrees). The clouds
   repo's notes and runtime had them outside (reported back in the handoff). The PDFs at research.nvidia.com/labs/rtr/approximate-mie/ fetch fine; read them with
   `pdftotext -layout` (WebFetch returns compressed bytes). The large-particle fit is valid for 5-50 um only (`ptMieFit` throws outside).
-- A large ground quad near the world origin self-intersects (V302): a ray leaving a point near the origin of a 2 km triangle starts ~1.5e-5 m above it, below that
-  triangle's own test precision (~1e-4 m). f32 BVH nodes hide it for an AXIS-ALIGNED plane (flat node box), the default quantized nodes (boxes rounded out by a grid
-  step) expose it: the ground under an opaque box read 100x pbrt's sky light, with no media in the scene. Tessellate big grounds (`quad` `segments`), or `pt_bvh=f32`,
-  or `pt_origin_offset=auto` (floor; it biases homogeneous media at their boundary, +0.26% at 2 mm). Check any new big-plane scene against pbrt / Mitsuba.
+- A large ground quad near the world origin self-intersects (V302, FIXED by the per-hit position error bound): a ray leaving a point near the origin of a 2 km triangle starts ~1.5e-5 m above it, below
+  that triangle's own test precision (~1e-4 m); the default quantized BVH nodes (boxes rounded out by a grid step) expose it (f32 nodes hide it for an axis-aligned plane): the ground under an opaque box read
+  100x pbrt's sky light, with no media in the scene. `rtSurface` now returns `positionError` (pbrt-v4 bound, collapsed to its LARGEST AXIS: a flat plane's per-axis error along its normal is 0 yet the next
+  ray's test errs by the triangle's extent, so a per-axis pbrt offset `|n| . err` changed nothing: 0.0129 stayed 0.0129 even at x1000) and `ptOffsetOriginErr` offsets by it before the ulp step. Only when positions are
+  decoded from vertices (`positions: 'barycentric'`, the default); `positions: 'ray'`, the G-buffer positions of ReSTIR's init / temporal / spatial passes (`g.p`) and light sample end points keep the ulp offset alone.
+  An interface skip (medium boundary) does not use the bound, and the free flight after it starts at the true crossing (`volBack`), so no offset skips medium. Check any new big-plane scene against pbrt / Mitsuba.
 - `volumes.outputs` (orders 0-1, primary transmittance, second moment, first-scatter distance) live in the accumulator tail; z = seed difference / standard error has a
   spread of ~0.7, not 1, because of heavy tails (a firefly inflates both): judge the standard error by mean(diff^2) / mean(se_a^2 + se_b^2) (1.005 PCG, 0.93-1.006 Owen-Sobol).
   The order-0-1 plane equals a `maxDepth` 1 render of the same seed per pixel, bit for bit. Grid + brick + outputs is 50.5 KB, + two-lobe phase 51.5 KB.

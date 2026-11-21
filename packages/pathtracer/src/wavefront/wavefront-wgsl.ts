@@ -144,6 +144,7 @@ ${aovs ? `    aovDone: bool,
 ` : ''}${vol ? `    volState: u32,
     med: u32,
     skips: u32,
+    volBack: f32,
 ` : ''}${spec ? `    hero: bool,
 ` : ''}}
 
@@ -170,6 +171,7 @@ ${extra ? `    let s4 = ptwfState[4u * n + path];
 ${vol ? `    p.volState = s4.x;
     p.med = s4.y & 0xffffu;
     p.skips = s4.y >> 16u;
+    p.volBack = bitcast<f32>(s4.z);
 ` : ''}${spec ? `    p.hero = ((s2.w >> 30u) & 1u) == 1u;
 ` : ''}    return p;
 }
@@ -179,7 +181,7 @@ fn ptwfStorePath(path: u32, n: u32, p: PtwfPath) {
     ptwfState[n + path] = vec4u(bitcast<vec3u>(p.dir), bitcast<u32>(p.etaScale));
     ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth | 0x20000000u | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''}${impure ? ' | select(0u, 0x10000000u, p.impure)' : ''}${spec ? ' | select(0u, 0x40000000u, p.hero)' : ''});
     ptwfState[3u * n + path] = vec4u(bitcast<vec3u>(p.prevP), ${tex ? 'bitcast<u32>(p.coneSpread)' : '0u'});
-${extra ? `    ptwfState[4u * n + path] = vec4u(${vol ? 'p.volState, p.med | (p.skips << 16u), 0u' : medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
+${extra ? `    ptwfState[4u * n + path] = vec4u(${vol ? 'p.volState, p.med | (p.skips << 16u), bitcast<u32>(p.volBack)' : medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
 ` : ''}}
 `;
 }
@@ -390,13 +392,14 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
     var ray = RtRay(st.origin, 0.0, st.dir, PT_FAR);
     var med = st.med;
     var skips = st.skips;
+    var back = st.volBack;
     var flag = 0u;
     var hit: RtHit;
     loop {
         hit = rtClosest(ray, RT_MASK_ALL);
         if (med != 0u) {
-            let segMax = select(PT_FAR, hit.t, hit.t >= 0.0);
-            let ev = ptVolSample(med, ray.origin, ray.direction, segMax, &st.beta);
+            let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + back;
+            let ev = ptVolSample(med, ray.origin - ray.direction * back, ray.direction, segMax, &st.beta);
             if (ev.kind == 2u) {
                 flag = 3u;
                 break;
@@ -420,7 +423,11 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
             let medIn = select(med, mv.x, mv.z != 0u);
             let medOut = select(med, mv.y, mv.z != 0u);
             med = select(medOut, medIn, dot(ray.direction, hit.normal) < 0.0);
-            ray = RtRay(ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+            let ptI = ray.origin + ray.direction * hit.t;
+            let nsI = ptSideNormal(hit.normal, ray.direction);
+            let qI = ptOffsetOrigin(ptI, nsI);
+            back = ptVolBack(qI, ptI, nsI, ray.direction);
+            ray = RtRay(qI, 0.0, ray.direction, PT_FAR);
             continue;
         }
         break;
@@ -428,6 +435,7 @@ fn ptwfIntersect(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_in
     st.origin = ray.origin;
     st.med = med;
     st.skips = skips;
+    st.volBack = back;
     st.volState = ptVolState;
     ptwfStorePath(path, n, st);
     ptwfHit[path] = vec4u(bitcast<u32>(hit.t), hit.instance, hit.triangle, hit.material);
@@ -495,7 +503,7 @@ ${medium ? `        st.beta = st.beta * exp(-st.sigma * hit.t);
             break;
         }
         st.coneWidth = coneW;
-        st.origin = ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, ray.direction));
+        st.origin = ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, ray.direction), surf.positionError);
         moved = true;
         ray = RtRay(st.origin, 0.0, ray.direction, PT_FAR);
         hit = rtClosest(ray, RT_MASK_ALL);
@@ -733,7 +741,7 @@ ${ind}ptwfQueue[2u * n + ss] = path;
         }
         let vertex = depth;
         depth += 1u;
-        let pm = st.origin + st.dir * hit.t;
+        let pm = st.origin - st.dir * st.volBack + st.dir * hit.t;
         let woM = -ray.direction;
         if (PT_NEE) {
             let ld = ptwfSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
@@ -791,7 +799,7 @@ ${vol ? `    med: u32,
 ` : ''}}
 
 // ptSampleLd of the megakernel up to the visibility test: returns the unoccluded contribution and the shadow ray.
-fn ptwfSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${vol ? ', medIn: u32, medOut: u32' : ''}) -> PtwfLd {
+fn ptwfSampleLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${vol ? ', medIn: u32, medOut: u32' : ''}) -> PtwfLd {
     let none = PtwfLd(false, vec3f(0.0), RtRay(vec3f(0.0), 0.0, vec3f(0.0, 0.0, 1.0), 0.0)${vol ? ', 0u' : ''});
     let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
     let pointU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_LIGHT_POINT));
@@ -812,7 +820,7 @@ fn ptwfSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams
     if (!(ptMax3(f) > 0.0)) {
         return none;
     }
-    let origin = ptOffsetOrigin(p, ptSideNormal(ng, li.wi));
+    let origin = ptOffsetOriginErr(p, ptSideNormal(ng, li.wi), pe);
     var ray: RtRay;
     if (li.distance < 1.0e30) {
         let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
@@ -901,7 +909,7 @@ ${PT_RESTIR_UNPACK_WGSL}
 
 // ReSTIR DI (P4.2a): the first vertex's light is the final reservoir of its pixel (ptRestirLd of the megakernel up to the visibility test); the shadow kernel tests it. The region of
 // the final reservoirs is in the (otherwise unused) \`up.w\` lane of the params record.
-fn ptwfRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> PtwfLd {
+fn ptwfRestirLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> PtwfLd {
     let none = PtwfLd(false, vec3f(0.0), RtRay(vec3f(0.0), 0.0, vec3f(0.0, 0.0, 1.0), 0.0));
     let r = ptRestirRes[bitcast<u32>(ptParams.up.w) + pxIndex];
     let rw = bitcast<f32>(r.z);
@@ -917,7 +925,7 @@ fn ptwfRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams
     if (!(ptMax3(f) > 0.0)) {
         return none;
     }
-    let origin = ptOffsetOrigin(p, ptSideNormal(ng, li.wi));
+    let origin = ptOffsetOriginErr(p, ptSideNormal(ng, li.wi), pe);
     var ray: RtRay;
     if (li.distance < 1.0e30) {
         let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
@@ -1119,11 +1127,11 @@ ${aniso ? `    var frame = ptFrameFromNormal(${shadingNormal});
     if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
 ${restir ? `        var ld: PtwfLd;
         if (vertex == 0u) {
-            ld = ptwfRestirLd(surf.position, hit.normal, frame, wo, bp, ${pixelOf});
+            ld = ptwfRestirLd(surf.position, surf.positionError, hit.normal, frame, wo, bp, ${pixelOf});
         } else {
-            ld = ptwfSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex);
+            ld = ptwfSampleLd(surf.position, surf.positionError, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex);
         }
-` : `        let ld = ptwfSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${vol ? ', medIn, medOut' : ''});
+` : `        let ld = ptwfSampleLd(surf.position, surf.positionError, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${vol ? ', medIn, medOut' : ''});
 `}        if (ld.valid) {
 ${shadowQueue('            ')}        }
     }
@@ -1162,7 +1170,7 @@ ${medium ? `        sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.0);
     }` : ''}
     prevP = surf.position;
     let wiWorld = ptFromLocal(frame, s.wi);
-    let nextOrigin = ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, wiWorld));
+    let nextOrigin = ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, wiWorld), surf.positionError);
 
     if (rrStart > 0u && depth >= rrStart) {
         let rrBeta = beta * etaScale;

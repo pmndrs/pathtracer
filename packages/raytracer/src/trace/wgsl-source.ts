@@ -20,6 +20,11 @@ import { MESH_FLAG, SURFACE, SURFACE_TABLE, RT_MASK_ALL, RT_NO_MATERIAL, HIT_BYT
 
 const hex = (value: number): string => `0x${value.toString(16)}u`;
 
+/** pbrt-v4 `gamma(n)` = n eps / (1 - n eps) with eps = 2^-24 (f32 unit roundoff): the relative error bound of n chained float operations. */
+export const rtGamma = (n: number): number => (n * 2 ** -24) / (1 - n * 2 ** -24);
+const RT_GAMMA3 = Math.fround(rtGamma(3)).toString();
+const RT_GAMMA7 = Math.fround(rtGamma(7)).toString();
+
 /** L0 and L1 on top of the bvh walk. No bindings of its own. */
 export const RT_CORE_WGSL = /* wgsl */ `
 // ---- @pmndrs/raytracer core: L0 visibility, L1 closest hit -------------------------------------------------------
@@ -170,6 +175,8 @@ const RT_SV_TANGENT: u32 = ${o.tangentOffset ?? 0}u;
 ` : ''}
 const RT_MESH_HAS_NORMALS: u32 = ${MESH_FLAG.HAS_NORMALS}u;
 const RT_MESH_HAS_UVS: u32 = ${MESH_FLAG.HAS_UVS}u;
+const RT_GAMMA3: f32 = ${RT_GAMMA3};
+const RT_GAMMA7: f32 = ${RT_GAMMA7};
 const RT_SV_STRIDE: u32 = ${o.vertexStride}u;
 const RT_SV_NORMAL: u32 = ${o.normalOffset}u;
 const RT_SV_UV: u32 = ${o.uvOffset}u;
@@ -179,6 +186,7 @@ const RT_TABLE_HEADER_VEC4S: u32 = ${o.headerVec4s ?? SURFACE_TABLE.HEADER_VEC4S
 
 struct RtSurface {
     position: vec3f,       // world space
+    positionError: vec3f,  // conservative absolute error bound of position per axis (pbrt-v4 style); zero unless the position was decoded from vertices (RT_SURFACE_POSITIONS)
     geometricNormal: vec3f,
     frontFace: bool,
     shadingNormal: vec3f,  // interpolated, world space, on the geometric normal's side; the geometric normal without data
@@ -240,6 +248,7 @@ ${o.tangents ? `fn rtSurfaceTangent(hit: RtHit) -> vec4f {
     s.shadingNormal = hit.normal;
     s.uv = vec2f(0.0);
     s.position = vec3f(0.0);
+    s.positionError = vec3f(0.0);
 #if RT_SURFACE_TEXFRAME
     s.uvDensity = 0.0;
     s.tangent = vec4f(1.0, 0.0, 0.0, 1.0);
@@ -283,11 +292,23 @@ ${o.tangents ? `    if ((want & RT_SURF_TANGENT) != 0u) {
 
 #if RT_SURFACE_POSITIONS
     if ((want & RT_SURF_POSITION) != 0u) {
-        let p = rtVertex3(vbase, v0 + RT_SV_POSITION) * w0 + rtVertex3(vbase, v1 + RT_SV_POSITION) * w1 + rtVertex3(vbase, v2 + RT_SV_POSITION) * w2;
+        let c0 = rtVertex3(vbase, v0 + RT_SV_POSITION) * w0;
+        let c1 = rtVertex3(vbase, v1 + RT_SV_POSITION) * w1;
+        let c2 = rtVertex3(vbase, v2 + RT_SV_POSITION) * w2;
+        let p = c0 + c1 + c2;
         let r0 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W}u);
         let r1 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 1}u);
         let r2 = rtTableRow(record + ${SURFACE_TABLE.INSTANCE_O2W + 2}u);
         s.position = vec3f(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+        // Error bound (pbrt-v4 Triangle interaction + Transform::operator()(Point3fi)): object space gamma(7) * sum |w_i v_i|, then |M| eo + gamma(3) (|M| |p| + |t|).
+        let eo = RT_GAMMA7 * (abs(c0) + abs(c1) + abs(c2));
+        let ap = abs(p);
+        let a0 = abs(r0.xyz);
+        let a1 = abs(r1.xyz);
+        let a2 = abs(r2.xyz);
+        let pe = vec3f(dot(a0, eo), dot(a1, eo), dot(a2, eo)) + RT_GAMMA3 * vec3f(dot(a0, ap) + abs(r0.w), dot(a1, ap) + abs(r1.w), dot(a2, ap) + abs(r2.w));
+        // Isotropic (the largest axis): the NEXT ray's test against this same triangle errs by about its extent along ANY axis, so a flat axis-aligned plane (error 0 along its normal) still needs the offset.
+        s.positionError = vec3f(max(pe.x, max(pe.y, pe.z)));
     }
 #endif
 #if RT_SURFACE_UVS

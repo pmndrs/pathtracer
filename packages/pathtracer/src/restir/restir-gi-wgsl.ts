@@ -334,7 +334,7 @@ fn ptRestirGiInit(@builtin(global_invocation_id) id: vec3u) {
             let e2 = ${evalFn}(bp2, wo2, wl);
             let f2 = e2.f * abs(wl.z);
             if (max(f2.x, max(f2.y, f2.z)) > 0.0) {
-                let origin = ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, li.wi));
+                let origin = ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, li.wi), surf.positionError);
                 var lray: RtRay;
                 if (li.distance < 1.0e30) {
                     let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
@@ -354,7 +354,7 @@ fn ptRestirGiInit(@builtin(global_invocation_id) id: vec3u) {
     let s2 = ${sampleFn}(bp2, wo2, vec3f(uc2, ud2.x, ud2.y));
     if (s2.flags != 0u && s2.pdf > 0.0) {
         let wi2 = ptFromLocal(frame2, s2.wi);
-        let ray2 = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, wi2)), 0.0, wi2, PT_FAR);
+        let ray2 = RtRay(ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, wi2), surf.positionError), 0.0, wi2, PT_FAR);
         let hit2 = rtClosest(ray2, RT_MASK_ALL);
         let beta2 = s2.f * (abs(s2.wi.z) / s2.pdf);
         if (hit2.t < 0.0) {

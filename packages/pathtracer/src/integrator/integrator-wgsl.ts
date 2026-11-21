@@ -166,13 +166,6 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   volumes?: PtVolumeOptions | null;
   /**
-   * A floor (metres) for the self-intersection offset of every secondary ray origin, added along the side normal before the ulp offset (Waechter and Binder).
-   * The ulp offset alone assumes the hit point is accurate to a few ulps of ITSELF; a point near the origin on a large triangle (a 2 km ground under the camera)
-   * carries the error of its far vertices instead (~2e-7 x their magnitude), so bounce and shadow rays re-hit the surface from behind (P5.v17: the ground
-   * under an opaque box received 100x the sky light pbrt does). Set it to about 2^-19 x the scene's largest coordinate. Default 0: off, the kernel text is unchanged.
-   */
-  originOffset?: number;
-  /**
    * Spectral transport (P5, `docs/internal/design/spectral.md`): paths carry three wavelengths (hero sampling) in the lanes of the vec3 throughput; every RGB reflectance,
    * conductor eta / k, transmission / coat / sheen colour is uplifted to its sigmoid-polynomial spectrum (Jakob and Hanika 2019, as pbrt-v4), emission and the
    * environment / sun to the same times D65, and the sample is converted to linear Rec.709 by the CIE 1931 matching functions. Opt-in (default off: the kernel text is
@@ -258,8 +251,6 @@ export interface ResolvedIntegratorOptions {
   restirShared: boolean;
   /** P5 participating media (`PtIntegratorOptions.volumes`). */
   volumes: PtVolumeOptions | null;
-  /** `PtIntegratorOptions.originOffset` (0 = off). */
-  originOffset: number;
   /** Spectral transport (P5), or null. */
   spectral: ResolvedSpectralOptions | null;
   /** ReSTIR GI on top of DI (`PtRestirOptions.gi`, P5): the shade ends the path at the first non-delta vertex and adds the final GI reservoir's contribution. */
@@ -292,7 +283,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const spectral = resolveSpectralOptions(o.spectral);
   if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
   if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, originOffset: ptOriginOffset(o.originOffset), spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -323,11 +314,6 @@ struct PtParams {
  * The pieces of the integrator the wavefront scheduler (`../wavefront/`) shares with the megakernel, so both compile the same text:
  * constants, ray-origin offset, MIS weight and the escaped-ray (environment / sun) term. Moving them here left the megakernel's text byte-identical.
  */
-function ptOriginOffset(v: number | undefined): number {
-  if (v === undefined || v === 0) return 0;
-  if (!(v > 0 && Number.isFinite(v))) throw new RangeError(`integrator.originOffset must be a finite number >= 0 (metres), got ${v}`);
-  return Math.fround(v);
-}
 
 export function ptCommonHeadWgsl(o: ResolvedIntegratorOptions): string {
   const tex = o.textures;
@@ -345,13 +331,16 @@ const PT_CONE_DIFFUSE_SPREAD: f32 = 0.5;
 ` : ''}${o.lod !== 'off' ? `const PT_LOD_DEPTH: u32 = ${o.lodDepth}u;
 ${tex ? `const PT_LOD_TEX_BIAS: f32 = ${PT_LOD_TEX_BIAS};
 ` : ''}` : ''}
-${o.originOffset > 0 ? `const PT_ORIGIN_FLOOR: f32 = ${o.originOffset};
-
-fn ptOffsetOrigin(p0: vec3f, n: vec3f) -> vec3f {
-    let p = p0 + PT_ORIGIN_FLOOR * n;` : `fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {`}
+// \`err\` is the surface position's absolute error bound (RtSurface.positionError, pbrt-v4 OffsetRayOrigin: d = |n| . err along the side normal), applied before the ulp step.
+fn ptOffsetOriginErr(p0: vec3f, n: vec3f, err: vec3f) -> vec3f {
+    let p = p0 + dot(abs(n), err) * n;
     let ofs = vec3i(PT_INT_SCALE * n);
     let pi = bitcast<vec3f>(bitcast<vec3i>(p) + select(ofs, -ofs, p < vec3f(0.0)));
     return select(pi, p + PT_FLOAT_SCALE * n, abs(p) < vec3f(PT_ORIGIN));
+}
+
+fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
+    return ptOffsetOriginErr(p, n, vec3f(0.0));
 }
 
 fn ptSideNormal(n: vec3f, w: vec3f) -> vec3f {
@@ -609,8 +598,9 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   // P5: the free-flight segment of the ray in the current medium (before the hit it ends at is looked at), and the medium-boundary handling at that hit.
   const volSegment = vol
     ? `        if (curMed != 0u) {
-            let segMax = select(PT_FAR, hit.t, hit.t >= 0.0);
-            let ev = ptVolSample(curMed, ray.origin, ray.direction, segMax, &beta);
+            let vo = ray.origin - ray.direction * volBack;
+            let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + volBack;
+            let ev = ptVolSample(curMed, vo, ray.direction, segMax, &beta);
             if (ev.kind == 2u) {
                 break;
             }
@@ -621,7 +611,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
                 let vertex = depth;
 ${volOut ? `                ptVoCapture(depth, radiance);
 ` : ''}                depth += 1u;
-                let pm = ray.origin + ray.direction * ev.t;
+                let pm = vo + ray.direction * ev.t;
 ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptVoDist = length(pm - origin);
                     ptVoHas = 1.0;
@@ -633,6 +623,7 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
 ${ptVolPhaseSampleWgsl(o.volumes!, '                ', 'curMed', 'woM', 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION))', 'wiM', 'prevPdf')}                specularBounce = false;
                 prevP = pm;
                 ray = RtRay(pm, 0.0, wiM, PT_FAR);
+                volBack = 0.0;
 ${rrMedium}                continue;
             }
         }
@@ -648,7 +639,11 @@ ${rrMedium}                continue;
                 break;
             }
             curMed = select(medOut, medIn, dot(ray.direction, hit.normal) < 0.0);
-            ray = RtRay(ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+            let ptI = ray.origin + ray.direction * hit.t;
+            let nsI = ptSideNormal(hit.normal, ray.direction);
+            let qI = ptOffsetOrigin(ptI, nsI);
+            volBack = ptVolBack(qI, ptI, nsI, ray.direction);
+            ray = RtRay(qI, 0.0, ray.direction, PT_FAR);
             continue;
         }
 `
@@ -669,7 +664,7 @@ ${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WG
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
-fn ptRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> vec3f {
+fn ptRestirLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> vec3f {
     let r = ptRestirRes[ptParams.limits.w + pxIndex];
     let rw = bitcast<f32>(r.z);
     if (r.x == RT_NONE || !(rw > 0.0)) {
@@ -684,7 +679,7 @@ fn ptRestirLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, 
     if (!(ptMax3(f) > 0.0)) {
         return vec3f(0.0);
     }
-    let origin = ptOffsetOrigin(p, ptSideNormal(ng, li.wi));
+    let origin = ptOffsetOriginErr(p, ptSideNormal(ng, li.wi), pe);
     var ray: RtRay;
     if (li.distance < 1.0e30) {
         let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
@@ -701,9 +696,9 @@ ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
 ` : ''}${gi ? `
 ${PT_RESTIR_OCT_WGSL}
 ${ptRestirGiShadeWgsl(evalFn)}` : ''}
-fn ptSampleLd(p: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters || restir ? ', pxIndex: u32' : ''}${vol ? ', medIn: u32, medOut: u32' : ''}) -> vec3f {
+fn ptSampleLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters || restir ? ', pxIndex: u32' : ''}${vol ? ', medIn: u32, medOut: u32' : ''}) -> vec3f {
 ${restir ? `    if (vertex == 0u) {
-        return ptRestirLd(p, ng, frame, wo, bp, pxIndex);
+        return ptRestirLd(p, pe, ng, frame, wo, bp, pxIndex);
     }
 ` : ''}    let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
     let pointU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_LIGHT_POINT));
@@ -724,7 +719,7 @@ ${restir ? `    if (vertex == 0u) {
     if (!(ptMax3(f) > 0.0)) {
         return vec3f(0.0);
     }
-    let origin = ptOffsetOrigin(p, ptSideNormal(ng, li.wi));
+    let origin = ptOffsetOriginErr(p, ptSideNormal(ng, li.wi), pe);
     var ray: RtRay;
     if (li.distance < 1.0e30) {
         let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
@@ -793,6 +788,7 @@ ${mask ? `    var skips = 0u;
 ${medium ? `    var sigma = vec3f(0.0);
 ` : ''}${vol ? `    var curMed = ${o.volumes!.cameraMedium ?? 0}u;
     var ifaceSkips = 0u;
+    var volBack = 0.0;
     ptVolSeed(pixelSeed, sampleIndex);
 ${volOut ? `    ptVoBegin(ray, curMed, pixelSeed, sampleIndex);
 ` : ''}` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
@@ -844,7 +840,7 @@ ${counters ? `                termReason = 6u;
 ` : ''}                break;
             }
             cone = RtCone(coneW, cone.spread);
-            ray = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+            ray = RtRay(ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, ray.direction), surf.positionError), 0.0, ray.direction, PT_FAR);
             continue;
         }
 ` : ''}
@@ -910,7 +906,7 @@ ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
 ` : `        let frame = ptFrameFromNormal(${shadingNormal});
 `}        let wo = ptToLocal(frame, -ray.direction);
         if (PT_NEE && ${fuzz ? '(!ptBsdfIsDelta(bp) || ptFuzzActive(wo.z))' : '!ptBsdfIsDelta(bp)'}) {
-${addRadiance(`beta * ptSampleLd(surf.position, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters || restir ? ', pxIndex' : ''}${vol ? ', medIn, medOut' : ''})`, 'vertex', '            ')}        }
+${addRadiance(`beta * ptSampleLd(surf.position, surf.positionError, hit.normal, frame, wo, bp, pixelSeed, sampleIndex, vertex${counters || restir ? ', pxIndex' : ''}${vol ? ', medIn, medOut' : ''})`, 'vertex', '            ')}        }
 
 ${gi ? `        if (vertex == 0u && !ptBsdfIsDelta(bp)) {
             // ReSTIR GI: the final reservoir stands for everything after this vertex (the 2-bounce estimate); the DI term above is the direct light.
@@ -944,8 +940,9 @@ ${medium ? `            sigma = select(vec3f(0.0), ptMediumSigma(mat), wo.z > 0.
         }` : ''}
         prevP = surf.position;
         let wiWorld = ptFromLocal(frame, s.wi);
-        ray = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, wiWorld)), 0.0, wiWorld, PT_FAR);
-${vol ? `        curMed = select(medOut, medIn, dot(wiWorld, hit.normal) < 0.0);
+        ray = RtRay(ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, wiWorld), surf.positionError), 0.0, wiWorld, PT_FAR);
+${vol ? `        volBack = 0.0;
+        curMed = select(medOut, medIn, dot(wiWorld, hit.normal) < 0.0);
 ` : ''}
         if (rrStart > 0u && depth >= rrStart) {
             let rrBeta = beta * etaScale;

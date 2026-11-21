@@ -465,7 +465,7 @@ ${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADI
                 return;
             }
             cone = RtCone(coneW, cone.spread);
-            ray = RtRay(ptOffsetOrigin(surf.position, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+            ray = RtRay(ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, ray.direction), surf.positionError), 0.0, ray.direction, PT_FAR);
             continue;
         }
 ` : ''}        ptRsGbuf[i] = bitcast<u32>(surf.position.x);

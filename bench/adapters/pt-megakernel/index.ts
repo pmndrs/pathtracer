@@ -41,8 +41,6 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   volumeMajorant?: 'global' | 'brick';
   /** P5.v15 / P5.v16: `volumes.outputs` (megakernel): uploads `vol_order01`, `vol_orders2plus`, `vol_transmittance`, `vol_stderr`, `vol_first_scatter` next to the image. */
   volumeOutputs?: boolean;
-  /** `integrator.originOffset` in metres, or `'auto'` = 2^-19 x the largest world coordinate of the scene's meshes (P5.v17 self-intersection floor). */
-  originOffsetSetting?: number | 'auto';
   /** P5.v18: the grid texture format (`r16float` rounds the density to f16 first). */
   volumeGridFormat?: 'r32float' | 'r16float';
   /** maxDepth override (the scene's own otherwise). */
@@ -272,7 +270,6 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.volumeShadow ? { volumeShadow: settings.volumeShadow } : {}),
         ...(settings.volumeMajorant ? { volumeMajorant: settings.volumeMajorant } : {}),
         ...(settings.volumeOutputs ? { volumeOutputs: 1 } : {}),
-        ...(settings.originOffsetSetting !== undefined ? { originOffset: settings.originOffsetSetting } : {}),
         ...(settings.volumeGridFormat ? { volumeGridFormat: settings.volumeGridFormat } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
@@ -394,7 +391,6 @@ export class PtMegakernelAdapter implements RendererAdapter {
     builder.dispose();
     this.trace = uploadTraceScene(device, data, scene.name);
     const textureOptions = { ...(this.settings.mips === 'cpu' ? { mips: 'cpu' as const } : {}), ...(this.settings.textureBinding === 'table' ? { binding: 'table' as const } : {}) };
-    this.originOffsetMetres = this.settings.originOffsetSetting === 'auto' ? sceneMaxCoordinate(input) * 2 ** -19 : (this.settings.originOffsetSetting ?? 0);
     const copy = buildSceneCopy({ ...input, options: { ...input.options, ...(Object.keys(textureOptions).length ? { textures: { ...input.options?.textures, ...textureOptions } } : {}), ...(this.settings.lightSelection ? { lightSelection: this.settings.lightSelection } : {}), surface: { ...input.options?.surface, positions: (this.settings.positions ?? 'barycentric') === 'barycentric' } } });
     this.sceneBuffers = uploadSceneCopy(device, copy, { label: `${scene.name} scene`, ...(this.settings.scenePacking ? { packing: this.settings.scenePacking } : {}) });
     this.lastLoad = { caps, copy, input };
@@ -450,7 +446,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
     // P5.v18: r16float grid = the density rounded to f16 everywhere (texture, densityMax, brick majorants), so the majorant bounds what the GPU reads
     const volumes = volumes0?.grid && this.settings.volumeGridFormat === 'r16float' ? roundVolumesF16(volumes0) : volumes0;
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeGridFormat === 'r16float' ? { format: 'r16float' as const } : {}), ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}), ...(this.originOffsetMetres > 0 ? { originOffset: this.originOffsetMetres } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeGridFormat === 'r16float' ? { format: 'r16float' as const } : {}), ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
     if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;
@@ -535,7 +531,6 @@ export class PtMegakernelAdapter implements RendererAdapter {
   }
 
   private autoReason = '';
-  private originOffsetMetres = 0;
   private outputStats: Record<string, number> = {};
 
   /** AOVs, counters and the denoised frame after the timed region (readbacks and the denoiser are never inside it). */
@@ -614,21 +609,6 @@ export class PtMegakernelAdapter implements RendererAdapter {
 }
 
 export const createPtMegakernel = (settings?: PtAdapterSettings, id?: string): PtMegakernelAdapter => new PtMegakernelAdapter(settings, id);
-
-/** The largest |coordinate| of any mesh vertex in world space (instance transforms applied): the scale the origin-offset floor follows. */
-function sceneMaxCoordinate(input: { meshes: ReadonlyArray<{ positions: ArrayLike<number> }>; instances: ReadonlyArray<{ meshIndex: number; objectToWorld: ArrayLike<number> }> }): number {
-  let max = 0;
-  for (const inst of input.instances) {
-    const p = input.meshes[inst.meshIndex]?.positions;
-    if (!p) continue;
-    const m = inst.objectToWorld;
-    for (let i = 0; i + 2 < p.length; i += 3) {
-      const x = p[i] as number, y = p[i + 1] as number, z = p[i + 2] as number;
-      for (let r = 0; r < 3; r++) max = Math.max(max, Math.abs((m[r] as number) * x + (m[4 + r] as number) * y + (m[8 + r] as number) * z + (m[12 + r] as number)));
-    }
-  }
-  return max;
-}
 
 /** The scene's volumes with the grid density rounded to f16 and every grid medium's densityMax recomputed from the rounded values (P5.v18). */
 function roundVolumesF16(v: NonNullable<ReturnType<typeof sceneVolumes>>): NonNullable<ReturnType<typeof sceneVolumes>> {
