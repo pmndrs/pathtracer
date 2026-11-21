@@ -14,6 +14,7 @@ import { ENV_FILE } from '../tier0/env-sky.ts';
 import { buildGltfSceneDesc } from '../gltf-desc.ts';
 import type { GltfDescMaterial, GltfModelRef, GltfSceneBuild } from '../gltf-desc.ts';
 import type { GltfSidecar } from '../gltf-scene-desc.ts';
+import { gltfVolumesAsMedia } from '../gltf-media.ts';
 import type { EnvironmentDesc, MaterialDesc, SceneDesc } from '../schema.ts';
 import anisotropy from './golden/AnisotropyStrengthTest.json' with { type: 'json' };
 import attenuation from './golden/AttenuationTest.json' with { type: 'json' };
@@ -59,6 +60,8 @@ function make(golden: GoldenFile, sidecar: GltfSidecar, format: 'glb' | 'gltf' =
   const build: GltfSceneBuild = { ...sidecar, model, materials: goldenMaterials(golden) };
   return { golden, model, sidecar, scene: buildGltfSceneDesc(build) };
 }
+
+const attenuationScene = (): Tier1GltfScene => sidecars.attenuation;
 
 const sidecars = {
   // R1..R5 volume and thin blocks, 20 x 20 backdrop at z = -2, labels left of the blocks. Drop the labels and the one row that needs a thickness texture.
@@ -222,4 +225,8 @@ const sidecars = {
 export const tier1GltfScenes: readonly Tier1GltfScene[] = Object.values(sidecars);
 
 /** The `SceneDesc`s, registered in `scenes/index.ts` (`--scenes AttenuationTest-notex,...`). */
-export const tier1GltfSceneDescs: readonly SceneDesc[] = tier1GltfScenes.map((s) => s.scene);
+export const tier1GltfSceneDescs: readonly SceneDesc[] = [
+  ...tier1GltfScenes.map((s) => s.scene),
+  // V6.1: the same glTF absorption as real media (`integrator.volumes`) instead of the OpenPBR Beer absorber.
+  gltfVolumesAsMedia(attenuationScene().scene),
+];
