@@ -1,0 +1,37 @@
+{
+  "scene": "vol-cl-slab-top-g85-a100-t200",
+  "renderer": "mitsuba3-llvm_ad_rgb",
+  "version": "mitsuba 3.9.1",
+  "spp": 4096,
+  "seconds": 113.63,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-fgSP4N/scene.xml bench/references/vol-cl-slab-top-g85-a100-t200/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "settings": {
+    "maxDepth": 512,
+    "rrStartDepth": null,
+    "film": {
+      "width": 64,
+      "height": 64,
+      "filter": "box"
+    },
+    "integrator": "volpath",
+    "variant": "llvm_ad_rgb",
+    "rr": false,
+    "max_depth": 513,
+    "sampler": "multijitter",
+    "filter": "box 0.5",
+    "renderSeconds": 113.40440797805786,
+    "spectral": false
+  },
+  "approximations": [
+    "mitsuba: absorption-only interior media use the `volpath` integrator (same max_depth and rr_depth rules as `path`); homogeneous medium with sigma_t = -ln(T)/depth per RGB channel (written as scale = max sigma and rgb = sigma / max sigma, because an `rgb` medium value must lie in [0, 1]), albedo 0.",
+    "mitsuba: participating media use `volpath` (max_depth = ours + 1); homogeneous media are written as scale x rgb (rgb must lie in [0, 1]); grids are `heterogeneous` media with a `.vol` gridvolume (grey sigma_t, trilinear, clamp outside: the scene keeps a zero border so it matches pbrt).",
+    "mitsuba: directional light angularRadius is ignored (delta direction)."
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-21T09:52:27.438Z"
+}

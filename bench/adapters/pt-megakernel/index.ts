@@ -16,7 +16,7 @@ import { buildTraceScene, createMeshBvhBuilder, uploadTraceScene, type NodeForma
 import { ALPHA_MODE, fetchBlueNoise, createMaterial, detectCaps, requestDeviceForCaps, sceneFormatOf, uploadSceneCopy, buildSceneCopy, lightSelectionName, DEFAULT_LIGHT_SELECTION, type Caps, type LightSelection, type SceneCopy, type SceneCopyBuffers, type SceneCopyInput } from '@pmndrs/raytracer';
 import { sceneDensityFiles, sceneVolumes } from '../../scenes/volumes.ts';
 import type { Rgb2SpecTable } from '@pmndrs/pathtracer';
-import { brickMajorants, PtMegakernel, PtWavefront, ptwfAutoPolicy, ptApplyMode, ptMegakernelWgsl, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
+import { brickMajorants, ptRoundGridF16, PtMegakernel, PtWavefront, ptwfAutoPolicy, ptApplyMode, ptMegakernelWgsl, ptModePreset, type PtMode, resolveRestirOptions, PT_PAIR, ptCameraBasis, ptMaterialFeatures, ptPixelSeed, ptSample2D, PT_COUNTER, PT_COUNTER_WORDS, type PtAovs, type PtCounters, type PtImage, type PtIntegratorOptions, type PtLayeredOptions, type PtMaterialOptions, type PtMegakernelOptions, type PtWavefrontOptions } from '@pmndrs/pathtracer';
 import type { FeatureSupport, Image, RenderBudget, RenderResult, RendererAdapter, RendererInfo } from '../../src/adapter.ts';
 import type { TriangleMesh } from '../../scenes/geometry.ts';
 import { resolveOpenPbr } from '../../scenes/openpbr.ts';
@@ -43,6 +43,8 @@ export interface PtAdapterSettings extends PtIntegratorOptions {
   volumeOutputs?: boolean;
   /** `integrator.originOffset` in metres, or `'auto'` = 2^-19 x the largest world coordinate of the scene's meshes (P5.v17 self-intersection floor). */
   originOffsetSetting?: number | 'auto';
+  /** P5.v18: the grid texture format (`r16float` rounds the density to f16 first). */
+  volumeGridFormat?: 'r32float' | 'r16float';
   /** maxDepth override (the scene's own otherwise). */
   maxDepth?: number;
   /** rrStartDepth override: a number, or 0 for off; the scene's own otherwise. */
@@ -271,6 +273,7 @@ export class PtMegakernelAdapter implements RendererAdapter {
         ...(settings.volumeMajorant ? { volumeMajorant: settings.volumeMajorant } : {}),
         ...(settings.volumeOutputs ? { volumeOutputs: 1 } : {}),
         ...(settings.originOffsetSetting !== undefined ? { originOffset: settings.originOffsetSetting } : {}),
+        ...(settings.volumeGridFormat ? { volumeGridFormat: settings.volumeGridFormat } : {}),
         ...(settings.primary === 'vbuffer' ? { primary: 'vbuffer' } : {}),
         ...(settings.scenePacking ? { scenePacking: settings.scenePacking } : {}),
         ...(settings.bvh && Object.keys(settings.bvh).length ? { bvh: settings.bvh } : {}),
@@ -443,9 +446,11 @@ export class PtMegakernelAdapter implements RendererAdapter {
       if (!response.ok) throw new Error(`density file ${file}: HTTP ${response.status}. Run: node bench/scenes/volumes/vdb-grid.ts`);
       densityFiles.set(file, new Float32Array(await response.arrayBuffer()));
     }
-    const volumes = sceneVolumes(scene, input, densityFiles);
+    const volumes0 = sceneVolumes(scene, input, densityFiles);
+    // P5.v18: r16float grid = the density rounded to f16 everywhere (texture, densityMax, brick majorants), so the majorant bounds what the GPU reads
+    const volumes = volumes0?.grid && this.settings.volumeGridFormat === 'r16float' ? roundVolumesF16(volumes0) : volumes0;
     const spectralTable = integratorSettings.spectral ? await fetchSpectralTable(typeof integratorSettings.spectral === 'object' ? integratorSettings.spectral.res ?? 64 : 64) : undefined;
-    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}), ...(this.originOffsetMetres > 0 ? { originOffset: this.originOffsetMetres } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
+    const kernelOptions = { ...(volumes?.grid ? { volumeGrid: { ...volumes.grid, ...(this.settings.volumeGridFormat === 'r16float' ? { format: 'r16float' as const } : {}), ...(this.settings.volumeMajorant === 'brick' ? { majorant: brickMajorants(volumes.grid.resolution, volumes.grid.density) } : {}) } } : {}), ...(spectralTable ? { spectralTable } : {}), ...(this.settings.mode ? { mode: this.settings.mode } : {}), ...(blueNoise ? { blueNoise } : {}), format: sceneFormatOf({ nodeFormat: this.trace.nodeFormat, triangleLeaves: this.trace.triangleLeaves, positionLayout: this.trace.positionLayout, ...(this.settings.bvh?.decode ? { wideDecode: this.settings.bvh.decode } : {}), ...(this.settings.bvh?.walk ? { wideWalk: this.settings.bvh.walk } : {}) }), layout: copy.layout, textures: copy.textureLayout, ...(this.settings.scenePacking ? { scenePacking: this.settings.scenePacking } : {}), integrator: { ...integratorSettings, ...(alphaMask ? { alphaMask } : {}), ...(alphaMask && (this.settings.alphaShadow === 'coverage' || this.settings.alphaShadow === 'stochastic') ? { alphaCoverage: this.settings.alphaCoverage ?? alphaCoverageOf(input) } : {}), envMap: !!hdriMap, envSampling: this.envSampling(!!hdriMap), materials, ...(mtlx ? { materialx: { wgsl: mtlx.programs.wgsl, normal: mtlx.programs.normal } } : {}), ...(volumes ? { volumes: { ...volumes.options, ...(this.settings.volumeShadow ? { shadowTracking: this.settings.volumeShadow } : {}), ...(this.settings.volumeMajorant ? { majorant: this.settings.volumeMajorant } : {}), ...(this.settings.volumeOutputs ? { outputs: true } : {}) } } : {}), ...(this.originOffsetMetres > 0 ? { originOffset: this.originOffsetMetres } : {}) }, ...(this.settings.prune !== undefined ? { prune: this.settings.prune } : {}), ...(this.settings.shortenNames !== undefined ? { shortenNames: this.settings.shortenNames } : {}), label: this.info.id };
     // D32: `auto` also routes a megakernel over the ~50 KB DXC class to the wavefront (the kernel text is only known here, after the materials / textures are decided).
     if (this.autoReason !== '' && this.settings.scheduler !== 'wavefront' && !volumes && !integratorSettings.spectral) {
       const kernelBytes = ptMegakernelWgsl(caps, ptApplyMode(kernelOptions as unknown as PtMegakernelOptions)).length;
@@ -623,4 +628,12 @@ function sceneMaxCoordinate(input: { meshes: ReadonlyArray<{ positions: ArrayLik
     }
   }
   return max;
+}
+
+/** The scene's volumes with the grid density rounded to f16 and every grid medium's densityMax recomputed from the rounded values (P5.v18). */
+function roundVolumesF16(v: NonNullable<ReturnType<typeof sceneVolumes>>): NonNullable<ReturnType<typeof sceneVolumes>> {
+  const density = ptRoundGridF16(v.grid!.density);
+  let max = 0;
+  for (const x of density) max = Math.max(max, x);
+  return { ...v, grid: { ...v.grid!, density }, options: { ...v.options, media: v.options.media.map((m) => (m.grid ? { ...m, grid: { ...m.grid, densityMax: max } } : m)) } };
 }

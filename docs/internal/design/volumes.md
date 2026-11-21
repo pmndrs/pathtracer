@@ -80,6 +80,23 @@ The Cornell scene's 1% is the colour of the walls, not the medium: the plain `co
 
 Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match and why): [bench/results/VOLUMES.md](../../../bench/results/VOLUMES.md). The scenes and what each proves are listed at the top of `bench/scenes/volumes/index.ts`.
 
+## 5b. Cloud regime additions (P5.v13-v18, docs/internal/CLOUDS-HANDOFF.md)
+
+- **Phase lobes** (`volume/phase.ts`, `PtMedium.lobes`): `(1 - w) HG(gA) + w Draine(gB, alpha)`; `MediumDesc.phase` is `hg2` (two HG lobes), `hgDraine`, or `mie`
+  (Jendersie and d'Eon 2023 large-particle fit, 5-50 um, no clamp of the forward peak, V298). A medium with lobes gets a 7th table row `(gB, w, alpha, 0)`; the phase
+  sample picks a lobe with u.x, rescales u.x for the lobe, u.y is the azimuth. HG lobes are sampled as 1 - u (cosine to the forward direction) in a form that does not
+  cancel at g 0.995; Draine by the supplemental's closed-form CDF inversion (V299). Both schedulers. Without lobes the text is the plain HG one.
+- **Outputs** (`volumes.outputs`, megakernel): 3 vec4 per pixel after the radiance sums: (orders 0-1 rgb, primary transmittance), (radiance^2 rgb, first-scatter
+  distance), (first scatter happened, 0, 0, 0); `readVolumeOutputs` / `ptDecodeVolumeOutputs`. The order of a contribution is the number of scatter or bounce vertices
+  of its light path: a vertex's NEE is order vertex + 1, an escape or emitter hit after `depth` vertices is order `depth`. Everything added before `depth` goes from 1
+  to 2 is orders 0-1, so the plane equals a `maxDepth` 1 render per pixel (checked bit for bit). Interface (boundary) skips do not count. The transmittance is the
+  shadow-ray estimator along the camera ray up to the first SOLID surface, on its own stream, so the beauty is bit-identical with the outputs on or off.
+- **Depth caps** (`vol-cl-furnace-*`, `vol-cl-sph-*` sweeps, `bench/results/VOLUMES.md`): at albedo 0.99 an optical diameter of 200 needs no more than 512 orders
+  (512 vs 8192 differ by 6e-5); at albedo 1 depth 512 is 4-7% dark and 2048 still 0.4-0.6%.
+- **r16float grids** (`volumeGrid.format`, V301): the same kernel text (`textureLoad` returns f32), half the memory; the data must be f16-exact (`ptRoundGridF16`), so
+  densityMax and the brick majorants computed from it bound what the GPU reads.
+- **Origin offset floor** (`integrator.originOffset`, V302): see CLAUDE.md Traps (large grounds near the origin self-intersect with quantized BVH nodes).
+
 ## 6. Open problems
 
 1. Brick / coarse-grid majorant (DDA) for sparse grids; today the null-collision count scales with `densityMax * path length`.

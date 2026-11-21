@@ -128,7 +128,11 @@ a denoiser for volume frames. If item 4's second moment lands, a variance-guided
 
 ## Done
 
-_(nothing yet)_
+- 2026-11-21 **P5.v13 validation**: `vol-cl-sph-*`, `vol-cl-slab-*`, `vol-cl-cloud256` (256^3, 2 m voxels) at or below the pbrt-vs-Mitsuba floor in every cell, relBias within +-0.3%; closed forms `vol-cl-furnace-*`, `vol-cl-single-*`; depth caps: albedo 0.99 needs <= 512 orders at tau 200, albedo 1 at 512 is 4-7% dark. `bench/results/VOLUMES.md` "Cloud regime".
+- 2026-11-21 **P5.v14 phases**: `MediumDesc.phase` / `PtMedium.lobes` = `hg2`, `hgDraine`, `mie` (5-50 um), both schedulers; `vol-cl-single-{hg2,mie10,mie20}[-oblique]` against the closed form, `vol-cl-sph-hg2-a99-t50` against Mitsuba `blendphase`. Cycles comparison open.
+- 2026-11-21 **P5.v15 / P5.v16 outputs**: `integrator.volumes.outputs` (megakernel) + `PtMegakernel.readVolumeOutputs()`: orders 0-1 (= a `maxDepth` 1 render, bit for bit), primary transmittance (1 - alpha, up to the first solid surface), standard error from the second moment (calibrated against seed spread), first-scatter distance. Bench: `pt_volume_outputs=1`.
+- 2026-11-21 **P5.v17 ground**: `vol-cl-ground-furnace`, `vol-cl-ground-absorb` (closed forms), `vol-cl-ground-sph-g85-a99-t50` (at the floor). Use a tessellated ground (see Requests back to clouds).
+- 2026-11-21 **P5.v18 r16float**: `volumeGrid.format: 'r16float'` with `ptRoundGridF16` (compute `densityMax` and `brickMajorants` from the rounded array). `vol-cl-cloud256` r16 vs r32: relMSE 5.5e-6, mean -0.003%.
 
 ## Requests back to clouds
 
@@ -138,3 +142,9 @@ _(nothing yet)_
   and Blender Cycles (`phase_mie_fitted_parameters`, volume_util.h), which agree. `docs/research/approximate-mie.md` lines 23, 25, 90, 92 and
   `packages/runtime/src/runtime.ts:651, 653` subtract them OUTSIDE. At d = 20 um that gives gD 0.483 instead of 0.594 and wD 0.304 instead of 0.498
   (mixture mean cosine 0.896 instead of 0.879). Please fix both, and re-check any fit or tuning done against the HG + Draine option.
+- **2026-11-21, a ground under the cloud: tessellate it.** A single large ground quad near the world origin self-intersects with the default (quantized) BVH nodes
+  (V302: the ground under an opaque box read 100x pbrt's sky light). Split it (e.g. 64 x 64 quads) or keep triangles near the camera small; or pass
+  `integrator.originOffset` (2^-19 x the largest coordinate; safe for a grid with a zero border).
+- **2026-11-21, new options the reference page can use:** `volumes.outputs: true` + `readVolumeOutputs()` replaces the second seed (standard error) and the page's own
+  alpha march (transmittance); `volumeGrid.format: 'r16float'` (round the bake with `ptRoundGridF16` first) halves the 437 MB grid; `media[i].lobes` (`ptPhaseLobes({ type:
+  'mie', diameter })` or `hg2`) for the droplet phase (set `g` to `lobes.gA`).

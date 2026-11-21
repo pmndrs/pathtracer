@@ -1,0 +1,34 @@
+{
+  "scene": "vol-cl-slab-base-g80-a99-t50",
+  "renderer": "pbrt-v4-cpu",
+  "version": "pbrt-v4 b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f (+bench no-RR patch)",
+  "spp": 4096,
+  "seconds": 110.85,
+  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/vol-cl-slab-base-g80-a99-t50/pbrt-v4-cpu-4096spp.pfm .cache/native/work-A1Hn5W/scene.pbrt",
+  "settings": {
+    "maxDepth": 512,
+    "rrStartDepth": null,
+    "film": {
+      "width": 64,
+      "height": 64,
+      "filter": "box"
+    },
+    "integrator": "volpath",
+    "rr": false,
+    "sampler": "zsobol",
+    "filter": "box 0.5",
+    "sensor": "cie1931 iso100 (passthrough)",
+    "spectral": true
+  },
+  "approximations": [
+    "pbrt: participating media use `volpath` (patched no-RR, V59); RGB sigma_a / sigma_s are uplifted to unbounded spectra (grey is exact, saturated colours are off per channel, V62); grids are `uniformgrid` media (dense density, no NanoVDB converter).",
+    "pbrt: directional light angularRadius is ignored (pbrt distant lights are delta lights); `L` is used as irradiance."
+  ],
+  "host": {
+    "hostname": "Denniss-MacBook-Pro.local",
+    "platform": "darwin 25.6.0",
+    "cpus": 18,
+    "cpuModel": "Apple M5 Pro"
+  },
+  "date": "2026-11-21T09:40:45.184Z"
+}
