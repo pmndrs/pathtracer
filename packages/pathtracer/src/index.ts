@@ -31,6 +31,7 @@ export * from './volume/volume.ts';
 export * from './volume/camera-medium.ts';
 export * from './volume/phase.ts';
 export * from './volume/volume-wgsl.ts';
+export * from './volume/auto-options.ts';
 export * from './spectral/cie1931.ts';
 export * from './spectral/rgb2spec.ts';
 export * from './spectral/spectral-wgsl.ts';
