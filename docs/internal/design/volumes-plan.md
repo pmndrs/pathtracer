@@ -103,8 +103,9 @@ materials render as media.
 |---|---|---|
 | V6.1 | glTF `KHR_materials_volume` attenuation as an absorbing medium in the volume path (and the `volume_scatter` proposal as a scattering one) | the Beer-slab closed form in `openpbr-check` |
 | V6.2 | Medium stack (nested / overlapping media, camera inside any medium; three-gpu-pathtracer has one) | nested-sphere closed form (absorbers) |
-| V6.3 | Cloud example (procedural 256^3 grid, no download, progressive + OIDN) | examples smoke |
+| ✅ V6.3 | Cloud example (procedural 256^3 grid, no download, progressive + OIDN) | examples smoke |
 | V6.4 | Sponza thin-fog god-ray example (needs V4.2) and lamp-fog example (needs V4.1) | examples smoke |
+| V6.6 | API ergonomics found by the cloud example (V6.3): sigma_t / albedo / phase as runtime uniforms (sliders without a recompile, today every change rebuilds the kernel), a `ptMediumFrom` overload taking a phase, `volumeGrid` building its own brick majorants when `majorant: 'brick'`, `rrStartDepth` exposed in `ProgressiveRenderer` | same image before / after; a slider change takes < 1 frame |
 | V6.5 | Adapter-aware defaults (grid format / size from limits, wavefront when the megakernel passes the DXC class) | caps page on the three machines |
 
 ## Suggested order

@@ -286,6 +286,23 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     heavy: true,
   },
   {
+    slug: 'cloud',
+    path: 'pathtracer/cloud/',
+    title: 'Cloud',
+    summary: 'A cumulus cloud path traced from a 128\u00b3 density grid made on the page: a bright forward-scattering medium under a sun and a sky.',
+    description:
+      'A closed box with a medium-boundary material bounds a procedural density grid (soft blobs times fractal noise). Rays are tracked through it by delta tracking against 8\u00b3 brick majorants. ' +
+      'The medium is grey with albedo 0.99, so light scatters many times (the core optical depth is about 40; 128 scattering events per path are plenty), and the phase is strongly forward: ' +
+      'one Henyey-Greenstein lobe, or the water-droplet Mie fit of `ptPhaseLobes`. Move the sun, thicken the cloud, change the droplet size. Extinction, albedo and phase are compiled into the kernel, so a change rebuilds it.',
+    category: 'pathtracer',
+    status: 'experimental',
+    tags: ['volumes', 'cloud', 'density grid', 'Mie phase', 'brick majorant'],
+    docs: 'pathtracer/volumes',
+    source: 'examples/pathtracer/cloud',
+    heavy: true,
+    check: { query: 'scale=0.25&res=64', samples: 2 },
+  },
+  {
     slug: 'spectral',
     path: 'pathtracer/spectral/',
     title: 'Spectral rendering and dispersion',
