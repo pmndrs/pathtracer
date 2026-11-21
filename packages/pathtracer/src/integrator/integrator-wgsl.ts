@@ -275,8 +275,9 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaCoverage = o.alphaCoverage ?? [];
   if ((alphaShadow === 'coverage' || alphaShadow === 'stochastic') && alphaCoverage.length === 0) throw new RangeError(`integrator.alphaShadow '${alphaShadow}' needs alphaCoverage (one fraction per material)`);
   if (o.volumes) {
-    const clash = o.restir ? 'restir' : o.frame ? 'frame' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
+    const clash = o.restir ? 'restir' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
+    if (o.frame && o.volumes.outputs) throw new Error('integrator.frame cannot be combined with integrator.volumes.outputs (V5.1c: both write the accumulator tail; the megakernel frame planes and the guide / order outputs are separate products)');
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     if ((o.volumes.forcedNee || o.volumes.equiangular) && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee / equiangular cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
     if ((o.volumes.forcedNee || o.volumes.equiangular) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
@@ -620,8 +621,7 @@ ${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogen
                 radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
             }
 ` : ''}            let ev = ptVolSample(curMed, vo, ray.direction, segMax, &beta);
-${ptMediumsEmit(o.volumes!.media) ? `            radiance += ptVolEmitTake();
-` : ''}            if (ev.kind == 2u) {
+${ptMediumsEmit(o.volumes!.media) ? addPure('ptVolEmitTake()', 'depth', '            ') : ''}            if (ev.kind == 2u) {
                 break;
             }
             if (ev.kind == 1u) {
@@ -642,7 +642,17 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptAovGuide(pxIndex, dims.x * dims.y, ptVolMedium(curMed).albedo, -ray.direction);
                     aovDone = true;
                 }
-` : ''}                let woM = -ray.direction;
+` : ''}${frame ? `                // V5.1c: a medium scatter is the "diffuse" class (the phase function is the medium's BSDF): albedo = sigma_s / sigma_t, normal -ray.direction, viewZ and motion of the scatter point, roughness 1.
+                if (vertex == 0u) {
+                    fSeen = true;
+                    fNormal = -ray.direction;
+                    fViewZ = -dot(pm - origin, normalize(ptParams.forward.xyz));
+                    fMotion = ptFrameMotion(pm);
+                    fRough = 1.0;
+                    fAlbedo = ptVolMedium(curMed).albedo;
+                }
+${emitMirror ? `                fPure = false;
+` : ''}` : ''}                let woM = -ray.direction;
                 if (PT_NEE${forced ? ' && !fHomog' : ''}) {
                     radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
                 }

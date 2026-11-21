@@ -43,6 +43,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
   if (o.volumes?.equiangular) return 'integrator.volumes.equiangular (equiangular distance sampling builds on the forced NEE, megakernel only: V4.1)';
   if (o.volumes?.forcedNee) return 'integrator.volumes.forcedNee (forced in-scatter NEE is megakernel only: V4.2)';
+  if (o.frame && o.volumes) return 'integrator.frame with integrator.volumes (V5.1c: the megakernel only; the wavefront scatter vertex lives in the shade kernel and has no frame planes)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
   if (o.restir && o.restirShared) return 'integrator.restir.sharedHit (the shared primary hit joins the wavefront camera kernel: TASKS P4.2a follow-up)';

@@ -27,6 +27,21 @@ describe('optional integrator outputs (R10 hooks, R4 counters, AOVs)', () => {
     expect(ptwfUnsupported({ volumes, aovs: true } as never)).toBeNull(); // V5.1b: the wavefront writes the same guides
   });
 
+  it('volumes + frame (V5.1c): a first-vertex scatter writes the frame planes; wavefront and volumes.outputs refuse', () => {
+    const media = [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }];
+    const volumes = { media, materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
+    const k = mk({ volumes, frame: true }, false);
+    expect(k).toContain('fAlbedo = ptVolMedium(curMed).albedo');
+    expect(k).toContain('fMotion = ptFrameMotion(pm)');
+    expect(k).toContain('fPure = false;');
+    expect(mk({ volumes }, false)).not.toContain('fAlbedo = ptVolMedium');
+    // an emissive medium's segment light goes to the emission plane through the same pure-path rule as an emitter
+    const emissive = { ...volumes, media: [{ ...media[0], emission: [1, 1, 1] }] };
+    expect(mk({ volumes: emissive, frame: true }, false)).toMatch(/if \(fPure\) \{\s*fEmit \+= ptVolEmitTake\(\);/);
+    expect(() => mk({ volumes: { ...volumes, outputs: true }, frame: true })).toThrow(/frame.*volumes.outputs/);
+    expect(ptwfUnsupported({ volumes, frame: true } as never)).toMatch(/frame with integrator.volumes/);
+  });
+
   it('hooks: both functions are called after NEE and before the BSDF sample, in both schedulers', () => {
     const mega = mk({ hooks: hook }, false);
     expect(mega).toContain('ptOnVertex(hv)');
