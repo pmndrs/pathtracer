@@ -452,22 +452,22 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     slug: 'realtime-restir',
     path: 'realtime/restir/',
     title: 'ReSTIR DI in real time',
-    summary: '64 lamps at one sample per pixel per frame: plain next-event estimation against reservoir resampling with temporal and spatial reuse.',
+    summary: 'Plain light sampling and ReSTIR DI side by side at one sample per pixel over 64 lamps, with the error of each single frame measured live.',
     description:
-      'Plain next-event estimation picks one light per pixel and frame; ReSTIR DI draws several candidates, keeps one by its contribution and reuses good picks from the previous frame and from neighbours. ' +
-      'Compare single frames, switch between unbiased and biased reuse, and turn the temporal and spatial passes off one at a time.',
+      'Both halves render the same frame with one sample per pixel. Plain next-event estimation picks one lamp per pixel at random; ReSTIR DI keeps the best of several candidates and reuses picks from neighbours and the previous frame. ' +
+      'While the camera is still, the page averages plain NEE frames into a reference and reads each method\'s single-frame error against it (about 15x lower with ReSTIR). Average while still shows that both converge to the same image.',
     brief: {
       kind: "quality",
-      shows: "64 lamps at one sample per pixel per frame. Plain next-event estimation picks one lamp per pixel at random; ReSTIR DI keeps the best of several candidates and reuses picks from neighbours and the previous frame, so a single frame is far less noisy.",
-      tryThis: ["Switch Light sampling between Plain NEE and ReSTIR and compare single frames", "Turn temporal or spatial reuse off to see what each adds"],
-      compare: "Light sampling: Plain NEE (one light per pixel)",
+      shows: "At the same one sample per pixel, ReSTIR DI gives a far less noisy frame than plain light sampling with many lights, and both converge to the same image: less noise, not a different answer. That is what makes many-light real time feasible behind a denoiser.",
+      tryThis: ["Hold the camera still for a few seconds and read the error per frame for each half", "Turn on Average while still: both halves converge to the same picture", "Turn temporal or spatial reuse off to see what each part of ReSTIR adds"],
+      compare: "The left half: plain NEE (one light per pixel), same frame, same sample count",
     },
     category: 'realtime',
     status: 'experimental',
     tags: ['ReSTIR DI', 'realtime', 'many lights'],
     docs: 'pathtracer/restir',
     source: 'examples/realtime/restir',
-    check: { samples: 8, thumbQuery: 'accumulate=1', thumbSamples: 64 },
+    check: { samples: 8 },
   },
   {
     slug: 'convergence',
