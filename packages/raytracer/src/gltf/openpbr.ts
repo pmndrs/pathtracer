@@ -29,6 +29,10 @@ export interface OpenPbrParams {
   /** Metres. Default 0 = no medium. */ transmissionDepth?: number;
   /** Default 0 (no dispersion). */ transmissionDispersionScale?: number;
   /** Default 20. */ transmissionDispersionAbbeNumber?: number;
+  /**
+   * glTF `KHR_materials_scatter` (draft, volumetric mode only: a transmissive material with `KHR_materials_volume` thickness > 0 and a finite attenuation distance). `strength` = scatterStrengthFactor,
+   * `multiscatterColor` = the MULTI-scatter albedo of the volume, `anisotropy` = HG g. Present only when the extension is. Not read by `openPbrToRtMaterial`; `gltfVolumesAsMedia` (bench) turns it into sigma_s / g.
+   */ volumeScatter?: { strength: number; multiscatterColor: Rgb; anisotropy: number };
   /** Default 0. glTF `KHR_materials_diffuse_transmission` maps here (thin-walled). */ subsurfaceWeight?: number;
   /** Default white. */ subsurfaceColor?: Rgb;
   /** Default 0. */ coatWeight?: number;

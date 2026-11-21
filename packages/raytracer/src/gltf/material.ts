@@ -32,6 +32,7 @@ export interface GltfMaterialExtensions {
   KHR_materials_emissive_strength?: { emissiveStrength?: number };
   KHR_materials_dispersion?: { dispersion?: number };
   KHR_materials_diffuse_transmission?: { diffuseTransmissionFactor?: number; diffuseTransmissionColorFactor?: readonly number[]; diffuseTransmissionTexture?: GltfTextureInfo; diffuseTransmissionColorTexture?: GltfTextureInfo };
+  KHR_materials_scatter?: { scatterStrengthFactor?: number; scatterStrengthTexture?: GltfTextureInfo; multiscatterColorFactor?: readonly number[]; multiscatterColorTexture?: GltfTextureInfo; scatterAnisotropy?: number };
   KHR_materials_unlit?: Record<string, never>;
   [other: string]: unknown;
 }
@@ -53,7 +54,7 @@ export interface GltfMaterialJson {
 export const MAPPED_EXTENSIONS = [
   'KHR_materials_ior', 'KHR_materials_specular', 'KHR_materials_transmission', 'KHR_materials_volume', 'KHR_materials_clearcoat',
   'KHR_materials_sheen', 'KHR_materials_iridescence', 'KHR_materials_anisotropy', 'KHR_materials_emissive_strength',
-  'KHR_materials_dispersion', 'KHR_materials_diffuse_transmission', 'KHR_materials_unlit',
+  'KHR_materials_dispersion', 'KHR_materials_diffuse_transmission', 'KHR_materials_scatter', 'KHR_materials_unlit',
 ] as const;
 
 /** glTF spec defaults, kept in one place so tests can pin them. */
@@ -177,6 +178,9 @@ export function gltfMaterialToOpenPbr(material: GltfMaterialJson, extensions: Gl
   const tr = extensions.KHR_materials_transmission;
   const vol = extensions.KHR_materials_volume;
   const dt = extensions.KHR_materials_diffuse_transmission;
+  const sc = extensions.KHR_materials_scatter;
+  if (sc?.scatterStrengthTexture) textures.push('scatterStrengthTexture');
+  if (sc?.multiscatterColorTexture) textures.push('multiscatterColorTexture');
   const transmission = tr ? (tr.transmissionFactor ?? D.transmissionFactor) : 0;
   if (tr?.transmissionTexture) textures.push('transmissionTexture');
   let lostTint = false;
@@ -193,6 +197,11 @@ export function gltfMaterialToOpenPbr(material: GltfMaterialJson, extensions: Gl
         if (finite) {
           out.transmissionColor = rgb(vol?.attenuationColor, D.attenuationColor);
           out.transmissionDepth = distance;
+          if (sc) {
+            const strength = sc.scatterStrengthFactor ?? 0;
+            // Volumetric mode of KHR_materials_scatter (draft, glTF PR 2579): sigma_s / sigma_a follow from the multi-scatter albedo; strength 0 = plain absorption.
+            if (strength > 0) out.volumeScatter = { strength, multiscatterColor: rgb(sc.multiscatterColorFactor, [1, 1, 1]), anisotropy: sc.scatterAnisotropy ?? 0 };
+          }
           if (!same(tint, [1, 1, 1])) {
             lostTint = true;
             notes.push('baseColor tint dropped: transmissionColor holds the volume attenuationColor');
@@ -204,6 +213,7 @@ export function gltfMaterialToOpenPbr(material: GltfMaterialJson, extensions: Gl
         // glTF: no volume, or thickness 0, means a thin surface (no absorption, no refraction offset).
         out.geometryThinWalled = true;
         out.transmissionColor = tint;
+        if (sc && (sc.scatterStrengthFactor ?? 0) > 0) notes.push('KHR_materials_scatter thin-walled mode (diffuse scatter BSDF) is not mapped');
         if (finite && !same(rgb(vol?.attenuationColor, D.attenuationColor), [1, 1, 1])) notes.push('attenuation ignored: thickness 0 means a thin-walled surface');
       }
       if (!same(out.transmissionColor ?? [1, 1, 1], [1, 1, 1]) && out.transmissionDepth === undefined) notes.push('transmissionColor is a non-physical tint (depth 0): baseColor on the transmission lobe');

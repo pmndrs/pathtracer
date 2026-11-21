@@ -99,6 +99,7 @@ Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match
 - **Separate depth cap** (`volumes.separateDepth`, `PtLimits.maxVolumeDepth`, V303): the pbrt rule counts a medium scatter as a path vertex, so a cloud that needs 512 scatters
   also grants 512 surface bounces. With the option a second counter counts scatters: a scatter ends the path at `scatters >= maxVolumeDepth`, a surface at
   `depth - scatters >= maxDepth`; emission, MIS and sampler dimensions still use the total vertex count. Both schedulers agree per pixel (1.1e-6).
+- **Hardware-filtered density** (`volumes.densityFilter: 'hardware'`, V304): one `textureSampleLevel` with a linear clamp-to-edge sampler (group 2 binding 20) times the per-axis factor `clamp(g + 1, 0, 1) clamp(n - g, 0, 1)` (trilinear is separable, so this is exactly the manual zero-outside lookup); r32float needs `float32-filterable`. Saves 246 B on the grid + brick kernel.
 - **Ratio-tracking roulette** (`volumes.trRoulette`, V1.1): pbrt-v4's rule (tr < 0.05: end with probability 0.75, else x4) in every ratio-tracked shadow segment.
 - **r16float grids** (`volumeGrid.format`, V301): the same kernel text (`textureLoad` returns f32), half the memory; the data must be f16-exact (`ptRoundGridF16`), so
   densityMax and the brick majorants computed from it bound what the GPU reads.

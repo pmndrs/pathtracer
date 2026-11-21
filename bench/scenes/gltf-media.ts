@@ -19,6 +19,21 @@ export function attenuationToSigmaA(color: Rgb, distance: number): Rgb | undefin
   return s.every((v) => v === 0) ? undefined : s;
 }
 
+export interface VolumeScatter { strength: number; multiscatterColor: Rgb; anisotropy: number }
+
+/**
+ * Single-scatter albedo from the multi-scatter albedo and HG g, the inversion KHR_materials_scatter specifies (draft, glTF PR 2579, after Kulla and Conty 2017) and
+ * three-gpu-pathtracer's `getSingleScatterAlbedo` (src/webgpu/nodes/medium.wgsl.js) implements: s = clamp(4.09712 + 4.20863 a - sqrt(9.59217 + 41.6808 a + 17.7126 a^2), 0, 1),
+ * rho_ss = (1 - s^2) / (1 - g s^2); a channel with a = 0 gives s = 1 and rho_ss = 0. `multiscatter` is already multiplied by scatterStrength.
+ */
+export function singleScatterAlbedo(multiscatter: Rgb, g: number): Rgb {
+  return multiscatter.map((a) => {
+    if (!(a > 0)) return 0;
+    const s = Math.min(1, Math.max(0, 4.09712 + 4.20863 * a - Math.sqrt(9.59217 + 41.6808 * a + 17.7126 * a * a)));
+    return (1 - s * s) / (1 - g * s * s);
+  }) as unknown as Rgb;
+}
+
 /** The sigma_a of a scene material's Beer absorber, or `undefined` when the material has none this conversion handles. */
 export function absorberOf(m: MaterialDesc): Rgb | undefined {
   if (m.type !== 'openpbr') return undefined;
@@ -37,9 +52,13 @@ export function gltfVolumesAsMedia(scene: SceneDesc, name = `${scene.name}-media
     const sigmaA = absorberOf(m);
     if (!sigmaA) continue;
     const mediumName = `absorb-${key}`;
-    media[mediumName] = { type: 'homogeneous', sigmaA, sigmaS: [0, 0, 0] };
+    // sigmaA from absorberOf is the attenuation sigma_t = -ln(colour) / distance. KHR_materials_scatter splits it: sigma_s = sigma_t rho_ss, sigma_a = sigma_t (1 - rho_ss).
+    const vs = (m as { volumeScatter?: VolumeScatter }).volumeScatter;
+    const rho = vs ? singleScatterAlbedo(vs.multiscatterColor.map((c) => c * vs.strength) as unknown as Rgb, vs.anisotropy) : ([0, 0, 0] as Rgb);
+    const sigmaS = sigmaA.map((t, i) => t * rho[i]!) as unknown as Rgb;
+    media[mediumName] = { type: 'homogeneous', sigmaA: sigmaA.map((t, i) => t - sigmaS[i]!) as unknown as Rgb, sigmaS, ...(vs && vs.anisotropy !== 0 ? { g: vs.anisotropy } : {}) };
     mediumOf.set(key, mediumName);
-    const { transmissionDepth: _depth, ...rest } = m as MaterialDesc & { transmissionDepth?: number };
+    const { transmissionDepth: _depth, volumeScatter: _vs, ...rest } = m as MaterialDesc & { transmissionDepth?: number; volumeScatter?: VolumeScatter };
     materials[key] = { ...rest, transmissionColor: [1, 1, 1] } as MaterialDesc;
   }
   if (mediumOf.size === 0) return scene;
