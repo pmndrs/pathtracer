@@ -86,6 +86,7 @@ shader; examples only, not part of the packages.
 | Our file | Source | Licence | Notes |
 |---|---|---|---|
 | `packages/pathtracer/src/volume/volume-wgsl.ts` (`ptVolTele`), `volume.ts` (`telescopingTransmittance`) | Blender Cycles `intern/cycles/kernel/integrator/shade_volume.h` (`volume_transmittance`) and `kernel/sample/mapping.h` (`sample_geometric_distribution`), after Misso, Bitterli, Georgiev, Jarosz 2022 (local clone `research/sources/native/cycles` (2026-11-11)) | Apache-2.0 (Blender Foundation; SPDX header) | Re-implementation of the structure (order distribution r = 0.9, cut-off at order 4, interleaved-half debiasing term) per brick DDA cell with the analytic minorant; k capped at 64; the shared order uniform is a hash of (sample index, cell). Opt-in `shadowTracking: 'telescoping'` (V2.3) |
+| `packages/pathtracer/src/volume/vspg-wgsl.ts` (`volumes.guiding: 'vspg'`) | Blender Cycles `kernel/integrator/shade_volume.h` (Volume Scattering Probability Guiding) after Xu et al. 2025 | Apache-2.0 (Blender Foundation) | The contribution-ratio guide L_scatter / (L_scatter + L_transmit) of earlier samples, the 75 / 25 defensive mix with the natural probability and the natural / guided branch weights; reformulated as a guided existence decision of the first majorant collision with a per-pixel accumulator guide; no Cycles code copied |
 
 ### 1.4 Clean-room status
 

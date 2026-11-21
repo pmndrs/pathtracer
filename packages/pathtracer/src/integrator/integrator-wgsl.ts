@@ -281,6 +281,11 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     if ((o.volumes.forcedNee || o.volumes.equiangular) && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee / equiangular cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
     if ((o.volumes.forcedNee || o.volumes.equiangular) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
+    if (o.volumes.guiding === 'vspg') {
+      if (o.volumes.outputs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.volumes.outputs (both live in the accumulator tail)");
+      if (o.aovs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.aovs (both live in the accumulator tail)");
+      if (o.accumulate === false) throw new Error("integrator.volumes.guiding 'vspg' needs accumulate (the guide is a sum over samples)");
+    }
     if (o.volumes.adaptive && !o.volumes.outputs) throw new Error('integrator.volumes.adaptive needs integrator.volumes.outputs (the done flag lives in its accumulator tail)');
     if (o.volumes.outputs && o.accumulate === false) throw new Error('integrator.volumes.outputs needs accumulate (the outputs are sums over samples)');
   }
@@ -565,6 +570,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const sd = vol && !!o.volumes!.separateDepth;
   const equi = vol && !!o.volumes!.equiangular;
   const forced = vol && (!!o.volumes!.forcedNee || equi);
+  const vspg = vol && o.volumes!.guiding === 'vspg';
   const aniso = !!mats?.features.aniso;
   const fuzz = !!mats?.features.fuzz;
   const film = !!mats?.features.thinFilm;
@@ -622,8 +628,23 @@ ${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogen
             if (fHomog && ${sd ? 'mdepth < maxVolDepth' : 'depth < maxDepth'}) {
                 radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
             }
+` : ''}${vspg ? `            // V4.3 VSPG: the first medium segment of the primary ray takes a guided collision-exists decision (volume/vspg-wgsl.ts); the radiance added after it is the statistic.
+            var vsSet = false;
+            if (!vspgDone && depth == 0u) {
+                vspgDone = true;
+                vsSet = true;
+                vspgRad = radiance;
+                let vsT = ptAccum[dims.x * dims.y + pxIndex];
+                ptVolGuide = select(2.0, vsT.x / (vsT.x + vsT.y), vsT.x + vsT.y > 0.0);
+                ptVolGuideHit = false;
+            }
 ` : ''}            let ev = ptVolSample(curMed, vo, ray.direction, segMax, &beta);
-${ptMediumsEmit(o.volumes!.media) ? addPure('ptVolEmitTake()', 'depth', '            ') : ''}            if (ev.kind == 2u) {
+${vspg ? `            if (vsSet) {
+                vspgOn = ptVolGuide < 0.0;
+                vspgHit = ptVolGuideHit;
+                ptVolGuide = -1.0;
+            }
+` : ''}${ptMediumsEmit(o.volumes!.media) ? addPure('ptVolEmitTake()', 'depth', '            ') : ''}            if (ev.kind == 2u) {
                 break;
             }
             if (ev.kind == 1u) {
@@ -805,7 +826,7 @@ ${spec ? `    ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);
     let origin = ptParams.origin.xyz;
     var ray = RtRay(origin, 0.0, normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y), PT_FAR);
 
-${counters || aovs || hooks || restir || frame ? `    let pxIndex = px.y * dims.x + px.x;
+${counters || aovs || hooks || restir || frame || vspg ? `    let pxIndex = px.y * dims.x + px.x;
 ` : ''}${counters ? `    var termReason = 0u;
 ` : ''}${aovs ? `    var aovDone = false;
 ` : ''}${frame ? `${emit ? `    var fEmit = vec3f(0.0);
@@ -837,7 +858,11 @@ ${medium ? `    var sigma = vec3f(0.0);
 `}    var ifaceSkips = 0u;
     var volBack = 0.0;
     ptVolSeed(pixelSeed, sampleIndex);
-${volOut ? `    ptVoBegin(ray, ${stack ? 'curStack' : 'curMed'}, pixelSeed, sampleIndex);
+${vspg ? `    var vspgDone = false;
+    var vspgOn = false;
+    var vspgHit = false;
+    var vspgRad = vec3f(0.0);
+` : ''}${volOut ? `    ptVoBegin(ray, ${stack ? 'curStack' : 'curMed'}, pixelSeed, sampleIndex);
 ` : ''}` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
 ${vbHit ? `    var primary = true;
@@ -1009,6 +1034,11 @@ ${counters ? `                    termReason = 3u;
 ${counters ? `    ptCountEnd(pxIndex, depth, termReason);
 ` : ''}${frame ? `    ptFramePlanes(pxIndex, dims.x * dims.y, radiance, ${emit ? 'vec3f(0.0), fEmit' : 'fDirect, vec3f(0.0)'}, fBounce, fSeen, fIsSpec, fNormal, fViewZ, fMotion, fRough, fAlbedo, fSpec);
 ` : ''}${volOut ? `    ptVoEnd(radiance);
+` : ''}${vspg ? `    if (vspgOn) {
+        let vsC = max(dot(radiance - vspgRad, vec3f(0.2126, 0.7152, 0.0722)), 0.0);
+        let vsI = dims.x * dims.y + pxIndex;
+        ptAccum[vsI] = ptAccum[vsI] + select(vec4f(0.0, vsC, 0.0, 1.0), vec4f(vsC, 0.0, 0.0, 1.0), vspgHit);
+    }
 ` : ''}    return PtRadiance(${spec ? 'ptSpecToRgb(radiance)' : emit ? 'radiance + fEmit' : 'radiance'}, 0.0);
 }
 

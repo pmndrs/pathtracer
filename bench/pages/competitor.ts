@@ -73,6 +73,7 @@ try {
     ...(args['pt_forced_nee'] === '1' ? { volumeForcedNee: true } : {}),
     ...(args['pt_vol_stack'] === '1' ? { volumeStack: true } : {}),
     ...(args['pt_equiangular'] === '1' ? { volumeEquiangular: true } : {}),
+    ...(args['pt_vspg'] === '1' ? { volumeGuiding: 'vspg' as const } : {}),
     ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : {}),
     ...(args['pt_grid_layout'] === 'atlas' ? { volumeGridLayout: 'atlas' as const } : {}),
     ...(args['pt_volume_outputs'] === '1' ? { volumeOutputs: true } : {}),

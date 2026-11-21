@@ -503,7 +503,7 @@ export class PtMegakernel {
     this.frameBuffer?.destroy();
     this.frameBuffer = null;
     // The AOVs (when on) live in the tail of the accumulator: width * height radiance sums, then PT_AOV_VEC4 vec4 per pixel.
-    const vec4PerPixel = this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : this.options.integrator?.volumes?.outputs ? 1 + PT_VOLUME_OUTPUT_VEC4 : 1;
+    const vec4PerPixel = this.options.integrator?.aovs ? 1 + PT_AOV_VEC4 : this.options.integrator?.volumes?.outputs ? 1 + PT_VOLUME_OUTPUT_VEC4 : this.options.integrator?.volumes?.guiding === 'vspg' ? 2 : 1;
     this.accum = this.device.createBuffer({ label: 'pt accum', size: width * height * 16 * vec4PerPixel, usage: STORAGE | COPY_SRC | COPY_DST });
     if (this.options.integrator?.frame) {
       const bytes = width * height * 16 * PT_FRAME_PLANES;

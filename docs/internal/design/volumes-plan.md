@@ -76,7 +76,7 @@ Gate: lamp-lit fog and thin-fog god rays at least 3x better equal-time relMSE th
 |---|---|---|
 | ✅ V4.1 | Equiangular + distance MIS for emissive triangles in homogeneous media | new `vol-lamp-fog` (maxDepth 1) vs a 1D quadrature |
 | ✅ V4.2 | Forced in-scatter NEE for thin homogeneous media | thin-fog closed form (single scatter) |
-| V4.3 | Volume scattering probability guiding (VSPG, Cycles) | thin-fog scene equal time |
+| ✅ V4.3 (off by default) | Volume scattering probability guiding (VSPG, Cycles) | thin-fog scene equal time |
 | V4.4 | Equiangular in grid media (Cycles' scheme) | `vol-cornell-smoke` grid twin |
 | ✅ V4.5 | Height fog (exponential in y, closed-form optical depth and exact distance sampling, no majorant) | closed-form T and single-scatter quadrature |
 | ✅ V4.6 | Emissive media (Le or temperature grid + blackbody) | closed form Le (1 - exp(-sigma_a d)) |

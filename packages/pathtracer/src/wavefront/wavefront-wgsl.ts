@@ -42,6 +42,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // `integrator.spectral` (the wavelengths are recomputed from pixel and sample in shade; one hero bit in the path state) run on the wavefront.
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
   if (o.volumes?.equiangular) return 'integrator.volumes.equiangular (equiangular distance sampling builds on the forced NEE, megakernel only: V4.1)';
+  if (o.volumes?.guiding === 'vspg') return "integrator.volumes.guiding 'vspg' (volume scattering probability guiding is megakernel only: V4.3)";
   if (o.volumes?.forcedNee) return 'integrator.volumes.forcedNee (forced in-scatter NEE is megakernel only: V4.2)';
   if (o.frame && o.volumes) return 'integrator.frame with integrator.volumes (V5.1c: the megakernel only; the wavefront scatter vertex lives in the shade kernel and has no frame planes)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';

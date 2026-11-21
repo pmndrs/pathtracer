@@ -17,6 +17,7 @@
  *
  * Needs from the surrounding module: `RtRay`, `rtClosest`, `RT_MASK_ALL`, `ptOffsetOrigin`, `ptSideNormal`, `ptMax3`, `PtFrame` helpers, the light sampling.
  */
+import { PT_VSPG_DECLS_WGSL, PT_VSPG_STEP_WGSL } from './vspg-wgsl.ts';
 import type { PtMedium, PtVolumeOptions } from './volume.ts';
 import { ptMediumMajorant, ptMediumsEmit } from './volume.ts';
 import { ptPhaseValidate } from './phase.ts';
@@ -581,7 +582,7 @@ ${roulette ? `            if (ptMax3(tr) < 0.05) {
 }
 ` : ''}`);
   if (has('flight')) chunks.push(/* wgsl */ `
-${emissive ? `// V4.6 emission of the segments flown since the last take (the caller adds it to the radiance right after \`ptVolSample\`).
+${v.guiding === 'vspg' ? PT_VSPG_DECLS_WGSL : ''}${emissive ? `// V4.6 emission of the segments flown since the last take (the caller adds it to the radiance right after \`ptVolSample\`).
 var<private> ptVolEmit: vec3f = vec3f(0.0);
 
 fn ptVolEmitTake() -> vec3f {
@@ -625,8 +626,8 @@ ${grid ? `    if (hasLe && m.info.x == 0.0) {` : `    if (hasLe) {`}
     }
 ` : ''}    var t = 0.0;
     for (var i = 0u; i < 4096u; i++) {
-        t += -log(1.0 - ptVolRand()) / m.mu;
-        if (t >= tmax) {
+${v.guiding === 'vspg' ? PT_VSPG_STEP_WGSL : `        t += -log(1.0 - ptVolRand()) / m.mu;
+`}        if (t >= tmax) {
             return PtVolEvent(tmax, 0u);
         }
         let st = m.sigmaT * ptVolDensity(m, o + d * t);

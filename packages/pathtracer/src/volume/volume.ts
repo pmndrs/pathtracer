@@ -154,6 +154,13 @@ export interface PtVolumeOptions {
    */
   equiangular?: boolean;
   /**
+   * V4.3 (megakernel only): volume scattering probability guiding (Cycles / Xu et al.) on the first free-flight segment of the primary ray in homogeneous and plain-loop grid media
+   * (height and brick media keep delta tracking). `'vspg'` guides the probability that a majorant collision exists in the segment by the pixel's earlier scatter / pass-through
+   * contributions (one vec4 per pixel in the accumulator tail), weighted (a / P, (1 - a) / (1 - P)): unbiased for any P, helps thin media where most camera rays never scatter.
+   * Combinable with `forcedNee` / `equiangular`; refused with `outputs`, `aovs`, `accumulate: false`. Derivation and twin: `volume/vspg-wgsl.ts`. Default 'none': kernels are unchanged.
+   */
+  guiding?: 'none' | 'vspg';
+  /**
    * V6.6: the medium table (sigma_t, albedo, g, lobe weights) is read from a UNIFORM buffer (group 2 binding `PT_VOLUME_MEDIA_BINDING`, no storage slot) instead of being compiled into the
    * kernel, so `PtMegakernel.setMedia` / `PtWavefront.setMedia` change the numbers without a recompile (then reset the accumulation). The structure stays compiled (see `ptVolumeMediaCompatible`).
    * Default false: the kernel text is unchanged.
