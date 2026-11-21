@@ -90,7 +90,7 @@ reference mean within 1% in under 2 s on the M5.
 |---|---|---|
 | 🟨 V5.1 | (V5.1a ✅ aovs + OIDN megakernel, V5.1b ✅ wavefront, V5.1c ✅ frame + media megakernel; open: wavefront frame + media, the upscaler bias) Lift `frame` / `aovs` refusal for media: medium primary-vertex semantics (albedo sigma_s / sigma_t, normal 0 / -wo, viewZ and motion from the first scatter), sky x T in the emission plane | `realtime-check` plane identity on `vol-cornell-smoke` |
 | ✅ V5.2 ★ (plain scheduler) | `volumes.outputs` on the wavefront; `ptwfAutoPolicy` for media after the quiet-pass A/B (inline refill read 0.72x per spp, provisional) | `wf-p5-check` outputs per pixel |
-| V5.3 | `preview` media preset (ray-marched shadows N = 1, lower medium depth, hardware filtering), A/B vs reference mode | mean within 1% on the V0 scenes |
+| ✅ V5.3 (maintainer to confirm) | `preview` media preset (ray-marched shadows N = 1, lower medium depth, hardware filtering), A/B vs reference mode | mean within 1% on the V0 scenes |
 | V5.4 | ReSTIR DI on surfaces behind homogeneous media (final shadow ray through `ptVolTr`) | `restir-check` bias scan on a fog scene |
 | V5.5 | Research: volumetric ReSTIR; NRC at medium vertices (NRC track) | design notes first |
 

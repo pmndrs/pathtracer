@@ -15,6 +15,7 @@
 import type { PtLayeredOptions } from '../bsdf/layered.ts';
 import type { SceneCopyPacking } from '@pmndrs/raytracer';
 import type { PtIntegratorOptions } from './integrator-wgsl.ts';
+import type { PtVolumeOptions } from '../volume/volume.ts';
 
 export type PtMode = 'reference' | 'preview' | 'realtime';
 export const PT_MODES: readonly PtMode[] = ['reference', 'preview', 'realtime'];
@@ -26,7 +27,9 @@ export interface PtModePreset {
   /** Layering of OpenPBR layered materials (merged into `integrator.materials.layered` where the caller left a field undefined). */
   layered: Pick<PtLayeredOptions, 'layering' | 'albedoBase' | 'albedoCorrection'> | null;
   /** The path limits the mode suggests (`pt.setLimits`; a scene's own depth stays for `reference`, hence null). */
-  limits: { maxDepth: number; rrStartDepth: number; textureConeScale?: number } | null;
+  limits: { maxDepth: number; rrStartDepth: number; textureConeScale?: number; /** V5.3: cap of medium scatter events per path, for a scene with media (needs `volumes.separateDepth`, which the preset turns on); surfaces keep `maxDepth`. */ maxVolumeDepth?: number } | null;
+  /** V5.3: media options the mode sets on a scene that has `integrator.volumes` (see `ptApplyMode` for the guards that keep refused combinations out). */
+  volumes: Pick<PtVolumeOptions, 'trRoulette' | 'forcedNee' | 'equiangular' | 'separateDepth' | 'densityFilter'> | null;
   /** The scene copy binding the mode wants. Pass it to `uploadSceneCopy({ packing })` AND to the kernel's `scenePacking`; `create` does not apply it (a mismatch throws in `setScene`). */
   scenePacking: SceneCopyPacking | null;
 }
@@ -43,6 +46,8 @@ export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'preview.aovs': 'albedo + normal + viewZ for OIDN on the converged-ish frame (P2.34); the OIDN-small pipeline is P4.7',
   'preview.limits': 'maxDepth 4, no Russian roulette: pending A/B (R3)',
   'preview.layered': 'D24 + D32: albedo layering, internal base, albedoCorrection texture (P2.32b: furnace <= 1.003, within 4% of the walk on the Tier 1 class B scenes); these are the library defaults since D32, the preset states them',
+  'preview.volumes': 'V5.3 (media scenes only; every entry is an explicit caller value away from being off): trRoulette (grid media; unbiased, V1.1), forcedNee + equiangular (megakernel, homogeneous media, no `outputs`, `nee` on; unbiased, V305 / V309), densityFilter hardware (grid media only when `volumeGrid.format` is r16float / r8unorm; 8-bit filter weights, not bit-equal to manual), separateDepth (the cap below). Timings are provisional (QUIET-PASS); bias table in volumes.md 5b',
+  'preview.maxVolumeDepth': '256 scatters per path with surfaces at their own `maxDepth` (V303, V5.3 A/B at 256 spp, provisional load 9-12): BIASED dark on thick high-albedo clouds: sphere g 0.85 albedo 0.99 t 50 -0.20% (same as 512), sphere g 0.8 albedo 1 t 200 -2.96% (64: -4.31% / -11.99%, 128: -0.61% / -6.84%); grid cloud and Cornell smoke (scene depth <= 40) unaffected. A caller\'s `setLimits` decides; the preset only names it (`ptModePreset(\'preview\').limits.maxVolumeDepth`; the bench adapter applies it unless `pt_maxvoldepth` is given)',
   'preview.scenePacking': 'packed: P3.11, one storage buffer less in every kernel, per-pixel identical images; the library default since D32 (provisional: Sponza a wash, Cornell megakernel +2%; the optional quiet pass confirms)',
   'realtime.alphaPolicy': 'as preview (D31: exact + transmit; max speed `alphaPolicy: \'opaqueShadow\'`)',
   'realtime.alphaShadow': 'as preview (D31)',
@@ -55,18 +60,20 @@ export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'realtime.frame': 'per-frame outputs for the temporal filter (P4.1, V122); both schedulers since P4.1b (the wavefront: plain scheduler only, planes in the accumulator tail, V211); costs 7 planes of vec4 per pixel of write bandwidth (the 7th is the emission plane, P4.5a, V200); not timed yet (QUIET-PASS)',
   'realtime.restir': 'opt-in (`integrator.restir`), D32: when on, `unbiased` (no initial visibility), M 8, temporal, spatial 2 random are the library defaults, and the realtime preset adds `sharedHit` (megakernel, trace primaries, positions in the layout: -5.8% frame on Sponza 1280x720); pays on many-light scenes only (1.9-2.8x relMSE, -28% FLIP at +13..30% frame time), a sun + sky scene gains nothing',
   'realtime.scheduler': 'D32: `ptwfAutoPolicy({ ..., frame: true, triangles, kernelBytes })` is the recommended scheduler choice: wavefront for big scenes (>= 100k triangles, >= 2^17 pixels) or a megakernel over the ~50 KB DXC class, else megakernel',
+  'realtime.volumes': 'none added (V5.3): frame + volumes compiles on the megakernel since V5.1c (first-vertex scatter = diffuse class), not on the wavefront; `volumes.outputs` + frame throws; the kernel is 51-53 KB (over the DXC class). Media speed options for realtime are not measured',
   'realtime.limits': 'maxDepth 2, no Russian roulette (a depth cap is the real-time termination; R3 compares RR / throughput / cache termination after the denoiser): pending A/B',
 };
 
 const LAYERED = { layering: 'albedo', albedoBase: 'internal', albedoCorrection: 'texture' } as const;
 
 const PRESETS: Record<PtMode, PtModePreset> = {
-  reference: { mode: 'reference', integrator: {}, layered: null, limits: null, scenePacking: null },
+  reference: { mode: 'reference', integrator: {}, layered: null, limits: null, volumes: null, scenePacking: null },
   preview: {
     mode: 'preview',
     integrator: { alphaPolicy: 'exact', alphaShadow: 'transmit', alphaTransmit: 0.45, materialLod: 'secondary', textureLod: 'cone', aovs: true },
     layered: LAYERED,
-    limits: { maxDepth: 4, rrStartDepth: 0, textureConeScale: 1 },
+    limits: { maxDepth: 4, rrStartDepth: 0, textureConeScale: 1, maxVolumeDepth: 256 },
+    volumes: { trRoulette: true, forcedNee: true, equiangular: true, separateDepth: true },
     scenePacking: 'packed',
   },
   realtime: {
@@ -74,6 +81,7 @@ const PRESETS: Record<PtMode, PtModePreset> = {
     integrator: { alphaPolicy: 'exact', alphaShadow: 'transmit', alphaTransmit: 0.45, materialLod: 'secondary', textureLod: 'cone', frame: true },
     layered: LAYERED,
     limits: { maxDepth: 2, rrStartDepth: 0, textureConeScale: 1 },
+    volumes: null,
     scenePacking: 'packed',
   },
 };
@@ -123,6 +131,30 @@ export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'meg
   const restir = merged.restir as { sharedHit?: boolean } | null | undefined;
   const layout = (options as { layout?: { positions?: boolean } }).layout;
   if (options.mode === 'realtime' && restir && typeof restir === 'object' && restir.sharedHit === undefined && scheduler === 'megakernel' && (merged.primary ?? 'trace') === 'trace' && layout?.positions) merged.restir = { ...restir, sharedHit: true };
+  // V5.3: media. Only `preview` carries media options. `realtime` adds none (V5.1c: frame + volumes runs on the MEGAKERNEL only, the wavefront still refuses it; that kernel is 51-53 KB, over the ~50 KB DXC class), so a realtime scene's `volumes` pass through unchanged. Each option is added only where the kernel accepts it, so the preset never produces a refused combination.
+  const vol = merged.volumes as PtVolumeOptions | null | undefined;
+  if (vol && preset.volumes) {
+    const v: Record<string, unknown> = { ...vol };
+    const setv = (key: string, value: unknown): void => {
+      if (v[key] === undefined) v[key] = value;
+    };
+    const hasGrid = vol.media.some((m) => m.grid);
+    const homogeneous = vol.media.some((m) => !m.grid && !m.height) && !vol.media.some((m) => m.height);
+    if (preset.volumes.trRoulette && hasGrid) setv('trRoulette', true);
+    if (preset.volumes.separateDepth) setv('separateDepth', true);
+    // forced / equiangular: megakernel only, homogeneous media, `nee` on, no outputs (their order split would miss the forced estimates).
+    if (scheduler === 'megakernel' && homogeneous && !vol.outputs && merged.nee !== false) {
+      if (preset.volumes.forcedNee) setv('forcedNee', true);
+      if (preset.volumes.equiangular) setv('equiangular', true);
+    }
+    // Hardware density filtering only with a grid format the device always filters (r32float needs `float32-filterable`: the caller opts in).
+    const gridFormat = (options as { volumeGrid?: { format?: string } }).volumeGrid?.format;
+    if (hasGrid && (gridFormat === 'r16float' || gridFormat === 'r8unorm')) setv('densityFilter', 'hardware');
+    merged.volumes = v as unknown as PtVolumeOptions;
+    // AOVs and volume outputs share the accumulator tail (refused together); the reduced secondary material kernel has no scatter vertex on the wavefront.
+    if (vol.outputs && merged.aovs === true && (options.integrator as PtIntegratorOptions | undefined)?.aovs === undefined) merged.aovs = false;
+    if (scheduler === 'wavefront' && (options.integrator as PtIntegratorOptions | undefined)?.materialLod === undefined) merged.materialLod = 'full';
+  }
   const materials = merged.materials as { features: { layered?: boolean }; layered?: Record<string, unknown> } | null | undefined;
   if (preset.layered && materials?.features.layered) {
     const layered: Record<string, unknown> = { ...(materials.layered ?? {}) };
