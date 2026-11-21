@@ -6,7 +6,8 @@
  * delta tracking against 8^3 brick majorants (`majorant: 'brick'`). The medium is grey and almost non-absorbing (albedo 0.99), so light bounces
  * many times; the phase function is strongly forward, either one Henyey-Greenstein lobe or the water-droplet Mie fit (`ptPhaseLobes`).
  *
- * The extinction, albedo and phase are compiled into the kernel (a change rebuilds it, a few seconds); the sun only rewrites the scene copy.
+ * The medium table is a uniform buffer (`volumes.runtimeParams`): extinction, albedo, g and droplet size are written with `setMedia` and restart the accumulation, no recompile.
+ * Switching the phase between Mie (two lobes) and Henyey-Greenstein changes the kernel's structure and rebuilds it (a few seconds); the sun only rewrites the scene copy.
  */
 import { buildGpuScene, type GpuScene, type SceneCopyInput } from '@pmndrs/raytracer';
 import { brickMajorants, gridWorldToIndex, ptPhaseLobes, type PtIntegratorOptions, type PtMedium } from '@pmndrs/pathtracer';
@@ -134,7 +135,7 @@ defineExample(async (ctx) => {
       ...(lobes ? { lobes } : {}),
       grid: { resolution: [RES, RES, RES], worldToIndex: gridWorldToIndex([RES, RES, RES], [MIN, MAX]), densityMax },
     };
-    return { media: [medium], materials: [{ interior: 1, exterior: 0, boundary: true }], majorant: 'brick' };
+    return { media: [medium], materials: [{ interior: 1, exterior: 0, boundary: true }], majorant: 'brick', runtimeParams: true };
   };
 
   const updateStats = () => ctx.stats.set('core optical depth', (params.extinction * core).toFixed(0));
@@ -156,6 +157,14 @@ defineExample(async (ctx) => {
       ctx.error('Could not build the cloud', error);
     }
   };
+  /** Extinction, albedo, g and droplet size: rewrite the medium table in place and restart the accumulation (no recompile). */
+  const updateMedia = () => {
+    const t = performance.now();
+    (renderer?.kernel as { setMedia(v: NonNullable<PtIntegratorOptions['volumes']>): void } | undefined)?.setMedia(volumes()!);
+    renderer?.restart();
+    updateStats();
+    ctx.stats.set('medium update', `${(performance.now() - t).toFixed(2)} ms (no recompile)`);
+  };
   /** The sun only changes the scene copy: rebuild the (cheap) scene and rebind it. */
   const moveSun = async () => {
     const old = gpuScene;
@@ -169,15 +178,15 @@ defineExample(async (ctx) => {
   sun.addBinding(params, 'sunElevation', { label: 'elevation (°)', min: 2, max: 88, step: 1 }).on('change', (e) => e.last && void moveSun());
   sun.addBinding(params, 'sunAzimuth', { label: 'azimuth (°)', min: -180, max: 180, step: 1 }).on('change', (e) => e.last && void moveSun());
 
-  const medium = pane.addFolder({ title: 'Medium (rebuilds the kernel)' });
-  const recompile = (e: { last: boolean }) => e.last && void rebuild();
-  medium.addBinding(params, 'extinction', { label: 'density scale (1/m)', min: 2, max: 80, step: 1 }).on('change', recompile);
-  medium.addBinding(params, 'albedo', { label: 'albedo', min: 0.8, max: 1, step: 0.005 }).on('change', recompile);
+  const medium = pane.addFolder({ title: 'Medium' });
+  const live = () => updateMedia();
+  medium.addBinding(params, 'extinction', { label: 'density scale (1/m)', min: 2, max: 80, step: 1 }).on('change', live);
+  medium.addBinding(params, 'albedo', { label: 'albedo', min: 0.8, max: 1, step: 0.005 }).on('change', live);
   medium.addBinding(params, 'phase', { label: 'phase', options: { 'Mie droplets (Jendersie-d’Eon)': 'mie', 'Henyey-Greenstein': 'hg' } }).on('change', () => { diameter.hidden = params.phase !== 'mie'; g.hidden = params.phase !== 'hg'; void rebuild(); });
   const diameter = medium.addBinding(params, 'diameter', { label: 'droplet size (µm)', min: 5, max: 50, step: 1 });
-  diameter.on('change', recompile);
+  diameter.on('change', live);
   const g = medium.addBinding(params, 'g', { label: 'HG g', min: 0, max: 0.95, step: 0.01 });
-  g.on('change', recompile);
+  g.on('change', live);
   g.hidden = true;
 
   const path = pane.addFolder({ title: 'Path' });

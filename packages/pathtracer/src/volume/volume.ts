@@ -136,6 +136,12 @@ export interface PtVolumeOptions {
    * 1/r^2 noise of a lamp close to the ray into a smooth estimate. Sun / environment picks keep the exponential distance. Derivation and twin: `volume/equiangular-wgsl.ts`. Default false: the kernel text is unchanged.
    */
   equiangular?: boolean;
+  /**
+   * V6.6: the medium table (sigma_t, albedo, g, lobe weights) is read from a UNIFORM buffer (group 2 binding `PT_VOLUME_MEDIA_BINDING`, no storage slot) instead of being compiled into the
+   * kernel, so `PtMegakernel.setMedia` / `PtWavefront.setMedia` change the numbers without a recompile (then reset the accumulation). The structure stays compiled (see `ptVolumeMediaCompatible`).
+   * Default false: the kernel text is unchanged.
+   */
+  runtimeParams?: boolean;
 }
 
 /** vec4 per pixel the volume outputs add to the accumulator (after the `width * height` radiance sums). */

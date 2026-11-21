@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { RESERVED, balanced, declaredIdentifiers } from '../../../raytracer/src/wgsl-names.testutil.ts';
 import { ptMegakernelBuild } from '../integrator/megakernel.ts';
 import { ptwfUnsupported } from '../wavefront/wavefront-wgsl.ts';
-import { PT_VOLUME_ALL_PARTS, ptVolumeRatioShadows, ptVolumeValidate, ptVolumeWgsl } from './volume-wgsl.ts';
+import { PT_VOLUME_ALL_PARTS, ptVolumeMediaCompatible, ptVolumeMediaData, ptVolumeRatioShadows, ptVolumeValidate, ptVolumeWgsl } from './volume-wgsl.ts';
 import type { PtVolumeOptions } from './volume.ts';
 
 const caps = buildCaps({ features: new Set(['subgroups', 'shader-f16', 'timestamp-query']), limits: {} }, new Set());
@@ -190,5 +190,33 @@ describe('height fog (V4.5)', () => {
   it('declares legal names', () => {
     const names = declaredIdentifiers(ptVolumeWgsl(heightOpts));
     for (const n of names) expect(RESERVED.has(n)).toBe(false);
+  });
+});
+
+describe('volumes.runtimeParams (V6.6)', () => {
+  const rt: PtVolumeOptions = { ...homog, runtimeParams: true };
+  it('declares the table as a uniform at binding 22 and has no private initializer; the default text is unchanged', () => {
+    const text = build(rt);
+    expect(text).toMatch(/@group\(2\) @binding\(22\) var<uniform> ptVolMedia: array<vec4f, 6>;/);
+    expect(text).not.toContain('var<private> ptVolMedia');
+    expect(balanced(text)).toBe(true);
+    expect(build({ ...homog, runtimeParams: false })).toBe(build(homog));
+  });
+  it('the data holds the compiled rows (majorant, r8 scale fold)', () => {
+    const g = { ...grid, densityMax: 2, densityScale: 0.5 };
+    const m: PtVolumeOptions = { ...homog, media: [{ sigmaT: [1, 2, 3], albedo: [0.5, 0.6, 0.7], g: 0.25, grid: g }] };
+    const d = ptVolumeMediaData(m);
+    expect(d.length).toBe(24);
+    expect(Array.from(d.slice(0, 8))).toEqual([0.5, 1, 1.5, 6, 0.5, Math.fround(0.6), Math.fround(0.7), 0.25]);
+    expect(d[8]).toBe(1.5); // max sigma_t x scale
+  });
+  it('setMedia validation accepts new numbers and refuses structure changes', () => {
+    const next = { ...rt, media: [{ sigmaT: [3, 3, 3], albedo: [0.2, 0.3, 0.4], g: -0.5 }] } as PtVolumeOptions;
+    expect(() => ptVolumeMediaCompatible(rt, next)).not.toThrow();
+    expect(() => ptVolumeMediaCompatible(rt, { ...rt, media: [...rt.media, ...rt.media] })).toThrow(/number of media/);
+    expect(() => ptVolumeMediaCompatible(rt, { ...rt, media: [{ ...rt.media[0]!, grid }] })).toThrow(/grid/);
+    expect(() => ptVolumeMediaCompatible(rt, { ...rt, media: [{ ...rt.media[0]!, lobes: { gA: 0.3, gB: -0.5, w: 0.2, alpha: 0 } }] })).toThrow(/phase lobes/);
+    expect(() => ptVolumeMediaCompatible(rt, { ...rt, shadowTracking: 'ratio' })).toThrow(/option/);
+    expect(() => ptVolumeMediaCompatible(rt, { ...rt, media: [{ ...rt.media[0]!, g: 1.5 }] })).toThrow(/g 1.5/);
   });
 });

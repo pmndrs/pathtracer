@@ -35,7 +35,8 @@ import { PT_BLUENOISE_BINDING, ptSamplerWgsl } from './dimensions.ts';
 import { ptApplyMode, ptModePreset, type PtMode } from './modes.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
-import { PT_VOLUME_BINDING, PT_VOLUME_INDIRECTION_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid } from '../volume/volume-wgsl.ts';
+import type { PtVolumeOptions } from '../volume/volume.ts';
+import { PT_VOLUME_BINDING, PT_VOLUME_INDIRECTION_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_MEDIA_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid, ptVolumeMediaCompatible, ptVolumeMediaData } from '../volume/volume-wgsl.ts';
 import { PT_VOLUME_OUTPUT_VEC4, brickAtlasMemory, buildBrickAtlas, ptDecodeVolumeOutputs, ptF16Bits, ptR8Bytes, ptTexelBound, type PtVolumeOutputs } from '../volume/volume.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
@@ -284,6 +285,9 @@ export class PtMegakernel {
   /** P5: the density grid of a grid medium (group 2 binding `PT_VOLUME_BINDING`). */
   private volumeTexture: GPUTexture | null = null;
   private volumeSampler: GPUSampler | null = null;
+  /** V6.6 `volumes.runtimeParams`: the medium table (uniform, group 2 binding `PT_VOLUME_MEDIA_BINDING`) and the media it was last written from. */
+  private mediaBuffer: GPUBuffer | null = null;
+  private mediaNow: PtVolumeOptions | null = null;
   private majorantTexture: GPUTexture | null = null;
   /** V3.2: the brick indirection texture of `volumes.gridLayout: 'atlas'` (`volumeTexture` is then the atlas) and its size against the dense grid. */
   private indirectionTexture: GPUTexture | null = null;
@@ -386,6 +390,7 @@ export class PtMegakernel {
           ...(volumeGrid ? [{ binding: PT_VOLUME_BINDING, visibility: COMPUTE, texture: { sampleType: (volumeHw ? 'float' : 'unfilterable-float') as 'float' | 'unfilterable-float', viewDimension: '3d' as const } }] : []),
           ...(volumeGrid && options.integrator?.volumes?.gridLayout === 'atlas' ? [{ binding: PT_VOLUME_INDIRECTION_BINDING, visibility: COMPUTE, texture: { sampleType: 'uint' as const, viewDimension: '3d' as const } }] : []),
           ...(volumeHw ? [{ binding: PT_VOLUME_SAMPLER_BINDING, visibility: COMPUTE, sampler: { type: 'filtering' as const } }] : []),
+          ...(options.integrator?.volumes?.runtimeParams ? [{ binding: PT_VOLUME_MEDIA_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const } }] : []),
           ...(spectral ? [{ binding: PT_SPEC_BINDING, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float' as const, viewDimension: '2d' as const } }] : []),
           ...(options.integrator?.frame ? [{ binding: PT_FRAME_PARAMS_BINDING, visibility: COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true, minBindingSize: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, visibility: COMPUTE, buffer: { type: 'storage' as const } }] : []),
         ],
@@ -410,6 +415,12 @@ export class PtMegakernel {
       kernel.atlasMemory = at.memory;
     } else if (volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid!, label);
     if (volumeHw) kernel.volumeSampler = createVolumeSampler(device, label);
+    if (options.integrator?.volumes?.runtimeParams) {
+      const data = ptVolumeMediaData(options.integrator.volumes);
+      kernel.mediaBuffer = device.createBuffer({ label: `${label} media`, size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(kernel.mediaBuffer, 0, data);
+      kernel.mediaNow = options.integrator.volumes;
+    }
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
       const mj = options.volumeGrid!.majorant!;
       if ((options.integrator?.volumes?.shadowTracking === 'residual' || options.integrator?.volumes?.shadowTracking === 'telescoping') && !mj.minima) throw new Error("PtMegakernel: integrator.volumes.shadowTracking 'residual' / 'telescoping' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
@@ -528,6 +539,17 @@ export class PtMegakernel {
     this.samples = index >>> 0;
   }
 
+  /**
+   * V6.6 (`integrator.volumes.runtimeParams`): rewrites the medium table (sigma_t, albedo, g, lobe weights; the majorant and the r8 scale fold are recomputed) without a recompile.
+   * `volumes` is the whole options object with new `media`; everything the kernel's code depends on must be unchanged (`ptVolumeMediaCompatible` throws). Reset the accumulation afterwards.
+   */
+  setMedia(volumes: PtVolumeOptions): void {
+    if (!this.mediaBuffer || !this.mediaNow) throw new Error('PtMegakernel.setMedia: the kernel was not built with integrator.volumes.runtimeParams');
+    ptVolumeMediaCompatible(this.mediaNow, volumes);
+    this.device.queue.writeBuffer(this.mediaBuffer, 0, ptVolumeMediaData(volumes));
+    this.mediaNow = volumes;
+  }
+
   setLimits(limits: PtLimits): void {
     this.limits = limits;
   }
@@ -596,6 +618,7 @@ export class PtMegakernel {
         ...(this.volumeTexture ? [{ binding: PT_VOLUME_BINDING, resource: this.volumeTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.indirectionTexture ? [{ binding: PT_VOLUME_INDIRECTION_BINDING, resource: this.indirectionTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.volumeSampler ? [{ binding: PT_VOLUME_SAMPLER_BINDING, resource: this.volumeSampler }] : []),
+        ...(this.mediaBuffer ? [{ binding: PT_VOLUME_MEDIA_BINDING, resource: { buffer: this.mediaBuffer } }] : []),
         ...(this.majorantTexture ? [{ binding: PT_VOLUME_MAJORANT_BINDING, resource: this.majorantTexture.createView({ dimension: '3d' }) }] : []),
         ...(this.specTexture ? [{ binding: PT_SPEC_BINDING, resource: this.specTexture.createView() }] : []),
         ...(this.frameBuffer && this.frameParamsBuffer ? [{ binding: PT_FRAME_PARAMS_BINDING, resource: { buffer: this.frameParamsBuffer, offset: 0, size: PT_FRAME_PARAMS_BYTES } }, { binding: PT_FRAME_BINDING, resource: { buffer: this.frameBuffer } }] : []),
@@ -761,6 +784,7 @@ export class PtMegakernel {
   }
 
   destroy(): void {
+    this.mediaBuffer?.destroy();
     this.counterBuffer?.destroy();
     this.paramsBuffer.destroy();
     this.fuzzTable?.destroy();

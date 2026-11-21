@@ -28,6 +28,8 @@ export const PT_VOLUME_MAJORANT_BINDING = 17;
 export const PT_VOLUME_SAMPLER_BINDING = 20;
 /** V3.2 `gridLayout: 'atlas'`: the `r32uint` brick indirection texture (`bx | by << 10 | bz << 20` of the atlas brick, `0xffffffff` empty); binding 16 is then the atlas. */
 export const PT_VOLUME_INDIRECTION_BINDING = 21;
+/** V6.6 `volumes.runtimeParams`: the medium table as a UNIFORM `array<vec4f, media x stride>` (no storage-buffer slot), rewritten by `setMedia`. */
+export const PT_VOLUME_MEDIA_BINDING = 22;
 
 const f32Lit = (v: number): string => {
   const f = Math.fround(v);
@@ -70,21 +72,53 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
   if ((v.cameraMedium ?? 0) > n) throw new RangeError('integrator.volumes: cameraMedium does not exist');
 }
 
-function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
+/** Rows of one medium as numbers (`mediumVec4s` is their text): (sigmaT x scale, mu), (albedo, g), info, world-to-index 3 x vec4, then the lobes row when the table has them. */
+function mediumRows(m: PtMedium, lobes: boolean): number[][] {
   const mu = ptMediumMajorant(m);
   const grid = m.grid;
-  const k = grid?.densityScale ?? 1; // V3.1: r8unorm texels are density / scale; sigma_t x scale is exact, and the brick majorant texture holds texel units
+  const k = grid?.densityScale ?? 1;
   const w = grid ? grid.worldToIndex : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-  const row = (a: number[]): string => `vec4f(${a.map(f32Lit).join(', ')})`;
   return [
-    row([...(k === 1 ? m.sigmaT : m.sigmaT.map((x) => x * k)), mu]),
-    row([...m.albedo, m.g]),
-    row(grid ? [Math.max(...m.sigmaT) * k, ...grid.resolution] : m.height ? [0, m.height.H, m.height.y0, 0] : [0, 0, 0, 0]),
-    row(w.slice(0, 4)),
-    row(w.slice(4, 8)),
-    row(w.slice(8, 12)),
-    ...(lobes ? [row(m.lobes && m.lobes.w > 0 ? [m.lobes.gB, m.lobes.w, m.lobes.alpha, 0] : [0, 0, 0, 0])] : []),
+    [...(k === 1 ? m.sigmaT : m.sigmaT.map((x) => x * k)), mu],
+    [...m.albedo, m.g],
+    grid ? [Math.max(...m.sigmaT) * k, ...grid.resolution] : m.height ? [0, m.height.H, m.height.y0, 0] : [0, 0, 0, 0],
+    w.slice(0, 4),
+    w.slice(4, 8),
+    w.slice(8, 12),
+    ...(lobes ? [m.lobes && m.lobes.w > 0 ? [m.lobes.gB, m.lobes.w, m.lobes.alpha, 0] : [0, 0, 0, 0]] : []),
   ];
+}
+
+/** V6.6: the medium table of `volumes.runtimeParams` as the f32 data of binding `PT_VOLUME_MEDIA_BINDING` (the same rows the compiled table would hold: majorant, max sigma_t and the r8 scale are derived here). */
+export function ptVolumeMediaData(v: PtVolumeOptions): Float32Array<ArrayBuffer> {
+  ptVolumeValidate(v);
+  const lobes = ptVolumeHasLobes(v);
+  return new Float32Array(v.media.flatMap((m) => mediumRows(m, lobes).flatMap((r) => r.map((x) => (f32Lit(x), x)))));
+}
+
+/**
+ * V6.6: throws unless `next` can replace `prev` in a kernel built for `prev` with `runtimeParams`. The kernel's code depends on the number of media, on each medium's kind (grid / height / homogeneous),
+ * on whether the table has lobes (and which media have one) and on every option; only the numbers of the rows (sigma_t, albedo, g, lobe weights / g / alpha, the grid's density max / scale) may change.
+ */
+export function ptVolumeMediaCompatible(prev: PtVolumeOptions, next: PtVolumeOptions): void {
+  ptVolumeValidate(next);
+  const bad = (what: string): never => { throw new RangeError(`setMedia: ${what} changed (it is compiled into the kernel: rebuild it)`); };
+  if (next.media.length !== prev.media.length) bad('the number of media');
+  if (ptVolumeHasLobes(next) !== ptVolumeHasLobes(prev)) bad('whether the table has phase lobes');
+  prev.media.forEach((a, i) => {
+    const b = next.media[i] as PtMedium;
+    if (!!a.grid !== !!b.grid) bad(`medium ${i} grid`);
+    if (!!a.height !== !!b.height) bad(`medium ${i} height profile`);
+    if (!!(a.lobes && a.lobes.w > 0) !== !!(b.lobes && b.lobes.w > 0)) bad(`medium ${i} phase lobes`);
+    if (a.grid && b.grid && (a.grid.resolution.join() !== b.grid.resolution.join() || a.grid.worldToIndex.join() !== b.grid.worldToIndex.join())) bad(`medium ${i} grid geometry`);
+    if (a.grid && b.grid && (a.grid.densityMax !== b.grid.densityMax || (a.grid.densityScale ?? 1) !== (b.grid.densityScale ?? 1))) bad(`medium ${i} grid density max / scale (they belong to the uploaded texture and its majorants)`);
+  });
+  const strip = (v: PtVolumeOptions): string => JSON.stringify({ ...v, media: undefined, runtimeParams: undefined });
+  if (strip(prev) !== strip(next)) bad('a volumes option (materials / cameraMedium / estimator settings)');
+}
+
+function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
+  return mediumRows(m, lobes).map((a) => `vec4f(${a.map(f32Lit).join(', ')})`);
 }
 
 /**
@@ -143,7 +177,7 @@ fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
 ` : ''}`);
   }
   if (has('tables')) chunks.push(/* wgsl */ `
-var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f, ${v.media.length * stride}>(${v.media.flatMap((m) => mediumVec4s(m, lobes)).join(', ')});
+${v.runtimeParams ? `@group(2) @binding(${PT_VOLUME_MEDIA_BINDING}) var<uniform> ptVolMedia: array<vec4f, ${v.media.length * stride}>;` : `var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f, ${v.media.length * stride}>(${v.media.flatMap((m) => mediumVec4s(m, lobes)).join(', ')});`}
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
 var<private> ptVolState: u32;${tele ? `
 var<private> ptVolSampleIdx: u32;` : ''}
