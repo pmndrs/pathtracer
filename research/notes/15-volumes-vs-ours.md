@@ -48,3 +48,16 @@ Analysis agent report (Opus), comparing [14-volumes-survey.md](14-volumes-survey
 - NanoVDB / OpenVDB licence: possibly Apache-2.0 now (verify); WebVDB's `nanovdb-wgsl` and emcfarlane/webgpu-nanovdb are different projects, both licences unchecked.
 - Residual ratio tracking patent "expired": verify before it becomes a default. Peters 2025 jackknife is biased: preview only.
 - Volume guiding 2022-24 exists (VSPG, in Cycles); Cycles is not "delta tracking only".
+
+## Licences and patents (checked 2026-11-22)
+
+| item | status | source | for us |
+|---|---|---|---|
+| US9767601B2 residual ratio tracking (Disney; Novak, Jarosz, Selle) | **Expired** for non-payment of fees, 2025-10-27 ("Expired - Fee Related") | https://patents.google.com/patent/US9767601B2/en | free to implement |
+| Disney patents on spectral / decomposition tracking (Kutz et al. 2017) | none found in the US9767601 family / cited-by; USPTO not queried directly | paper page disneyanimation.com/publications/spectral-and-decomposition-tracking-... | search USPTO (Kutz, Habel, Li, Novak) before a default ships |
+| Cycles `shade_volume.h` | Apache-2.0 (SPDX header) | raw.githubusercontent.com/blender/blender/main/intern/cycles/kernel/integrator/shade_volume.h | port with attribution |
+| emcfarlane/webgpu-nanovdb | Apache-2.0 (LICENSE text; GitHub shows NOASSERTION) | github.com/emcfarlane/webgpu-nanovdb/blob/main/LICENSE | port with attribution |
+| OpenVDB / NanoVDB | Apache-2.0 since 12.0 (was MPL-2.0; RE-LICENSE_NOTE.txt) | github.com/AcademySoftwareFoundation/openvdb | port from >= 12.0 with attribution |
+| WebVDB (`parseVdb`, `nanovdb-wgsl`) | MIT, our own repo (DennisSmolek/WebVDB); inherits Apache-2.0 notices of pnanovdb.wgsl / PNanoVDB.h | ~/Developer/WebVDB/LICENSE, THIRD_PARTY.md | port; keep the inherited notices; avoid its neural weights (licence question) |
+| WDAS cloud dataset | CC BY-SA 3.0 Unported | media.disneyanimation.com/.../License_Cloud.pdf | test asset only, fetched / git-ignored, never bundled in the MIT packages |
+| Misso, Bitterli, Georgiev, Jarosz 2022 "Unbiased and consistent rendering using biased estimators" | no patent found (USPTO not queried); authors' code licence unread | research.nvidia.com/labs/rtr/publication/misso2022unbiased | implement from the paper / the Cycles port (Apache-2.0); check for an NVIDIA filing before shipping |
