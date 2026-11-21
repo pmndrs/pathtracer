@@ -71,6 +71,9 @@ const CASES: Record<string, Case> = {
   'vol-grid-cloud-outputs': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeOutputs: true } },
   'vol-cornell-smoke-outputs': { scene: 'vol-cornell-smoke', settings: { volumeOutputs: true } },
   'vol-slab-single-outputs': { scene: 'vol-slab-single', settings: { volumeOutputs: true } },
+  // V5.1b: first-scatter AOV guides (albedo, normal, viewZ) on the wavefront, compared per pixel as well as the beauty
+  'vol-grid-cloud-aovs': { scene: 'vol-grid-cloud', settings: { aovs: true } },
+  'vol-cornell-smoke-aovs': { scene: 'vol-cornell-smoke', settings: { aovs: true } },
   'vol-grid-cloud-r8': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r8unorm' } },
   // spectral transport
   cornell: { scene: 'cornell', settings: SPECTRAL },
@@ -215,6 +218,7 @@ async function runCase(name: string, c: Case, variants: string[], o: { spp: numb
     metrics[`${name}_control_packing_pixels_over_1e-3`] = a.over1e3;
     other.dispose();
   }
+  const aovRef = c.settings?.aovs ? await mk.readAovs() : null;
   const voRef = c.settings?.volumeOutputs ? await mk.readVolumeOutputs() : null;
   for (const v of variants) {
     const opt = VARIANTS[v];
@@ -262,7 +266,28 @@ async function runCase(name: string, c: Case, variants: string[], o: { spp: numb
         if (over > 0) voBad = true;
       }
     }
-    const bad = a.overPx > 0 || a.nonFinite > 0 || voBad;
+    let aovBad = false;
+    if (aovRef) {
+      // V5.1b: albedo / normal / viewZ planes, per element (largest difference over the larger value, floor 1e-3 of the mean)
+      const aw = await wf.readAovs();
+      for (const [pn, pa, pb] of [['albedo', aovRef.albedo, aw.albedo], ['normal', aovRef.normal, aw.normal], ['viewz', aovRef.viewZ, aw.viewZ]] as Array<[string, Float32Array, Float32Array]>) {
+        let mean = 0;
+        for (let i = 0; i < pa.length; i++) mean += Math.abs(pa[i] as number) / pa.length;
+        const fl = Math.max(1e-6, 1e-3 * mean);
+        let worst = 0;
+        let over = 0;
+        for (let i = 0; i < pa.length; i++) {
+          const d = Math.abs((pb[i] as number) - (pa[i] as number)) / Math.max(Math.abs(pa[i] as number), Math.abs(pb[i] as number), fl);
+          if (!(d <= worst)) worst = d;
+          if (!(d <= o.tol)) over++;
+        }
+        metrics[`${tag}_aov_${pn}_relelem_max`] = worst;
+        metrics[`${tag}_aov_${pn}_over_gate`] = over;
+        metrics[`${tag}_aov_${pn}_mean_mk`] = mean;
+        if (over > 0) aovBad = true;
+      }
+    }
+    const bad = a.overPx > 0 || a.nonFinite > 0 || voBad || aovBad;
     metrics[`${tag}_mismatch`] = bad ? 1 : 0;
     if (bad && a.worst.length > 0) note(`${tag} worst pixels (x, y, rel): ${a.worst.map(([i, r]) => `(${i % scene.film.width}, ${Math.floor(i / scene.film.width)}, ${r.toExponential(1)})`).join(' ')}`);
     if (bad) note(`${tag}: ${a.overPx} of ${a.total} pixels differ by more than ${o.tol} of their size (max ${a.maxRelPx}; per channel ${a.over} over, max ${a.maxRel}, over 1e-3: ${a.over1e3}), non-finite ${a.nonFinite}`);

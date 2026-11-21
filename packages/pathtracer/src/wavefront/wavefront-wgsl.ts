@@ -42,7 +42,6 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
   if (o.volumes?.equiangular) return 'integrator.volumes.equiangular (equiangular distance sampling builds on the forced NEE, megakernel only: V4.1)';
   if (o.volumes?.forcedNee) return 'integrator.volumes.forcedNee (forced in-scatter NEE is megakernel only: V4.2)';
-  if (o.volumes && o.aovs) return 'integrator.volumes with integrator.aovs (the first-scatter guides are megakernel only: V5.1a)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
   if (o.restir && o.restirShared) return 'integrator.restir.sharedHit (the shared primary hit joins the wavefront camera kernel: TASKS P4.2a follow-up)';
@@ -799,7 +798,12 @@ ${ind}ptwfQueue[2u * n + ss] = path;
         let vertex = depth;
         depth += 1u;${sd ? '\n        mdepth += 1u;' : ''}
         let pm = st.origin - st.dir * st.volBack + st.dir * hit.t;
-${vo ? `        if (vertex == 0u) {
+${aovs ? `        if (vertex == 0u) {
+            // V5.1b: the megakernel's first-scatter guides: albedo = single-scattering albedo of the medium, normal = -ray direction, viewZ of the scatter point
+            ptAovPrimary(path, n, -dot(pm - ptParams.origin.xyz, normalize(ptParams.forward.xyz)));
+            ptAovGuide(path, n, ptVolMedium(curMed).albedo, -ray.direction);
+        }
+` : ''}${vo ? `        if (vertex == 0u) {
             ptAccum[2u * n + path].w += length(pm - ptParams.origin.xyz);
             ptAccum[3u * n + path].x += 1.0;
         }
@@ -837,7 +841,8 @@ ${sd ? `        next.mdepth = mdepth;
         next.volState = ptVolState;
         next.med = curMed;
         next.skips = st.skips;
-        ptwfStorePath(path, n, next);
+${aovs ? `        next.aovDone = st.aovDone || vertex == 0u;
+` : ''}        ptwfStorePath(path, n, next);
 ${appendNext('        ')}        return;
     }
 `
