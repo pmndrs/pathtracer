@@ -161,7 +161,7 @@ function checkPath(label: string, scene: SceneDesc, cameras: PtLookAtCamera[], f
   }
   // V5.1c: a first-vertex medium scatter is diffuse class with albedo sigma_s / sigma_t
   for (const m of Object.values(scene.media ?? {})) {
-    const mm = m as { sigmaA?: V3; sigmaS?: V3 };
+    const mm = m as unknown as { sigmaA?: V3; sigmaS?: V3 };
     if (mm.sigmaA && mm.sigmaS) diffuseAlbedos.push([0, 1, 2].map((k) => mm.sigmaS![k]! / Math.max(mm.sigmaA![k]! + mm.sigmaS![k]!, 1e-12)) as V3);
   }
   let normalDev = 0;
