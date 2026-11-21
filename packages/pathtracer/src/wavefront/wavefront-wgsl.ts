@@ -31,6 +31,7 @@ import { ptFrameAddWgsl, ptHookVertexExpr, ptHooksWgsl, ptHookWantsRadiance } fr
 import { PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL } from '../restir/restir-wgsl.ts';
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
 import { ptSpectralWgsl } from '../spectral/spectral-wgsl.ts';
+import { ptMediumsEmit } from '../volume/volume.ts';
 import { ptVolPhaseEvalExpr, ptVolPhaseSampleWgsl, ptVolumeRatioShadows, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import { PTWF_ARGS_MAIN, PTWF_ARGS_REFILL, PTWF_ARGS_SHADOW, PTWF_COUNT_IDLE, PTWF_INIT, PTWF_START_ITER, PTWF_STRIDE, PTWF_WORKGROUP } from './layout.ts';
 
@@ -377,9 +378,10 @@ function ptwfIntersectVolWgsl(o: ResolvedIntegratorOptions, wf: PtwfConfig): str
   const v = o.volumes as NonNullable<ResolvedIntegratorOptions['volumes']>;
   // V5.2 `volumes.outputs`: at iteration 0 the intersect kernel runs the megakernel's primary-transmittance march (`ptVoBegin`, its own stream: the same numbers) and adds T to the w lane of plane 1
   const vo = !!v.outputs;
+  const emissive = ptMediumsEmit(v.media); // V4.6: the intersect kernel adds the segments' emission to the accumulator (the shade kernel never sees the flight)
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
-${bindings(vo ? ['params', 'accum', 'state', 'hit', 'count', 'queue'] : ['params', 'state', 'hit', 'count', 'queue'])}
+${bindings(vo || emissive ? ['params', 'accum', 'state', 'hit', 'count', 'queue'] : ['params', 'state', 'hit', 'count', 'queue'])}
 ${ptCommonHeadWgsl(o)}
 ${PT_MIS_WGSL}
 ${ptVolumeWgsl(v, vo ? ['seedOf', 'bind', 'tables', 'density', 'flight', 'tr', 'outputsMarch'] : ['seedOf', 'bind', 'tables', 'density', 'flight'])}
@@ -423,7 +425,8 @@ ${vo ? `    if (iter == 0u) {
         if (med != 0u) {
             let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + back;
             let ev = ptVolSample(med, ray.origin - ray.direction * back, ray.direction, segMax, &st.beta);
-            if (ev.kind == 2u) {
+${emissive ? `            ptAccum[path] = ptAccum[path] + vec4f(ptVolEmitTake(), 0.0);
+` : ''}            if (ev.kind == 2u) {
                 flag = 3u;
                 break;
             }

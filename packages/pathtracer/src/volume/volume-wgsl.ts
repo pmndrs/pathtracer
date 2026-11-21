@@ -18,7 +18,7 @@
  * Needs from the surrounding module: `RtRay`, `rtClosest`, `RT_MASK_ALL`, `ptOffsetOrigin`, `ptSideNormal`, `ptMax3`, `PtFrame` helpers, the light sampling.
  */
 import type { PtMedium, PtVolumeOptions } from './volume.ts';
-import { ptMediumMajorant } from './volume.ts';
+import { ptMediumMajorant, ptMediumsEmit } from './volume.ts';
 import { ptPhaseValidate } from './phase.ts';
 
 export const PT_VOLUME_BINDING = 16;
@@ -54,6 +54,11 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
       if (!(m.height.H > 0) || !Number.isFinite(m.height.H) || !Number.isFinite(m.height.y0)) throw new RangeError(`integrator.volumes: medium ${i} has an invalid height profile (H must be > 0)`);
       if (v.forcedNee || v.equiangular) throw new RangeError('integrator.volumes: a height medium cannot be combined with forcedNee / equiangular (they assume a homogeneous medium)');
     }
+    if (m.emission) {
+      if (m.emission.some((e) => !(e >= 0) || !Number.isFinite(e))) throw new RangeError(`integrator.volumes: medium ${i} has an invalid emission (RGB, finite, >= 0)`);
+      if (m.height && ptMediumsEmit([m])) throw new RangeError(`integrator.volumes: medium ${i} is a height medium with emission (V4.6: homogeneous and grid media only)`);
+      if (m.emission.some((e) => e > 0) && v.majorant === 'brick' && m.grid) throw new RangeError(`integrator.volumes: medium ${i} emits and has majorant 'brick' (V4.6: the brick walk has no emission term; use the global majorant)`);
+    }
     if (m.grid && !(m.grid.densityMax >= 0)) throw new RangeError(`integrator.volumes: medium ${i} has an invalid grid densityMax`);
     if (m.grid && !(Math.max(...m.sigmaT) > 0)) throw new RangeError(`integrator.volumes: grid medium ${i} has no extinction (sigmaT is 0)`);
     if (m.lobes) {
@@ -67,13 +72,14 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
     const [a] = grids;
     for (const m of grids) if (m.grid!.resolution.join() !== a!.grid!.resolution.join()) throw new RangeError('integrator.volumes: grid media must share one resolution (one 3D texture per kernel)');
   }
+  if (v.outputs && ptMediumsEmit(v.media)) throw new RangeError('integrator.volumes: emission does not combine with volumes.outputs yet (V4.6: the order-0-1 split of the emission term is not defined)');
   const n = v.media.length;
   for (const mv of v.materials) if (mv.interior > n || mv.exterior > n || mv.interior < 0 || mv.exterior < 0) throw new RangeError('integrator.volumes: a material names a medium that does not exist');
   if ((v.cameraMedium ?? 0) > n) throw new RangeError('integrator.volumes: cameraMedium does not exist');
 }
 
 /** Rows of one medium as numbers (`mediumVec4s` is their text): (sigmaT x scale, mu), (albedo, g), info, world-to-index 3 x vec4, then the lobes row when the table has them. */
-function mediumRows(m: PtMedium, lobes: boolean): number[][] {
+function mediumRows(m: PtMedium, lobes: boolean, emit = false): number[][] {
   const mu = ptMediumMajorant(m);
   const grid = m.grid;
   const k = grid?.densityScale ?? 1;
@@ -86,6 +92,7 @@ function mediumRows(m: PtMedium, lobes: boolean): number[][] {
     w.slice(4, 8),
     w.slice(8, 12),
     ...(lobes ? [m.lobes && m.lobes.w > 0 ? [m.lobes.gB, m.lobes.w, m.lobes.alpha, 0] : [0, 0, 0, 0]] : []),
+    ...(emit ? [[...(m.emission ?? [0, 0, 0]), 0]] : []), // V4.6: the emission row comes last (index 6 + lobes)
   ];
 }
 
@@ -93,7 +100,8 @@ function mediumRows(m: PtMedium, lobes: boolean): number[][] {
 export function ptVolumeMediaData(v: PtVolumeOptions): Float32Array<ArrayBuffer> {
   ptVolumeValidate(v);
   const lobes = ptVolumeHasLobes(v);
-  return new Float32Array(v.media.flatMap((m) => mediumRows(m, lobes).flatMap((r) => r.map((x) => (f32Lit(x), x)))));
+  const emit = ptMediumsEmit(v.media);
+  return new Float32Array(v.media.flatMap((m) => mediumRows(m, lobes, emit).flatMap((r) => r.map((x) => (f32Lit(x), x)))));
 }
 
 /**
@@ -105,6 +113,7 @@ export function ptVolumeMediaCompatible(prev: PtVolumeOptions, next: PtVolumeOpt
   const bad = (what: string): never => { throw new RangeError(`setMedia: ${what} changed (it is compiled into the kernel: rebuild it)`); };
   if (next.media.length !== prev.media.length) bad('the number of media');
   if (ptVolumeHasLobes(next) !== ptVolumeHasLobes(prev)) bad('whether the table has phase lobes');
+  if (ptMediumsEmit(next.media) !== ptMediumsEmit(prev.media)) bad('whether any medium emits');
   prev.media.forEach((a, i) => {
     const b = next.media[i] as PtMedium;
     if (!!a.grid !== !!b.grid) bad(`medium ${i} grid`);
@@ -117,8 +126,8 @@ export function ptVolumeMediaCompatible(prev: PtVolumeOptions, next: PtVolumeOpt
   if (strip(prev) !== strip(next)) bad('a volumes option (materials / cameraMedium / estimator settings)');
 }
 
-function mediumVec4s(m: PtMedium, lobes: boolean): string[] {
-  return mediumRows(m, lobes).map((a) => `vec4f(${a.map(f32Lit).join(', ')})`);
+function mediumVec4s(m: PtMedium, lobes: boolean, emit = false): string[] {
+  return mediumRows(m, lobes, emit).map((a) => `vec4f(${a.map(f32Lit).join(', ')})`);
 }
 
 /**
@@ -154,7 +163,8 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const residual = brick && (v.shadowTracking === 'residual' || tele);
   const lobes = ptVolumeHasLobes(v);
   const height = v.media.some((m) => m.height); // V4.5: closed-form exponential fog; the code below is emitted only then
-  const stride = lobes ? 7 : 6;
+  const emissive = ptMediumsEmit(v.media); // V4.6
+  const stride = 6 + (lobes ? 1 : 0) + (emissive ? 1 : 0);
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
   const matRow = (m: (typeof mats)[number]): string => `vec4u(${m.interior}u, ${m.exterior}u, ${m.interior !== 0 || m.exterior !== 0 || m.boundary ? 1 : 0}u, ${m.boundary ? 1 : 0}u)`;
   const chunks: string[] = [];
@@ -177,7 +187,7 @@ fn ptVolSeedOf(pixelSeed: u32, sampleIndex: u32) -> u32 {
 ` : ''}`);
   }
   if (has('tables')) chunks.push(/* wgsl */ `
-${v.runtimeParams ? `@group(2) @binding(${PT_VOLUME_MEDIA_BINDING}) var<uniform> ptVolMedia: array<vec4f, ${v.media.length * stride}>;` : `var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f, ${v.media.length * stride}>(${v.media.flatMap((m) => mediumVec4s(m, lobes)).join(', ')});`}
+${v.runtimeParams ? `@group(2) @binding(${PT_VOLUME_MEDIA_BINDING}) var<uniform> ptVolMedia: array<vec4f, ${v.media.length * stride}>;` : `var<private> ptVolMedia: array<vec4f, ${v.media.length * stride}> = array<vec4f, ${v.media.length * stride}>(${v.media.flatMap((m) => mediumVec4s(m, lobes, emissive)).join(', ')});`}
 var<private> ptVolMats: array<vec4u, ${mats.length}> = array<vec4u, ${mats.length}>(${mats.map(matRow).join(', ')});
 var<private> ptVolState: u32;${tele ? `
 var<private> ptVolSampleIdx: u32;` : ''}
@@ -536,13 +546,28 @@ ${roulette ? `            if (ptMax3(tr) < 0.05) {
 }
 ` : ''}`);
   if (has('flight')) chunks.push(/* wgsl */ `
-// One free-flight segment [0, tmax] of a path in medium 'id' (delta tracking). kind 0: reached tmax (beta carries the weight), 1: real scatter at t, 2: killed.
+${emissive ? `// V4.6 emission of the segments flown since the last take (the caller adds it to the radiance right after \`ptVolSample\`).
+var<private> ptVolEmit: vec3f = vec3f(0.0);
+
+fn ptVolEmitTake() -> vec3f {
+    let e = ptVolEmit;
+    ptVolEmit = vec3f(0.0);
+    return e;
+}
+
+` : ''}// One free-flight segment [0, tmax] of a path in medium 'id' (delta tracking). kind 0: reached tmax (beta carries the weight), 1: real scatter at t, 2: killed.
 fn ptVolSample(id: u32, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f>) -> PtVolEvent {
     let m = ptVolMedium(id);
     if (!(m.mu > 0.0)) {
         return PtVolEvent(tmax, 0u);
     }
-${height ? `    if (ptVolIsHeight(m)) {
+${emissive ? `    let le = ptVolMedia[(id - 1u) * ${stride}u + ${stride - 1}u].xyz;
+    let hasLe = ptMax3(le) > 0.0;
+${grid ? `    if (hasLe && m.info.x == 0.0) {` : `    if (hasLe) {`}
+        // homogeneous: the segment integral in closed form, Le (1 - albedo) (1 - exp(-sigma_t L)) at the weight of the segment start
+        ptVolEmit += *beta * le * (vec3f(1.0) - m.albedo) * (vec3f(1.0) - exp(-m.sigmaT * tmax));
+    }
+` : ''}${height ? `    if (ptVolIsHeight(m)) {
         let ss = m.sigmaT * m.albedo;
         let r = ptMax3(ss);
         let gm = ptVolHeightG(m, o, d, tmax);
@@ -571,7 +596,10 @@ ${height ? `    if (ptVolIsHeight(m)) {
         }
         let st = m.sigmaT * ptVolDensity(m, o + d * t);
         let ss = st * m.albedo;
-        let ssMax = ptMax3(ss);
+${emissive && grid ? `        if (hasLe && m.info.x != 0.0) {
+            ptVolEmit += *beta * (st - ss) * le / m.mu;
+        }
+` : ''}        let ssMax = ptMax3(ss);
         let ps = ssMax / m.mu;
         if (ptVolRand() < ps) {
             *beta = *beta * (ss / ssMax);

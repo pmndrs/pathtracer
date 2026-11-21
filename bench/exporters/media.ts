@@ -29,7 +29,9 @@ const vec = (v: readonly number[]): string => v.map(num).join(' ');
 export function pbrtMedium(name: string, m: MediumDesc, transform: Mat4 | undefined, assetsDir: string): string[] {
   if (m.phase) throw new Error(`pbrt: medium '${name}' has a ${m.phase.type} phase function; pbrt-v4 only has one HG lobe (P5.v14 references: Mitsuba blendphase for hg2, Cycles for Draine / Mie)`);
   if (m.type === 'height') throw new Error(`pbrt: medium '${name}' is a height (exponential) medium; pbrt-v4 has no exponential medium (homogeneous, uniformgrid, rgbgrid, cloud, nanovdb): no reference (V4.5)`);
-  const common = `"rgb sigma_a" [ ${vec(m.sigmaA)} ] "rgb sigma_s" [ ${vec(m.sigmaS)} ] "float scale" ${num(m.scale ?? 1)} "float g" ${num(m.g ?? 0)}`;
+  if (m.Le && m.type === 'grid') throw new Error(`pbrt: grid medium '${name}' has Le; pbrt-v4's uniformgrid takes its emission from a separate "Lescale" grid, not the density: no export (V4.6)`);
+  const le = m.Le ? ` "rgb Le" [ ${vec(m.Le)} ]` : '';
+  const common = `"rgb sigma_a" [ ${vec(m.sigmaA)} ] "rgb sigma_s" [ ${vec(m.sigmaS)} ] "float scale" ${num(m.scale ?? 1)} "float g" ${num(m.g ?? 0)}${le}`;
   if (m.type === 'homogeneous') return [`MakeNamedMedium "${name}" "string type" "homogeneous" ${common}`];
   const [nx, ny, nz] = m.resolution;
   const lines = ['AttributeBegin'];
@@ -59,6 +61,7 @@ export function mitsubaVol(resolution: readonly [number, number, number], densit
 /** A Mitsuba `<medium id="name">` element (and the `.vol` file it needs, if any). */
 export function mitsubaMedium(name: string, m: MediumDesc, transform: Mat4 | undefined, assetsDir: string): { xml: string; file?: { path: string; data: Buffer } } {
   if (m.type === 'height') throw new Error(`mitsuba: medium '${name}' is a height (exponential) medium; Mitsuba 3 has no exponential medium (V4.5)`);
+  if (m.Le && (m.Le[0] > 0 || m.Le[1] > 0 || m.Le[2] > 0)) throw new Error(`mitsuba: medium '${name}' has Le; Mitsuba 3's volpath has no emissive medium (V4.6)`);
   const scale = m.scale ?? 1;
   const sigmaT = [0, 1, 2].map((i) => (m.sigmaA[i] as number) + (m.sigmaS[i] as number));
   const albedo = sigmaT.map((t, i) => (t > 0 ? (m.sigmaS[i] as number) / t : 0));

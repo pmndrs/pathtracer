@@ -177,6 +177,11 @@ export type MediumDesc = ({ type: 'homogeneous' } | {
   /** Default 0 (isotropic). */ g?: number;
   /** Default 1. */ scale?: number;
   /**
+   * V4.6 emission (opt-in): radiance `Le` (linear RGB) emitted per unit length in proportion to the absorption, `sigma_a(x) Le` (pbrt-v4's source term; `scale` multiplies sigma_a, not `Le`;
+   * a grid medium scales it with its density). Homogeneous: pbrt-v4 `"rgb Le"`; grid and Mitsuba 3 (no emissive medium in `volpath`) have no export (the exporters throw). Not with `height`.
+   */
+  Le?: Rgb;
+  /**
    * P5.v14: a phase function other than one HG lobe (then `g` is ignored): two HG lobes `(1 - w2) HG(g1) + w2 HG(g2)`, HG + Draine, or the water-droplet fit
    * of Jendersie and d'Eon 2023 by mean diameter in micrometres (5 to 50). pbrt has none of them (the exporter throws); Mitsuba takes `hg2` as `blendphase`.
    */

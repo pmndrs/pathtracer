@@ -220,3 +220,27 @@ describe('volumes.runtimeParams (V6.6)', () => {
     expect(() => ptVolumeMediaCompatible(rt, { ...rt, media: [{ ...rt.media[0]!, g: 1.5 }] })).toThrow(/g 1.5/);
   });
 });
+
+describe('V4.6 emissive media', () => {
+  const emissive: PtVolumeOptions = { ...homog, media: [{ ...homog.media[0]!, emission: [1, 2, 3] }] };
+  it('without emission the volume text and the kernel are unchanged; with it only the emission code appears', () => {
+    expect(build({ ...homog, media: [{ ...homog.media[0]!, emission: [0, 0, 0] }] })).toBe(build(homog));
+    const t = build(emissive);
+    for (const n of ['ptVolEmit', 'ptVolEmitTake']) expect(t).toContain(n);
+    expect(build(homog)).not.toContain('ptVolEmit');
+    expect(ptVolumeWgsl(emissive)).toContain('(vec3f(1.0) - m.albedo)');
+  });
+  it('grid media add the per-collision term; height / brick / outputs refuse', () => {
+    expect(ptVolumeWgsl({ ...gridded, media: [{ ...gridded.media[0]!, emission: [1, 1, 1] }] })).toContain('(st - ss) * le / m.mu');
+    expect(() => ptVolumeValidate({ ...bricked, media: [{ ...bricked.media[0]!, emission: [1, 1, 1] }] })).toThrow(/brick/);
+    expect(() => ptVolumeValidate({ ...emissive, media: [{ ...emissive.media[0]!, height: { y0: 0, H: 1 } }] })).toThrow(/height/);
+    expect(() => ptVolumeValidate({ ...emissive, outputs: true })).toThrow(/outputs/);
+  });
+  it('runtime table carries the emission row last; setMedia cannot switch emission on', () => {
+    const rt = { ...emissive, runtimeParams: true };
+    const data = ptVolumeMediaData(rt);
+    expect(Array.from(data.slice(data.length - 4))).toEqual([1, 2, 3, 0]);
+    expect(() => ptVolumeMediaCompatible({ ...homog, runtimeParams: true }, rt)).toThrow(/emits/);
+  });
+});
+

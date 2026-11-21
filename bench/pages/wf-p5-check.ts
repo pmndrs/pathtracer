@@ -45,6 +45,8 @@ const SPECTRAL: PtAdapterSettings = { spectral: {} };
 const CASES: Record<string, Case> = {
   // media: closed forms and scenes (docs/internal/design/volumes.md)
   'vol-absorb-slab': { scene: 'vol-absorb-slab' },
+  'vol-emit-slab': { scene: 'vol-emit-slab' },
+  'vol-emit-grid-slab': { scene: 'vol-emit-grid-slab' },
   'vol-camera-medium': { scene: 'vol-camera-medium' },
   'vol-height-absorb': { scene: 'vol-height-absorb' },
   'vol-height-furnace': { scene: 'vol-height-furnace' },

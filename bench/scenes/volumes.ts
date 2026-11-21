@@ -32,7 +32,7 @@ export function sceneVolumes(scene: SceneDesc, input: Pick<DescSceneCopyInput, '
     const d = (scene.media as NonNullable<SceneDesc['media']>)[name]!;
     const lobes = d.phase ? ptPhaseLobes(d.phase) : undefined;
     const g = lobes ? lobes.gA : (d.g ?? 0);
-    const withLobes = (m: PtMedium): PtMedium => (lobes ? { ...m, lobes } : m);
+    const withLobes = (m: PtMedium): PtMedium => ({ ...m, ...(lobes ? { lobes } : {}), ...(d.Le && (d.Le[0] > 0 || d.Le[1] > 0 || d.Le[2] > 0) ? { emission: [d.Le[0], d.Le[1], d.Le[2]] as [number, number, number] } : {}) });
     if (d.type === 'homogeneous') return withLobes(ptMediumFrom(d.sigmaA, d.sigmaS, g, d.scale ?? 1));
     if (d.type === 'height') return withLobes(ptMediumFrom(d.sigmaA, d.sigmaS, g, d.scale ?? 1, undefined, { y0: d.y0, H: d.H }));
     if (grid) throw new RangeError(`scene '${scene.name}': more than one grid medium (one 3D texture per kernel)`);

@@ -278,6 +278,73 @@ export const volVdbSmoke: SceneDesc = {
   environment: { type: 'uniform', radiance: [0.4, 0.4, 0.4] },
 };
 
-export const volumeCheckScenes: readonly SceneDesc[] = [volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
+// --- V4.6 emissive media: a black background, a purely absorbing emissive slab seen along its normal -------------------------------------------------------------
+const BLACK = { type: 'uniform' as const, radiance: [0, 0, 0] as const };
+const EMIT_LE = [2, 1, 0.5] as const;
+const EMIT_SIGMA = [0.4, 0.9, 1.8] as const;
+export const volEmitSlab: SceneDesc = {
+  version: 1,
+  name: 'vol-emit-slab',
+  purpose: 'Emissive purely absorbing slab (1 m, sigma_a 0.4/0.9/1.8, Le 2/1/0.5) on a black background, normal incidence: pixel = Le (1 - exp(-sigma_a d)) per channel (V4.6).',
+  tier: 1,
+  camera: NARROW([0, 0, 5]),
+  film: FILM,
+  integrator: { maxDepth: 8 },
+  materials: { boundary: { type: 'interface' } },
+  media: { glow: { type: 'homogeneous', sigmaA: EMIT_SIGMA, sigmaS: [0, 0, 0], Le: EMIT_LE } },
+  meshes: [slabMesh(1, 'glow')],
+  environment: BLACK,
+  expected: { type: 'mean', value: EMIT_SIGMA.map((s, i) => EMIT_LE[i]! * (1 - Math.exp(-s))) as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
+};
+/** The camera looks down -z from z = 5 into a slab over z in [-0.5, 0.5]: L = integral over depth of Le sigma_a(z) exp(-tau(from the entry z = 0.5 down to z)) dz, by quadrature of the same trilinear density. */
+function gridEmitExpected(): number[] {
+  const g = slabGrid();
+  const dens = gridDensity({ resolution: g.resolution, worldToIndex: gridWorldToIndex(g.resolution, g.bounds), densityMax: Math.max(...g.density) }, g.density);
+  const n = 40000;
+  return GRID_SIGMA.map((s, c) => {
+    let tau = 0, L = 0;
+    for (let i = 0; i < n; i++) {
+      const d = dens(0, 0, 0.5 - (i + 0.5) / n), dz = 1 / n;
+      tau += s * d * dz * 0.5;
+      L += EMIT_LE[c]! * s * d * Math.exp(-tau) * dz;
+      tau += s * d * dz * 0.5;
+    }
+    return L;
+  });
+}
+export const volEmitGridSlab: SceneDesc = (() => {
+  const g = slabGrid();
+  return {
+    version: 1,
+    name: 'vol-emit-grid-slab',
+    purpose: 'Emissive grid slab (16 density layers along the normal, absorption only, Le 2/1/0.5) on a black background: pixel = integral of Le sigma_a(z) exp(-tau) dz of the trilinear density (V4.6).',
+    tier: 1,
+    camera: NARROW([0, 0, 5]),
+    film: FILM,
+    integrator: { maxDepth: 8 },
+    materials: { boundary: { type: 'interface' } },
+    media: { layers: { type: 'grid', resolution: g.resolution, density: g.density, bounds: g.bounds, sigmaA: GRID_SIGMA, sigmaS: [0, 0, 0], Le: EMIT_LE } },
+    meshes: [{ name: 'slab', geometry: { type: 'box', size: [8, 8, 1] }, material: 'boundary', medium: { interior: 'layers' } }],
+    environment: BLACK,
+    expected: { type: 'mean', value: gridEmitExpected() as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
+  };
+})();
+
+/** A scattering emissive sphere (albedo 0.5, g 0.3, grey so pbrt's spectral uplift is exact) on a black background: our emission + in-scattering against pbrt-v4 `homogeneous` with `Le` (Mitsuba 3 has no emissive medium: no second reference). */
+export const volEmitSphere: SceneDesc = {
+  version: 1,
+  name: 'vol-emit-sphere',
+  purpose: 'Emissive scattering sphere (r 0.8, sigma_a = sigma_s = 1.2, g 0.3, Le 1) on a black background: emission plus scattered emission, pbrt-v4 reference only (V4.6).',
+  tier: 2,
+  camera: { type: 'perspective', position: [0, 0.2, 3], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 30 },
+  film: { width: 96, height: 96, filter: 'box' },
+  integrator: { maxDepth: 32 },
+  materials: { boundary: { type: 'interface' } },
+  media: { glow: { type: 'homogeneous', sigmaA: [1.2, 1.2, 1.2], sigmaS: [1.2, 1.2, 1.2], g: 0.3, Le: [1, 1, 1] } },
+  meshes: [{ name: 'ball', geometry: { type: 'sphere', radius: 0.8, segments: 64, rings: 32 }, material: 'boundary', medium: { interior: 'glow' } }],
+  environment: BLACK,
+};
+
+export const volumeCheckScenes: readonly SceneDesc[] = [volEmitSlab, volEmitGridSlab, volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud, volVdbSmoke];
-export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes, ...cloudScenes];
+export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeReferenceScenes, volEmitSphere, ...cloudScenes];

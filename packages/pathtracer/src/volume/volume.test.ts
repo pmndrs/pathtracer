@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance } from './volume.ts';
+import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance, ptMediumEmissionSegment } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -616,5 +616,38 @@ describe('height fog (V4.5)', () => {
   });
   it('an infinite upward ray has a finite depth H e^{-a} / d.y', () => {
     expect(heightOpticalDepth(h, [0, 0.5, 0], [0, 1, 0], 1e9)).toBeCloseTo(2, 6);
+  });
+});
+
+describe('V4.6 medium emission (TS twin)', () => {
+  const le: [number, number, number] = [2, 0.5, 1];
+  it('homogeneous with scattering off: the per-segment form is Le (1 - exp(-sigma_t L)) and one delta-tracking pass adds exactly that', () => {
+    const m = { ...ptMediumFrom([0.8, 1.6, 0.4], [0, 0, 0], 0), emission: le };
+    const L = 1.7;
+    const emit: [number, number, number] = [0, 0, 0];
+    deltaTrack(m, [0, 0, 0], [0, 0, 1], L, rng(1), () => 1, emit);
+    for (let c = 0; c < 3; c++) expect(emit[c]).toBeCloseTo(le[c]! * (1 - Math.exp(-(m.sigmaT[c] as number) * L)), 12);
+    expect(ptMediumEmissionSegment(m, L)).toEqual(emit);
+  });
+  it('albedo scales the source by sigma_a / sigma_t', () => {
+    const m = { ...ptMediumFrom([0.5, 0.5, 0.5], [0.5, 0.5, 0.5], 0), emission: le };
+    const e = ptMediumEmissionSegment(m, 2);
+    expect(e[0]).toBeCloseTo(le[0]! * 0.5 * (1 - Math.exp(-2)), 12);
+  });
+  it('grid with scattering off: the mean of the collision-term estimator equals the quadrature of Le sigma_a(z) exp(-tau(z)) dz', () => {
+    const nz = 8, data = Float32Array.from({ length: nz }, (_, k) => 0.25 + (k % 3) * 0.5); // density per z layer
+    const grid = { resolution: [1, 1, nz] as [number, number, number], worldToIndex: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, nz / 4, -0.5], densityMax: 0.25 + 2 * 0.5 };
+    const m = { ...ptMediumFrom([1.2, 0.6, 0.9], [0, 0, 0], 0, 1, grid), emission: le };
+    const dens = (_x: number, _y: number, z: number) => { const g = Math.min(Math.max(z * nz / 4 - 0.5, 0), nz - 1), i = Math.min(Math.floor(g), nz - 2), f = g - i; return data[i]! * (1 - f) + data[i + 1]! * f; };
+    const Lz = 4, steps = 40000;
+    const ref = [0, 0, 0];
+    const tau = [0, 0, 0];
+    for (let i = 0; i < steps; i++) {
+      const z = ((i + 0.5) / steps) * Lz, d = dens(0, 0, z), dz = Lz / steps;
+      for (let c = 0; c < 3; c++) { const st = (m.sigmaT[c] as number) * d; tau[c]! += st * dz * 0.5; ref[c]! += le[c]! * st * Math.exp(-tau[c]!) * dz; tau[c]! += st * dz * 0.5; }
+    }
+    const r = rng(5), N = 60000, acc = [0, 0, 0];
+    for (let n = 0; n < N; n++) { const e: [number, number, number] = [0, 0, 0]; deltaTrack(m, [0, 0, 0], [0, 0, 1], Lz, r, dens, e); for (let c = 0; c < 3; c++) acc[c]! += e[c]!; }
+    for (let c = 0; c < 3; c++) expect(acc[c]! / N / ref[c]!).toBeCloseTo(1, 1);
   });
 });

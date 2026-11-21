@@ -50,6 +50,12 @@ export interface PtMedium {
    * transmittance use the closed-form optical depth (no majorant, no tracking); mutually exclusive with `grid`; refused with `forcedNee` / `equiangular`.
    */
   height?: PtMediumHeight;
+  /**
+   * V4.6 emission (opt-in): radiance `Le` (RGB) emitted per unit length in proportion to the absorption, `sigma_a(x) Le` with `sigma_a = (1 - albedo) sigma_t(x)` (pbrt-v4's source term; a grid medium
+   * scales it with its density). Homogeneous media add the closed-form segment integral (`ptMediumEmissionSegment`), grid media one term per tentative collision of delta tracking. Needs the global
+   * majorant (not `height`, not `majorant: 'brick'`). Absent / all zero = no emission and the kernel text is unchanged.
+   */
+  emission?: VolRgb;
   /** A two-lobe phase function (P5.v14, `phase.ts`): `(1 - w) HG(gA) + w Draine(gB, alpha)`. Absent or `w` 0 = one HG lobe of mean cosine `g` (the kernel text is then unchanged). */
   lobes?: PtPhaseLobes;
 }
@@ -206,6 +212,15 @@ export function ptMediumFrom(sigmaA: VolRgb, sigmaS: VolRgb, g = 0, scale = 1, g
   return { sigmaT, albedo, g, ...(grid ? { grid } : {}), ...(height ? { height } : {}) };
 }
 
+/** V4.6: true when any medium of the table emits. */
+export const ptMediumsEmit = (media: readonly PtMedium[]): boolean => media.some((m) => !!m.emission && (m.emission[0] > 0 || m.emission[1] > 0 || m.emission[2] > 0));
+
+/** V4.6 closed form of a homogeneous medium's emission over a segment of length `len`: `Le (1 - albedo) (1 - exp(-sigma_t len))` per channel (= `Le sigma_a / sigma_t (1 - e^{-sigma_t len})`). */
+export function ptMediumEmissionSegment(m: PtMedium, len: number): [number, number, number] {
+  const le = m.emission ?? [0, 0, 0];
+  return [0, 1, 2].map((c) => (le[c] as number) * (1 - (m.albedo[c] as number)) * (1 - Math.exp(-(m.sigmaT[c] as number) * len))) as [number, number, number];
+}
+
 /** The scalar majorant of delta tracking. */
 export function ptMediumMajorant(m: PtMedium): number {
   return (m.grid ? m.grid.densityMax : 1) * Math.max(m.sigmaT[0], m.sigmaT[1], m.sigmaT[2]);
@@ -287,11 +302,14 @@ export function heightTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, ran
 }
 
 /** One free-flight segment of a path (`ptVolSample` in WGSL). `rand` returns uniform numbers in [0, 1). */
-export function deltaTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand: () => number, density: DensityFn = () => 1): VolEvent {
+export function deltaTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand: () => number, density: DensityFn = () => 1, emit?: [number, number, number]): VolEvent {
   if (m.height) return heightTrack(m, o, d, tmax, rand);
   const mu = ptMediumMajorant(m);
   const w: [number, number, number] = [1, 1, 1];
   if (!(mu > 0)) return { kind: 'pass', t: tmax, weight: w };
+  // V4.6 `emit` (radiance added along the segment, in units of the path weight at the segment start): homogeneous = closed form once; grid = beta sigma_a Le / mu at every tentative collision.
+  const le = emit && m.emission ? m.emission : undefined;
+  if (emit && le && !m.grid) { const e = ptMediumEmissionSegment(m, tmax); for (let c = 0; c < 3; c++) emit[c] = (emit[c] as number) + e[c]!; }
   let t = 0;
   for (let i = 0; i < 4096; i++) {
     t += -Math.log(1 - rand()) / mu;
@@ -299,6 +317,7 @@ export function deltaTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand
     const dens = m.grid ? density(o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t) : 1;
     const st = m.sigmaT.map((s) => s * dens);
     const ss = st.map((s, c) => s * (m.albedo[c] as number));
+    if (emit && le && m.grid) for (let c = 0; c < 3; c++) emit[c] = (emit[c] as number) + (w[c] as number) * ((st[c] as number) - (ss[c] as number)) * (le[c] as number) / mu;
     const ssMax = Math.max(ss[0] as number, ss[1] as number, ss[2] as number);
     const ps = ssMax / mu;
     if (rand() < ps) return { kind: 'scatter', t, weight: [w[0] * (ss[0] as number) / ssMax, w[1] * (ss[1] as number) / ssMax, w[2] * (ss[2] as number) / ssMax] };

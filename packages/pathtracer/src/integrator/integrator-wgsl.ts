@@ -18,7 +18,7 @@ import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './ou
 import { ptForcedNeeWgsl } from '../volume/forced-wgsl.ts';
 import { ptEquiangularWgsl } from '../volume/equiangular-wgsl.ts';
 import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
-import type { PtVolumeOptions } from '../volume/volume.ts';
+import { ptMediumsEmit, type PtVolumeOptions } from '../volume/volume.ts';
 import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
@@ -620,7 +620,8 @@ ${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogen
                 radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
             }
 ` : ''}            let ev = ptVolSample(curMed, vo, ray.direction, segMax, &beta);
-            if (ev.kind == 2u) {
+${ptMediumsEmit(o.volumes!.media) ? `            radiance += ptVolEmitTake();
+` : ''}            if (ev.kind == 2u) {
                 break;
             }
             if (ev.kind == 1u) {

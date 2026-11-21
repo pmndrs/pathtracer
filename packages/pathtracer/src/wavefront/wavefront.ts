@@ -30,7 +30,7 @@ import { PT_RESTIR_GI_SHADE_BINDING } from '../restir/restir-gi-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable } from '../spectral/rgb2spec.ts';
-import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, type PtVolumeOutputs, type brickAtlasMemory } from '../volume/volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptMediumsEmit, type PtVolumeOutputs, type brickAtlasMemory } from '../volume/volume.ts';
 import { ptRenderUntil, type PtRenderUntilResult, type PtStopOptions } from '../integrator/render-until.ts';
 import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
@@ -331,7 +331,7 @@ export class PtWavefront {
     const features = options.integrator?.materials?.features;
     const corrTexture = !!features?.layered && ptLayerCorrNeedsTexture(options.integrator?.materials?.layered);
     const resolved = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
-    const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi, ...(ptVolumeHasGrid(resolved.volumes) ? { volumeGrid: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.densityFilter === 'hardware' ? { volumeHw: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.majorant === 'brick' ? { volumeMajorant: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.gridLayout === 'atlas' ? { volumeAtlas: true } : {}), ...(resolved.volumes?.outputs ? { volumeOutputs: true } : {}), ...(resolved.volumes?.runtimeParams ? { volumeMedia: true } : {}), ...(resolved.spectral ? { spectral: true } : {}) };
+    const extra: PtwfExtraBindings = { blueNoise: resolved.sampler === 'bluenoise', frame: resolved.frame, restir: resolved.restir, restirGi: resolved.restirGi, ...(ptVolumeHasGrid(resolved.volumes) ? { volumeGrid: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.densityFilter === 'hardware' ? { volumeHw: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.majorant === 'brick' ? { volumeMajorant: true } : {}), ...(ptVolumeHasGrid(resolved.volumes) && resolved.volumes?.gridLayout === 'atlas' ? { volumeAtlas: true } : {}), ...(resolved.volumes?.outputs || (resolved.volumes && ptMediumsEmit(resolved.volumes.media)) ? { volumeOutputs: true } : {}), ...(resolved.volumes?.runtimeParams ? { volumeMedia: true } : {}), ...(resolved.spectral ? { spectral: true } : {}) };
     ptWarnVolumeCapRisk('PtWavefront', resolved.volumes, undefined, resolved.volumes?.majorant === 'brick' ? options.volumeGrid?.majorant?.values : undefined);
     if (extra.volumeGrid && !options.volumeGrid) throw new Error('PtWavefront: integrator.volumes has a grid medium: pass the `volumeGrid` option (resolution + density)');
     if (extra.volumeHw && (options.volumeGrid?.format ?? 'r32float') === 'r32float' && !device.features.has('float32-filterable')) throw new Error("PtWavefront: integrator.volumes.densityFilter 'hardware' with an r32float grid needs the 'float32-filterable' device feature (this device lacks it): use volumeGrid.format 'r16float' or densityFilter 'manual'");
