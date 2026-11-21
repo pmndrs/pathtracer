@@ -38,7 +38,7 @@ The smallest complete programs: a first image, a glTF model.
 
 | Example | What it shows | Status |
 | --- | --- | --- |
-| [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) | rtClosest and rtSurface in your own compute shader: normals, uvs, materials and distances of the first hit. |  |
+| [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) | A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record. |  |
 | [Ambient occlusion](https://pmndrs.github.io/pathtracer/examples/raytracer/ao/) | rtVisible, the cheapest query: cosine rays over the hemisphere ask only whether anything is within a radius. |  |
 | [One-bounce shading](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/) | rtShade at the first hit: emission and one light sample with its shadow ray, the lighting a reflection or GI effect needs. |  |
 | [Batch tracing](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/) | RtBatchTracer: camera rays and shadow rays from GPU buffers, hits and visibility back into GPU buffers, five passes and no readback. |  |

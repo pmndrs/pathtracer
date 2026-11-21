@@ -126,10 +126,10 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     slug: 'hits',
     path: 'raytracer/hits/',
     title: 'Hit inspector',
-    summary: 'rtClosest and rtSurface in your own compute shader: normals, uvs, materials and distances of the first hit.',
+    summary: 'A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record.',
     description:
-      'One camera ray per pixel per frame through `rtClosest`, then `rtSurface` decodes what was hit. Pick the property to show: shading or geometric normal, ' +
-      'front or back face, distance bands, texture coordinates, barycentrics, material and instance ids, or the base colour with its texture. No path tracer is involved.',
+      'Every pixel is a ray traced through the BVH each frame, nothing is rasterised. The first hit of a camera ray is the surface a rasteriser would draw, so its data (base colour, normals, uv, ids) has no noise and looks like a raster G-buffer; noise only comes with lighting. ' +
+      'Pick the property to show, and click a pixel: a second entry point traces the ray through it and lists the hit record (distance, instance, triangle, material, barycentrics, uv, position, normals).',
     category: 'raytracer',
     status: 'stable',
     tags: ['rtClosest', 'rtSurface', 'inline WGSL'],
