@@ -621,6 +621,9 @@ export class PtWavefront {
       if (!this.vbufferView) throw new Error('PtWavefront: setVbuffer() first');
     }
     if (this.options.integrator?.frame && passes !== 1) throw new RangeError('PtWavefront.encode: with integrator.frame one encode is one frame (one sample, one previous camera): passes must be 1');
+    // One sample needs maxDepth + 2 uniform records; past the ring the records of a single sample overwrite each other and the image came out black (found
+    // by the volumes regression sweep at maxDepth 4096). Refuse instead of rendering nothing; refill mode reuses 4 records and has no such limit.
+    if (ptwfRecordsPerSample(this.iterDepth()) > PTWF_PARAM_SLOTS) throw new RangeError(`PtWavefront.encode: maxDepth ${this.iterDepth()} needs ${ptwfRecordsPerSample(this.iterDepth())} params records per sample, past the ${PTWF_PARAM_SLOTS}-slot ring: use refill (any depth), the megakernel, or maxDepth <= ${PTWF_PARAM_SLOTS - 2}`);
     if (passes > this.maxPassesPerEncode()) throw new RangeError(`PtWavefront.encode: at most ${this.maxPassesPerEncode()} passes per call at maxDepth ${this.iterDepth()}`);
     this.ioGroups ??= this.makeIoGroups(b);
     this.argsGroup ??= this.device.createBindGroup({ label: 'ptwf args', layout: this.layouts.args, entries: [{ binding: 0, resource: { buffer: this.argsBuffer } }] });
