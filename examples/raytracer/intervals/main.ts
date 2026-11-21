@@ -1,13 +1,12 @@
 /**
  * Interval queries (experimental): `rtClosestInterval(origin, direction, t0, t1, mask)` finds the closest hit with t in (t0, t1], exact at
  * both ends in f32, so consecutive intervals split a ray with no gap and no overlap. Radiance cascades rely on that: cascade n owns the
- * distances (t0 * growth^(n-1), t0 * growth^n] (`rtCascadeStart` / `rtCascadeEnd`) and every hit belongs to exactly one cascade.
+ * distances (t0 * growth^(n-1), t0 * growth^n] (`rtCascadeStart` / `rtCascadeEnd`) and every hit must belong to exactly one cascade.
  *
- * From each pixel's first hit, cosine rays go out over the hemisphere:
- *   cascade colours   each ray walks the cascades in order with rtClosestInterval and takes the colour of the one its first hit is in
- *                     (white: escaped to the sky). The colours add up to the full occlusion, cascade by cascade.
- *   one cascade       what cascade n alone sees: the fraction of rays with something inside its interval
- *   camera ray        the cascade that holds the camera ray's own hit distance from the camera, as bands
+ * The final image (the default view) lights each surface by the sky it sees, and every sky ray is traced cascade by cascade. It matches
+ * the reference, the same rays traced as one full-length ray, pixel for pixel. The broken view traces each cascade as a plain ray shortened
+ * at both ends (gaps of 8% around every boundary, exaggerated so they show): whatever lies in a gap is missed and the sky leaks in, here as
+ * a brighter back wall and corners in the Cornell box. The "pieces" views show the cascades themselves.
  */
 import type { GpuScene } from '@pmndrs/raytracer';
 import { Accumulation, exposeForChecks } from '../../shared/accumulation.ts';
@@ -16,7 +15,7 @@ import { scenePicker } from '../../shared/scene-picker.ts';
 import { ioEntries, TraceKernel } from '../../shared/trace-kernel.ts';
 import { VIEW_BYTES, VIEW_WGSL, writeView } from '../../shared/view.ts';
 
-const WGSL = /* wgsl */ `
+const wgsl = (textured: boolean) => /* wgsl */ `
 ${VIEW_WGSL}
 @group(2) @binding(0) var<uniform> view: ExView;
 @group(2) @binding(1) var<storage, read_write> accum: array<vec4f>;
@@ -37,6 +36,32 @@ fn exOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
   return select(pi, p + (1.0 / 65536.0) * n, abs(p) < vec3f(1.0 / 32.0));
 }
 fn exSide(n: vec3f, w: vec3f) -> vec3f { return select(-n, n, dot(n, w) > 0.0); }
+
+// A sky with a bright zenith, a pale horizon and a dark ground: the light the final image gathers.
+fn exSky(d: vec3f) -> vec3f {
+  let up = d.y;
+  if (up < 0.0) { return vec3f(0.12, 0.11, 0.1); }
+  return mix(vec3f(0.95, 0.92, 0.85), vec3f(0.45, 0.62, 1.0), sqrt(up)) * 1.3;
+}
+
+// Is anything along the ray within the last cascade's reach? mode 3: cascade by cascade with exact intervals; 4: one full ray;
+// 5: the classic bug, each cascade traced as a plain ray over (start, end) shrunk by a small margin, which leaves gaps at the boundaries.
+fn exBlocked(mode: u32, origin: vec3f, d: vec3f, count: u32, t0: f32, growth: f32) -> bool {
+  let reach = rtCascadeEnd(count - 1u, t0, growth);
+  if (mode == 4u) { return rtIsHit(rtClosest(RtRay(origin, 0.0, d, reach), RT_MASK_ALL)); }
+  for (var n = 0u; n < count; n++) {
+    let a = rtCascadeStart(n, t0, growth);
+    let b = rtCascadeEnd(n, t0, growth);
+    var h: RtHit;
+    if (mode == 5u) {
+      h = rtClosest(RtRay(origin, a * 1.08, d, b * 0.92), RT_MASK_ALL);
+    } else {
+      h = rtClosestInterval(origin, d, a, b, RT_MASK_ALL);
+    }
+    if (rtIsHit(h)) { return true; }
+  }
+  return false;
+}
 
 // One colour per cascade (up to 8).
 fn exCascadeColour(n: u32) -> vec3f {
@@ -66,7 +91,22 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let hit = rtClosest(ray, RT_MASK_ALL);
   var c = vec3f(1.0);
   if (!rtIsHit(hit)) {
-    c = vec3f(0.85, 0.9, 1.0);
+    c = select(vec3f(0.85, 0.9, 1.0), exSky(ray.direction), mode >= 3u);
+  } else if (mode >= 3u) {
+    // The payoff: the surface lit by the sky it can see, the sky seen through the cascades' intervals.
+    let s = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_GEOMETRIC_NORMAL | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_MATERIAL);
+    let ng = exSide(s.geometricNormal, -ray.direction);
+    let nrm = exSide(s.shadingNormal, -ray.direction);
+    let origin = exOffsetOrigin(s.position, ng);
+    var m = rtMaterial(s.material);
+    ${textured ? 'm = rtApplyMaterialTextures(m, s.uv, 0.0);' : ''}
+    var sky = vec3f(0.0);
+    for (var k = 0u; k < rays; k++) {
+      var d = exCosineDirection(nrm, vec2f(exRand(&seed), exRand(&seed)));
+      if (dot(d, ng) <= 0.0) { d = reflect(d, ng); }
+      if (!exBlocked(mode, origin, d, count, t0, growth)) { sky += exSky(d); }
+    }
+    c = m.baseColor * m.baseWeight * sky / f32(rays) + m.emissionColor;
   } else if (mode == 2u) {
     // The camera ray's hit distance, by cascade: bands that grow by \`growth\` each.
     let n = rtCascadeIndex(hit.t, t0, growth, count);
@@ -104,10 +144,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 defineExample(async (ctx) => {
   const { device, caps, pane, stats } = ctx;
   const search = new URLSearchParams(location.search);
-  const params = { mode: Number(search.get('mode') ?? 0), first: 0.05, growth: 4, count: Number(search.get('count') ?? 4), cascade: Number(search.get('cascade') ?? 1), raysPerFrame: 2 };
+  const params = { mode: Number(search.get('mode') ?? 3), first: 0.05, growth: 4, count: Number(search.get('count') ?? 4), cascade: Number(search.get('cascade') ?? 1), raysPerFrame: 2 };
   const accumulation = new Accumulation(ctx);
   accumulation.maxFrames = 512;
-  accumulation.view.toneMapping = 'clamp';
   exposeForChecks(accumulation);
   const viewBuffer = device.createBuffer({ label: 'view', size: VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   let kernel: TraceKernel | null = null;
@@ -119,14 +158,14 @@ defineExample(async (ctx) => {
   };
 
   const sceneFolder = pane.addFolder({ title: 'Scene' });
-  const picker = await scenePicker(ctx, sceneFolder, 'Sheen Chair', async (scene: GpuScene, loaded) => {
+  const picker = await scenePicker(ctx, sceneFolder, 'Cornell box', async (scene: GpuScene, loaded) => {
     kernel = await TraceKernel.create(device, caps, scene, {
-      label: 'intervals', wgsl: WGSL, entryPoints: ['main'], io: ioEntries(['uniform', 'write']),
-      module: { intervals: true, scene: { slot: { group: 1, firstBinding: 0 }, layout: scene.copy.layout, packing: scene.packing, materials: false, lights: false } },
+      label: 'intervals', wgsl: wgsl(!!scene.copy.textureLayout), entryPoints: ['main'], io: ioEntries(['uniform', 'write']),
+      module: { intervals: true },
     });
     bound = null;
-    // The first cascade ends at a hundredth of the scene's size: four cascades growing by 4 then reach about two thirds of it.
-    params.first = Number(search.get('first') ?? (Math.hypot(...loaded.bounds.max.map((v, i) => v - loaded.bounds.min[i]!)) * 0.01).toPrecision(2));
+    // The first cascade ends at 2% of the scene's size: four cascades growing by 4 then reach past the whole scene (1.28x its diagonal).
+    params.first = Number(search.get('first') ?? (Math.hypot(...loaded.bounds.max.map((v, i) => v - loaded.bounds.min[i]!)) * 0.02).toPrecision(2));
     pane.refresh();
     legend();
     stats.set('kernel', `${(kernel.bytes / 1024).toFixed(1)} KB`);
@@ -134,11 +173,31 @@ defineExample(async (ctx) => {
   }, () => accumulation.reset());
 
   const f = pane.addFolder({ title: 'Cascades (experimental)' });
+  const EXPLAIN: Record<number, string> = {
+    3: 'final: each surface lit by the sky it sees, each sky ray traced cascade by cascade (exact intervals)',
+    4: 'reference: the same sky rays as one full-length ray; matches Final exactly',
+    5: 'broken: each cascade as a plain ray shortened by 8% at both ends; geometry in the gaps is missed and the sky leaks in',
+    0: 'pieces: the colour of the cascade whose interval holds each sky ray\'s first hit (white: escaped)',
+    1: 'pieces: what the chosen cascade alone sees: dark where something lies inside its interval',
+    2: 'pieces: the cascade that holds the camera ray\'s own hit distance',
+  };
   const changed = () => {
     legend();
+    stats.set('showing', EXPLAIN[params.mode] ?? '');
     accumulation.reset();
   };
-  f.addBinding(params, 'mode', { label: 'show', options: { 'Which cascade each AO ray hits in': 0, 'One cascade on its own': 1, 'Camera hit distance': 2 } }).on('change', changed);
+  stats.set('showing', EXPLAIN[params.mode] ?? '');
+  f.addBinding(params, 'mode', {
+    label: 'show',
+    options: {
+      'Final: sky light through cascades': 3,
+      'Reference: one full-length ray': 4,
+      'Broken: naive intervals (gaps)': 5,
+      'Pieces: cascade each ray hits in': 0,
+      'Pieces: one cascade alone': 1,
+      'Pieces: camera distance by cascade': 2,
+    },
+  }).on('change', changed);
   f.addBinding(params, 'first', { label: 'first cascade end', min: 0.001, max: 5, step: 0.001 }).on('change', changed);
   f.addBinding(params, 'growth', { min: 1.5, max: 8, step: 0.5 }).on('change', changed);
   f.addBinding(params, 'count', { label: 'cascades', min: 1, max: 8, step: 1 }).on('change', changed);
