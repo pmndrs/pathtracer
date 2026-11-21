@@ -122,6 +122,36 @@ describe('delta tracking', () => {
     expect(ptMediumMajorant(m)).toBeCloseTo(2 * grid.densityMax, 6);
   });
 
+  it('ratio tracking with Russian roulette is unbiased and reads the density less often in a dense medium', () => {
+    const res = [4, 4, 4] as const;
+    const data = new Float32Array(64).map((_, i) => 0.5 + 0.5 * ((i * 37) % 11) / 10);
+    const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: Math.max(...data) };
+    const base = gridDensity(grid, data);
+    let lookups = 0;
+    const dens = (x: number, y: number, z: number) => { lookups++; return base(x, y, z); };
+    const m = ptMediumFrom([3, 4, 5], [0, 0, 0], 0, 1, grid);
+    let tau = 0;
+    const sub = 20000;
+    for (let i = 0; i < sub; i++) tau += base(0.4, 0.3, -0.5 + ((i + 0.5) / sub) * 2) * (2 / sub);
+    const n = 100000;
+    const run = (roulette: boolean) => {
+      const r = rng(77);
+      lookups = 0;
+      const sum = [0, 0, 0], sq = [0, 0, 0];
+      for (let i = 0; i < n; i++) {
+        const t = transmittance(m, [0.4, 0.3, -0.5], [0, 0, 1], 2, r, dens, roulette);
+        for (let c = 0; c < 3; c++) { sum[c]! += t[c]!; sq[c]! += t[c]! * t[c]!; }
+      }
+      return { mean: sum.map((x) => x / n), se: sum.map((x, c) => Math.sqrt(Math.max(0, sq[c]! / n - (x / n) ** 2) / n)), lookups: lookups / n };
+    };
+    const off = run(false), on = run(true);
+    for (let c = 0; c < 3; c++) {
+      const exact = Math.exp(-m.sigmaT[c]! * tau);
+      expect(Math.abs(on.mean[c]! - exact)).toBeLessThan(4 * on.se[c]!);
+    }
+    expect(on.lookups).toBeLessThan(off.lookups);
+  });
+
   it('gridWorldToIndex puts the first voxel centre at index 0 and honours the medium transform', () => {
     const m = gridWorldToIndex([4, 2, 2], [[-1, 0, 0], [1, 1, 1]], [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]);
     // medium-space point (-1 + 0.25, 0.25, 0.25) is the first voxel centre; in world it is shifted by +5 in x

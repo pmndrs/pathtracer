@@ -293,6 +293,9 @@ export const ptShadowWeighted = (o: ResolvedIntegratorOptions): boolean => o.alp
 /** The shadow kernel / path needs the scene copy (material and texture fetches) for its alpha handling. */
 export const ptShadowNeedsScene = (o: ResolvedIntegratorOptions): boolean => ptMaskShadow(o) || (ptShadowWeighted(o) && o.alphaShadow !== 'coverage' && o.alphaShadow !== 'stochastic' && o.alphaShadow !== 'transmit');
 /** Extension rays after the first scattering vertex honour cutouts. Camera rays always do. */
+/** @deprecated alias: `separateDepth` lives in `PtVolumeOptions` (V1.3). */
+export type PtVolumesOptions = PtVolumeOptions;
+
 export const ptMaskIndirect = (o: ResolvedIntegratorOptions): boolean => o.alphaMask && (o.alphaPolicy === 'exact' || o.alphaPolicy === 'opaqueShadow');
 
 /** Bytes of one `ptParams` record (5 vec4 + 1 vec4u pair). */
@@ -551,6 +554,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const medium = !!mats?.features.medium;
   const vol = !!o.volumes;
   const volOut = vol && !!o.volumes!.outputs;
+  const sd = vol && !!o.volumes!.separateDepth;
   const aniso = !!mats?.features.aniso;
   const fuzz = !!mats?.features.fuzz;
   const film = !!mats?.features.thinFilm;
@@ -605,12 +609,12 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
                 break;
             }
             if (ev.kind == 1u) {
-                if (depth >= maxDepth) {
+                if (${sd ? 'mdepth >= maxVolDepth' : 'depth >= maxDepth'}) {
                     break;
                 }
                 let vertex = depth;
 ${volOut ? `                ptVoCapture(depth, radiance);
-` : ''}                depth += 1u;
+` : ''}                depth += 1u;${sd ? '\n                mdepth += 1u;' : ''}
                 let pm = vo + ray.direction * ev.t;
 ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptVoDist = length(pm - origin);
@@ -753,7 +757,8 @@ fn ptPath(px: vec2u, sampleIndex: u32) -> PtRadiance {
 ${bn ? `    ptBnPixel = px;
 ` : ''}    let dims = ptParams.dims;
     let maxDepth = ptParams.limits.x;
-    let rrStart = ptParams.limits.y;
+${sd ? `    let maxVolDepth = bitcast<u32>(ptParams.forward.w);
+` : ''}    let rrStart = ptParams.limits.y;
     let pixelSeed = ptPixelSeed(px.x, px.y, dims.w);
 ${spec ? `    ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);
 ` : ''}    let jitter = ${vb ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER)'};
@@ -781,7 +786,8 @@ ${onRadiance ? `    let ptHookFlags = ptHookUpdateFlag(px.x, px.y, sampleIndex);
 ` : ''}    var beta = vec3f(1.0);
     var specularBounce = false;
     var depth = 0u;
-    var etaScale = 1.0;
+${sd ? `    var mdepth = 0u;
+` : ''}    var etaScale = 1.0;
 ${mask ? `    var skips = 0u;
 ` : ''}    var prevP = origin;
     var prevPdf = 0.0;
@@ -890,7 +896,7 @@ ${lodS.bsdf(mixU, shadingNormal, true) ?? `        let bp = ptBsdfFromMaterial(m
             fSpec = ptAovSpecular(mat);
             fIsSpec = bp.kind == PT_BSDF_CONDUCTOR || bp.kind == PT_BSDF_DIELECTRIC;
         }
-` : ''}        if (${black} || depth >= maxDepth) {
+` : ''}        if (${black} || ${sd ? '(depth - mdepth)' : 'depth'} >= maxDepth) {
 ${counters ? `            termReason = select(2u, 1u, ${black});
 ` : ''}            break;
         }

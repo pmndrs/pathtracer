@@ -65,6 +65,18 @@ export interface PtVolumeOptions {
    */
   majorant?: 'global' | 'brick';
   /**
+   * V1.1: Russian roulette in ratio tracking (pbrt-v4's rule): when the largest channel of the running transmittance estimate is below 0.05, the ray ends with
+   * probability 0.75 (estimate 0) and otherwise continues with the estimate times 4. Unbiased; the random number comes from the same stream. Default false (kernels unchanged).
+   */
+  trRoulette?: boolean;
+  /**
+   * V1.3: medium scatter events get their own cap `maxVolumeDepth` (`PtLimits`, read from `ptParams.forward.w`; unset = `maxDepth`). `depth` stays the TOTAL vertex
+   * count (emission, MIS and sampler dimensions keep using it), a second counter counts the scatters; a surface vertex ends the path at `depth - scatters >= maxDepth`,
+   * a medium scatter at `scatters >= maxVolumeDepth`, so scatters no longer eat the surface budget (Cycles / three-gpu-pathtracer style; pbrt and Mitsuba share one
+   * depth: references use it off or with equal caps). Default off: the kernel text is unchanged.
+   */
+  separateDepth?: boolean;
+  /**
    * P5.v15 / P5.v16 (megakernel only): extra per-pixel sums in the accumulator tail (`PT_VOLUME_OUTPUT_VEC4` vec4 per pixel after the radiance; layout in
    * `ptDecodeVolumeOutputs`): the radiance of scattering orders 0 and 1 (the light of paths with at most one scatter or bounce vertex, the expectation of a
    * `maxDepth` 1 render), the primary ray's transmittance through the media up to the first solid surface (ratio tracking on its own stream, so the beauty image
@@ -182,7 +194,7 @@ export function deltaTrack(m: PtMedium, o: VolRgb, d: VolRgb, tmax: number, rand
 }
 
 /** Transmittance estimate over a segment (`ptVolTrSegment`): closed form for a homogeneous medium, ratio tracking for a grid. */
-export function transmittance(m: PtMedium, o: VolRgb, d: VolRgb, len: number, rand: () => number, density: DensityFn = () => 1): [number, number, number] {
+export function transmittance(m: PtMedium, o: VolRgb, d: VolRgb, len: number, rand: () => number, density: DensityFn = () => 1, roulette = false): [number, number, number] {
   if (!m.grid) return m.sigmaT.map((s) => Math.exp(-s * len)) as [number, number, number];
   const mu = ptMediumMajorant(m);
   const tr: [number, number, number] = [1, 1, 1];
@@ -194,6 +206,10 @@ export function transmittance(m: PtMedium, o: VolRgb, d: VolRgb, len: number, ra
     const dens = density(o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t);
     for (let c = 0; c < 3; c++) tr[c] = (tr[c] as number) * (1 - ((m.sigmaT[c] as number) * dens) / mu);
     if (!(Math.max(tr[0], tr[1], tr[2]) > 0)) break;
+    if (roulette && Math.max(tr[0], tr[1], tr[2]) < 0.05) {
+      if (rand() < 0.75) return [0, 0, 0];
+      for (let c = 0; c < 3; c++) tr[c] = (tr[c] as number) * 4;
+    }
   }
   return tr;
 }

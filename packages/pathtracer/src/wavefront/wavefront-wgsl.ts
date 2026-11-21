@@ -121,11 +121,13 @@ function stateWgsl(o: ResolvedIntegratorOptions): string {
   const vol = !!o.volumes;
   const spec = !!o.spectral;
   const extra = medium || tex || vol;
+  const sd = vol && !!o.volumes!.separateDepth;
   const aovs = o.aovs;
   // P4.5a: `frameEmission: 'mirror'` carries one bit per path: has it left the chain of perfect-mirror bounces from the primary hit? Bit 28 of the depth word (set = impure, so a fresh path's word
   // is unchanged and `(word & 0x1fffffff) == 0` still means depth 0 at the primary), which takes the depth down to 28 bits in such kernels.
   const impure = o.frame && o.frameEmission === 'mirror';
-  const depthMask = impure ? '0x0fffffffu' : '0x1fffffffu';
+  // V1.3 `separateDepth`: the total depth takes bits 0-13 and the medium-scatter count bits 14-27 (volumes refuse frame / aovs / spectral, so bits 28-30 are free), capping a path at 16383 vertices.
+  const depthMask = sd ? '0x3fffu' : impure ? '0x0fffffffu' : '0x1fffffffu';
   return /* wgsl */ `
 struct PtwfPath {
     origin: vec3f,
@@ -134,7 +136,8 @@ struct PtwfPath {
     etaScale: f32,
     beta: vec3f,
     depth: u32,
-    specular: bool,
+${sd ? `    mdepth: u32,
+` : ''}    specular: bool,
     prevP: vec3f,
     sigma: vec3f,
     coneWidth: f32,
@@ -161,7 +164,8 @@ ${extra ? `    let s4 = ptwfState[4u * n + path];
     p.etaScale = bitcast<f32>(s1.w);
     p.beta = ptwfF3(s2);
     p.depth = s2.w & ${depthMask};
-    p.specular = (s2.w >> 31u) == 1u;${aovs ? `
+${sd ? `    p.mdepth = (s2.w >> 14u) & 0x3fffu;
+` : ''}    p.specular = (s2.w >> 31u) == 1u;${aovs ? `
     p.aovDone = ((s2.w >> 30u) & 1u) == 1u;` : ''}${impure ? `
     p.impure = ((s2.w >> 28u) & 1u) == 1u;` : ''}
     p.prevP = ptwfF3(s3);
@@ -179,7 +183,7 @@ ${vol ? `    p.volState = s4.x;
 fn ptwfStorePath(path: u32, n: u32, p: PtwfPath) {
     ptwfState[path] = vec4u(bitcast<vec3u>(p.origin), bitcast<u32>(p.prevPdf));
     ptwfState[n + path] = vec4u(bitcast<vec3u>(p.dir), bitcast<u32>(p.etaScale));
-    ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth | 0x20000000u | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''}${impure ? ' | select(0u, 0x10000000u, p.impure)' : ''}${spec ? ' | select(0u, 0x40000000u, p.hero)' : ''});
+    ptwfState[2u * n + path] = vec4u(bitcast<vec3u>(p.beta), p.depth${sd ? ' | (p.mdepth << 14u)' : ''} | 0x20000000u | select(0u, 0x80000000u, p.specular)${aovs ? ' | select(0u, 0x40000000u, p.aovDone)' : ''}${impure ? ' | select(0u, 0x10000000u, p.impure)' : ''}${spec ? ' | select(0u, 0x40000000u, p.hero)' : ''});
     ptwfState[3u * n + path] = vec4u(bitcast<vec3u>(p.prevP), ${tex ? 'bitcast<u32>(p.coneSpread)' : '0u'});
 ${extra ? `    ptwfState[4u * n + path] = vec4u(${vol ? 'p.volState, p.med | (p.skips << 16u), bitcast<u32>(p.volBack)' : medium ? 'bitcast<vec3u>(p.sigma)' : 'vec3u(0u)'}, ${tex ? 'bitcast<u32>(p.coneWidth)' : '0u'});
 ` : ''}}
@@ -710,6 +714,7 @@ export function ptwfShadeWgsl(options: PtIntegratorOptions = {}, wf: PtwfConfig 
   // P5 (V270): participating media (`vol`: a scatter vertex, the medium of a shadow ray) and spectral transport (`spec`: the three wavelengths are recomputed here from (pixel, sample)
   // each time a path is shaded; the lane radiance converts to RGB per add, which is linear, so the sum is the megakernel's).
   const vol = !!o.volumes;
+  const sd = vol && !!o.volumes!.separateDepth;
   const volRatio = vol && ptVolumeRatioShadows(o.volumes as NonNullable<typeof o.volumes>);
   const spec = o.spectral;
   const addOut = emitMode ? 'ptwfAddRadianceE(path, n, radiance, fEmit, fEmitW)' : frameOut ? 'ptwfAddRadianceF(path, n, radiance, fDirect)' : spec ? 'ptwfAddRadiance(path, ptSpecToRgb(radiance))' : 'ptwfAddRadiance(path, radiance)';
@@ -736,11 +741,11 @@ ${ind}ptwfQueue[2u * n + ss] = path;
         return; // a path delta tracking killed, or one past the interface skip limit: the megakernel's break
     }
     if (h1.w == 2u) {
-        if (depth >= maxDepth) {
+        if (${sd ? 'mdepth >= maxVolDepth' : 'depth >= maxDepth'}) {
             return;
         }
         let vertex = depth;
-        depth += 1u;
+        depth += 1u;${sd ? '\n        mdepth += 1u;' : ''}
         let pm = st.origin - st.dir * st.volBack + st.dir * hit.t;
         let woM = -ray.direction;
         if (PT_NEE) {
@@ -767,7 +772,8 @@ ${wf.refill ? `        ptwfLive = true;
         next.etaScale = etaScale;
         next.beta = beta;
         next.depth = depth;
-        next.specular = false;
+${sd ? `        next.mdepth = mdepth;
+` : ''}        next.specular = false;
         next.prevP = pm;
         next.sigma = vec3f(0.0);
         next.coneWidth = ${tex ? 'st.coneWidth' : '0.0'};
@@ -992,7 +998,8 @@ ${wf.batch ? `    ptwfState[2u * n + path].w = 0u;
     let dims = ptParams.dims;
     let n = ptwfSlots(dims);
     let maxDepth = ptParams.limits.x;
-    let rrStart = ptParams.limits.y;
+${sd ? `    let maxVolDepth = bitcast<u32>(ptParams.forward.w);
+` : ''}    let rrStart = ptParams.limits.y;
     let iter = ptParams.limits.w;
 ${wf.refill ? `    let sampleIndex = ptwfSampleIndex(path);
     let pixel = path % (dims.x * dims.y);
@@ -1010,7 +1017,8 @@ ${vol ? `    ptVolState = st.volState;
     var beta = st.beta;
     var specularBounce = st.specular;
     var depth = st.depth;
-    var etaScale = st.etaScale;
+${sd ? `    var mdepth = st.mdepth;
+` : ''}    var etaScale = st.etaScale;
     var prevP = st.prevP;
     var prevPdf = st.prevPdf;
 ${medium ? `    var sigma = st.sigma;
@@ -1109,7 +1117,7 @@ ${lodS.bsdf(mixU, shadingNormal, true) ?? `    let bp = ptBsdfFromMaterial(mat${
 ` : frameOut ? `    if (depth == 0u) {
         ptFramePlanes(path, n, fDirect, fDirect, vec3f(0.0), 0.0, true, bp.kind == PT_BSDF_CONDUCTOR || bp.kind == PT_BSDF_DIELECTRIC, ${shadingNormal}, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)), ptFrameMotion(surf.position), mat.specularRoughness, ptAovAlbedo(mat), ptAovSpecular(mat));
     }
-` : ''}    if (${black} || depth >= maxDepth) {
+` : ''}    if (${black} || ${sd ? '(depth - mdepth)' : 'depth'} >= maxDepth) {
         ${addOut};
 ${counters ? `        ptCountEnd(path, depth, select(2u, 1u, ${black}));
 ` : ''}        return;
@@ -1195,7 +1203,8 @@ ${wf.refill ? `    ptwfLive = true;
     next.etaScale = etaScale;
     next.beta = beta;
     next.depth = depth;
-    next.specular = specularBounce;
+${sd ? `    next.mdepth = mdepth;
+` : ''}    next.specular = specularBounce;
     next.prevP = prevP;
     next.sigma = ${medium ? 'sigma' : 'vec3f(0.0)'};
     next.coneWidth = ${tex ? 'cone.width' : '0.0'};

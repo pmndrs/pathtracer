@@ -319,6 +319,17 @@ describe('wavefront media and spectral transport (P5 follow-up, V270)', () => {
     expect(ptWavefrontBuild(caps, { ...variants.spectral!, refill: 'batch', ...raw }).camera.code).toContain('p.hero = false;');
   });
 
+  it('volumes.separateDepth (V1.3) adds the medium-scatter counter to the shade kernel only when on', () => {
+    const off = ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, ...raw });
+    const on = ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, integrator: { volumes: { ...(volHomog as object), separateDepth: true } as never }, ...raw });
+    expect(off.shade.code).not.toContain('mdepth');
+    expect(off.shade.code).not.toContain('maxVolDepth');
+    expect(on.shade.code).toContain('mdepth >= maxVolDepth');
+    expect(on.shade.code).toContain('(depth - mdepth) >= maxDepth');
+    expect(on.shade.code).toContain('next.mdepth = mdepth;');
+    expect(on.shade.code).toContain('p.mdepth << 14u');
+  });
+
   it('refuses what it does not port: the reduced shade kernel (materialLod) and the combinations the megakernel refuses', () => {
     expect(() => ptWavefrontBuild(caps, { ...variants['vol-homogeneous']!, integrator: { volumes: volHomog, materials: { features: { ...feat, medium: false }, layered: { layering: 'albedo' } }, materialLod: 'secondary' } as never })).toThrow(/materialLod.*volumes/);
     expect(() => ptWavefrontBuild(caps, { ...variants.spectral!, integrator: { spectral: true, materials: { features: feat, layered: { layering: 'albedo' } }, materialLod: 'secondary' } as never })).toThrow(/materialLod.*spectral/);

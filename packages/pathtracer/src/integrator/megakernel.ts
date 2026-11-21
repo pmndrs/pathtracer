@@ -66,6 +66,8 @@ export interface PtLimits {
   rrStartDepth?: number;
   /** `textureLod: 'cone'` only: multiplies the pixel angle the ray cone starts with. Default 1; pbrt-v4's rule is `max(1/8, 1/sqrt(spp))`. */
   textureConeScale?: number;
+  /** `integrator.volumes.separateDepth` only: the cap of medium scatter events per path (surface vertices keep `maxDepth`). Default = `maxDepth`. At most 16383. */
+  maxVolumeDepth?: number;
 }
 
 export interface PtMegakernelOptions {
@@ -502,6 +504,7 @@ export class PtMegakernel {
     // With a V-buffer the (otherwise unused) w lanes of origin and right carry the frame's sample position inside the pixel (0.5 + offset): `ptPath` reads them in place of pair 0.
     const vb = this.options.integrator?.primary === 'vbuffer';
     f.set([...basis.origin, vb ? 0.5 + this.jitter[0] : 0, ...basis.right, vb ? 0.5 + this.jitter[1] : 0, ...basis.up, 0, ...basis.forward, 0], 8);
+    if (this.options.integrator?.volumes?.separateDepth) u[23] = Math.min(this.limits.maxVolumeDepth ?? this.limits.maxDepth, 16383) >>> 0; // forward.w: a u32 the kernel bitcasts (V1.3)
     return buffer;
   }
 

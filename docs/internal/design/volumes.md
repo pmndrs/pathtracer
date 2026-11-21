@@ -96,6 +96,10 @@ Full tables (agreement with pbrt / Mitsuba, the settings A/B, what did not match
   shadow-ray estimator along the camera ray up to the first SOLID surface, on its own stream, so the beauty is bit-identical with the outputs on or off.
 - **Depth caps** (`vol-cl-furnace-*`, `vol-cl-sph-*` sweeps, `bench/results/VOLUMES.md`): at albedo 0.99 an optical diameter of 200 needs no more than 512 orders
   (512 vs 8192 differ by 6e-5); at albedo 1 depth 512 is 4-7% dark and 2048 still 0.4-0.6%.
+- **Separate depth cap** (`volumes.separateDepth`, `PtLimits.maxVolumeDepth`, V303): the pbrt rule counts a medium scatter as a path vertex, so a cloud that needs 512 scatters
+  also grants 512 surface bounces. With the option a second counter counts scatters: a scatter ends the path at `scatters >= maxVolumeDepth`, a surface at
+  `depth - scatters >= maxDepth`; emission, MIS and sampler dimensions still use the total vertex count. Both schedulers agree per pixel (1.1e-6).
+- **Ratio-tracking roulette** (`volumes.trRoulette`, V1.1): pbrt-v4's rule (tr < 0.05: end with probability 0.75, else x4) in every ratio-tracked shadow segment.
 - **r16float grids** (`volumeGrid.format`, V301): the same kernel text (`textureLoad` returns f32), half the memory; the data must be f16-exact (`ptRoundGridF16`), so
   densityMax and the brick majorants computed from it bound what the GPU reads.
 - **Self-intersection on large triangles** (V302, P5.v19): the stopgap `integrator.originOffset` (a scene-global floor that skipped `floor / cos` of medium at every boundary) is gone. `rtSurface` returns a

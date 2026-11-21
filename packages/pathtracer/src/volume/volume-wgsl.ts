@@ -91,6 +91,7 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const grid = ptVolumeHasGrid(v);
   const ratio = ptVolumeRatioShadows(v);
   const brick = grid && v.majorant === 'brick';
+  const roulette = v.trRoulette === true;
   const lobes = ptVolumeHasLobes(v);
   const stride = lobes ? 7 : 6;
   const mats = v.materials.length > 0 ? v.materials : [{ interior: 0, exterior: 0, boundary: false }];
@@ -349,7 +350,13 @@ fn ptVolTrBrick(m: PtVolMedium, o: vec3f, d: vec3f, len: f32) -> vec3f {
             if (!(ptMax3(tr) > 0.0)) {
                 return vec3f(0.0);
             }
-        }
+${roulette ? `            if (ptMax3(tr) < 0.05) {
+                if (ptVolRand() < 0.75) {
+                    return vec3f(0.0);
+                }
+                tr = tr * 4.0;
+            }
+` : ''}        }
     }
     return tr;
 }
@@ -408,7 +415,13 @@ ${brick ? `    if (m.info.x != 0.0) {
             if (!(ptMax3(tr) > 0.0)) {
                 break;
             }
-        }
+${roulette ? `            if (ptMax3(tr) < 0.05) {
+                if (ptVolRand() < 0.75) {
+                    return vec3f(0.0);
+                }
+                tr = tr * 4.0;
+            }
+` : ''}        }
         return tr;
     }
 ` : ''}    return exp(-m.sigmaT * len);

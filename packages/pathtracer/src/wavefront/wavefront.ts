@@ -538,7 +538,12 @@ export class PtWavefront {
   /** How many sample passes one `encode` call can take with the current `maxDepth` (the params ring must not wrap inside one encoder). */
   maxPassesPerEncode(): number {
     if (this.wf.refill) return Infinity; // only the parity of an iteration is ever read: 4 uniform records per encode, any length
-    return Math.max(1, Math.floor(PTWF_PARAM_SLOTS / ptwfRecordsPerSample(this.limits.maxDepth)));
+    return Math.max(1, Math.floor(PTWF_PARAM_SLOTS / ptwfRecordsPerSample(this.iterDepth())));
+  }
+
+  /** Depth iterations a sample can need: `maxDepth`, plus `maxVolumeDepth` with `volumes.separateDepth` (a medium scatter is an iteration that does not count toward `maxDepth`). */
+  private iterDepth(): number {
+    return this.options.integrator?.volumes?.separateDepth ? this.limits.maxDepth + Math.min(this.limits.maxVolumeDepth ?? this.limits.maxDepth, 16383) : this.limits.maxDepth;
   }
 
   /** `sampleIndex` is the pass number in the plain scheduler and the TARGET samples per pixel in refill mode (`dims.z`). */
@@ -552,6 +557,7 @@ export class PtWavefront {
     f[6] = this.limits.textureConeScale ?? 1;
     const vb = this.options.integrator?.primary === 'vbuffer';
     f.set([...basis.origin, vb ? 0.5 + this.jitter[0] : 0, ...basis.right, vb ? 0.5 + this.jitter[1] : 0, ...basis.up, 0, ...basis.forward, 0], 8);
+    if (this.options.integrator?.volumes?.separateDepth) u[23] = Math.min(this.limits.maxVolumeDepth ?? this.limits.maxDepth, 16383) >>> 0; // forward.w (V1.3)
     if (this.finalRegionBase !== 0) u[19] = this.finalRegionBase; // up.w: the ReSTIR final-reservoir region (P4.2a), a u32 the shade kernel bitcasts
     return buffer;
   }
@@ -571,7 +577,7 @@ export class PtWavefront {
       if (!this.vbufferView) throw new Error('PtWavefront: setVbuffer() first');
     }
     if (this.options.integrator?.frame && passes !== 1) throw new RangeError('PtWavefront.encode: with integrator.frame one encode is one frame (one sample, one previous camera): passes must be 1');
-    if (passes > this.maxPassesPerEncode()) throw new RangeError(`PtWavefront.encode: at most ${this.maxPassesPerEncode()} passes per call at maxDepth ${this.limits.maxDepth}`);
+    if (passes > this.maxPassesPerEncode()) throw new RangeError(`PtWavefront.encode: at most ${this.maxPassesPerEncode()} passes per call at maxDepth ${this.iterDepth()}`);
     this.ioGroups ??= this.makeIoGroups(b);
     this.argsGroup ??= this.device.createBindGroup({ label: 'ptwf args', layout: this.layouts.args, entries: [{ binding: 0, resource: { buffer: this.argsBuffer } }] });
     this.emptyGroup ??= this.device.createBindGroup({ label: 'ptwf empty', layout: this.layouts.empty, entries: [] });
@@ -590,7 +596,7 @@ export class PtWavefront {
       this.hookRadianceGroup = this.device.createBindGroup({ label: 'ptwf hooks radiance (empty)', layout: this.layouts.hooksRadiance, entries: [] });
     }
     const hookRadianceGroup = this.hookRadianceGroup;
-    const maxDepth = this.limits.maxDepth;
+    const maxDepth = this.iterDepth();
     const pass = encoder.beginComputePass({ label: 'ptwf samples', timestampWrites });
     const gx = Math.ceil(this.width / 8);
     const gy = Math.ceil(this.height / 8);
@@ -653,7 +659,7 @@ export class PtWavefront {
 
   /** Iterations the next `encode(passes)` asks for per pass: the learned figure, else a guess (a short path; `finish` does the rest). */
   private iterationsPerPass(): number {
-    return this.itersPerPass > 0 ? this.itersPerPass : Math.min(this.limits.maxDepth + 1, 16);
+    return this.itersPerPass > 0 ? this.itersPerPass : Math.min(this.iterDepth() + 1, 16);
   }
 
   /**

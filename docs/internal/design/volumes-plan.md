@@ -29,18 +29,18 @@ Status: ⬜ not started · 🟨 in progress · ✅ done. ★ = the clouds handof
 Cloud regime at the pbrt / Mitsuba floor (27 cells + a 256^3 cloud), droplet phases, volume outputs (order split, transmittance, standard error), r16float grids, ground
 scenes, per-hit origin offset bound + free flight from the true crossing. Open from it: Cycles comparison of the Mie / Draine phases (waits on the clouds side's script).
 
-### ⬜ V1 — Housekeeping and cheap speed (all S)
+### 🟨 V1 — Housekeeping and cheap speed (all S)
 
 Gate: `vol-cl-cloud256` and `vol-cl-sph-g85-a99-t200` at 256 spp keep their mean within 2 standard errors of today's, with fewer density lookups per shadow ray (counter); quiet-pass ms/spp queued.
 
 | id | task | check (minutes) |
 |---|---|---|
-| V1.1 ★ | Roulette in ratio tracking (T < 0.05, survive 0.75, weight 1/0.75), shadow rays and the outputs' transmittance, both schedulers | TS twin mean at 1e5 trials vs line integral; the two scenes at 256 spp within the SE; lookup counter |
+| ✅ V1.1 ★ | Roulette in ratio tracking (T < 0.05, survive 0.75, weight 1/0.75), shadow rays and the outputs' transmittance, both schedulers | TS twin mean at 1e5 trials vs line integral; the two scenes at 256 spp within the SE; lookup counter |
 | V1.2 ★ | Hardware-filtered density (`textureSampleLevel` on r16float / r8unorm, r32float with `float32-filterable`) as an option, manual 8-tap stays the default until the A/B | `vol-grid-slab` closed form; same-seed relMSE vs manual on `vol-cl-cloud256` (~1e-5); bytes saved |
-| V1.3 ★ | Separate `maxVolumeDepth` (medium scatters vs surface bounces) | equal to today with both caps equal; `vol-cl-ground-sph` with surface 8 / medium 2048 |
+| ✅ V1.3 ★ | Separate `maxVolumeDepth` (medium scatters vs surface bounces) | equal to today with both caps equal; `vol-cl-ground-sph` with surface 8 / medium 2048 |
 | V1.4 | Loop caps visible: count truncations (4096 collisions, brick cell cap, ratio-tracking cap); warn at upload when densityMax x sigma_t x diagonal > ~1e3 | synthetic dense slab near the cap |
-| V1.5 | Doc fixes: volumes.md sections 3 / 6.1 and DIVERGES V243 still describe the global majorant only | read-through |
-| V1.6 ★ | Per-pixel wavefront check of lobe scenes | `wf-p5-check cases=vol-cl-single-mie10,vol-cl-sph-hg2-a99-t50 spp=16` |
+| ✅ V1.5 | Doc fixes: volumes.md sections 3 / 6.1 and DIVERGES V243 still describe the global majorant only | read-through |
+| ✅ V1.6 ★ | Per-pixel wavefront check of lobe scenes | `wf-p5-check cases=vol-cl-single-mie10,vol-cl-sph-hg2-a99-t50 spp=16` |
 | V1.7 | Offset-bound follow-ups: ReSTIR G-buffer positions, light-sample end points, medium interface skips, `positions: 'ray'` | `vol-cl-ground-occluder` with each path on |
 | V1.8 ★ | Windows DXC compile of the 50-54 KB volume megakernels (and the wavefront split as fallback) | `kernel-compile` page on the 3060, cold / warm |
 
