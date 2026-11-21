@@ -303,6 +303,22 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     check: { query: 'scale=0.25&res=64', samples: 2 },
   },
   {
+    slug: 'fog',
+    path: 'pathtracer/fog/',
+    title: 'Fog and light shafts',
+    summary: 'Sunlit thin fog in a room with slits in its wall: light shafts that forced in-scatter and equiangular sampling turn from noise into a smooth image.',
+    description:
+      'A closed box with a medium-boundary material fills a room with thin homogeneous fog (optical depth about 0.5). In thin fog most rays never collide, so the plain estimator, which samples light only at real collisions, leaves the shafts very noisy. ' +
+      '`forcedNee` adds one light sample per free-flight segment at a distance drawn on the segment; `equiangular` draws that distance around the lamp, so a lamp inside the fog no longer gives 1/r\u00b2 noise. All three estimators converge to the same image. The estimator is compiled into the kernel, so a change rebuilds it.',
+    category: 'pathtracer',
+    status: 'experimental',
+    tags: ['volumes', 'fog', 'god rays', 'forced NEE', 'equiangular sampling'],
+    docs: 'pathtracer/volumes',
+    source: 'examples/pathtracer/fog',
+    heavy: true,
+    check: { query: 'scale=0.25', samples: 2 },
+  },
+  {
     slug: 'spectral',
     path: 'pathtracer/spectral/',
     title: 'Spectral rendering and dispersion',
