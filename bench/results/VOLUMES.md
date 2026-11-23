@@ -129,6 +129,12 @@ relMSE here is on the channel-mean image (eps 1e-2); "at floor" = ours vs Mitsub
 
 Every cell is at or below the floor. relBias against Mitsuba stays within +-0.3% (the albedo-1 tau-200 slab seen from above: -0.27%, pbrt itself -0.2% from Mitsuba there).
 
+Re-check 2026-11-23 (fresh 1024 spp render of all 35 reference cells at d2d7ccc, default settings, run name `vol-visual-cmp`; mean differences with a standard error from 8 x 8
+blocks of the difference image): every cell within +-0.4% of Mitsuba. The two tau-200 slabs repeat their offsets at a new seed, so they are systematic, not noise, even
+though relMSE calls them at floor: `slab-base-g85-a99-t200` +0.37% vs Mitsuba (7.5 SE) and +0.74% vs pbrt (pbrt -0.37% from Mitsuba, 13 SE); `slab-top-g85-a100-t200`
+-0.39% vs Mitsuba, -0.59% vs pbrt. The references disagree by a similar amount there, so the truth is open; the cheap test is a depth sweep of those two cells (the
+512 cap is where they differ most: albedo 1, tau 200). Visual page: our render beside both references with difference maps (artifact `Volume Reference Comparison`).
+
 ### Ground and phase cells
 
 | scene | pbrt vs Mitsuba (floor) | ours vs pbrt | ours vs Mitsuba | relBias vs Mitsuba / pbrt | ours mean | verdict |
