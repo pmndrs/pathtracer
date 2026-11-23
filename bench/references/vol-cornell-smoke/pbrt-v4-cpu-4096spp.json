@@ -3,8 +3,8 @@
   "renderer": "pbrt-v4-cpu",
   "version": "pbrt-v4 b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f (+bench no-RR patch)",
   "spp": 4096,
-  "seconds": 240.19,
-  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/vol-cornell-smoke/pbrt-v4-cpu-4096spp.pfm .cache/native/work-fy6SDK/scene.pbrt",
+  "seconds": 40.56,
+  "command": ".cache/native/pbrt-v4/build/pbrt --quiet --outfile bench/references/vol-cornell-smoke/pbrt-v4-cpu-4096spp.pfm .cache/native/work-zxwekh/scene.pbrt",
   "settings": {
     "maxDepth": 32,
     "rrStartDepth": null,
@@ -29,5 +29,5 @@
     "cpus": 18,
     "cpuModel": "Apple M5 Pro"
   },
-  "date": "2026-11-18T05:51:55.663Z"
+  "date": "2026-11-23T04:28:39.638Z"
 }

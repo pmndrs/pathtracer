@@ -3,8 +3,8 @@
   "renderer": "mitsuba3-llvm_ad_rgb",
   "version": "mitsuba 3.9.1",
   "spp": 4096,
-  "seconds": 132.27,
-  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-5SzXTl/scene.xml bench/references/vol-cornell-smoke/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
+  "seconds": 53.94,
+  "command": ".cache/native/mitsuba-venv/bin/python bench/references/mitsuba_render.py .cache/native/work-IV8DeC/scene.xml bench/references/vol-cornell-smoke/mitsuba3-llvm_ad_rgb-4096spp.pfm llvm_ad_rgb 4096",
   "settings": {
     "maxDepth": 32,
     "rrStartDepth": null,
@@ -19,7 +19,7 @@
     "max_depth": 33,
     "sampler": "multijitter",
     "filter": "box 0.5",
-    "renderSeconds": 131.75879287719727,
+    "renderSeconds": 52.466448068618774,
     "spectral": false
   },
   "approximations": [
@@ -32,5 +32,5 @@
     "cpus": 18,
     "cpuModel": "Apple M5 Pro"
   },
-  "date": "2026-11-18T05:54:07.942Z"
+  "date": "2026-11-23T04:29:33.582Z"
 }

@@ -135,6 +135,21 @@ though relMSE calls them at floor: `slab-base-g85-a99-t200` +0.37% vs Mitsuba (7
 -0.39% vs Mitsuba, -0.59% vs pbrt. The references disagree by a similar amount there, so the truth is open; the cheap test is a depth sweep of those two cells (the
 512 cap is where they differ most: albedo 1, tau 200). Visual page: our render beside both references with difference maps (artifact `Volume Reference Comparison`).
 
+### Cornell box at equal spp (2026-11-23)
+
+relMSE at 16 / 64 / 256 spp against converged 4096 spp references, as a multiple of pbrt's at the same spp (correctness runs, `--load-wait 0`; ours = `pt-megakernel` defaults,
+"+ eq" = `pt_equiangular=1`). No fireflies (> 10x the reference) in any image at 64 spp or more.
+
+| scene | Mitsuba | ours | ours + eq | reference |
+|---|---|---|---|---|
+| `vol-cornell-smoke` (cube on the floor, far from the lamp) | 0.76-0.77x | 0.85-0.91x | 0.75-0.81x | mean of pbrt + Mitsuba |
+| `vol-cornell-fog` (new: the examples' `volumes` page, fog up to 4 mm under the lamp, blocks inside) | biased (below) | 1.10-1.19x | 0.64-0.68x | pbrt only |
+
+`vol-cornell-fog`: Mitsuba reads -34% against pbrt (darkest near the lamp: -37% top third, -23% bottom), ours +0.7% (pbrt reads ~1% low on this coloured lamp: spectral uplift,
+as on `vol-cornell-smoke`). `vol-cornell-fog-empty` (no blocks) is the same (-33%), so the surfaces inside the fog are not the cause. OPEN: a Mitsuba export or Mitsuba
+volpath problem when the medium fills the room around a lamp just outside it; until resolved, judge this scene against pbrt. Equiangular sampling is the lever for the
+fog-near-a-lamp case and is still opt-in.
+
 ### Ground and phase cells
 
 | scene | pbrt vs Mitsuba (floor) | ours vs pbrt | ours vs Mitsuba | relBias vs Mitsuba / pbrt | ours mean | verdict |
