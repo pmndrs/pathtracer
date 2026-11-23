@@ -194,6 +194,33 @@ export const volCornellSmoke: SceneDesc = {
   ],
 };
 
+/**
+ * The examples' "Fog and clouds" page in the bench Cornell box: fog fills the room up to 4 mm under the ceiling lamp (the example: 1 cm under it in a 2 m room), optical depth
+ * across the room ~1.2 as there (sigma_t 2.2/m over 0.55 m), albedo 0.9, g 0.3, both blocks inside the fog. Medium scatter points next to a small bright lamp: the case
+ * `vol-cornell-smoke` (a cube on the floor) never tests.
+ */
+export const volCornellFog: SceneDesc = {
+  ...cornell,
+  name: 'vol-cornell-fog',
+  purpose: 'Cornell box filled with homogeneous fog up to 4 mm under the lamp (sigma_t 2.2/m, albedo 0.9, g 0.3), blocks inside the fog: scatter points next to a small bright emitter (the examples volumes page).',
+  tier: 2,
+  film: { width: 128, height: 128, filter: 'box' },
+  integrator: { maxDepth: 32 },
+  materials: { ...cornell.materials, boundary: { type: 'interface' } },
+  media: { fog: { type: 'homogeneous', sigmaA: [0.22, 0.22, 0.22], sigmaS: [1.98, 1.98, 1.98], g: 0.3 } },
+  meshes: [
+    ...cornell.meshes.map((m) => (m.name === 'short-block' || m.name === 'tall-block' ? { ...m, medium: { interior: 'fog', exterior: 'fog' } } : m)),
+    { name: 'fog-box', geometry: { type: 'box', size: [0.541, 0.5417, 0.551] }, material: 'boundary', transform: translation(0.2745, 0.27385, 0.2795), medium: { interior: 'fog' } },
+  ],
+};
+/** `vol-cornell-fog` without the two blocks: no opaque surface inside the fog (pbrt and Mitsuba disagree by ~40% with the blocks in; this tells whose export is wrong). */
+export const volCornellFogEmpty: SceneDesc = {
+  ...volCornellFog,
+  name: 'vol-cornell-fog-empty',
+  purpose: `${volCornellFog.purpose} Blocks removed: no surface inside the fog.`,
+  meshes: volCornellFog.meshes.filter((m) => m.name !== 'short-block' && m.name !== 'tall-block'),
+};
+
 export const volMilkSphere: SceneDesc = {
   version: 1,
   name: 'vol-milk-sphere',
@@ -277,6 +304,42 @@ export const volVdbSmoke: SceneDesc = {
   lights: [{ type: 'directional', direction: [-0.5, -1, -0.4], irradiance: [3, 3, 3] }],
   environment: { type: 'uniform', radiance: [0.4, 0.4, 0.4] },
 };
+
+/**
+ * Real OpenVDB clouds (V3.4b; test assets, CC BY-SA, derivatives are generated and git-ignored). `node bench/scenes/volumes/vdb-grid.ts <vdb> <name> <downsample>`:
+ *  - `vdb-wdas-cloud`: WDAS cloud (quarter res), 3^3 box average -> 170x117x209, 2 zero border cells, peak 1; one file unit = 1 m here (the cloud is ~425 x 292 x 522 units).
+ *  - `vdb-bunny-cloud`: OpenVDB bunny_cloud, 2^3 average -> 293x290x223, peak 1 (raw peak 2.6); ~47 x 46 x 37 units.
+ * Cloud regime like `vol-cl-cloud256`: sun behind (travels -x, -y, +z, so the camera at +z looks at the lit rim) plus sky 0.4, g 0.85, albedo 0.99, maxDepth 512.
+ */
+function vdbCloud(name: string, purpose: string, file: string, resolution: readonly [number, number, number], lo: readonly [number, number, number], hi: readonly [number, number, number], sigmaT: number, camera: SceneDesc['camera']): SceneDesc {
+  const half = [0, 1, 2].map((a) => (hi[a]! - lo[a]!) / 2) as [number, number, number];
+  return {
+    version: 1,
+    name,
+    purpose,
+    tier: 2,
+    camera,
+    film: { width: 128, height: 128, filter: 'box' },
+    integrator: { maxDepth: 512 },
+    materials: { boundary: { type: 'interface' } },
+    media: { cloud: { type: 'grid', resolution, densityFile: file, bounds: [[-half[0], -half[1], -half[2]], half], sigmaA: [0.01 * sigmaT, 0.01 * sigmaT, 0.01 * sigmaT], sigmaS: [0.99 * sigmaT, 0.99 * sigmaT, 0.99 * sigmaT], g: 0.85 } },
+    meshes: [{ name: 'cloud-box', geometry: { type: 'box', size: [2 * half[0], 2 * half[1], 2 * half[2]] }, material: 'boundary', medium: { interior: 'cloud' } }],
+    lights: [{ type: 'directional', direction: [-0.55, -0.45, 0.7], irradiance: [3, 3, 3] }],
+    environment: { type: 'uniform', radiance: [0.4, 0.4, 0.4] },
+  };
+}
+export const volVdbWdasCloud: SceneDesc = vdbCloud(
+  'vol-vdb-wdas-cloud',
+  "Walt Disney Animation Studios cloud (wdas_cloud_quarter.vdb, 3^3 averaged to 170x117x209), peak sigma_t 0.22/unit (max column tau 58, mean over covered columns 14), albedo 0.99, HG g 0.85, sun behind + sky 0.4, maxDepth 512: a real cloud for the equal-spp noise comparison (V3.4b; needs `node bench/scenes/volumes/vdb-grid.ts <vdb> vdb-wdas-cloud 3`).",
+  'generated/volumes/vdb-wdas-cloud.f32', [170, 117, 209], [-222.91666135191917, -72.91666492819786, -303.74999275803566], [202.0833285152912, 219.5833280980587, 218.74999478459358], 0.22,
+  { type: 'perspective', position: [0, 60, 1250], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 24 },
+);
+export const volVdbBunnyCloud: SceneDesc = vdbCloud(
+  'vol-vdb-bunny-cloud',
+  "OpenVDB bunny_cloud.vdb (2^3 averaged to 293x290x223), peak sigma_t 6/unit (max column tau 49, mean over covered columns 5.5), albedo 0.99, HG g 0.85, sun behind + sky 0.4, maxDepth 512 (V3.4b; needs `node bench/scenes/volumes/vdb-grid.ts <vdb> vdb-bunny-cloud 2`).",
+  'generated/volumes/vdb-bunny-cloud.f32', [293, 290, 223], [-24.36, -4.12, -17], [22.52, 42.28, 18.68], 6,
+  { type: 'perspective', position: [0, 4, 120], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 24 },
+);
 
 // --- V4.6 emissive media: a black background, a purely absorbing emissive slab seen along its normal -------------------------------------------------------------
 const BLACK = { type: 'uniform' as const, radiance: [0, 0, 0] as const };
@@ -420,6 +483,6 @@ export const volNestedFurnace: SceneDesc = {
 };
 
 export const volumeCheckScenes: readonly SceneDesc[] = [volEmitSlab, volEmitGridSlab, volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
-export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volMilkSphere, volGridCloud, volVdbSmoke];
+export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volCornellFog, volCornellFogEmpty, volMilkSphere, volGridCloud, volVdbSmoke, volVdbWdasCloud, volVdbBunnyCloud];
 export const volumeStackScenes: readonly SceneDesc[] = [volNestedAbsorb, volNestedOverlap, volNestedCamera, volNestedFurnace];
 export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, ...cloudScenes];

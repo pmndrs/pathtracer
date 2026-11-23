@@ -185,3 +185,25 @@ The oblique single-scatter cells read +1-2e-4 high at three seeds (a small consi
 
 Primary transmittance: absorber slab 0.493432 vs 0.493435, grid slab 0.496876 vs 0.497029 (ratio tracking, 1024 spp). Orders 0-1 = a maxDepth 1 render per pixel (bit for bit), orders 0-1 + 2+ = beauty;
 beauty bit-identical with outputs on or off. Standard error vs the seed-to-seed difference: mean diff^2 / mean (se_a^2 + se_b^2) = 1.005 (PCG), 0.93 / 1.006 (Owen-Sobol, tau 10 / 50).
+
+### Real OpenVDB clouds, equal-spp noise (V3.4b)
+
+Scenes `vol-vdb-wdas-cloud` (WDAS cloud quarter, 3^3 average -> 170x117x209, sigma_t peak 0.22/unit, max column tau 58, mean over covered columns 14),
+`vol-vdb-bunny-cloud` (OpenVDB bunny_cloud, 2^3 average -> 293x290x223, sigma_t peak 6/unit, max column tau 49, mean 5.5) and `vol-vdb-smoke` (sigma_t 40/unit). 128x128, g 0.85 (smoke 0.2),
+albedo 0.99, maxDepth 512, sun behind + sky 0.4, brick majorant. Converter: `node bench/scenes/volumes/vdb-grid.ts <vdb> <name> <downsample>` (derivatives git-ignored, CC BY-SA).
+Metric: `bench/adapters/vdb-eqspp.ts`, relMSE of each image against the MEAN of the pbrt and Mitsuba 1024 spp references (non-finite pixels excluded; Mitsuba has 17 / 62 / 3 at 1024 spp).
+Correctness only (`--load-wait 0`, machine not quiet). The 1024 spp rows are not an equal-noise comparison (the reference contains those very renders); the reference's own noise adds ~8e-4 (WDAS) / 1e-3 (bunny) to every row.
+
+| scene | spp | relMSE ours | pbrt | Mitsuba | ours / pbrt | ours / Mitsuba |
+|---|---|---|---|---|---|---|
+| wdas | 16 | 9.1e-2 | 1.09e-1 | 8.7e-2 | 0.84 | 1.05 |
+| wdas | 64 | 2.17e-2 | 2.64e-2 | 2.18e-2 | 0.82 | 0.99 |
+| wdas | 256 | 6.2e-3 | 7.4e-3 | 6.2e-3 | 0.84 | 1.01 |
+| bunny | 16 | 1.34e-1 | 1.48e-1 | 1.16e-1 | 0.91 | 1.15 |
+| bunny | 64 | 3.3e-2 | 3.6e-2 | 2.8e-2 | 0.91 | 1.16 |
+| bunny | 256 | 9.2e-3 | 1.02e-2 | 8.3e-3 | 0.90 | 1.12 |
+| smoke | 16 | 3.6e-3 | 7.5e-3 | 6.3e-3 | 0.48 | 0.57 |
+| smoke | 64 | 9.0e-4 | 1.6e-3 | 1.5e-3 | 0.55 | 0.60 |
+| smoke | 256 | 2.6e-4 | 4.4e-4 | 4.1e-4 | 0.59 | 0.63 |
+
+Mean / reference mean is within 0.4% for every row, no firefly (>10x) pixels in any image. Result: at equal spp our noise is 0.82-0.91x pbrt's and 0.99-1.16x Mitsuba's on the real clouds (no extra samples needed), and lower on the smoke.

@@ -1,9 +1,9 @@
 /**
- * OpenVDB float grid -> a dense density file for a `grid` medium (P5, Node only). Uses WebVDB's `vdb-web-tools` (`parseVdb`, pure TypeScript; the sibling checkout's `dist/`,
+ * OpenVDB float grid -> a dense density file for a `grid` medium (P5, Node only). Uses WebVDB's `packages/vdb` tools (`parseVdb`, pure TypeScript; the sibling checkout's `dist/`,
  * default `~/Developer/WebVDB`, override with `WEBVDB_DIR`), averages `downsample`^3 voxel blocks (inactive voxels are the background, 0), pads `border` zero cells (pbrt reads zero
  * outside a grid, Mitsuba clamps: a zero border makes them agree) and scales the density to a peak of 1.
  *
- *   node bench/scenes/volumes/vdb-grid.ts [<file.vdb> <out-name>]     default: WebVDB's fixtures/vdb-samples/smoke.vdb -> bench/assets/generated/volumes/vdb-smoke.{f32,json}
+ *   node bench/scenes/volumes/vdb-grid.ts [<file.vdb> <out-name> [<downsample>]]     default: WebVDB's fixtures/vdb-samples/smoke.vdb -> bench/assets/generated/volumes/vdb-smoke.{f32,json}
  *
  * The output is a derivative of the OpenVDB sample model (CC BY-SA 4.0, THIRD_PARTY): generated, git-ignored, never committed.
  * Index space: OpenVDB voxel centres sit at integer indices, world = index * voxel size, so a cell block starting at index `i0` spans `[(i0 - 0.5) vs, (i0 + d - 0.5) vs]`.
@@ -34,7 +34,7 @@ export async function convertVdb(file: string, options: { downsample?: number; b
   const down = options.downsample ?? 2;
   const border = options.border ?? 2;
   const webvdb = process.env.WEBVDB_DIR ?? join(homedir(), 'Developer', 'WebVDB');
-  const tools = (await nodeImport(pathToFileURL(join(webvdb, 'packages', 'vdb-web-tools', 'dist', 'index.js')).href)) as { parseVdb(b: ArrayBuffer): { grids: Array<{ name: string; gridType: string; indexBBox: { min: number[]; max: number[] } | null; activeVoxelCount: bigint; transform: { voxelSize: number[] }; iterLeaves(): Iterable<{ origin: number[]; values: Float32Array; valueMask: Uint32Array }> }> } };
+  const tools = (await nodeImport(pathToFileURL(join(webvdb, 'packages', 'vdb', 'dist', 'tools', 'index.js')).href)) as { parseVdb(b: ArrayBuffer): { grids: Array<{ name: string; gridType: string; indexBBox: { min: number[]; max: number[] } | null; activeVoxelCount: bigint; transform: { voxelSize: number[] }; iterLeaves(): Iterable<{ origin: number[]; values: Float32Array; valueMask: Uint32Array }> }> } };
   const bytes = readFileSync(file);
   const vdb = tools.parseVdb(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   const grid = vdb.grids.find((g) => (options.grid ? g.name === options.grid : g.gridType.startsWith('Tree_float'))) ;
@@ -74,7 +74,8 @@ export async function convertVdb(file: string, options: { downsample?: number; b
 async function main(): Promise<void> {
   const file = process.argv[2] ?? join(process.env.WEBVDB_DIR ?? join(homedir(), 'Developer', 'WebVDB'), 'fixtures', 'vdb-samples', 'smoke.vdb');
   const name = process.argv[3] ?? 'vdb-smoke';
-  const out = await convertVdb(file, {});
+  const down = process.argv[4] ? Number(process.argv[4]) : 2;
+  const out = await convertVdb(file, { downsample: down });
   mkdirSync(GENERATED_DIR, { recursive: true });
   writeFileSync(join(GENERATED_DIR, `${name}.f32`), Buffer.from(out.density.buffer, out.density.byteOffset, out.density.byteLength));
   const meta = { name, resolution: out.resolution, bounds: out.bounds, peakBeforeNormalisation: out.peak, source: out.source };
