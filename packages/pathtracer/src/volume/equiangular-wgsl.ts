@@ -13,7 +13,7 @@
 // Light picks that are not a triangle (sun, environment: no point) and a degenerate geometry (ray through the point, h ~ 0) use the exponential distance only: the choice depends on the
 // pick and the geometry, never on u, so the per-pick estimator stays unbiased.
 
-import { forcedOneMinusExp, PT_FORCED_VERTEX_BASE, PT_MARCH_STRIDE } from './forced-wgsl.ts';
+import { forcedOneMinusExp, PT_FORCED_VERTEX_BASE, PT_MARCH_STRIDE, PT_VOL_GRID_SSTR_WGSL, ratioTrackTr } from './forced-wgsl.ts';
 
 export interface EquiangularSegment {
   /** Ray parameter of the point on the ray closest to the light point. */
@@ -62,9 +62,22 @@ export function equiangularMixSample(u: number, mu: number, L: number, seg: Equi
   return { t, pdf: 0.5 * expPdf(t, mu, L) + 0.5 * equiangularPdf(t, seg) };
 }
 
-export function ptEquiangularWgsl(march = 1): string {
-  if (march > 1) return ptEquiangularMarchWgsl(march);
-  return /* wgsl */ `
+/**
+ * TS twin of the V4.4 grid estimate (`volumes.forcedGrid`) for one segment [0, L) of a heterogeneous grey medium with extinction sigmaT(t) <= mu and single-scattering albedo `albedo`:
+ * t from the truncated exponential of the MAJORANT mu (seg null) or its 50/50 mixture with equiangular (`equiangularMixSample`: both densities are closed form, so the mixture pdf is exact
+ * whatever the density profile), then  F = albedo sigmaT(t) T_hat(0, t) Ld(t) / pdf(t)  with T_hat ratio-tracked against mu. E[F] = integral_0^L T(0, t) sigma_s(t) Ld(t) dt, the expected light
+ * sample of the segment's first real collision under delta tracking (which therefore skips its own).
+ */
+export function gridForcedEstimate(u: number, sigmaT: (t: number) => number, albedo: number, mu: number, L: number, seg: EquiangularSegment | null, ld: (t: number) => number, rnd: () => number): number {
+  const m = equiangularMixSample(u, mu, L, seg);
+  const st = sigmaT(m.t);
+  if (!(st > 0)) return 0;
+  return (albedo * st * ratioTrackTr(sigmaT, mu, m.t, rnd) * ld(m.t)) / m.pdf;
+}
+
+export function ptEquiangularWgsl(march = 1, grid = false): string {
+  if (march > 1) return ptEquiangularMarchWgsl(march, grid);
+  return /* wgsl */ `${grid ? PT_VOL_GRID_SSTR_WGSL : ''}
 // V4.1 equiangular + exponential one-sample MIS for one free-flight segment [0, segMax) in a homogeneous medium (see volume/equiangular-wgsl.ts). The caller multiplies by beta.
 fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
     let m = ptVolMedium(id);
@@ -110,9 +123,17 @@ fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampl
         t = min(-log(1.0 - u * a) / m.mu, segMax);
         pdf = pe * exp(-m.mu * t);
     }
-    let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+${grid ? `    var w = m.sigmaT * m.albedo * exp(-m.sigmaT * t);
+    if (m.info.x != 0.0) {
+        w = ptVolGridSsTr(m, id, vo, d, t);
+        if (!(ptMax3(abs(w)) > 0.0)) {
+            return vec3f(0.0);
+        }
+    }
+    return w * ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv) / pdf;
+` : `    let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
     return m.sigmaT * m.albedo * exp(-m.sigmaT * t) * ld / pdf;
-}
+`}}
 `;
 }
 
@@ -120,8 +141,8 @@ fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampl
  * V7.1: equiangular + exponential MIS with `march` strata on the camera segment. Stratum i draws its distance coordinate u = (i + xi.x) / n and chooses the technique with its own second
  * number xi.y (equiangular when xi.y >= 0.5): both techniques then stratify in their own CDF space, and the one-sample balance MIS stays unbiased. Deeper segments (n = 1) keep the V4.1 split of u.
  */
-function ptEquiangularMarchWgsl(march: number): string {
-  return /* wgsl */ `
+function ptEquiangularMarchWgsl(march: number, grid: boolean): string {
+  return /* wgsl */ `${grid ? PT_VOL_GRID_SSTR_WGSL : ''}
 // V7.1 equiangular + exponential one-sample MIS with ${march} stratified distances on the camera segment (volume/equiangular-wgsl.ts). The caller multiplies by beta.
 fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
     let m = ptVolMedium(id);
@@ -177,9 +198,17 @@ fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampl
             t = min(-log(1.0 - u * a) / m.mu, segMax);
             pdf = pe * exp(-m.mu * t);
         }
-        let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+${grid ? `        var w = m.sigmaT * m.albedo * exp(-m.sigmaT * t);
+        if (m.info.x != 0.0) {
+            w = ptVolGridSsTr(m, id, vo, d, t);
+            if (!(ptMax3(abs(w)) > 0.0)) {
+                continue;
+            }
+        }
+        acc += w * ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv) / pdf;
+` : `        let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
         acc += m.sigmaT * m.albedo * exp(-m.sigmaT * t) * ld / pdf;
-    }
+`}    }
     return acc / f32(n);
 }
 `;

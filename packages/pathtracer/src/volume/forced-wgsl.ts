@@ -61,9 +61,41 @@ export function forcedDistance(u: number, mu: number, L: number): number {
   return -Math.log(1 - u * forcedOneMinusExp(mu * L)) / mu;
 }
 
-export function ptForcedNeeWgsl(march = 1): string {
-  if (march > 1) return ptForcedNeeMarchWgsl(march);
-  return /* wgsl */ `
+/** TS twin (V4.4): ratio-tracked transmittance over [0, t) of a scalar extinction profile sigma(s) <= mu: the product over the majorant's events of (1 - sigma / mu) (unbiased for exp(-integral sigma)). */
+export function ratioTrackTr(sigma: (s: number) => number, mu: number, t: number, rnd: () => number): number {
+  let tr = 1;
+  let s = 0;
+  for (;;) {
+    s += -Math.log(1 - rnd()) / mu;
+    if (s >= t) return tr;
+    tr *= 1 - sigma(s) / mu;
+  }
+}
+
+/**
+ * V4.4 (`volumes.forcedGrid`): sigma_s(t) x T(0, t) at the forced distance t of a GRID segment: the density at t and a ratio-tracked transmittance on [0, t) drawn from its own stream forked off
+ * the path's (as a shadow ray's), so it is independent of the light sample's shadow estimate and E[sigma_s T_hat Ld | t] = sigma_s(t) T(0, t) Ld(t): the forced estimate keeps the expectation
+ * of the real collision's light sample, which it replaces. Zero density at t: zero (no tracking, no shadow ray).
+ */
+export const PT_VOL_GRID_SSTR_WGSL = /* wgsl */ `
+// V4.4: sigma_s(t) T(0, t) at the forced distance t of a grid segment (density at t, ratio-tracked T on a forked stream; volume/forced-wgsl.ts).
+fn ptVolGridSsTr(m: PtVolMedium, id: u32, vo: vec3f, d: vec3f, t: f32) -> vec3f {
+    let dens = ptVolDensity(m, vo + d * t);
+    if (!(dens > 0.0)) {
+        return vec3f(0.0);
+    }
+    let seed = ptVolFork();
+    let keep = ptVolState;
+    ptVolState = seed;
+    let tr = ptVolTrSegment(id, vo, d, t);
+    ptVolState = keep;
+    return m.sigmaT * dens * m.albedo * tr;
+}
+`;
+
+export function ptForcedNeeWgsl(march = 1, grid = false): string {
+  if (march > 1) return ptForcedNeeMarchWgsl(march, grid);
+  return /* wgsl */ `${grid ? PT_VOL_GRID_SSTR_WGSL : ''}
 // V4.2 forced in-scatter NEE for one free-flight segment [0, segMax) in a homogeneous medium (weights: see volume/forced-wgsl.ts). The caller multiplies by beta.
 fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
     let m = ptVolMedium(id);
@@ -75,15 +107,23 @@ fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sam
     let a = select(1.0 - exp(-x), x * (1.0 - 0.5 * x + x * x / 6.0), x < 1.0e-3);
     let u = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(fv, PT_SLOT_BSDF_DIRECTION)).x;
     let t = min(-log(1.0 - u * a) / m.mu, segMax);
-    let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+${grid ? `    var w = m.sigmaT * m.albedo * exp(-(m.sigmaT - vec3f(m.mu)) * t) * (a / m.mu);
+    if (m.info.x != 0.0) {
+        w = ptVolGridSsTr(m, id, vo, d, t) * exp(m.mu * t) * (a / m.mu);
+        if (!(ptMax3(abs(w)) > 0.0)) {
+            return vec3f(0.0);
+        }
+    }
+    return w * ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+` : `    let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
     return m.sigmaT * m.albedo * exp(-(m.sigmaT - vec3f(m.mu)) * t) * (a / m.mu) * ld;
-}
+`}}
 `;
 }
 
 /** V7.1: the forced estimate with `march` stratified distances on the camera ray's segment (depth 0); deeper segments take one (stratum 0 = the V4.2 vertex). */
-function ptForcedNeeMarchWgsl(march: number): string {
-  return /* wgsl */ `
+function ptForcedNeeMarchWgsl(march: number, grid: boolean): string {
+  return /* wgsl */ `${grid ? PT_VOL_GRID_SSTR_WGSL : ''}
 // V7.1 forced in-scatter NEE with ${march} stratified distances on the camera segment (volume/forced-wgsl.ts). The caller multiplies by beta.
 fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
     let m = ptVolMedium(id);
@@ -102,9 +142,17 @@ fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sam
         let xi = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(fv, PT_SLOT_BSDF_DIRECTION)).x;
         let u = (f32(i) + xi) / f32(n);
         let t = min(-log(1.0 - u * a) / m.mu, segMax);
-        let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+${grid ? `        var w = m.sigmaT * m.albedo * exp(-(m.sigmaT - vec3f(m.mu)) * t) * (a / m.mu);
+        if (m.info.x != 0.0) {
+            w = ptVolGridSsTr(m, id, vo, d, t) * exp(m.mu * t) * (a / m.mu);
+            if (!(ptMax3(abs(w)) > 0.0)) {
+                continue;
+            }
+        }
+        acc += w * ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+` : `        let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
         acc += m.sigmaT * m.albedo * exp(-(m.sigmaT - vec3f(m.mu)) * t) * (a / m.mu) * ld;
-    }
+`}    }
     return acc / f32(n);
 }
 `;

@@ -75,6 +75,7 @@ try {
     ...(Number(args['pt_march']) > 1 ? { volumeMarch: Number(args['pt_march']) } : {}),
     ...(args['pt_vol_stack'] === '1' ? { volumeStack: true } : {}),
     ...(args['pt_equiangular'] === '1' ? { volumeEquiangular: true } : {}),
+    ...(args['pt_forced_grid'] === '1' ? { volumeForcedGrid: true } : {}),
     ...(args['pt_vspg'] === '1' ? { volumeGuiding: 'vspg' as const } : {}),
     ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : {}),
     ...(args['pt_grid_layout'] === 'atlas' ? { volumeGridLayout: 'atlas' as const } : {}),

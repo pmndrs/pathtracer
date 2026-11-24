@@ -17,7 +17,7 @@ import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dime
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
 import { ptForcedNeeWgsl, ptMarchCount } from '../volume/forced-wgsl.ts';
 import { ptEquiangularWgsl } from '../volume/equiangular-wgsl.ts';
-import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
+import { ptVolPhaseSampleWgsl, ptVolumeHasGrid, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import { ptMediumStackPack, ptMediumsEmit, type PtVolumeOptions } from '../volume/volume.ts';
 import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
@@ -286,6 +286,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     const marchN = ptMarchCount(o.volumes ?? undefined);
     if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
+    if (o.volumes.forcedGrid && !(o.volumes.forcedNee || o.volumes.equiangular || marchN > 1)) throw new Error('integrator.volumes.forcedGrid needs forcedNee, equiangular or marchSamples (it extends their forced estimate to grid media, V4.4)');
     if (o.volumes.guiding === 'vspg') {
       if (o.volumes.outputs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.volumes.outputs (both live in the accumulator tail)");
       if (o.aovs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.aovs (both live in the accumulator tail)");
@@ -581,6 +582,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const equi = vol && !!o.volumes!.equiangular;
   const marchN = vol ? ptMarchCount(o.volumes ?? undefined) : 1;
   const forced = vol && (!!o.volumes!.forcedNee || equi || marchN > 1);
+  const fgrid = forced && !!o.volumes!.forcedGrid && ptVolumeHasGrid(o.volumes); // V4.4: the forced estimate also on grid segments
   const vspg = vol && o.volumes!.guiding === 'vspg';
   const aniso = !!mats?.features.aniso;
   const fuzz = !!mats?.features.fuzz;
@@ -634,9 +636,10 @@ ${stack ? `            ptVolCurSt = curStack;
 ` : ''}            let vo = ray.origin - ray.direction * volBack;
             let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + volBack;
 ${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogeneous media; the scatter below then skips its own light sample).
-            let fm = ptVolMedium(curMed);
+${fgrid ? `            let fHomog = PT_NEE; // V4.4 forcedGrid: grid segments too
+` : `            let fm = ptVolMedium(curMed);
             let fHomog = fm.info.x == 0.0 && PT_NEE;
-            if (fHomog && ${sd ? 'mdepth < maxVolDepth' : 'depth < maxDepth'}) {
+`}            if (fHomog && ${sd ? 'mdepth < maxVolDepth' : 'depth < maxDepth'}) {
 ${volOut ? `                // V7.3: the camera segment's estimate (depth 0) is order 1; a later segment's is order >= 2 and is held out of the order-0-1 capture (ptVoLate, flushed after it).
                 // One call site: two inlined copies of the estimator compiled to different float code and flipped edge samples (+8% on a few pixels).
                 let fAdd = beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
@@ -745,7 +748,7 @@ ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> pt
 ` : ''}
 ${spec ? `${ptSpectralWgsl(spec)}\n` : ''}${ptCommonHeadWgsl(o)}
 
-${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced && !equi ? ptForcedNeeWgsl(marchN) : ''}${equi ? ptEquiangularWgsl(marchN) : ''}${forced && volOut ? 'var<private> ptVoLate: vec3f;\n' : ''}
+${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced && !equi ? ptForcedNeeWgsl(marchN, fgrid) : ''}${equi ? ptEquiangularWgsl(marchN, fgrid) : ''}${forced && volOut ? 'var<private> ptVoLate: vec3f;\n' : ''}
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
