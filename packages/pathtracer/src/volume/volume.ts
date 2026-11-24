@@ -170,6 +170,13 @@ export interface PtVolumeOptions {
    */
   marchSamples?: number;
   /**
+   * V4.4 (megakernel only; needs `forcedNee`, `equiangular` or `marchSamples`): the forced in-scatter estimate also runs on GRID medium segments (otherwise only homogeneous ones). The distance is
+   * drawn exactly as on a homogeneous segment (truncated exponential of the medium's scalar majorant, or its 50/50 mixture with equiangular), and the closed-form sigma_s exp(-sigma_t t)
+   * becomes sigma_s(t) x T(0, t) with T ratio-tracked on its own forked stream (unbiased); a real collision on a grid segment then skips its own light sample, as on a homogeneous one.
+   * Derivation and twin: `volume/forced-wgsl.ts` (`gridForcedEstimate`). Ignored without a grid medium. Default false: the kernel text is unchanged.
+   */
+  forcedGrid?: boolean;
+  /**
    * V4.3 (megakernel only): volume scattering probability guiding (Cycles / Xu et al.) on the first free-flight segment of the primary ray in homogeneous and plain-loop grid media
    * (height and brick media keep delta tracking). `'vspg'` guides the probability that a majorant collision exists in the segment by the pixel's earlier scatter / pass-through
    * contributions (one vec4 per pixel in the accumulator tail), weighted (a / P, (1 - a) / (1 - P)): unbiased for any P, helps thin media where most camera rays never scatter.

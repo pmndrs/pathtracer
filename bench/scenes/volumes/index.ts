@@ -2,7 +2,7 @@ import { gridDensity, gridWorldToIndex, slabSingleScatter } from '@pmndrs/pathtr
 import { compose, rotationX, scaling, translation } from '../geometry.ts';
 import type { MediumDesc, MeshDesc, SceneDesc } from '../schema.ts';
 import { cornell } from '../tier0/cornell.ts';
-import { cloudScenes } from './clouds.ts';
+import { cloudScenes, volLampFog } from './clouds.ts';
 
 /**
  * Participating-media scenes (P5, docs/internal/design/volumes.md).
@@ -510,7 +510,39 @@ export const volNestedFurnace: SceneDesc = {
   expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.01, pixelwise: false },
 };
 
+// --- V4.4: grid twins for the forced / equiangular estimate on grid media (`volumes.forcedGrid`) ----------------------------------------------------------------------
+/**
+ * `vol-cornell-smoke` with the cube's medium as a GRID of constant density 1 (8^3 over a box 1.36x the cube, so every point inside the cube lies between voxel centres of value 1 and the
+ * trilinear lookup is exactly 1: the medium equals the homogeneous one, only the estimators differ: delta / ratio tracking instead of closed forms). Same image expected.
+ */
+export const volCornellSmokeGrid: SceneDesc = {
+  ...volCornellSmoke,
+  name: 'vol-cornell-smoke-grid',
+  purpose: 'vol-cornell-smoke with the smoke as a constant-density GRID medium (trilinear lookup exactly 1 inside the cube): the same image through the grid code paths (V4.4 forcedGrid A/B; no reference render).',
+  media: { smoke: { type: 'grid', resolution: [8, 8, 8], density: new Array(512).fill(1), bounds: [[-0.15, -0.15, -0.15], [0.15, 0.15, 0.15]], sigmaA: [1, 1, 1], sigmaS: [9, 9, 9], g: 0.3 } },
+};
+/** Smooth heterogeneous density over the 3 m fog box of `vol-lamp-fog` (16^3, values 0.05..1.95, mean about 1, a zero border cell outside the box), so the scene keeps its tau ~0.3. */
+function lampFogGrid(): number[] {
+  const n = 16;
+  const out: number[] = [];
+  for (let k = 0; k < n; k++)
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++) {
+        const x = (i + 0.5) / n, y = (j + 0.5) / n, z = (k + 0.5) / n;
+        const edge = i === 0 || j === 0 || k === 0 || i === n - 1 || j === n - 1 || k === n - 1;
+        out.push(edge ? 0 : 0.05 + 1.9 * Math.sin(Math.PI * (1.7 * x + 0.6 * y)) ** 2 * (0.5 + 0.5 * Math.cos(2 * Math.PI * (z + 0.3 * x))));
+      }
+  return out;
+}
+/** `vol-lamp-fog` with a heterogeneous GRID fog (sigma_t 0.1/m x density, density 0.05..1.95 in smooth bands), the same lamp: the real grid scene of the V4.4 A/B (no reference render). */
+export const volLampFogGrid: SceneDesc = {
+  ...volLampFog,
+  name: 'vol-lamp-fog-grid',
+  purpose: 'vol-lamp-fog with a heterogeneous grid fog (16^3, smooth bands, mean density ~1 at sigma_t 0.1/m, albedo 0.9, g 0.3), maxDepth 1 (V4.4 forcedGrid / equiangular-in-grid A/B; no reference render).',
+  media: { fog: { type: 'grid', resolution: [16, 16, 16], density: lampFogGrid(), bounds: [[-1.6, -1.6, -1.6], [1.6, 1.6, 1.6]], sigmaA: [0.01, 0.01, 0.01], sigmaS: [0.09, 0.09, 0.09], g: 0.3 } },
+};
+
 export const volumeCheckScenes: readonly SceneDesc[] = [volEmitSlab, volEmitGridSlab, volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volCornellFog, volCornellFogEmpty, volMilkSphere, volGridCloud, volVdbSmoke, volVdbWdasCloud, volVdbBunnyCloud];
 export const volumeStackScenes: readonly SceneDesc[] = [volNestedAbsorb, volNestedOverlap, volNestedCamera, volNestedFurnace];
-export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, volGridSlabInner, ...cloudScenes];
+export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, volGridSlabInner, volCornellSmokeGrid, volLampFogGrid, ...cloudScenes];

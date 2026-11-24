@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { equiangularDistance, equiangularMixSample, equiangularPdf, equiangularSegment, expPdf, ptEquiangularWgsl } from './equiangular-wgsl.ts';
+import { equiangularDistance, equiangularMixSample, equiangularPdf, equiangularSegment, expPdf, gridForcedEstimate, ptEquiangularWgsl } from './equiangular-wgsl.ts';
 
 // One homogeneous grey segment [0, L) along +x, a point lamp q at distance h from the ray (isotropic phase): the single-scatter integrand toward q is
 //   f(t) = exp(-s t) s a * (1/4pi) * E * exp(-s r(t)) / r(t)^2,  r(t)^2 = h^2 + (t - t0)^2   (E = lamp intensity; unoccluded, the MIS weight is 1).
@@ -85,5 +85,81 @@ describe('equiangular distance sampling (V4.1)', () => {
     expect(w).toContain('ptSampleLdMedium');
     expect(w).toContain('atan2');
     expect(w).toContain('RT_LIGHT_TRIANGLE');
+  });
+});
+
+// V4.4 (`forcedGrid`): a heterogeneous grey segment [0, L) along +x (extinction sigma(t) <= mu, a smooth 1D profile with an empty stretch), a point lamp at height h over t0, the shadow
+// transmittance toward the lamp a closed form (the twin tests the distance + ratio-tracked T(0, t), not the shadow ray). Reference: a midpoint quadrature of T(0, t) sigma_s(t) Ld(t)
+// with T accumulated on the same grid. Also the plain estimator the forced one replaces: delta tracking's first real collision with its own light sample.
+describe('forced / equiangular estimate on a grid segment (V4.4)', () => {
+  const L = 3;
+  const mu = 1.2;
+  const albedo = 0.9;
+  const sigma = (t: number): number => (t > 1.6 && t < 2.0 ? 0 : mu * (0.05 + 0.9 * Math.sin(1.3 * t + 0.4) ** 2));
+  const mk = (seed: number) => {
+    let state = seed;
+    return (): number => {
+      state = (state + 0x6d2b79f5) | 0;
+      let z = Math.imul(state ^ (state >>> 15), 1 | state);
+      z = (z + Math.imul(z ^ (z >>> 7), 61 | z)) ^ z;
+      return ((z ^ (z >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const setup = (h: number, t0: number) => {
+    const ld = (t: number): number => {
+      const r2 = h * h + (t - t0) * (t - t0);
+      return (5 * Math.exp(-0.3 * Math.sqrt(r2))) / (4 * Math.PI * r2);
+    };
+    const M = 2_000_000;
+    const dt = L / M;
+    let tau = 0;
+    let exact = 0;
+    for (let i = 0; i < M; i++) {
+      const t = (i + 0.5) * dt;
+      const s = sigma(t);
+      exact += Math.exp(-(tau + 0.5 * s * dt)) * albedo * s * ld(t) * dt;
+      tau += s * dt;
+    }
+    return { ld, exact, seg: equiangularSegment([t0, h, 0], [1, 0, 0], L)! };
+  };
+  const stats = (f: () => number, n: number) => {
+    let sum = 0;
+    let sum2 = 0;
+    for (let i = 0; i < n; i++) {
+      const e = f();
+      sum += e;
+      sum2 += e * e;
+    }
+    const mean = sum / n;
+    const variance = sum2 / n - mean * mean;
+    return { mean, variance, se: Math.sqrt(variance / n) };
+  };
+  const N = 100_000;
+  for (const c of [{ h: 0.05, t0: 1.2 }, { h: 0.3, t0: -0.4 }, { h: 0.1, t0: 1.8 }]) {
+    it(`forced, mixture and delta tracking agree with the quadrature within 4 SE (h ${c.h}, t0 ${c.t0})`, () => {
+      const { ld, exact, seg } = setup(c.h, c.t0);
+      const rnd = mk(777);
+      const forced = stats(() => gridForcedEstimate(rnd(), sigma, albedo, mu, L, null, ld, rnd), N);
+      const mix = stats(() => gridForcedEstimate(rnd(), sigma, albedo, mu, L, seg, ld, rnd), N);
+      // the estimator they replace: delta tracking to the first real collision (prob sigma / mu at each majorant event), its light sample at the collision
+      const plain = stats(() => {
+        let t = 0;
+        for (;;) {
+          t += -Math.log(1 - rnd()) / mu;
+          if (t >= L) return 0;
+          if (rnd() < sigma(t) / mu) return albedo * ld(t);
+        }
+      }, N);
+      for (const r of [forced, mix, plain]) expect(Math.abs(r.mean - exact)).toBeLessThan(4 * r.se + 1e-4 * exact);
+      // equiangular ignores the density: over the empty stretch (t0 1.8) its samples land where sigma_s = 0 and the gain over the majorant exponential is small (variance forced / mix 9.3, 1.0, 1.2 for the three cases; plain delta tracking / mix 3.2, 3.0, 0.47 at 1e5 trials).
+      if (c.t0 === 1.2) expect(mix.variance).toBeLessThan(forced.variance / 3);
+      console.log(`V4.4 twin h ${c.h} t0 ${c.t0}: exact ${exact.toExponential(4)} forced ${forced.mean.toExponential(4)} +- ${forced.se.toExponential(1)} mix ${mix.mean.toExponential(4)} +- ${mix.se.toExponential(1)} plain ${plain.mean.toExponential(4)} +- ${plain.se.toExponential(1)}; var forced/mix ${(forced.variance / mix.variance).toFixed(2)} plain/mix ${(plain.variance / mix.variance).toFixed(2)}`);
+    });
+  }
+  it('emits the grid helper only with grid = true', () => {
+    for (const march of [1, 4]) {
+      expect(ptEquiangularWgsl(march)).not.toContain('ptVolGridSsTr');
+      expect(ptEquiangularWgsl(march, true)).toContain('fn ptVolGridSsTr');
+    }
   });
 });
