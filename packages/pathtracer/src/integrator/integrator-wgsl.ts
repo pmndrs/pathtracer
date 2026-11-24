@@ -693,7 +693,8 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptAovGuide(pxIndex, dims.x * dims.y, ptVolMedium(curMed).albedo, -ray.direction);
                     aovDone = true;
                 }
-` : ''}${frame ? `                // V5.1c: a medium scatter is the "diffuse" class (the phase function is the medium's BSDF): albedo = sigma_s / sigma_t, normal -ray.direction, viewZ and motion of the scatter point, roughness 1.
+` : ''}${frame ? `${fm ? '' : `                // V5.1c: a medium scatter is the "diffuse" class (the phase function is the medium's BSDF): albedo = sigma_s / sigma_t, normal -ray.direction, viewZ and motion of the scatter point, roughness 1.
+                // (With frameMedia the guides come from the guide ray before the loop instead: a random scatter point is no stable guide, V7.5.)
                 if (vertex == 0u) {
                     fSeen = true;
                     fNormal = -ray.direction;
@@ -702,7 +703,7 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     fRough = 1.0;
                     fAlbedo = ptVolMedium(curMed).albedo;
                 }
-${emitMirror ? `                fPure = false;
+`}${emitMirror ? `                fPure = false;
 ` : ''}` : ''}                let woM = -ray.direction;
                 if (PT_NEE${forced ? ' && !fHomog' : ''}) {
 ${fm ? `                    let mAdd = beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
@@ -900,6 +901,40 @@ ${vspg ? `    var vspgDone = false;
 ` : ''}` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
 ${vbHit ? `    var primary = true;
+` : ''}${fm ? `    // V7.5: the frame planes' guides (viewZ, normal, motion, albedo, roughness) come from the first SOLID surface along the camera ray (medium boundaries are skipped), whatever the medium does to the
+    // path: a random scatter point would change them from frame to frame and SVGF would reject its history. A miss stays a miss. Through a medium the albedo guides are 1 (the planes then hold the
+    // light as it arrives: surface radiance times transmittance plus the multiple scattering, which the surface's albedo does not modulate).
+    {
+        var gRay = ray;
+        var gTrav = ${o.volumes!.cameraStack ? o.volumes!.cameraStack.length > 0 : !!o.volumes!.cameraMedium};
+        for (var gk = 0u; gk < 16u; gk++) {
+            let gh = rtClosest(gRay, RT_MASK_ALL);
+            if (gh.t < 0.0) {
+                break;
+            }
+            let gmv = ptVolMat(gh.material);
+            if (gmv.w != 0u) {
+                gTrav = true;
+                let gp = gRay.origin + gRay.direction * gh.t;
+                gRay = RtRay(ptOffsetOrigin(gp, ptSideNormal(gh.normal, gRay.direction)), 0.0, gRay.direction, PT_FAR);
+                continue;
+            }
+            let gs = rtSurface(gh, gRay, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${tex ? ' | RT_SURF_UV' : ''});
+            let gm = ${tex ? 'rtApplyMaterialTextures(rtMaterial(gh.material), gs.uv, 0.0)' : 'rtMaterial(gh.material)'};
+            let gb = ptBsdfFromMaterial(gm${mats ? `, ${mixU.replaceAll('depth', '0u')}` : ''});
+            fSeen = true;
+            fNormal = gs.shadingNormal;
+            fViewZ = -dot(gs.position - origin, normalize(ptParams.forward.xyz));
+            fMotion = ptFrameMotion(gs.position);
+            fRough = gm.specularRoughness;
+            fIsSpec = gb.kind == PT_BSDF_CONDUCTOR || gb.kind == PT_BSDF_DIELECTRIC;
+            if (!(gTrav || gmv.z != 0u)) {
+                fAlbedo = ptAovAlbedo(gm);
+                fSpec = ptAovSpecular(gm);
+            }
+            break;
+        }
+    }
 ` : ''}    loop {
 ${vbHit ? `        var hit: RtHit;
         if (primary) {
@@ -986,7 +1021,7 @@ ${lodS.bsdf(mixU, shadingNormal, true) ?? `        let bp = ptBsdfFromMaterial(m
             aovDone = true;
             ptAovGuide(pxIndex, dims.x * dims.y, ptAovAlbedo(mat), ${shadingNormal});
         }
-` : ''}${frame ? `        if (depth == 0u) {
+` : ''}${frame && !fm ? `        if (depth == 0u) {
             fSeen = true;
             fNormal = ${shadingNormal};
             fViewZ = -dot(surf.position - origin, normalize(ptParams.forward.xyz));

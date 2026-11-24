@@ -66,8 +66,8 @@ export class MediaRig {
         displayHeight: 2 * o.height,
         maxDepth: o.maxDepth,
         ...(share ? { shareDeviceWith: share } : {}),
-        adapter: { ...o.media, seed: o.seed, ...(split ? { frameMedia: true } : {}) },
-        ...(split ? { emissionTemporal: { alpha: o.alpha ?? 0.1, clip: o.clip ?? 0 } } : {}),
+        adapter: { ...o.media, seed: o.seed, frameMedia: split },
+        emissionTemporal: split ? { alpha: o.alpha ?? 0.1, clip: o.clip ?? 0 } : false,
       });
     const a = kernels.includes('all') ? await mk(false) : undefined;
     const b = kernels.includes('split') ? await mk(true, a) : undefined;

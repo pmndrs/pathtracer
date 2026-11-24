@@ -134,6 +134,7 @@ try {
       track(rig);
       adapterSummary = rig.a!.adapter.gpuContext!.summary;
       const frame2: { viewZ: Float32Array; radiance: Float32Array }[] = [];
+      const frame2s: { viewZ: Float32Array; radiance: Float32Array }[] = [];
       let aRad: Float32Array | null = null;
       for (let f = 1; f <= 2; f++) {
         await rig.frame(baseCam);
@@ -166,7 +167,10 @@ try {
           if (name === 'all') {
             frame2.push({ viewZ: fr.normalViewZ, radiance: fr.radiance });
             if (f === 1) aRad = fr.radiance;
-          } else if (f === 1 && aRad) {
+          } else {
+            frame2s.push({ viewZ: fr.normalViewZ, radiance: fr.radiance });
+          }
+          if (name === 'split' && f === 1 && aRad) {
             let worstAB = 0;
             let sumAB = 0;
             for (let i = 0; i < n * 4; i++) {
@@ -180,9 +184,10 @@ try {
           }
         }
       }
-      // guides of a medium first vertex: how much does viewZ of the same pixel move between two frames of a still camera?
-      {
-        const [g1, g2] = frame2 as [typeof frame2[0], typeof frame2[0]];
+      // guides of a medium first vertex: how much does viewZ of the same pixel move between two frames of a still camera? (all = scatter-point guides, split = guide ray, V7.5)
+      for (const [nm, fs] of [['', frame2], ['split_', frame2s]] as const) {
+        const [g1, g2] = fs as [typeof frame2[0], typeof frame2[0]];
+        if (!g1 || !g2) continue;
         let moved = 0;
         let seen = 0;
         for (let i = 0; i < W * H; i++) {
@@ -192,7 +197,7 @@ try {
           seen++;
           if (Math.abs(z1 - z2) > 0.02 * Math.max(Math.abs(z1), Math.abs(z2))) moved++;
         }
-        metrics[`${key}_identity_guide_viewz_unstable_frac`] = moved / Math.max(1, seen);
+        metrics[`${key}_identity_${nm}guide_viewz_unstable_frac`] = moved / Math.max(1, seen);
       }
       rig.destroy();
     }

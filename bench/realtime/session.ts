@@ -13,7 +13,7 @@
  * Jitter owner: the path tracer's sampler (pair 0, per pixel; Owen-Sobol with ReSTIR, blue noise without), as in the track N chain
  * (nrc-pipeline.md section 4): the upscaler runs with `jitter: false`, the denoiser gets `jitter` [0, 0], and motion is jitter-free by construction.
  */
-import type { PtLookAtCamera, PtMegakernel, PtRestirOptions } from '@pmndrs/pathtracer';
+import { resolveIntegratorOptions, type PtLookAtCamera, type PtMegakernel, type PtRestirOptions } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
 import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from './chain.ts';
@@ -93,7 +93,8 @@ export class RealtimePipelineSession {
       ...(o.denoiser ? { denoiser: o.denoiser } : {}),
       ...(o.upscaler ? { upscaler: o.upscaler } : {}),
       ...(o.reactive ? { reactive: o.reactive } : {}),
-      ...(o.emissionTemporal ? { emissionTemporal: o.emissionTemporal } : {}),
+      // V7.5: a kernel with `frameMedia` gets the emission temporal pass by default (an explicit `emissionTemporal: false` wins).
+      ...(o.emissionTemporal !== undefined ? (o.emissionTemporal ? { emissionTemporal: o.emissionTemporal } : {}) : resolveIntegratorOptions(kernel.options.integrator ?? {}).frameMedia ? { emissionTemporal: {} } : {}),
     };
     const arm = await PipelineArm.create(device, ps, o.preview ? 'preview' : 'realtime');
     return new RealtimePipelineSession({ adapter, device, kernel, arm, options: o, limits });

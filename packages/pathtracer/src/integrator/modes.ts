@@ -61,6 +61,7 @@ export const PT_MODE_NOTES: Readonly<Record<string, string>> = {
   'realtime.restir': 'opt-in (`integrator.restir`), D32: when on, `unbiased` (no initial visibility), M 8, temporal, spatial 2 random are the library defaults, and the realtime preset adds `sharedHit` (megakernel, trace primaries, positions in the layout: -5.8% frame on Sponza 1280x720); pays on many-light scenes only (1.9-2.8x relMSE, -28% FLIP at +13..30% frame time), a sun + sky scene gains nothing',
   'realtime.scheduler': 'D32: `ptwfAutoPolicy({ ..., frame: true, triangles, kernelBytes })` is the recommended scheduler choice: wavefront for big scenes (>= 100k triangles, >= 2^17 pixels) or a megakernel over the ~50 KB DXC class, else megakernel',
   'realtime.volumes': 'none added (V5.3): frame + volumes compiles on the megakernel since V5.1c (first-vertex scatter = diffuse class), not on the wavefront; `volumes.outputs` + frame throws; the kernel is 51-53 KB (over the DXC class). Media speed options for realtime are not measured',
+  'realtime.frameMedia': 'V7.5 (media scenes, megakernel, `frame` with the emission plane, no `volumes.outputs`): the camera ray\'s single scattering goes to plane 6 and the guide planes come from the first solid surface behind it (a medium-aware albedo of 1); the chain accumulates plane 6 itself (`emissionTemporal`, bench session default). A/B in TASKS V7.4 / V7.5: split relMSE 0.021 against 6.6 for SVGF on everything (fog, frame 4)',
   'realtime.limits': 'maxDepth 2, no Russian roulette (a depth cap is the real-time termination; R3 compares RR / throughput / cache termination after the denoiser): pending A/B',
 };
 
@@ -155,6 +156,9 @@ export function ptApplyMode<T extends PtModeOptions>(options: T, scheduler: 'meg
     if (vol.outputs && merged.aovs === true && (options.integrator as PtIntegratorOptions | undefined)?.aovs === undefined) merged.aovs = false;
     if (scheduler === 'wavefront' && (options.integrator as PtIntegratorOptions | undefined)?.materialLod === undefined) merged.materialLod = 'full';
   }
+  // V7.5: real-time frames of a scene with media split the camera ray's single scattering off the denoised planes (plane 6, `frameMedia`; the guides then come from the first solid surface, so SVGF keeps its
+  // history). Megakernel only, and only where the kernel accepts it (frame + the emission plane, no `outputs`); an explicit caller value (even false) wins.
+  if (options.mode === 'realtime' && scheduler === 'megakernel' && merged.volumes && merged.frame && merged.frameEmission !== 'none' && !(merged.volumes as PtVolumeOptions).outputs) set('frameMedia', true);
   const materials = merged.materials as { features: { layered?: boolean }; layered?: Record<string, unknown> } | null | undefined;
   if (preset.layered && materials?.features.layered) {
     const layered: Record<string, unknown> = { ...(materials.layered ?? {}) };

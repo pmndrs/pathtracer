@@ -73,3 +73,30 @@ describe('preview preset for media (V5.3)', () => {
     expect(ptApplyMode({ mode: 'preview' as const, integrator: {} }).integrator).not.toHaveProperty('volumes');
   });
 });
+
+// V7.5: real-time frames of a media scene split the camera ray's single scattering off the denoised planes; the guides come from a guide ray.
+describe('realtime preset frameMedia (V7.5)', () => {
+  const rt = (integrator: object, scheduler: 'megakernel' | 'wavefront' = 'megakernel') => ptApplyMode({ mode: 'realtime' as const, integrator }, scheduler).integrator as Record<string, unknown>;
+  it('is on for a media scene with frame outputs, and only then', () => {
+    expect(rt({ volumes: homog }).frameMedia).toBe(true);
+    expect(rt({}).frameMedia).toBeUndefined();
+    expect(rt({ volumes: homog }, 'wavefront').frameMedia).toBeUndefined();
+    expect(rt({ volumes: { ...homog, outputs: true } }).frameMedia).toBeUndefined();
+    expect(rt({ volumes: homog, frameEmission: 'none' }).frameMedia).toBeUndefined();
+    expect(ptApplyMode({ mode: 'preview' as const, integrator: { volumes: homog } }).integrator).not.toHaveProperty('frameMedia');
+  });
+  it('an explicit caller value wins', () => {
+    expect(rt({ volumes: homog, frameMedia: false }).frameMedia).toBe(false);
+  });
+  it('the kernel compiles; the guide ray exists only with frameMedia, and the scatter point no longer sets the guides', () => {
+    const build = (frameMedia: boolean) => ptMegakernelBuild(caps, { format: {}, layout, integrator: { ...(rt({ volumes: homog, frameMedia }) as object), shortenNames: false } as never, shortenNames: false, minify: false } as never).code;
+    const on = build(true);
+    const off = build(false);
+    expect(on).toContain('gRay');
+    expect(off).not.toContain('gRay');
+    expect(on).toContain('gTrav');
+    expect(off).toContain('fAlbedo = ptVolMedium(curMed).albedo');
+    expect(on).not.toContain('fAlbedo = ptVolMedium(curMed).albedo');
+    expect(on.match(/fSeen = true/g)?.length).toBe(1);
+  });
+});
