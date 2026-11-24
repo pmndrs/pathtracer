@@ -61,6 +61,7 @@ const CASES: Record<string, Case> = {
   'vol-camera-grid': { scene: 'vol-camera-grid' },
   'vol-camera-grid-auto': { scene: 'vol-camera-grid-auto' },
   'vol-grid-slab-brick': { scene: 'vol-grid-slab', settings: { volumeMajorant: 'brick' } },
+  'vol-grid-slab-inner-decomposition': { scene: 'vol-grid-slab-inner', settings: { volumeMajorant: 'brick', volumeFreeFlight: 'decomposition' } },
   'vol-cornell-smoke': { scene: 'vol-cornell-smoke' },
   'vol-cornell-smoke-ratio': { scene: 'vol-cornell-smoke', settings: { volumeShadow: 'ratio' } },
   'vol-milk-sphere': { scene: 'vol-milk-sphere' },

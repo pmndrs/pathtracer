@@ -136,6 +136,34 @@ export const volGridSlab: SceneDesc = (() => {
   };
 })();
 
+/**
+ * V2.4: `vol-grid-slab` with INTERIOR bricks (a 32^3 grid over the same 8 x 8 x 1 m box, density smooth along z: 0.6 + 0.3 sin(0.7 + 0.2 k)), so the brick minorant of the cells the
+ * camera ray crosses is well above 0 (min / max about 0.6-0.9) and decomposition tracking takes most collisions as control ones; in the 4 x 4 x 16 `vol-grid-slab` every brick
+ * touches the grid border, its minorant is 0 and decomposition equals delta tracking. Absorption only, unit sky: pixel = exp(-sigma integral of the trilinear density).
+ */
+const INNER_N = 32;
+const innerDensity = (k: number): number => 0.6 + 0.3 * Math.sin(0.7 + 0.2 * k);
+function innerSlabGrid(): { resolution: [number, number, number]; density: number[]; bounds: [[number, number, number], [number, number, number]] } {
+  const density: number[] = [];
+  for (let k = 0; k < INNER_N; k++) for (let j = 0; j < INNER_N; j++) for (let i = 0; i < INNER_N; i++) density.push(innerDensity(k));
+  return { resolution: [INNER_N, INNER_N, INNER_N], density, bounds: [[-4, -4, -0.5], [4, 4, 0.5]] };
+}
+export const volGridSlabInner: SceneDesc = (() => {
+  const g = innerSlabGrid();
+  const grid = { resolution: g.resolution, worldToIndex: gridWorldToIndex(g.resolution, g.bounds), densityMax: Math.max(...g.density) };
+  const dens = gridDensity(grid, g.density);
+  let tau = 0;
+  const n = 20000;
+  for (let i = 0; i < n; i++) tau += dens(0, 0, -0.5 + ((i + 0.5) / n)) / n;
+  return {
+    ...volGridSlab,
+    name: 'vol-grid-slab-inner',
+    purpose: 'V2.4: vol-grid-slab on a 32^3 grid with a smooth z profile, so the camera ray crosses interior bricks (minorant > 0): exercises decomposition tracking. Pixel = exp(-sigma integral of the trilinear density).',
+    media: { layers: { type: 'grid', resolution: g.resolution, density: g.density, bounds: g.bounds, sigmaA: GRID_SIGMA, sigmaS: [0, 0, 0] } },
+    expected: { type: 'mean', value: GRID_SIGMA.map((s) => Math.exp(-s * tau)) as unknown as [number, number, number], tolerance: 0.01, pixelwise: false },
+  };
+})();
+
 // --- the camera inside a grid medium (V3.3) ---------------------------------------------------------------------------------------------------------------------
 /** 32 layers over z in [-4, 4] (an 8 m box, the camera at its centre), an emitter 3 m ahead: pixel = L exp(-sigma integral_0^3 density(0, 0, -z) dz). */
 const CAM_LAYERS = 32;
@@ -485,4 +513,4 @@ export const volNestedFurnace: SceneDesc = {
 export const volumeCheckScenes: readonly SceneDesc[] = [volEmitSlab, volEmitGridSlab, volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volCornellFog, volCornellFogEmpty, volMilkSphere, volGridCloud, volVdbSmoke, volVdbWdasCloud, volVdbBunnyCloud];
 export const volumeStackScenes: readonly SceneDesc[] = [volNestedAbsorb, volNestedOverlap, volNestedCamera, volNestedFurnace];
-export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, ...cloudScenes];
+export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, volGridSlabInner, ...cloudScenes];
