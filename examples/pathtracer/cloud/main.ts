@@ -10,7 +10,7 @@
  * Switching the phase between Mie (two lobes) and Henyey-Greenstein changes the kernel's structure and rebuilds it (a few seconds); the sun only rewrites the scene copy.
  */
 import { buildGpuScene, type GpuScene, type SceneCopyInput } from '@pmndrs/raytracer';
-import { brickMajorants, gridWorldToIndex, ptPhaseLobes, type PtIntegratorOptions, type PtMedium } from '@pmndrs/pathtracer';
+import { gridWorldToIndex, ptPhaseLobes, type PtIntegratorOptions, type PtMedium } from '@pmndrs/pathtracer';
 import { box, mesh } from '../../shared/cornell.ts';
 import { defineExample } from '../../shared/example.ts';
 import { sunFrom } from '../../shared/models.ts';
@@ -105,7 +105,6 @@ defineExample(async (ctx) => {
   for (const v of density) { if (v > densityMax) densityMax = v; }
   // Core optical depth: the largest sum along y of one column (a vertical ray through the cloud), in units of sigma_t.
   for (let z = 0; z < RES; z += 4) for (let x = 0; x < RES; x += 4) { let s = 0; for (let y = 0; y < RES; y++) s += density[(z * RES + y) * RES + x]!; core = Math.max(core, s * ((MAX[1] - MIN[1]) / RES)); }
-  const majorant = brickMajorants([RES, RES, RES], density);
   const buildMs = performance.now() - t0;
   ctx.stats.set('density', `${RES}³ built in ${buildMs.toFixed(0)} ms`);
 
@@ -145,7 +144,7 @@ defineExample(async (ctx) => {
     ctx.progress('Compiling…');
     try {
       gpuScene ??= await buildGpuScene(device, input(), { label: 'cloud' });
-      const next = await ProgressiveRenderer.create(ctx, gpuScene, orbit.camera, { integrator: { volumes: volumes(), sunVisible: false }, volumeGrid: { resolution: [RES, RES, RES], density, majorant } });
+      const next = await ProgressiveRenderer.create(ctx, gpuScene, orbit.camera, { integrator: { volumes: volumes(), sunVisible: false }, volumeGrid: { resolution: [RES, RES, RES], density } });
       next.settings.maxDepth = renderer?.settings.maxDepth ?? params.maxDepth;
       const old = renderer;
       renderer = next;

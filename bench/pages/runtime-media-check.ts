@@ -63,7 +63,9 @@ try {
     const adapter = new PtMegakernelAdapter({});
     await adapter.load(getScene(name));
     const device = adapter.gpuContext!.device;
-    const v0 = (adapter as unknown as { lastKernelOptions: { integrator: { volumes: any } } }).lastKernelOptions.integrator.volumes;
+    const v00 = (adapter as unknown as { lastKernelOptions: { integrator: { volumes: any } } }).lastKernelOptions.integrator.volumes;
+    // `forced=1` (V6.6, the fog example's estimators): forced in-scatter NEE + equiangular distances (megakernel only: the wavefront rows are skipped below).
+    const v0 = args.forced === '1' ? { ...v00, forcedNee: true, equiangular: true } : v00;
     const v1 = {
       ...v0,
       media: v0.media.map((m: any) => {
@@ -75,12 +77,12 @@ try {
     const rt1 = { ...v1, runtimeParams: true };
     const kernels = {
       mk: {
-        a: adapter.renderer as PtMegakernel,
+        a: args.forced === '1' ? await adapter.createKernel({ integrator: { volumes: v0 } }) : (adapter.renderer as PtMegakernel),
         b: await adapter.createKernel({ integrator: { volumes: rt0 } }),
         c: await adapter.createKernel({ integrator: { volumes: v1 } }),
         d: await adapter.createKernel({ integrator: { volumes: rt0 } }),
       },
-      wf: {
+      wf: args.forced === '1' ? ({} as never) : {
         a: await adapter.createWavefrontKernel({ integrator: { volumes: v0 } }),
         b: await adapter.createWavefrontKernel({ integrator: { volumes: rt0 } }),
         c: await adapter.createWavefrontKernel({ integrator: { volumes: v1 } }),
@@ -88,6 +90,7 @@ try {
       },
     };
     for (const [sched, k] of Object.entries(kernels)) {
+      if (args.forced === '1' && sched === 'wf') continue;
       const A = await render(device, k.a, spp);
       const B = await render(device, k.b, spp);
       const C = await render(device, k.c, spp);

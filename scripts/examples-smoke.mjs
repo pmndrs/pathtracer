@@ -156,8 +156,8 @@ img.save(dst, 'WEBP', quality=82, method=6)
 const entries = EXAMPLES.filter((e) => !e.external && (!only.length || only.includes(e.slug)) && !skip.includes(e.slug) && !(flag('--no-network') && e.network && !e.check?.query));
 const server = value('--url', '') ? { url: value('--url', ''), stop: () => {} } : await startServer(Number(value('--port', '5320')));
 const { chromium } = await playwright();
-const gpuArgs = flag('--gpu') ? ['--enable-unsafe-webgpu'] : ['--no-sandbox', '--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
-const browser = await chromium.launch({ headless: true, args: gpuArgs });
+const gpuArgs = flag('--gpu') ? ['--enable-unsafe-webgpu', ...(process.env.CHROME_PATH ? ['--headless=new', '--use-angle=metal'] : [])] : ['--no-sandbox', '--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+const browser = await chromium.launch({ headless: true, args: gpuArgs, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
 const results = [];
 try {
   for (const entry of entries) {

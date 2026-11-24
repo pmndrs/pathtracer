@@ -16,6 +16,8 @@ export interface ProgressiveSettings {
   maxSamples: number;
   /** Scattering events per path (1 = direct light only). */
   maxDepth: number;
+  /** Russian roulette starts after this many scattering events (default 3). A deep multiple-scattering medium (a cloud) wants it large so albedo-0.99 paths are not cut early. */
+  rrStartDepth: number;
 }
 
 /** Which scheduler to compile: the megakernel (default) or the wavefront with its scheduling options. */
@@ -23,7 +25,7 @@ export type SchedulerChoice = { scheduler?: 'megakernel' } | ({ scheduler: 'wave
 
 export class ProgressiveRenderer {
   readonly view: AccumulationView;
-  readonly settings: ProgressiveSettings = { samplesPerFrame: 2, maxSamples: 4096, maxDepth: 8 };
+  readonly settings: ProgressiveSettings = { samplesPerFrame: 2, maxSamples: 4096, maxDepth: 8, rrStartDepth: 3 };
   private pt: PtMegakernel | PtWavefront;
   private scene: GpuScene;
   private camera: PtLookAtCamera;
@@ -117,7 +119,7 @@ export class ProgressiveRenderer {
     }
     if (this.dirty) {
       this.pt.setCamera(this.camera);
-      this.pt.setLimits({ maxDepth: this.settings.maxDepth, rrStartDepth: 3 });
+      this.pt.setLimits({ maxDepth: this.settings.maxDepth, rrStartDepth: this.settings.rrStartDepth });
       this.pt.reset(encoder);
       this.dirty = false;
       this.started = performance.now();

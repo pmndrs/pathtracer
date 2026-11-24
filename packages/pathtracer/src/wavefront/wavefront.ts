@@ -30,7 +30,7 @@ import { PT_RESTIR_GI_SHADE_BINDING } from '../restir/restir-gi-wgsl.ts';
 import { PT_VBUFFER_BINDING, ptVbufferWgsl } from '../integrator/vbuffer.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable } from '../spectral/rgb2spec.ts';
-import { PT_VOLUME_OUTPUT_VEC4, ptDecodeVolumeOutputs, ptMediumsEmit, type PtVolumeOutputs, type brickAtlasMemory } from '../volume/volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, ptVolumeGridWithMajorant, ptDecodeVolumeOutputs, ptMediumsEmit, type PtVolumeOutputs, type brickAtlasMemory } from '../volume/volume.ts';
 import { ptRenderUntil, type PtRenderUntilResult, type PtStopOptions } from '../integrator/render-until.ts';
 import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
@@ -326,7 +326,10 @@ export class PtWavefront {
   static async create(device: GPUDevice, caps: Caps, requested: PtWavefrontOptions): Promise<PtWavefront> {
     const moded = ptApplyMode(requested, 'wavefront');
     // The `bluenoise` sampler (real-time mode) defaults to the texture shipped in the package.
-    const options = moded.integrator?.sampler === 'bluenoise' && !moded.blueNoise ? { ...moded, blueNoise: await loadBlueNoise() } : moded;
+    const withNoise = moded.integrator?.sampler === 'bluenoise' && !moded.blueNoise ? { ...moded, blueNoise: await loadBlueNoise() } : moded;
+    // V6.6: `majorant: 'brick'` without a caller's `volumeGrid.majorant` builds the brick majorants here.
+    const grid = ptVolumeGridWithMajorant(withNoise.volumeGrid, withNoise.integrator?.volumes);
+    const options = grid === withNoise.volumeGrid ? withNoise : { ...withNoise, volumeGrid: grid };
     const label = options.label ?? 'pt wavefront';
     const build = ptWavefrontBuild(caps, options);
     const wf = scheduling(options, caps);
