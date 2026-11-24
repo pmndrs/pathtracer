@@ -108,6 +108,15 @@ materials render as media.
 | 🟨 V6.6 (runtime params ✅) | API ergonomics found by the cloud example (V6.3): sigma_t / albedo / phase as runtime uniforms (sliders without a recompile, today every change rebuilds the kernel), a `ptMediumFrom` overload taking a phase, `volumeGrid` building its own brick majorants when `majorant: 'brick'`, `rrStartDepth` exposed in `ProgressiveRenderer` | same image before / after; a slider change takes < 1 frame |
 | ✅ V6.5 | Adapter-aware defaults (grid format / size from limits, wavefront when the megakernel passes the DXC class) | caps page on the three machines |
 
+## V7 Two-part media estimator
+
+Idea: a raymarcher looks finished in a frame because it takes several light estimates along the view ray (single scattering, deterministic); we keep the unbiased path tracer for multiple scattering and replace only the single-scatter-from-camera part.
+
+| Item | What | Status |
+|---|---|---|
+| V7.1 | Homogeneous media: `volumes.marchSamples` N stratified distances on the camera segment (see forced-wgsl.ts header and DIVERGES V330). Megakernel only, implies `forcedNee`, composes with `equiangular`. Unbiased on `vol-cornell-fog` (within 1 SE at 1024 spp); error vs pbrt: x0.55-0.62 of the default at 1-64 spp from forced + equiangular, N adds a further gain only where one light sample per segment is the noise (lamp close to the ray: 6-18x at 1 spp, floor from 16 spp up) | done (2026-11-24) |
+| V7.2 | Grid media: the same N-strata estimate through the majorant / ratio-tracking transmittance (a grid segment has no closed-form exponential CDF: needs a distance proposal, e.g. equal-optical-depth strata from the brick majorants) | open |
+
 ## Suggested order
 
 V1.1, V1.2, V1.5, V1.6 first (S, minutes to check, direct win on the clouds' grain), then V2.1 + V2.2 + V2.3 as one A/B family, then V3.2. V1.8 and the quiet-pass items run

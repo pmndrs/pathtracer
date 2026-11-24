@@ -13,7 +13,7 @@
 // Light picks that are not a triangle (sun, environment: no point) and a degenerate geometry (ray through the point, h ~ 0) use the exponential distance only: the choice depends on the
 // pick and the geometry, never on u, so the per-pick estimator stays unbiased.
 
-import { forcedOneMinusExp, PT_FORCED_VERTEX_BASE } from './forced-wgsl.ts';
+import { forcedOneMinusExp, PT_FORCED_VERTEX_BASE, PT_MARCH_STRIDE } from './forced-wgsl.ts';
 
 export interface EquiangularSegment {
   /** Ray parameter of the point on the ray closest to the light point. */
@@ -62,7 +62,8 @@ export function equiangularMixSample(u: number, mu: number, L: number, seg: Equi
   return { t, pdf: 0.5 * expPdf(t, mu, L) + 0.5 * equiangularPdf(t, seg) };
 }
 
-export function ptEquiangularWgsl(): string {
+export function ptEquiangularWgsl(march = 1): string {
+  if (march > 1) return ptEquiangularMarchWgsl(march);
   return /* wgsl */ `
 // V4.1 equiangular + exponential one-sample MIS for one free-flight segment [0, segMax) in a homogeneous medium (see volume/equiangular-wgsl.ts). The caller multiplies by beta.
 fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
@@ -111,6 +112,75 @@ fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampl
     }
     let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
     return m.sigmaT * m.albedo * exp(-m.sigmaT * t) * ld / pdf;
+}
+`;
+}
+
+/**
+ * V7.1: equiangular + exponential MIS with `march` strata on the camera segment. Stratum i draws its distance coordinate u = (i + xi.x) / n and chooses the technique with its own second
+ * number xi.y (equiangular when xi.y >= 0.5): both techniques then stratify in their own CDF space, and the one-sample balance MIS stays unbiased. Deeper segments (n = 1) keep the V4.1 split of u.
+ */
+function ptEquiangularMarchWgsl(march: number): string {
+  return /* wgsl */ `
+// V7.1 equiangular + exponential one-sample MIS with ${march} stratified distances on the camera segment (volume/equiangular-wgsl.ts). The caller multiplies by beta.
+fn ptVolEquiNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
+    let m = ptVolMedium(id);
+    if (!(m.mu > 0.0) || !(segMax > 0.0)) {
+        return vec3f(0.0);
+    }
+    let n = select(1u, ${march}u, depth == 0u);
+    let x = m.mu * segMax;
+    let a = select(1.0 - exp(-x), x * (1.0 - 0.5 * x + x * x / 6.0), x < 1.0e-3);
+    let pe = m.mu / a;
+    var acc = vec3f(0.0);
+    for (var i = 0u; i < ${march}u; i++) {
+        if (i >= n) {
+            break;
+        }
+        let fv = ${PT_FORCED_VERTEX_BASE}u + i * ${PT_MARCH_STRIDE}u + depth;
+        let pick = rtSampleLight(ptSample2D(pixelSeed, sampleIndex, ptVertexPair(fv, PT_SLOT_SELECT_COMPONENT)).x);
+        if (pick.index == RT_NONE || !(pick.pmf > 0.0)) {
+            continue;
+        }
+        let l = rtLight(pick.index);
+        let xi = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(fv, PT_SLOT_BSDF_DIRECTION));
+        var u = (f32(i) + xi.x) / f32(n);
+        var h = 0.0;
+        var t0 = 0.0;
+        var thA = 0.0;
+        var thB = 0.0;
+        if (l.kind == RT_LIGHT_TRIANGLE) {
+            let b = rtSampleUniformTriangle(ptSample2D(pixelSeed, sampleIndex, ptVertexPair(fv, PT_SLOT_LIGHT_POINT)));
+            let rel = l.position + l.edge1 * b.x + l.edge2 * b.y - vo;
+            t0 = dot(rel, d);
+            let perp = rel - d * t0;
+            h = length(perp);
+            if (h > 1.0e-5 * max(1.0, segMax)) {
+                thA = atan2(-t0, h);
+                thB = atan2(segMax - t0, h);
+            } else {
+                h = 0.0;
+            }
+        }
+        var t: f32;
+        var pdf: f32;
+        if (h > 0.0) {
+            var useEq = xi.y >= 0.5;
+            if (n == 1u) {
+                useEq = u >= 0.5;
+                u = select(2.0 * u, 2.0 * u - 1.0, useEq);
+            }
+            t = select(-log(1.0 - u * a) / m.mu, t0 + h * tan(thA + u * (thB - thA)), useEq);
+            t = clamp(t, 0.0, segMax);
+            pdf = 0.5 * pe * exp(-m.mu * t) + 0.5 * h / ((thB - thA) * (h * h + (t - t0) * (t - t0)));
+        } else {
+            t = min(-log(1.0 - u * a) / m.mu, segMax);
+            pdf = pe * exp(-m.mu * t);
+        }
+        let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+        acc += m.sigmaT * m.albedo * exp(-m.sigmaT * t) * ld / pdf;
+    }
+    return acc / f32(n);
 }
 `;
 }

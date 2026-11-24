@@ -154,6 +154,12 @@ export interface PtVolumeOptions {
    */
   equiangular?: boolean;
   /**
+   * V7.1 (megakernel only, homogeneous media, implies `forcedNee`): the forced in-scatter estimate of the CAMERA ray's segment (depth 0) uses N = marchSamples stratified distances
+   * u_i = (i + xi_i) / N (each through the same inverse CDF, its own light pick / point / shadow ray, averaged), like a raymarcher's light estimate per step but unbiased. With `equiangular`
+   * each stratum stratifies its own CDF. Deeper segments keep one distance. Integer in [1, 64]; default undefined / 1: the kernel text is unchanged. Derivation: `volume/forced-wgsl.ts`.
+   */
+  marchSamples?: number;
+  /**
    * V4.3 (megakernel only): volume scattering probability guiding (Cycles / Xu et al.) on the first free-flight segment of the primary ray in homogeneous and plain-loop grid media
    * (height and brick media keep delta tracking). `'vspg'` guides the probability that a majorant collision exists in the segment by the pixel's earlier scatter / pass-through
    * contributions (one vec4 per pixel in the accumulator tail), weighted (a / P, (1 - a) / (1 - P)): unbiased for any P, helps thin media where most camera rays never scatter.

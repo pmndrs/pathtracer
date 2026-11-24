@@ -18,6 +18,33 @@
 /** 2^24: above any real vertex index (depth caps are far below it; `ptVertexPair` stays in u32 for up to 255 pairs per vertex), so a path deeper than any base cannot reuse a forced vertex's numbers. */
 export const PT_FORCED_VERTEX_BASE = 16777216;
 
+/**
+ * V7.1 march strata (`PtVolumeOptions.marchSamples`): stratum i of the camera ray's segment uses the forced vertex PT_FORCED_VERTEX_BASE + i * PT_MARCH_STRIDE + depth (stratum 0 is the V4.2 vertex).
+ * 2^20 is above any real depth; with ptVertexPair = base + vertex * pairsPerVertex + slot the pair index stays in u32 for up to PT_MARCH_MAX strata (see the unit test).
+ */
+export const PT_MARCH_STRIDE = 1048576;
+export const PT_MARCH_MAX = 64;
+
+/** Resolved stratum count of `marchSamples` (1 = off). */
+export function ptMarchCount(v: { marchSamples?: number } | undefined): number {
+  const n = v?.marchSamples;
+  if (n === undefined || !(n > 1)) return 1;
+  if (!Number.isInteger(n) || n > PT_MARCH_MAX) throw new RangeError(`integrator.volumes.marchSamples must be an integer in [1, ${PT_MARCH_MAX}], got ${n}`);
+  return n;
+}
+
+/** The forced vertex index of stratum i at a path depth. */
+export function forcedMarchVertex(i: number, depth: number): number {
+  return PT_FORCED_VERTEX_BASE + i * PT_MARCH_STRIDE + depth;
+}
+
+/** TS twin of the stratified estimator: mean over strata i of f(u_i), u_i = (i + xi_i) / n. `f` maps a uniform u to the (weighted) single-sample estimate. */
+export function marchEstimate(f: (u: number) => number, n: number, xi: (i: number) => number): number {
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += f((i + xi(i)) / n);
+  return sum / n;
+}
+
 /** 1 - exp(-x) without cancellation for small x. */
 export function forcedOneMinusExp(x: number): number {
   return x < 1e-3 ? x * (1 - x / 2 + (x * x) / 6) : 1 - Math.exp(-x);
@@ -34,7 +61,8 @@ export function forcedDistance(u: number, mu: number, L: number): number {
   return -Math.log(1 - u * forcedOneMinusExp(mu * L)) / mu;
 }
 
-export function ptForcedNeeWgsl(): string {
+export function ptForcedNeeWgsl(march = 1): string {
+  if (march > 1) return ptForcedNeeMarchWgsl(march);
   return /* wgsl */ `
 // V4.2 forced in-scatter NEE for one free-flight segment [0, segMax) in a homogeneous medium (weights: see volume/forced-wgsl.ts). The caller multiplies by beta.
 fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
@@ -49,6 +77,35 @@ fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sam
     let t = min(-log(1.0 - u * a) / m.mu, segMax);
     let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
     return m.sigmaT * m.albedo * exp(-(m.sigmaT - vec3f(m.mu)) * t) * (a / m.mu) * ld;
+}
+`;
+}
+
+/** V7.1: the forced estimate with `march` stratified distances on the camera ray's segment (depth 0); deeper segments take one (stratum 0 = the V4.2 vertex). */
+function ptForcedNeeMarchWgsl(march: number): string {
+  return /* wgsl */ `
+// V7.1 forced in-scatter NEE with ${march} stratified distances on the camera segment (volume/forced-wgsl.ts). The caller multiplies by beta.
+fn ptVolForcedNee(id: u32, vo: vec3f, d: vec3f, segMax: f32, pixelSeed: u32, sampleIndex: u32, depth: u32) -> vec3f {
+    let m = ptVolMedium(id);
+    if (!(m.mu > 0.0) || !(segMax > 0.0)) {
+        return vec3f(0.0);
+    }
+    let n = select(1u, ${march}u, depth == 0u);
+    let x = m.mu * segMax;
+    let a = select(1.0 - exp(-x), x * (1.0 - 0.5 * x + x * x / 6.0), x < 1.0e-3);
+    var acc = vec3f(0.0);
+    for (var i = 0u; i < ${march}u; i++) {
+        if (i >= n) {
+            break;
+        }
+        let fv = ${PT_FORCED_VERTEX_BASE}u + i * ${PT_MARCH_STRIDE}u + depth;
+        let xi = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(fv, PT_SLOT_BSDF_DIRECTION)).x;
+        let u = (f32(i) + xi) / f32(n);
+        let t = min(-log(1.0 - u * a) / m.mu, segMax);
+        let ld = ptSampleLdMedium(vo + d * t, -d, id, pixelSeed, sampleIndex, fv);
+        acc += m.sigmaT * m.albedo * exp(-(m.sigmaT - vec3f(m.mu)) * t) * (a / m.mu) * ld;
+    }
+    return acc / f32(n);
 }
 `;
 }

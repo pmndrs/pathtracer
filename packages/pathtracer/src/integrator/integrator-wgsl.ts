@@ -15,7 +15,7 @@ import type { PtMaterialOptions } from '../bsdf/adapter.ts';
 import type { PtBsdfOptions } from '../bsdf/bsdf.ts';
 import type { PtBlueNoiseOptions, PtBlueNoiseShift, PtSamplerKind } from './dimensions.ts';
 import { ptHookVertexExpr, ptHookWantsRadiance, type PtHooksOptions } from './outputs-wgsl.ts';
-import { ptForcedNeeWgsl } from '../volume/forced-wgsl.ts';
+import { ptForcedNeeWgsl, ptMarchCount } from '../volume/forced-wgsl.ts';
 import { ptEquiangularWgsl } from '../volume/equiangular-wgsl.ts';
 import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import { ptMediumStackPack, ptMediumsEmit, type PtVolumeOptions } from '../volume/volume.ts';
@@ -279,8 +279,9 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
     if (o.frame && o.volumes.outputs) throw new Error('integrator.frame cannot be combined with integrator.volumes.outputs (V5.1c: both write the accumulator tail; the megakernel frame planes and the guide / order outputs are separate products)');
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
-    if ((o.volumes.forcedNee || o.volumes.equiangular) && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee / equiangular cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
-    if ((o.volumes.forcedNee || o.volumes.equiangular) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
+    const marchN = ptMarchCount(o.volumes ?? undefined);
+    if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee / equiangular cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
+    if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
     if (o.volumes.guiding === 'vspg') {
       if (o.volumes.outputs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.volumes.outputs (both live in the accumulator tail)");
       if (o.aovs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.aovs (both live in the accumulator tail)");
@@ -569,7 +570,8 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   const volAdaptive = volOut && !!o.volumes!.adaptive;
   const sd = vol && !!o.volumes!.separateDepth;
   const equi = vol && !!o.volumes!.equiangular;
-  const forced = vol && (!!o.volumes!.forcedNee || equi);
+  const marchN = vol ? ptMarchCount(o.volumes ?? undefined) : 1;
+  const forced = vol && (!!o.volumes!.forcedNee || equi || marchN > 1);
   const vspg = vol && o.volumes!.guiding === 'vspg';
   const aniso = !!mats?.features.aniso;
   const fuzz = !!mats?.features.fuzz;
@@ -724,7 +726,7 @@ ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> pt
 ` : ''}
 ${spec ? `${ptSpectralWgsl(spec)}\n` : ''}${ptCommonHeadWgsl(o)}
 
-${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced && !equi ? ptForcedNeeWgsl() : ''}${equi ? ptEquiangularWgsl() : ''}
+${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced && !equi ? ptForcedNeeWgsl(marchN) : ''}${equi ? ptEquiangularWgsl(marchN) : ''}
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
