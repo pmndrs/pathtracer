@@ -41,7 +41,7 @@ Gate: `vol-cl-cloud256` and `vol-cl-sph-g85-a99-t200` at 256 spp keep their mean
 | ✅ V1.4 | Loop caps visible: count truncations (4096 collisions, brick cell cap, ratio-tracking cap); warn at upload when densityMax x sigma_t x diagonal > ~1e3 | synthetic dense slab near the cap |
 | ✅ V1.5 | Doc fixes: volumes.md sections 3 / 6.1 and DIVERGES V243 still describe the global majorant only | read-through |
 | ✅ V1.6 ★ | Per-pixel wavefront check of lobe scenes | `wf-p5-check cases=vol-cl-single-mie10,vol-cl-sph-hg2-a99-t50 spp=16` |
-| V1.7 | Offset-bound follow-ups: ReSTIR G-buffer positions, light-sample end points, medium interface skips, `positions: 'ray'` | `vol-cl-ground-occluder` with each path on |
+| ✅ V1.7 (scene-wide bound for ReSTIR / 'ray' positions; interface skips need nothing; NEE light ends: maintainer's call) | Offset-bound follow-ups: ReSTIR G-buffer positions, light-sample end points, medium interface skips, `positions: 'ray'` | `vol-cl-ground-occluder` with each path on |
 | V1.8 ★ | Windows DXC compile of the 50-54 KB volume megakernels (and the wavefront split as fallback) | `kernel-compile` page on the 3060, cold / warm |
 
 ### ⬜ V2 — Noise per time (S steps of M items)
