@@ -56,6 +56,20 @@ describe('optional integrator outputs (R10 hooks, R4 counters, AOVs)', () => {
     expect(ptwfUnsupported({ volumes, frame: true } as never)).toMatch(/frame with integrator.volumes/);
   });
 
+  it('volumes + frame + frameMedia (V7.4): the camera ray\'s single scattering goes to the emission plane; off = no trace of it', () => {
+    const media = [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }];
+    const volumes = { media, materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
+    const on = mk({ volumes: { ...volumes, forcedNee: true, equiangular: true }, frame: true, frameMedia: true }, false);
+    expect(on).toMatch(/if \(depth == 0u\) \{\s*fEmit \+= fAdd;/);
+    const col = mk({ volumes, frame: true, frameMedia: true }, false);
+    expect(col).toMatch(/if \(vertex == 0u\) \{\s*fEmit \+= mAdd;/);
+    const off = mk({ volumes: { ...volumes, forcedNee: true }, frame: true }, false);
+    expect(off).not.toContain('mAdd');
+    expect(off).not.toContain('fAdd');
+    expect(() => mk({ volumes, frame: true, frameMedia: true, frameEmission: 'none' })).toThrow(/frameMedia/);
+    expect(() => mk({ volumes, frameMedia: true })).toThrow(/frameMedia/);
+  });
+
   it('hooks: both functions are called after NEE and before the BSDF sample, in both schedulers', () => {
     const mega = mk({ hooks: hook }, false);
     expect(mega).toContain('ptOnVertex(hv)');

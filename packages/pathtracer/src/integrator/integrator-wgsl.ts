@@ -44,6 +44,12 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    *  - `'mirror'` (default): also what a chain of perfect-mirror bounces (smooth conductors) from the primary hit reaches (an emitter or the sky seen in a mirror, throughput included).
    */
   frameEmission?: 'none' | 'primary' | 'mirror';
+  /**
+   * With `frame`, `volumes` and a `frameEmission` other than 'none' (V7.4, docs/internal/design/volumes-plan.md): the camera ray's own single scattering (the forced / equiangular / march estimate of the camera segment and a
+   * first-vertex collision's NEE, i.e. the orders 0-1 light of the medium) goes to the emission plane (plane 6, noise-free of the demodulation, added back AFTER the filter) instead of the demodulated diffuse plane. A chain can then
+   * accumulate it over time without a spatial filter and run SVGF on the multiple scattering only. Default false: the kernel text is unchanged.
+   */
+  frameMedia?: boolean;
   /** `false`: the accumulator is overwritten with this dispatch's sample instead of summed (a frame, not a progressive pass). Default true, or false with `frame`. */
   accumulate?: boolean;
   /** Next-event estimation + MIS. Default true. False = BSDF sampling only (debug; delta suns contribute nothing). */
@@ -222,6 +228,8 @@ export interface ResolvedIntegratorOptions {
   frame: boolean;
   /** `frame`'s plane 6: `'none'` without `frame` (see `PtIntegratorOptions.frameEmission`). */
   frameEmission: 'none' | 'primary' | 'mirror';
+  /** `PtIntegratorOptions.frameMedia` (false unless frame + volumes + a frameEmission plane). */
+  frameMedia: boolean;
   accumulate: boolean;
   nee: boolean;
   envSampling: 'uniform' | 'importance' | 'none';
@@ -278,6 +286,8 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     const clash = o.restir ? 'restir' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
     if (o.frame && o.volumes.outputs) throw new Error('integrator.frame cannot be combined with integrator.volumes.outputs (V5.1c: both write the accumulator tail; the megakernel frame planes and the guide / order outputs are separate products)');
+    if (o.frameMedia && !o.frame) throw new Error('integrator.frameMedia needs integrator.frame');
+    if (o.frameMedia && o.frameEmission === 'none') throw new Error("integrator.frameMedia needs the emission plane (integrator.frameEmission other than 'none')");
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     const marchN = ptMarchCount(o.volumes ?? undefined);
     if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
@@ -295,7 +305,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const spectral = resolveSpectralOptions(o.spectral);
   if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
   if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', frameMedia: !!(o.frame && o.volumes && o.frameMedia), accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -592,6 +602,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   // P4.5a: light the primary BSDF does not modulate (an emitter or the sky seen directly, or through perfect mirrors) goes to `fEmit` instead of `radiance`; the beauty is their sum.
   const emit = o.frameEmission !== 'none';
   const emitMirror = o.frameEmission === 'mirror';
+  const fm = o.frameMedia; // V7.4: the camera ray's single scattering goes to the emission plane
   const pureCond = emitMirror ? 'fPure' : 'depth == 0u';
   const addPure = (value: string, index: string, indent: string): string =>
     !emit
@@ -635,8 +646,14 @@ ${volOut ? `                // V7.3: the camera segment's estimate (depth 0) is 
                 } else {
                     radiance += fAdd;
                 }
+` : `${fm ? `                let fAdd = beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
+                if (depth == 0u) {
+                    fEmit += fAdd;
+                } else {
+                    radiance += fAdd;
+                }
 ` : `                radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
-`}            }
+`}`}            }
 ` : ''}${vspg ? `            // V4.3 VSPG: the first medium segment of the primary ray takes a guided collision-exists decision (volume/vspg-wgsl.ts); the radiance added after it is the statistic.
             var vsSet = false;
             if (!vspgDone && depth == 0u) {
@@ -688,8 +705,14 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
 ${emitMirror ? `                fPure = false;
 ` : ''}` : ''}                let woM = -ray.direction;
                 if (PT_NEE${forced ? ' && !fHomog' : ''}) {
-                    radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
-                }
+${fm ? `                    let mAdd = beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
+                    if (vertex == 0u) {
+                        fEmit += mAdd;
+                    } else {
+                        radiance += mAdd;
+                    }
+` : `                    radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
+`}                }
 ${ptVolPhaseSampleWgsl(o.volumes!, '                ', 'curMed', 'woM', 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION))', 'wiM', 'prevPdf')}                specularBounce = false;
                 prevP = pm;
                 ray = RtRay(pm, 0.0, wiM, PT_FAR);
