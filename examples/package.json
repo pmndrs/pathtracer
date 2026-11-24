@@ -11,6 +11,9 @@
     "@pmndrs/bvh": "^0.1.0",
     "@pmndrs/pathtracer": "workspace:*",
     "@pmndrs/raytracer": "workspace:*",
+    "@pmndrs/upscaler": "^0.5.0",
+    "denoiser": "^2.0.0",
+    "three": "0.187.0",
     "tweakpane": "4.0.5"
   },
   "devDependencies": {
