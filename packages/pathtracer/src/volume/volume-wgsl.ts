@@ -68,6 +68,7 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
     }
   });
   if ((v.shadowTracking === 'residual' || v.shadowTracking === 'telescoping') && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError(`integrator.volumes: shadowTracking '${v.shadowTracking}' needs a grid medium with majorant 'brick'`);
+  if (v.freeFlight === 'decomposition' && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError("integrator.volumes: freeFlight 'decomposition' needs a grid medium with majorant 'brick' (and the brick minima)");
   const grids = v.media.filter((m) => m.grid);
   if (grids.length > 1) {
     const [a] = grids;
@@ -165,6 +166,8 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   // telescoping estimates can be negative (a debiasing term): only an exact zero ends a shadow ray, or the clamp would bias the mean
   const alive = v.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0';
   const residual = brick && (v.shadowTracking === 'residual' || tele);
+  const decomp = brick && v.freeFlight === 'decomposition'; // V2.4
+  const minima = residual || decomp; // the DDA returns the cell's minorant too (rg32float majorant texture)
   const lobes = ptVolumeHasLobes(v);
   const height = v.media.some((m) => m.height); // V4.5: closed-form exponential fog; the code below is emitted only then
   const emissive = ptMediumsEmit(v.media); // V4.6
@@ -426,10 +429,10 @@ fn ptDdaInit(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32) -> PtDda {
     return s;
 }
 
-// (t0, t1, majorant density${residual ? ', minorant density' : ''}) of the next cell; t1 <= t0 = no more cells.
-fn ptDdaNext(s: ptr<function, PtDda>) -> ${residual ? 'vec4f' : 'vec3f'} {
+// (t0, t1, majorant density${minima ? ', minorant density' : ''}) of the next cell; t1 <= t0 = no more cells.
+fn ptDdaNext(s: ptr<function, PtDda>) -> ${minima ? 'vec4f' : 'vec3f'} {
     if (!(*s).valid) {
-        return ${residual ? 'vec4f(0.0)' : 'vec3f(0.0)'};
+        return ${minima ? 'vec4f(0.0)' : 'vec3f(0.0)'};
     }
     let t0 = (*s).t;
     let tn = (*s).tNext;
@@ -441,7 +444,7 @@ fn ptDdaNext(s: ptr<function, PtDda>) -> ${residual ? 'vec4f' : 'vec3f'} {
         axis = 2;
     }
     let t1 = min(tn[axis], (*s).tExit);
-${residual ? `    let mm = textureLoad(ptVolMaj, vec3u((*s).cell), 0);
+${minima ? `    let mm = textureLoad(ptVolMaj, vec3u((*s).cell), 0);
     let dens = mm.x;
 ` : `    let dens = textureLoad(ptVolMaj, vec3u((*s).cell), 0).x;
 `}    (*s).t = t1;
@@ -454,7 +457,7 @@ ${residual ? `    let mm = textureLoad(ptVolMaj, vec3u((*s).cell), 0);
             (*s).valid = false;
         }
     }
-    return ${residual ? 'vec4f(t0, t1, dens, mm.y)' : 'vec3f(t0, t1, dens)'};
+    return ${minima ? 'vec4f(t0, t1, dens, mm.y)' : 'vec3f(t0, t1, dens)'};
 }
 
 fn ptVolSampleBrick(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32, beta: ptr<function, vec3f>) -> PtVolEvent {
@@ -468,13 +471,39 @@ fn ptVolSampleBrick(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32, beta: ptr<fun
         if (!(mu > 0.0)) {
             continue;
         }
-        var t = sg.x;
+${decomp ? `        // V2.4 decomposition tracking (Kutz et al. 2017): a tentative collision is a control one (sigmaT x min, no lookup) with probability pc = min / max,
+        // else a residual one (sigmaT x (density - min) against mr = max(sigmaT) (max - min)); one uniform picks the component and the event
+        let pc = sg.w / sg.z;
+        let mr = (sg.z - sg.w) * m.info.x;
+        let ssc = m.sigmaT * m.albedo;
+        let psc = ptMax3(ssc) / m.info.x;
+` : ''}        var t = sg.x;
         for (var i = 0u; i < 4096u; i++) {
             t += -log(1.0 - ptVolRand()) / mu;
             if (t >= sg.y) {
                 break;
             }
-            let st = m.sigmaT * ptVolDensity(m, o + d * t);
+${decomp ? `            let u = ptVolRand();
+            if (u < pc) {
+                if (u < pc * psc) {
+                    *beta = *beta * (ssc / ptMax3(ssc));
+                    return PtVolEvent(t, 1u);
+                }
+                *beta = *beta * ((vec3f(1.0) - m.sigmaT / m.info.x) / (1.0 - psc));
+                if (!(ptMax3(*beta) > 0.0)) {
+                    return PtVolEvent(t, 2u);
+                }
+                continue;
+            }
+            let st = m.sigmaT * (ptVolDensity(m, o + d * t) - sg.w);
+            let ss = st * m.albedo;
+            let ssMax = ptMax3(ss);
+            let ps = ssMax / mr;
+            if (u - pc < (1.0 - pc) * ps) {
+                *beta = *beta * (ss / ssMax);
+                return PtVolEvent(t, 1u);
+            }
+            *beta = *beta * ((vec3f(1.0) - st / mr) / (1.0 - ps));` : `            let st = m.sigmaT * ptVolDensity(m, o + d * t);
             let ss = st * m.albedo;
             let ssMax = ptMax3(ss);
             let ps = ssMax / mu;
@@ -482,7 +511,7 @@ fn ptVolSampleBrick(m: PtVolMedium, o: vec3f, d: vec3f, tmax: f32, beta: ptr<fun
                 *beta = *beta * (ss / ssMax);
                 return PtVolEvent(t, 1u);
             }
-            *beta = *beta * ((vec3f(1.0) - st / mu) / (1.0 - ps));
+            *beta = *beta * ((vec3f(1.0) - st / mu) / (1.0 - ps));`}
             if (!(ptMax3(*beta) > 0.0)) {
                 return PtVolEvent(t, 2u);
             }

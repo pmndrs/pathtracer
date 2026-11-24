@@ -58,6 +58,7 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   variants['vol-homogeneous'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volHomog } } as never);
   variants['vol-grid'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volGrid } } as never);
   variants['vol-grid-brick'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } } as never);
+  variants['vol-grid-brick-decomp'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick', freeFlight: 'decomposition' } } } as never);
   // Optional integrator outputs (R10 hooks, R4 counters, AOVs): only compiled when asked; the variants above stay byte-identical.
   const hookDemo = { wgsl: 'fn ptOnVertex(v: PtPathVertex) -> u32 { return select(PT_HOOK_CONTINUE, PT_HOOK_TERMINATE, v.depth >= 3u); }\nfn ptTerminate(v: PtPathVertex) -> vec3f { return vec3f(0.5); }' };
   for (const [name, integrator] of Object.entries(outputVariantOptions(hookDemo))) variants[`out-${name}`] = () => mk(caps, { format: {}, layout, integrator } as never);
@@ -146,6 +147,7 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     'vol-ratio': { format: {}, layout, integrator: { volumes: { ...volHomog, shadowTracking: 'ratio' } } },
     'vol-grid': { format: {}, layout, integrator: { volumes: volGrid } },
     'vol-grid-brick': { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } },
+    'vol-grid-brick-decomp': { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick', freeFlight: 'decomposition' } } },
     'vol-tex': { format: {}, layout: texLayout, textures, integrator: { volumes: volHomog } },
     spectral: { format: {}, layout, integrator: { spectral: true } },
     'spectral-nodisp': { format: {}, layout, integrator: { spectral: { dispersion: false } } },

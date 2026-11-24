@@ -61,6 +61,7 @@ const CASES: Record<string, Case> = {
   'vol-camera-grid': { scene: 'vol-camera-grid' },
   'vol-camera-grid-auto': { scene: 'vol-camera-grid-auto' },
   'vol-grid-slab-brick': { scene: 'vol-grid-slab', settings: { volumeMajorant: 'brick' } },
+  'vol-grid-slab-inner-decomposition': { scene: 'vol-grid-slab-inner', settings: { volumeMajorant: 'brick', volumeFreeFlight: 'decomposition' } },
   'vol-cornell-smoke': { scene: 'vol-cornell-smoke' },
   'vol-cornell-smoke-ratio': { scene: 'vol-cornell-smoke', settings: { volumeShadow: 'ratio' } },
   'vol-milk-sphere': { scene: 'vol-milk-sphere' },
@@ -72,6 +73,7 @@ const CASES: Record<string, Case> = {
   'vol-grid-cloud-roulette': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeTrRoulette: true } },
   'vol-grid-cloud-residual': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'residual', volumeTrRoulette: true } },
   'vol-grid-cloud-telescoping': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'telescoping' } },
+  'vol-grid-cloud-decomposition': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeFreeFlight: 'decomposition' } },
   'vol-grid-cloud-hw': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeDensityFilter: 'hardware' } },
   'vol-grid-cloud-atlas': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeGridLayout: 'atlas' } },
   // V5.2: `volumes.outputs` on the wavefront: the three tail planes (orders 0-1 + primary transmittance, standard error, first-scatter distance + fraction) are compared as well as the beauty

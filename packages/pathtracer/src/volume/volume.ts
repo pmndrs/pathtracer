@@ -100,6 +100,14 @@ export interface PtVolumeOptions {
    */
   majorant?: 'global' | 'brick';
   /**
+   * V2.4: free flight in a grid medium with `majorant: 'brick'`. `'delta'` (default; kernel text unchanged): delta tracking against each DDA cell's majorant. `'decomposition'`:
+   * decomposition tracking (Kutz, Habel, Li, Novak 2017) against the cell's minorant (needs `volumeGrid.majorant.minima`, `brickMajorants(.., .., { minima: true })`): the
+   * control part sigmaT x min is sampled without density lookups (for a grey medium a control collision is always real), the residual sigmaT x (density - min) by delta tracking
+   * against max - min. Same estimator expectation (unbiased), same path distribution for a grey medium; fewer lookups where min / max is high. Both schedulers (the wavefront's
+   * intersect kernel runs the same free flight). Twin: `brickTrack`.
+   */
+  freeFlight?: 'delta' | 'decomposition';
+  /**
    * V1.1: Russian roulette in ratio tracking (pbrt-v4's rule): when the largest channel of the running transmittance estimate is below 0.05, the ray ends with
    * probability 0.75 (estimate 0) and otherwise continues with the estimate times 4. Unbiased; the random number comes from the same stream. Default false (kernels unchanged).
    */
@@ -513,6 +521,57 @@ export function residualTransmittance(
     }
   }
   return { tr, lookups };
+}
+
+/**
+ * Twin of the WGSL brick free flight (`ptVolSampleBrick`) over the DDA cells of one ray, with V2.4 decomposition tracking (Kutz, Habel, Li, Novak 2017) when `decomposition`
+ * is set. `cells` as for `residualTransmittance`; `density(t)` the density along the ray; `m` gives sigmaT (RGB) and albedo (its grid's `densityScale` is ignored: pass
+ * densities in sigmaT units). Plain (`decomposition` false): delta tracking against the cell majorant `mu = max(sigmaT) max`, one lookup per tentative collision.
+ * Decomposition: sigma_t(x) = sigmaT min (the control, constant in the cell) + sigmaT (density(x) - min) (the residual). Control collisions (rate `max(sigmaT) min`) and
+ * residual ones (rate `max(sigmaT) (max - min)`) are two independent Poisson processes, the earlier wins; that is sampled as their superposition: a tentative collision at
+ * rate mu, a control one with probability min / max. A control collision needs no lookup (scatter probability max(sigmaT albedo) / max(sigmaT), the V240 per-channel weights;
+ * for a grey medium it is always real: scatter or absorb), a residual one reads the density and is real with probability sigmaT (density - min) / mu_r. One uniform picks
+ * the component and the event. The per-channel expected weights equal plain delta tracking's (docs/internal/design/volumes.md), so the estimator is unbiased; for a grey
+ * medium the path distribution is identical and only the lookups change.
+ */
+export function brickTrack(
+  m: Pick<PtMedium, 'sigmaT' | 'albedo'>, cells: readonly { t0: number; t1: number; max: number; min: number }[], density: (t: number) => number, rand: () => number, decomposition: boolean,
+): VolEvent & { lookups: number } {
+  const sMax = Math.max(...m.sigmaT);
+  const w: [number, number, number] = [1, 1, 1];
+  let lookups = 0;
+  const ssC = m.sigmaT.map((s, c) => s * (m.albedo[c] as number));
+  const ssCMax = Math.max(...ssC);
+  const psc = ssCMax / sMax;
+  for (const c of cells) {
+    const mu = sMax * c.max;
+    if (!(mu > 0)) continue;
+    const pc = decomposition ? c.min / c.max : 0;
+    const mr = sMax * (c.max - c.min);
+    let t = c.t0;
+    for (let i = 0; i < 4096; i++) {
+      t += -Math.log(1 - rand()) / mu;
+      if (t >= c.t1) break;
+      const u = rand();
+      if (u < pc) {
+        if (u < pc * psc) return { kind: 'scatter', t, weight: [0, 1, 2].map((k) => w[k]! * ssC[k]! / ssCMax) as [number, number, number], lookups };
+        for (let k = 0; k < 3; k++) w[k] = w[k]! * ((1 - (m.sigmaT[k] as number) / sMax) / (1 - psc));
+        if (!(Math.max(...w) > 0)) return { kind: 'killed', t, weight: w, lookups };
+        continue;
+      }
+      lookups++;
+      const dens = density(t) - (decomposition ? c.min : 0);
+      const mm = decomposition ? mr : mu;
+      const st = m.sigmaT.map((s) => s * dens);
+      const ss = st.map((s, k) => s * (m.albedo[k] as number));
+      const ssMax = Math.max(...ss);
+      const ps = ssMax / mm;
+      if (u - pc < (1 - pc) * ps) return { kind: 'scatter', t, weight: [0, 1, 2].map((k) => w[k]! * ss[k]! / ssMax) as [number, number, number], lookups };
+      for (let k = 0; k < 3; k++) w[k] = w[k]! * ((1 - st[k]! / mm) / (1 - ps));
+      if (!(Math.max(...w) > 0)) return { kind: 'killed', t, weight: w, lookups };
+    }
+  }
+  return { kind: 'pass', t: cells.length ? cells[cells.length - 1]!.t1 : 0, weight: w, lookups };
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance, ptMediumEmissionSegment } from './volume.ts';
+import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, brickTrack, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance, ptMediumEmissionSegment } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -404,6 +404,73 @@ describe('V2.2 residual ratio tracking twin', () => {
     expect(Math.abs(ratio.mean - exact)).toBeLessThan(4 * ratio.se);
     expect(residual.se).toBeLessThan(ratio.se);
     expect(residual.lookups).toBeLessThan(ratio.lookups);
+  });
+});
+
+describe('V2.4 decomposition tracking twin (brick free flight)', () => {
+  // the same smooth dense grid as V2.2: min / max per cell is high, so most tentative collisions are control ones
+  const res = [24, 24, 24] as const;
+  const data = new Float32Array(res[0] * res[1] * res[2]);
+  for (let k = 0; k < res[2]; k++) for (let j = 0; j < res[1]; j++) for (let i = 0; i < res[0]; i++)
+    data[i + res[0] * (j + res[1] * k)] = 0.55 + 0.4 * Math.sin(i * 0.21) * Math.cos(j * 0.17 + 0.5) * Math.sin(k * 0.13 + 1);
+  const grid = { resolution: res, worldToIndex: gridWorldToIndex(res, [[0, 0, 0], [1, 1, 1]]), densityMax: Math.max(...data) };
+  const dens = gridDensity(grid, data);
+  const mm = brickMajorants(res, data, { minima: true });
+  const a = [-2, 9.3, 11.1], b = [1, 0.1, 0.05];
+  const tmax = 28;
+  const along = (t: number) => dens((a[0]! + b[0]! * t + 0.5) / res[0], (a[1]! + b[1]! * t + 0.5) / res[1], (a[2]! + b[2]! * t + 0.5) / res[2]);
+  const cells = ddaSegments(mm.resolution, a as never, b as never, tmax).map((sg) => {
+    const i = sg.cell[0] + mm.resolution[0] * (sg.cell[1] + mm.resolution[1] * sg.cell[2]);
+    return { t0: sg.t0, t1: sg.t1, max: mm.values[i]!, min: mm.minima![i]! };
+  });
+  // optical depth per unit sigma_t up to t (fine quadrature)
+  const sub = 40000;
+  const cum = new Float64Array(sub + 1);
+  for (let i = 0; i < sub; i++) cum[i + 1] = cum[i]! + along(((i + 0.5) / sub) * tmax) * (tmax / sub);
+  const tauAt = (t: number) => cum[Math.min(sub, Math.round((t / tmax) * sub))]!;
+  const N = 100000;
+  const run = (sigmaT: [number, number, number], albedo: [number, number, number], decomposition: boolean, seed: number) => {
+    const r = rng(seed);
+    const pass = [0, 0, 0], passSq = [0, 0, 0], scat = [0, 0, 0], scatSq = [0, 0, 0];
+    const marks = [4, 10, 18], before = [0, 0, 0];
+    let lookups = 0;
+    for (let i = 0; i < N; i++) {
+      const e = brickTrack({ sigmaT, albedo }, cells, along, r, decomposition);
+      lookups += e.lookups;
+      const acc = e.kind === 'pass' ? [pass, passSq] : e.kind === 'scatter' ? [scat, scatSq] : null;
+      if (acc) for (let c = 0; c < 3; c++) { acc[0]![c]! += e.weight[c]!; acc[1]![c]! += e.weight[c]! ** 2; }
+      if (e.kind === 'scatter') marks.forEach((m, k) => { if (e.t < m) before[k]!++; });
+    }
+    const mean = (s: number[]) => s.map((x) => x / N);
+    const se = (s: number[], q: number[]) => s.map((x, c) => Math.sqrt(Math.max(0, q[c]! / N - (x / N) ** 2) / N));
+    return { pass: mean(pass), passSe: se(pass, passSq), scat: mean(scat), scatSe: se(scat, scatSq), cdf: before.map((x) => x / N), marks, lookups: lookups / N };
+  };
+
+  it('grey, albedo 1: the first-collision distance follows 1 - exp(-tau(t)) in both modes (1e5 trials, 4 SE), with fewer lookups', () => {
+    const sT = 0.08;
+    const plain = run([sT, sT, sT], [1, 1, 1], false, 7), dec = run([sT, sT, sT], [1, 1, 1], true, 8);
+    for (const e of [plain, dec]) {
+      e.marks.forEach((m, k) => {
+        const p = 1 - Math.exp(-sT * tauAt(m));
+        expect(Math.abs(e.cdf[k]! - p)).toBeLessThan(4 * Math.sqrt((p * (1 - p)) / N));
+      });
+      const T = Math.exp(-sT * tauAt(tmax));
+      expect(Math.abs(e.pass[0]! - T)).toBeLessThan(4 * e.passSe[0]! + 1e-9);
+    }
+    // lookups saved = the control share min / max of the cells' tentative collisions (this grid: about 10%; plain 0.90 vs 0.82 per flight)
+    expect(dec.lookups).toBeLessThan(0.95 * plain.lookups);
+  });
+
+  it('chromatic with absorption: pass weight = T per channel and scatter weight = albedo (1 - T) per channel, both modes (4 SE)', () => {
+    const sigmaT: [number, number, number] = [0.12, 0.07, 0.03], albedo: [number, number, number] = [0.9, 0.6, 0.95];
+    for (const [d, seed] of [[false, 11], [true, 12]] as const) {
+      const e = run(sigmaT, albedo, d, seed);
+      for (let c = 0; c < 3; c++) {
+        const T = Math.exp(-sigmaT[c]! * tauAt(tmax));
+        expect(Math.abs(e.pass[c]! - T)).toBeLessThan(4 * e.passSe[c]! + 1e-9);
+        expect(Math.abs(e.scat[c]! - albedo[c]! * (1 - T))).toBeLessThan(4 * e.scatSe[c]! + 1e-9);
+      }
+    }
   });
 });
 

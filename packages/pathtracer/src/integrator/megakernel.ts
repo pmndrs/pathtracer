@@ -426,7 +426,7 @@ export class PtMegakernel {
     }
     if (volumeGrid && options.integrator?.volumes?.majorant === 'brick') {
       const mj = options.volumeGrid!.majorant!;
-      if ((options.integrator?.volumes?.shadowTracking === 'residual' || options.integrator?.volumes?.shadowTracking === 'telescoping') && !mj.minima) throw new Error("PtMegakernel: integrator.volumes.shadowTracking 'residual' / 'telescoping' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
+      if ((options.integrator?.volumes?.shadowTracking === 'residual' || options.integrator?.volumes?.shadowTracking === 'telescoping' || options.integrator?.volumes?.freeFlight === 'decomposition') && !mj.minima) throw new Error("PtMegakernel: integrator.volumes.shadowTracking 'residual' / 'telescoping' and freeFlight 'decomposition' need `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
       kernel.majorantTexture = createMajorantTexture(device, mj, label, options.volumeGrid!.format === 'r8unorm' ? options.volumeGrid!.scale : 1);
     }
     if (bn) kernel.blueTexture = createBlueNoiseTexture(device, options.blueNoise as BlueNoiseTexture, label);
