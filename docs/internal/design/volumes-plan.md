@@ -29,7 +29,7 @@ Status: ⬜ not started · 🟨 in progress · ✅ done. ★ = the clouds handof
 Cloud regime at the pbrt / Mitsuba floor (27 cells + a 256^3 cloud), droplet phases, volume outputs (order split, transmittance, standard error), r16float grids, ground
 scenes, per-hit origin offset bound + free flight from the true crossing. Open from it: Cycles comparison of the Mie / Draine phases (waits on the clouds side's script).
 
-### 🟨 V1 — Housekeeping and cheap speed (all S)
+### 🟨 V1 — Housekeeping and cheap speed (all S; only V1.8 left: Windows / 3060)
 
 Gate: `vol-cl-cloud256` and `vol-cl-sph-g85-a99-t200` at 256 spp keep their mean within 2 standard errors of today's, with fewer density lookups per shadow ray (counter); quiet-pass ms/spp queued.
 
@@ -44,7 +44,7 @@ Gate: `vol-cl-cloud256` and `vol-cl-sph-g85-a99-t200` at 256 spp keep their mean
 | ✅ V1.7 (scene-wide bound for ReSTIR / 'ray' positions; interface skips need nothing; NEE light ends: maintainer's call) | Offset-bound follow-ups: ReSTIR G-buffer positions, light-sample end points, medium interface skips, `positions: 'ray'` | `vol-cl-ground-occluder` with each path on |
 | V1.8 ★ | Windows DXC compile of the 50-54 KB volume megakernels (and the wavefront split as fallback) | `kernel-compile` page on the 3060, cold / warm |
 
-### ⬜ V2 — Noise per time (S steps of M items)
+### ✅ V2 — Noise per time (all built, 2026-11-24; gate = quiet pass)
 
 Gate: equal-time relMSE on `vol-cl-cloud256` (and one dense homogeneous sphere) at least 2x better than V1, mean within 2 SE (provisional until the quiet pass).
 
@@ -57,7 +57,7 @@ Gate: equal-time relMSE on `vol-cl-cloud256` (and one dense homogeneous sphere) 
 | ✅ V2.5 ★ (closed, opt-in: allocated sampling is unbiased and saves 15-36% of samples, but loses 1.75-2.4x wall time today; stop-on-estimate = biased preview; tile retirement open) | Adaptive sampling per tile from the second moment (stop when SE < target) | spp saved at equal SE on `vol-cl-cloud256` |
 | ✅ V2.6 | Finite sun disc A/B against the delta sun for peaked phases (agree with the clouds side first) | `vol-cl-sph-mie20` 64 spp firefly count |
 
-### ⬜ V3 — Memory and scale
+### ✅ V3 — Memory and scale (2026-11-24)
 
 Gate: the clouds' 504x352x616 grid fits in <= 128 MB with an image same-seed equal (relMSE <= 1e-5) to the dense r32 one.
 
@@ -68,7 +68,7 @@ Gate: the clouds' 504x352x616 grid fits in <= 128 MB with an image same-seed equ
 | ✅ V3.3 | Camera inside a grid medium; auto-detect the camera medium | `vol-camera-medium` grid twin |
 | ✅ V3.4 | Browser `.vdb` loader (WebVDB `parseVdb` in a worker -> dense / atlas; licence check of WebVDB / NanoVDB first) | `vol-vdb-smoke` from the browser = from Node |
 
-### ⬜ V4 — Lights in media and outdoor fog
+### ✅ V4 — Lights in media and outdoor fog (all built, 2026-11-24; gate = quiet pass)
 
 Gate: lamp-lit fog and thin-fog god rays at least 3x better equal-time relMSE than V1 (own 4096 spp reference, once).
 
@@ -81,7 +81,7 @@ Gate: lamp-lit fog and thin-fog god rays at least 3x better equal-time relMSE th
 | ✅ V4.5 | Height fog (exponential in y, closed-form optical depth and exact distance sampling, no majorant) | closed-form T and single-scatter quadrature |
 | ✅ V4.6 | Emissive media (Le or temperature grid + blackbody) | closed form Le (1 - exp(-sigma_a d)) |
 
-### ⬜ V5 — Real time and preview with media
+### ✅ V5 — Real time and preview with media (2026-11-24; V5.4b frame-mode check and the V5.3 default open)
 
 Gate: `vol-cornell-smoke` and a cloud scene through the real-time chain (SVGF / OIDN / upscaler) with the plane identity exact (1e-6) and a preview that reaches the
 reference mean within 1% in under 2 s on the M5.
@@ -94,7 +94,7 @@ reference mean within 1% in under 2 s on the M5.
 | ✅ V5.4 (homogeneous media, megakernel; media add no bias; frame-mode GPU check and a pre-existing 128^2 ReSTIR offset open) | ReSTIR DI on surfaces behind homogeneous media (final shadow ray through `ptVolTr`) | `restir-check` bias scan on a fog scene |
 | ✅ V5.5 (notes: volumes-restir-nrc.md) | Research: volumetric ReSTIR; NRC at medium vertices (NRC track) | design notes first |
 
-### ⬜ V6 — Web parity and demos
+### 🟨 V6 — Web parity and demos (open: the Sponza god-ray example of V6.4; 3060 / iGPU runs)
 
 Gate: three examples in the catalog (cloud, Sponza god rays, lamp fog) that converge in seconds with OIDN on the M5 and run on the 3060 and an Intel iGPU; glTF volume
 materials render as media.
