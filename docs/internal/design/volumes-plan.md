@@ -54,7 +54,7 @@ Gate: equal-time relMSE on `vol-cl-cloud256` (and one dense homogeneous sphere) 
 | ✅ V2.2 (not a win) ★ | Residual ratio tracking for shadow rays against the minorant (verify the residual-tracking patent status first) | TS twin unbiased; `vol-grid-slab`; 256 spp within SE |
 | ✅ V2.3 (not a win) ★ | Misso 2022 telescoping transmittance, port of Cycles `volume_transmittance` (Apache-2.0, attribution), A/B vs ratio tracking | TS twin unbiased; equal-spp variance on `vol-cl-cloud256` |
 | V2.4 | Decomposition tracking for free flight (control part analytic, residual majorant) | `vol-grid-slab`; lookup counter |
-| 🟨 V2.5 ★ (V2.5a ✅ variance-guided stop; V2.5b built, biased: minSamples / top-up A/B next) | Adaptive sampling per tile from the second moment (stop when SE < target) | spp saved at equal SE on `vol-cl-cloud256` |
+| ✅ V2.5 ★ (closed, opt-in: allocated sampling is unbiased and saves 15-36% of samples, but loses 1.75-2.4x wall time today; stop-on-estimate = biased preview; tile retirement open) | Adaptive sampling per tile from the second moment (stop when SE < target) | spp saved at equal SE on `vol-cl-cloud256` |
 | ✅ V2.6 | Finite sun disc A/B against the delta sun for peaked phases (agree with the clouds side first) | `vol-cl-sph-mie20` 64 spp firefly count |
 
 ### ⬜ V3 — Memory and scale

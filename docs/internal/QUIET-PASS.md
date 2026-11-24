@@ -117,3 +117,4 @@ What the next pass should measure. Add a row when something needs a quiet-machin
   completion between samples is not a readback and keeps the timed region clean.
 - Our renderer is not in `ADAPTER_IDS`, so the baseline step leaves it out; the 2026-11-14 pass ran it as an extra step
   with the same settings (`--renderers pt-megakernel`).
+| V2.5 adaptive vs uniform | Allocated (`renderAllocated`, pilot 64) vs uniform at equal p99 pixel relative SE on `vol-cl-sph-g85-a99-t50` and `vol-cl-cloud256`, 64x64, 6+ seeds, uniform wall MEASURED at its matched spp (`render-until-check match=1 seeds=6`, then a uniform render at that spp); add a tile-retirement variant if built | Adaptive becomes worth recommending only if its wall time at equal p99 SE beats uniform (provisional today: 1.75-2.4x slower). |
