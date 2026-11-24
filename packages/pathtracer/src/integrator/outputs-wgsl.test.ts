@@ -27,6 +27,20 @@ describe('optional integrator outputs (R10 hooks, R4 counters, AOVs)', () => {
     expect(ptwfUnsupported({ volumes, aovs: true } as never)).toBeNull(); // V5.1b: the wavefront writes the same guides
   });
 
+  it('volumes.outputs + forcedNee / equiangular / marchSamples (V7.3): later segments go through ptVoLate, order 0-1 capture excludes them; off = no trace of it', () => {
+    const volumes = { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };
+    for (const extra of [{ forcedNee: true }, { forcedNee: true, equiangular: true }, { marchSamples: 4 }, { equiangular: true, marchSamples: 4 }]) {
+      const k = mk({ volumes: { ...volumes, ...extra, outputs: true } }, false);
+      expect(k).toContain('var<private> ptVoLate: vec3f;');
+      expect(k).toMatch(/if \(depth >= 1u && !ptVoCaptured\) \{\s*ptVoLate \+= fAdd;/);
+      // flushed after every capture and at the end, after ptVoEnd has read the order 0-1 sum
+      expect([...k.matchAll(/ptVoCapture\(depth, radiance\);\s*radiance \+= ptVoLate;/g)].length).toBe(2);
+      expect(k).toMatch(/ptVoEnd\(radiance\);\s*radiance \+= ptVoLate;/);
+    }
+    expect(mk({ volumes: { ...volumes, outputs: true } }, false)).not.toContain('ptVoLate');
+    expect(mk({ volumes: { ...volumes, forcedNee: true } }, false)).not.toContain('ptVoLate');
+  });
+
   it('volumes + frame (V5.1c): a first-vertex scatter writes the frame planes; wavefront and volumes.outputs refuse', () => {
     const media = [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }];
     const volumes = { media, materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] };

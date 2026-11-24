@@ -132,6 +132,8 @@ export interface PtVolumeOptions {
    * `maxDepth` 1 render), the primary ray's transmittance through the media up to the first solid surface (ratio tracking on its own stream, so the beauty image
    * is bit-identical to the kernel without outputs), the per-sample second moment of the radiance (a standard error from one render) and the distance to the
    * camera ray's first scatter event. Default off (the kernel text is unchanged).
+   * V7.3: combines with `forcedNee` / `equiangular` / `marchSamples`: the camera segment's forced estimate (depth 0) is order 1 and stays in the orders 0-1 plane; later
+   * segments' estimates are order 2+ and are held in `ptVoLate` until the capture has read the sum (the plane still equals a `maxDepth` 1 render of the same seed per pixel).
    */
   outputs?: boolean;
   /**
