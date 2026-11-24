@@ -285,7 +285,6 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     if (o.frame && o.volumes.outputs) throw new Error('integrator.frame cannot be combined with integrator.volumes.outputs (V5.1c: both write the accumulator tail; the megakernel frame planes and the guide / order outputs are separate products)');
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     const marchN = ptMarchCount(o.volumes ?? undefined);
-    if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.volumes.outputs) throw new Error('integrator.volumes.forcedNee / equiangular cannot be combined with integrator.volumes.outputs (the order split would miss the forced estimates)');
     if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
     if (o.volumes.guiding === 'vspg') {
       if (o.volumes.outputs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.volumes.outputs (both live in the accumulator tail)");
@@ -638,8 +637,16 @@ ${forced ? `            // V4.2: forced in-scatter NEE for this segment (homogen
             let fm = ptVolMedium(curMed);
             let fHomog = fm.info.x == 0.0 && PT_NEE;
             if (fHomog && ${sd ? 'mdepth < maxVolDepth' : 'depth < maxDepth'}) {
-                radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
-            }
+${volOut ? `                // V7.3: the camera segment's estimate (depth 0) is order 1; a later segment's is order >= 2 and is held out of the order-0-1 capture (ptVoLate, flushed after it).
+                // One call site: two inlined copies of the estimator compiled to different float code and flipped edge samples (+8% on a few pixels).
+                let fAdd = beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
+                if (depth >= 1u && !ptVoCaptured) {
+                    ptVoLate += fAdd;
+                } else {
+                    radiance += fAdd;
+                }
+` : `                radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
+`}            }
 ` : ''}${vspg ? `            // V4.3 VSPG: the first medium segment of the primary ray takes a guided collision-exists decision (volume/vspg-wgsl.ts); the radiance added after it is the statistic.
             var vsSet = false;
             if (!vspgDone && depth == 0u) {
@@ -665,7 +672,9 @@ ${vspg ? `            if (vsSet) {
                 }
                 let vertex = depth;
 ${volOut ? `                ptVoCapture(depth, radiance);
-` : ''}                depth += 1u;${sd ? '\n                mdepth += 1u;' : ''}
+${forced ? `                radiance += ptVoLate;
+                ptVoLate = vec3f(0.0);
+` : ''}` : ''}                depth += 1u;${sd ? '\n                mdepth += 1u;' : ''}
                 let pm = vo + ray.direction * ev.t;
 ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptVoDist = length(pm - origin);
@@ -736,7 +745,7 @@ ${restir ? `@group(2) @binding(${PT_RESTIR_SHADE_BINDING}) var<storage, read> pt
 ` : ''}
 ${spec ? `${ptSpectralWgsl(spec)}\n` : ''}${ptCommonHeadWgsl(o)}
 
-${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced && !equi ? ptForcedNeeWgsl(marchN) : ''}${equi ? ptEquiangularWgsl(marchN) : ''}
+${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WGSL : ''}${shadowWeighted ? ptShadowWeightWgsl(o) : ''}${PT_MIS_WGSL}${vol ? ptVolumeWgsl(o.volumes!) : ''}${forced && !equi ? ptForcedNeeWgsl(marchN) : ''}${equi ? ptEquiangularWgsl(marchN) : ''}${forced && volOut ? 'var<private> ptVoLate: vec3f;\n' : ''}
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
@@ -980,7 +989,9 @@ ${counters ? `            termReason = select(2u, 1u, ${black});
         }
         let vertex = depth;
 ${volOut ? `        ptVoCapture(depth, radiance);
-` : ''}        depth += 1u;
+${forced ? `        radiance += ptVoLate;
+        ptVoLate = vec3f(0.0);
+` : ''}` : ''}        depth += 1u;
 ${layered ? `        ptLayerSeed = pixelSeed ^ (sampleIndex * 2654435761u) ^ (vertex * 2246822519u);
 ` : ''}
 ${aniso ? `        var frame = ptFrameFromNormal(${shadingNormal});
@@ -1046,7 +1057,8 @@ ${counters ? `                    termReason = 3u;
 ${counters ? `    ptCountEnd(pxIndex, depth, termReason);
 ` : ''}${frame ? `    ptFramePlanes(pxIndex, dims.x * dims.y, radiance, ${emit ? 'vec3f(0.0), fEmit' : 'fDirect, vec3f(0.0)'}, fBounce, fSeen, fIsSpec, fNormal, fViewZ, fMotion, fRough, fAlbedo, fSpec);
 ` : ''}${volOut ? `    ptVoEnd(radiance);
-` : ''}${vspg ? `    if (vspgOn) {
+${forced ? `    radiance += ptVoLate;
+` : ''}` : ''}${vspg ? `    if (vspgOn) {
         let vsC = max(dot(radiance - vspgRad, vec3f(0.2126, 0.7152, 0.0722)), 0.0);
         let vsI = dims.x * dims.y + pxIndex;
         ptAccum[vsI] = ptAccum[vsI] + select(vec4f(0.0, vsC, 0.0, 1.0), vec4f(vsC, 0.0, 0.0, 1.0), vspgHit);
