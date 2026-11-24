@@ -1,7 +1,7 @@
 import { encodingWgsl, forward, layerCount, layerIn, layerOffset, layerOut, nrcEncodingWgsl } from '@pathtracer/mlp';
 import { halfToFloat } from '../pages/mlp-common.ts';
 import { type NrcCache, nrcInputsWgsl } from './cache.ts';
-import { webnnReplayOptions } from './webnn-replay-options.ts';
+import { webnnFoldShapes, webnnReplayOptions } from './webnn-replay-options.ts';
 
 // The interop API is experimental and has no DOM library declarations.
 interface Tensor { destroy(): void }
@@ -32,6 +32,8 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
     cache.settings.factorization !== 'off' || cache.settings.positionBands !== 4) throw new Error('WebNN replay requires the compact four-band evaluated fp16 baseline');
   const rows = Number(args.rows ?? 4096), repeats = Number(args.repeats ?? 12);
   if (![64, 4096, 8192, 16384, 32768].includes(rows) || !Number.isSafeInteger(repeats) || repeats < 1 || repeats > 100) throw new Error('Invalid replay geometry or repeat count');
+  const fold = webnnFoldShapes(rows, Number(args.fold ?? 1), mlp.shape.inputs);
+  const slab = fold.slab; // Queries per dispatch. Equal to `rows` unless `fold` widens the tensors.
   if (args.weights && !['layers', 'packed'].includes(args.weights)) throw new Error('weights must be layers or packed');
   if (args.publish && !['frame', 'slab'].includes(args.publish)) throw new Error('publish must be frame or slab');
   if (args.device && !['gpu', 'npu'].includes(args.device)) throw new Error('device must be gpu or npu');
@@ -78,8 +80,9 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
     const { shape } = mlp;
     const layers = layerCount(shape);
     const paddedWeights = mlp.weightCount + shape.width; // Last matrix has four output rows. RGB are trained and the fourth row stays zero.
-    const inputs: Record<string, Tensor> = { x: await tensor([rows, shape.inputs]) };
-    let y = builder.input('x', desc([rows, shape.inputs]));
+    const inputs: Record<string, Tensor> = { x: await tensor(fold.x) };
+    let y = builder.input('x', desc(fold.x));
+    if (slab !== rows) y = builder.reshape(y, fold.flatX);
     const packet = packed ? builder.input('weights', desc([paddedWeights])) : undefined;
     if (packet) inputs.weights = await tensor([paddedWeights]);
     for (let i = 0; i < layers; i++) {
@@ -93,12 +96,13 @@ export async function replayWebnn(cache: NrcCache, args: Record<string, string |
       y = builder.gemm(y, weight, { bTranspose: true });
       if (i + 1 < layers) y = builder.relu(y);
     }
+    if (slab !== rows) y = builder.reshape(y, fold.y);
     const start = performance.now();
     graph = await builder.build({ y });
     metrics.webnn_graph_build_ms = performance.now() - start;
-    const output = await tensor([rows, 4]);
+    const output = await tensor(fold.y);
     const { STORAGE, COPY_SRC, COPY_DST } = GPUBufferUsage;
-    const capacity = Math.ceil(records.queries.size / 80 / rows) * rows;
+    const capacity = Math.ceil(records.queries.size / 80 / slab) * slab;
     const features = make(capacity * shape.inputs * 2, STORAGE | COPY_SRC);
     const halfResult = make(capacity * 8, STORAGE | COPY_DST);
     const rgb = make(capacity * 16, STORAGE | COPY_SRC);
@@ -180,14 +184,14 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
     // `tensors=shared` (the November 19 sequence): one input / output pair, each chunk lent out, copied, returned and run in turn.
     const sequential = async (n: number) => {
       if (!perSlab) { await publish(); lap('weights'); }
-      const host = opt.route === 'cpu' ? new Uint8Array(await read(features, Math.ceil(n / rows) * rows * 128)) : undefined;
+      const host = opt.route === 'cpu' ? new Uint8Array(await read(features, Math.ceil(n / slab) * slab * 128)) : undefined;
       if (host) lap('in');
-      for (let offset = 0; offset < n; offset += rows) {
+      for (let offset = 0; offset < n; offset += slab) {
         if (perSlab) { await publish(); lap('weights'); }
-        if (host) ctx.writeTensor(inputs.x!, host.subarray(offset * 128, (offset + rows) * 128));
+        if (host) ctx.writeTensor(inputs.x!, host.subarray(offset * 128, (offset + slab) * 128));
         else {
           const x = await ctx.exportToGPU(inputs.x!);
-          submit(e => e.copyBufferToBuffer(features, offset * 128, x, 0, rows * 128));
+          submit(e => e.copyBufferToBuffer(features, offset * 128, x, 0, slab * 128));
           x.destroy();
         }
         lap('in');
@@ -197,7 +201,7 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
         if (host) gpu.queue.writeBuffer(halfResult, offset * 8, await ctx.readTensor(output));
         else {
           const out = await ctx.exportToGPU(output);
-          submit(e => e.copyBufferToBuffer(out, 0, halfResult, offset * 8, rows * 8));
+          submit(e => e.copyBufferToBuffer(out, 0, halfResult, offset * 8, slab * 8));
           out.destroy();
         }
         lap('out');
@@ -207,30 +211,30 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
     const chunks: { x: Tensor; y: Tensor }[] = [];
     const weightInputs = Object.fromEntries(Object.entries(inputs).filter(([name]) => name !== 'x'));
     const batched = async (n: number) => {
-      while (chunks.length < Math.ceil(n / rows)) chunks.push({ x: await tensor([rows, shape.inputs]), y: await tensor([rows, 4]) });
-      const list = chunks.slice(0, Math.ceil(n / rows));
+      while (chunks.length < Math.ceil(n / slab)) chunks.push({ x: await tensor(fold.x), y: await tensor(fold.y) });
+      const list = chunks.slice(0, Math.ceil(n / slab));
       await publish();
       lap('weights');
       if (opt.route === 'cpu') {
-        const host = new Uint8Array(await read(features, list.length * rows * 128));
-        list.forEach((c, k) => ctx.writeTensor(c.x, host.subarray(k * rows * 128, (k + 1) * rows * 128)));
+        const host = new Uint8Array(await read(features, list.length * slab * 128));
+        list.forEach((c, k) => ctx.writeTensor(c.x, host.subarray(k * slab * 128, (k + 1) * slab * 128)));
         lap('in');
         for (const c of list) ctx.dispatch(graph!, { ...weightInputs, x: c.x }, { y: c.y });
         lap('dispatch');
         const outs = await Promise.all(list.map(c => ctx.readTensor(c.y)));
-        outs.forEach((o, k) => gpu.queue.writeBuffer(halfResult, k * rows * 8, o));
+        outs.forEach((o, k) => gpu.queue.writeBuffer(halfResult, k * slab * 8, o));
         lap('out');
         return;
       }
       const xs = await Promise.all(list.map(c => ctx.exportToGPU(c.x)));
-      submit(e => xs.forEach((b, k) => e.copyBufferToBuffer(features, k * rows * 128, b, 0, rows * 128)));
+      submit(e => xs.forEach((b, k) => e.copyBufferToBuffer(features, k * slab * 128, b, 0, slab * 128)));
       for (const b of xs) b.destroy();
       lap('in');
       if (opt.sync === 'drain') { await gpu.queue.onSubmittedWorkDone(); lap('wait'); }
       for (const c of list) ctx.dispatch(graph!, { ...weightInputs, x: c.x }, { y: c.y });
       lap('dispatch');
       const ys = await Promise.all(list.map(c => ctx.exportToGPU(c.y)));
-      submit(e => ys.forEach((b, k) => e.copyBufferToBuffer(b, 0, halfResult, k * rows * 8, rows * 8)));
+      submit(e => ys.forEach((b, k) => e.copyBufferToBuffer(b, 0, halfResult, k * slab * 8, slab * 8)));
       for (const b of ys) b.destroy();
       lap('out');
     };
@@ -316,8 +320,8 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
       metrics[prefix + '_p50_ms'] = times[Math.ceil(times.length * .5) - 1]!;
       metrics[prefix + '_p95_ms'] = times[Math.ceil(times.length * .95) - 1]!;
     }
-    metrics.webnn_slabs = Math.ceil(count / rows);
-    metrics.webnn_padded_rows = metrics.webnn_slabs * rows - count;
+    metrics.webnn_slabs = Math.ceil(count / slab);
+    metrics.webnn_padded_rows = metrics.webnn_slabs * slab - count;
     return metrics;
   } finally {
     for (const buffer of buffers) buffer.destroy();

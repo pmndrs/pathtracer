@@ -10,6 +10,10 @@
  *    `writeTensor`, `readTensor`, `queue.writeBuffer` (the path the interop API exists to avoid; also the only one that runs where
  *    exportable tensors lose the context, such as SwiftShader on Linux).
  *  - `parity`: `strict` throws on stale or wrong predictions; `report` records them (`parity_failures`) and still times the arm.
+ *  - `fold` (1, 2, 4, 8; default 1 = off): an exportable tensor is capped at 8,192 rows on macOS (its IOSurface height), so one dispatch
+ *    cannot take a whole frame as [rows, 64]. `fold=F` keeps `rows` as the tensor height and makes it F times wider ([rows, F * 64]);
+ *    the graph reshapes it to [rows * F, 64] and the result back to [rows, F * 4]. The bytes are the same row-major block, so
+ *    `rows=4096 fold=8` is one dispatch of 32,768 queries. With `fold=1` no reshape is added and the graph is the earlier one.
  *  - `breakdown=1`: per-phase milliseconds (`webnn_phase_<name>_p50_ms`), timestamps around the existing awaits only (no extra waits).
  */
 export const WEBNN_REPLAY_OPTIONS = {
@@ -20,6 +24,12 @@ export const WEBNN_REPLAY_OPTIONS = {
   parity: ['strict', 'report'],
 } as const;
 type ReplayOptions = { -readonly [K in keyof typeof WEBNN_REPLAY_OPTIONS]: (typeof WEBNN_REPLAY_OPTIONS)[K][number] };
+
+/** Tensor and graph shapes of one dispatch for `rows` x `fold` (see `fold` above). `slab` is the number of queries per dispatch. */
+export function webnnFoldShapes(rows: number, fold: number, inputs: number): { slab: number; x: number[]; y: number[]; flatX: number[]; flatY: number[] } {
+  if (![1, 2, 4, 8].includes(fold)) throw new Error('fold must be 1, 2, 4 or 8');
+  return { slab: rows * fold, x: [rows, fold * inputs], y: [rows, fold * 4], flatX: [rows * fold, inputs], flatY: [rows * fold, 4] };
+}
 
 /** Parses and cross-checks the hand-off variants (exported for the unit test). */
 export function webnnReplayOptions(args: Record<string, string | undefined>): ReplayOptions & { breakdown: boolean } {
