@@ -66,7 +66,7 @@ Gate: the clouds' 504x352x616 grid fits in <= 128 MB with an image same-seed equ
 | ✅ V3.1 ★ | r8unorm grids with a per-medium scale | same-seed relMSE vs r16 |
 | ✅ V3.2 ★ | Sparse brick atlas: indirection texture at brick resolution + atlas of occupied 8^3 bricks with a 1-voxel apron (one texture, no storage buffer); gives several grids per kernel | same-seed image vs dense on `vol-cl-cloud256`; memory printout |
 | ✅ V3.3 | Camera inside a grid medium; auto-detect the camera medium | `vol-camera-medium` grid twin |
-| V3.4 | Browser `.vdb` loader (WebVDB `parseVdb` in a worker -> dense / atlas; licence check of WebVDB / NanoVDB first) | `vol-vdb-smoke` from the browser = from Node |
+| ✅ V3.4 | Browser `.vdb` loader (WebVDB `parseVdb` in a worker -> dense / atlas; licence check of WebVDB / NanoVDB first) | `vol-vdb-smoke` from the browser = from Node |
 
 ### ⬜ V4 — Lights in media and outdoor fog
 
@@ -92,7 +92,7 @@ reference mean within 1% in under 2 s on the M5.
 | ✅ V5.2 ★ (plain scheduler) | `volumes.outputs` on the wavefront; `ptwfAutoPolicy` for media after the quiet-pass A/B (inline refill read 0.72x per spp, provisional) | `wf-p5-check` outputs per pixel |
 | ✅ V5.3 (maintainer to confirm) | `preview` media preset (ray-marched shadows N = 1, lower medium depth, hardware filtering), A/B vs reference mode | mean within 1% on the V0 scenes |
 | V5.4 | ReSTIR DI on surfaces behind homogeneous media (final shadow ray through `ptVolTr`) | `restir-check` bias scan on a fog scene |
-| V5.5 | Research: volumetric ReSTIR; NRC at medium vertices (NRC track) | design notes first |
+| ✅ V5.5 (notes: volumes-restir-nrc.md) | Research: volumetric ReSTIR; NRC at medium vertices (NRC track) | design notes first |
 
 ### ⬜ V6 — Web parity and demos
 
