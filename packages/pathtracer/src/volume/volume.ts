@@ -15,7 +15,7 @@
  *  - Phase: the HG density is sampled exactly, so the throughput weight of a phase-sampled bounce is 1.
  */
 
-import type { PtPhaseLobes } from './phase.ts';
+import { ptPhaseLobes, type PtPhase, type PtPhaseLobes } from './phase.ts';
 
 export type VolRgb = readonly [number, number, number];
 
@@ -229,11 +229,29 @@ export function ptDecodeVolumeOutputs(sums: Float32Array, width: number, height:
   return { width, height, samples, radiance, order01, transmittance, stdError, firstScatterDistance, scatterFraction, sampleCount };
 }
 
-/** Medium from the bench's coefficients. */
-export function ptMediumFrom(sigmaA: VolRgb, sigmaS: VolRgb, g = 0, scale = 1, grid?: PtMediumGrid, height?: PtMediumHeight): PtMedium {
+/**
+ * Medium from the bench's coefficients. `phase` is a Henyey-Greenstein mean cosine, or a `PtPhase` (`{ type: 'hg' | 'hg2' | 'hgDraine' | 'mie', ... }`, V6.6):
+ * a two-lobe phase sets `lobes` and `g` = lobe A's `gA`, so `ptMediumFrom(a, s, { type: 'mie', diameter: 20 })` is the whole call. `{ type: 'hg', g }` equals the number `g`.
+ */
+export function ptMediumFrom(sigmaA: VolRgb, sigmaS: VolRgb, phase: number | PtPhase = 0, scale = 1, grid?: PtMediumGrid, height?: PtMediumHeight): PtMedium {
   const sigmaT = [0, 1, 2].map((i) => ((sigmaA[i] as number) + (sigmaS[i] as number)) * scale) as unknown as [number, number, number];
   const albedo = [0, 1, 2].map((i) => ((sigmaT[i] as number) > 0 ? ((sigmaS[i] as number) * scale) / (sigmaT[i] as number) : 0)) as unknown as [number, number, number];
-  return { sigmaT, albedo, g, ...(grid ? { grid } : {}), ...(height ? { height } : {}) };
+  const lobes = typeof phase === 'number' || phase.type === 'hg' ? undefined : ptPhaseLobes(phase);
+  const g = typeof phase === 'number' ? phase : lobes ? lobes.gA : (phase as { g: number }).g;
+  return { sigmaT, albedo, g, ...(lobes ? { lobes } : {}), ...(grid ? { grid } : {}), ...(height ? { height } : {}) };
+}
+
+/**
+ * V6.6: a `volumeGrid` option with its brick majorants filled in when `volumes.majorant` is `'brick'` and the caller passed none (`brickMajorants(resolution, density)`;
+ * with the minima when `shadowTracking` is `'residual'` / `'telescoping'`). A caller's own `majorant` is kept as is. Returns the argument itself when nothing is added.
+ */
+export function ptVolumeGridWithMajorant<G extends { resolution: readonly [number, number, number]; density: ArrayLike<number>; majorant?: unknown }>(
+  grid: G | undefined,
+  volumes: { majorant?: string; shadowTracking?: string } | null | undefined,
+): G | undefined {
+  if (!grid || grid.majorant || volumes?.majorant !== 'brick') return grid;
+  const minima = volumes.shadowTracking === 'residual' || volumes.shadowTracking === 'telescoping';
+  return { ...grid, majorant: brickMajorants(grid.resolution, grid.density, { minima }) };
 }
 
 /** V4.6: true when any medium of the table emits. */

@@ -8,7 +8,8 @@
  * In thin fog most camera rays never collide with a particle, so the plain estimator (pbrt's volpath: light is sampled only where a real collision happens)
  * sees a shaft only through the rare rays that do collide: a very noisy image. `forcedNee` adds one light sample per free-flight segment, at a distance drawn
  * on the segment, and `equiangular` draws that distance around the lamp so that a lamp inside the fog stops being a 1/r^2 noise source. Both are unbiased:
- * the three estimators converge to the same image, only the noise differs. The estimator is compiled into the kernel (a change rebuilds it).
+ * the three estimators converge to the same image, only the noise differs. The estimator is compiled into the kernel (a change rebuilds it);
+ * the fog's density, albedo and anisotropy are run-time uniforms (`volumes.runtimeParams`, written with `setMedia`), so their sliders restart the image without a recompile.
  */
 import { buildGpuScene, type GpuScene, type SceneCopyInput, type RtMaterialInput } from '@pmndrs/raytracer';
 import { ptMediumFrom, type PtIntegratorOptions } from '@pmndrs/pathtracer';
@@ -110,6 +111,8 @@ defineExample(async (ctx) => {
       materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }],
       // The camera sits inside the fog box, so its rays start in medium 1 (nothing else tells the kernel: boundaries are only crossed, never tested against the camera).
       cameraMedium: 1,
+      // Density, albedo and g are uniforms (`setMedia`): the fog sliders do not recompile.
+      runtimeParams: true,
       ...(estimator !== 'plain' ? { forcedNee: true } : {}),
       ...(estimator === 'equiangular' ? { equiangular: true } : {}),
     };
@@ -171,7 +174,13 @@ defineExample(async (ctx) => {
     B?.setCamera(orbit.camera);
   };
   const scene = (e: { last: boolean }) => e.last && void rebuildScene();
-  const recompile = (e: { last: boolean }) => e.last && void rebuild();
+  /** Density, albedo and g: rewrite the medium table of both kernels in place and restart both images (no recompile). */
+  const updateMedia = () => {
+    for (const [r, e] of [[A, params.left], [B, params.right]] as const) (r?.kernel as { setMedia(v: NonNullable<PtIntegratorOptions['volumes']>): void } | undefined)?.setMedia(volumes(e)!);
+    A?.restart();
+    B?.restart();
+    updateLabels();
+  };
 
   const estimator = pane.addFolder({ title: 'Estimators (rebuild the kernels)' });
   const options = { [NAMES.plain]: 'plain', [NAMES.forced]: 'forced', [NAMES.equiangular]: 'equiangular' };
@@ -185,10 +194,10 @@ defineExample(async (ctx) => {
     presentDirty = true;
   });
 
-  const fog = pane.addFolder({ title: 'Fog (rebuilds the kernels)' });
-  fog.addBinding(params, 'density', { label: 'extinction (1/m)', min: 0.01, max: 0.4, step: 0.005 }).on('change', recompile);
-  fog.addBinding(params, 'g', { label: 'anisotropy g', min: 0, max: 0.95, step: 0.01 }).on('change', recompile);
-  fog.addBinding(params, 'albedo', { label: 'albedo', min: 0.5, max: 1, step: 0.01 }).on('change', recompile);
+  const fog = pane.addFolder({ title: 'Fog' });
+  fog.addBinding(params, 'density', { label: 'extinction (1/m)', min: 0.01, max: 0.4, step: 0.005 }).on('change', updateMedia);
+  fog.addBinding(params, 'g', { label: 'anisotropy g', min: 0, max: 0.95, step: 0.01 }).on('change', updateMedia);
+  fog.addBinding(params, 'albedo', { label: 'albedo', min: 0.5, max: 1, step: 0.01 }).on('change', updateMedia);
 
   const sun = pane.addFolder({ title: 'Sun' });
   sun.addBinding(params, 'sunElevation', { label: 'elevation (°)', min: 3, max: 80, step: 1 }).on('change', scene);

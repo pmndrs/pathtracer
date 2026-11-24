@@ -37,7 +37,7 @@ import { PT_VBUFFER_BINDING, ptVbufferWgsl } from './vbuffer.ts';
 import { ptWarnVolumeCapRisk } from '../volume/cap-risk.ts';
 import type { PtVolumeOptions } from '../volume/volume.ts';
 import { PT_VOLUME_BINDING, PT_VOLUME_INDIRECTION_BINDING, PT_VOLUME_MAJORANT_BINDING, PT_VOLUME_MEDIA_BINDING, PT_VOLUME_SAMPLER_BINDING, ptVolumeHasGrid, ptVolumeMediaCompatible, ptVolumeMediaData } from '../volume/volume-wgsl.ts';
-import { PT_VOLUME_OUTPUT_VEC4, brickAtlasMemory, buildBrickAtlas, ptDecodeVolumeOutputs, ptF16Bits, ptR8Bytes, ptTexelBound, type PtVolumeOutputs } from '../volume/volume.ts';
+import { PT_VOLUME_OUTPUT_VEC4, brickAtlasMemory, buildBrickAtlas, ptVolumeGridWithMajorant, ptDecodeVolumeOutputs, ptF16Bits, ptR8Bytes, ptTexelBound, type PtVolumeOutputs } from '../volume/volume.ts';
 import { PT_SPEC_BINDING } from '../spectral/spectral-wgsl.ts';
 import { defaultRgb2SpecTable, rgb2SpecTexture, type Rgb2SpecTable } from '../spectral/rgb2spec.ts';
 import { PtRestirPasses, ptRestirUnsupported } from '../restir/restir.ts';
@@ -349,7 +349,10 @@ export class PtMegakernel {
     const moded = ptApplyMode(requested);
     const bn = moded.integrator?.sampler === 'bluenoise';
     // The `bluenoise` sampler (real-time mode) defaults to the texture shipped in the package.
-    const options = bn && !moded.blueNoise ? { ...moded, blueNoise: await loadBlueNoise() } : moded;
+    const withNoise = bn && !moded.blueNoise ? { ...moded, blueNoise: await loadBlueNoise() } : moded;
+    // V6.6: `majorant: 'brick'` without a caller's `volumeGrid.majorant` builds the brick majorants here.
+    const grid = ptVolumeGridWithMajorant(withNoise.volumeGrid, withNoise.integrator?.volumes);
+    const options = grid === withNoise.volumeGrid ? withNoise : { ...withNoise, volumeGrid: grid };
     const label = options.label ?? 'pt megakernel';
     if (bn) validateBlueNoise(options.blueNoise);
     if (options.integrator?.restir) {

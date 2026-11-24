@@ -28,7 +28,7 @@ The kernel takes the media as an integrator option, `PtVolumeOptions`:
 | `shadowTracking` | Shadow transmittance through a homogeneous medium: `'analytic'` (default, `exp(-sigma_t d)`, no noise) or `'ratio'` (ratio tracking, as pbrt). Grids always use ratio tracking. |
 | `majorant` | Grid media: `'global'` (default) or `'brick'`, a coarser grid of local maxima that cuts wasted steps in sparse volumes. |
 
-A medium (`PtMedium`) holds `sigmaT` (extinction per metre, RGB), `albedo` (scattering over extinction, per channel), `g` (the Henyey-Greenstein mean cosine, positive scatters forward) and an optional `grid`. `ptMediumFrom(sigmaA, sigmaS, g, scale, grid)` builds one from absorption and scattering coefficients per metre, the way pbrt takes them.
+A medium (`PtMedium`) holds `sigmaT` (extinction per metre, RGB), `albedo` (scattering over extinction, per channel), `g` (the Henyey-Greenstein mean cosine, positive scatters forward) and an optional `grid`. `ptMediumFrom(sigmaA, sigmaS, phase, scale, grid)` builds one from absorption and scattering coefficients per metre, the way pbrt takes them. `phase` is a number (the Henyey-Greenstein `g`) or a phase object such as `{ type: 'mie', diameter: 20 }` or `{ type: 'hg2', g1, g2, w2 }`, which also sets the two-lobe `lobes`.
 
 ## Medium boundaries
 
@@ -96,7 +96,7 @@ const pt = await PtMegakernel.create(device, caps, ptSceneOptions(scene, {
 - The density multiplies the medium's `sigmaT`. Voxel centres sit at `(i + 0.5) / n` across the bounds; outside the grid the density is 0.
 - `worldToIndex` is a row-major 3x4 matrix from world space to voxel index space. `gridWorldToIndex(resolution, bounds, toWorld)` builds it from the bounds in the owning mesh's object space and that mesh's object-to-world matrix (column-major, identity when omitted).
 - One grid per kernel: the density is one 3D texture. The camera cannot start inside a grid medium.
-- `majorant: 'brick'` also needs `volumeGrid.majorant = brickMajorants(resolution, density)`.
+- `majorant: 'brick'` builds the brick majorants from `volumeGrid.density` when you pass no `volumeGrid.majorant` (pass `brickMajorants(resolution, density)` yourself to reuse it or to fit a quantised grid).
 
 The library takes a dense array only. Our bench converts OpenVDB files to one with WebVDB's `parseVdb` ([`vdb-grid.ts`](https://github.com/pmndrs/pathtracer/blob/main/bench/scenes/volumes/vdb-grid.ts)); a dense grid of a large sparse volume costs a lot of memory.
 

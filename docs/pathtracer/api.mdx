@@ -87,7 +87,7 @@ The blue-noise texture loaders, `loadBlueNoise` (shipped textures) and `fetchBlu
 | --- | --- | --- |
 | `PtVolumeOptions` | type | `integrator.volumes`: media, per-material boundaries, camera medium, tracking settings. |
 | `PtMedium`, `PtMediumGrid`, `PtMaterialVolume` | type | A medium, its density grid, and the media on a material's two sides. |
-| `ptMediumFrom` | function | A medium from absorption and scattering per metre, phase `g`, scale and optional grid. |
+| `ptMediumFrom` | function | A medium from absorption and scattering per metre, phase (`g` or a phase object: `hg`, `hg2`, `hgDraine`, `mie`), scale and optional grid. |
 | `gridWorldToIndex` | function | World-to-voxel matrix of a grid from its bounds and its mesh's transform. |
 | `brickMajorants` | function | The coarse majorant grid for `majorant: 'brick'`. |
 | `ptVolumeValidate` | function | Throws on invalid volume options. |
