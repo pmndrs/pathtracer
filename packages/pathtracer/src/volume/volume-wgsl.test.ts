@@ -82,6 +82,20 @@ describe('integrator.volumes (P5)', () => {
     expect(balanced(ptVolumeWgsl(tele))).toBe(true);
   });
 
+  it("V2.4 freeFlight 'decomposition' needs a brick grid, reads the minorant in the free flight, keeps 'delta' text identical, and runs in the wavefront intersect kernel", () => {
+    const dec: PtVolumeOptions = { ...bricked, freeFlight: 'decomposition' };
+    const text = build(dec);
+    expect(text).toContain('mm.y');
+    expect(text).toContain('let pc = sg.w / sg.z;');
+    expect(build({ ...bricked, freeFlight: 'delta' })).toBe(build(bricked));
+    expect(build(bricked)).not.toContain('let pc =');
+    expect(() => ptVolumeValidate({ ...gridded, freeFlight: 'decomposition' })).toThrow(/brick/);
+    expect(() => ptVolumeValidate({ ...homog, freeFlight: 'decomposition' })).toThrow(/brick/);
+    expect(balanced(ptVolumeWgsl(dec))).toBe(true);
+    expect(ptwfUnsupported({ volumes: dec })).toBeNull();
+    for (const n of declaredIdentifiers(text)) expect(RESERVED.has(n)).toBe(false);
+  });
+
   it('majorant brick adds the coarse texture and the DDA; global and the analytic shadow do not', () => {
     const text = build(bricked);
     expect(text).toMatch(/@group\(2\) @binding\(17\) var ptVolMaj: texture_3d<f32>/);

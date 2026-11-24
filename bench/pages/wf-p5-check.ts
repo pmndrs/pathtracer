@@ -72,6 +72,7 @@ const CASES: Record<string, Case> = {
   'vol-grid-cloud-roulette': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeTrRoulette: true } },
   'vol-grid-cloud-residual': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'residual', volumeTrRoulette: true } },
   'vol-grid-cloud-telescoping': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'telescoping' } },
+  'vol-grid-cloud-decomposition': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeFreeFlight: 'decomposition' } },
   'vol-grid-cloud-hw': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeDensityFilter: 'hardware' } },
   'vol-grid-cloud-atlas': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeGridLayout: 'atlas' } },
   // V5.2: `volumes.outputs` on the wavefront: the three tail planes (orders 0-1 + primary transmittance, standard error, first-scatter distance + fraction) are compared as well as the beauty

@@ -397,7 +397,7 @@ export class PtWavefront {
     } else if (extra.volumeGrid) kernel.volumeTexture = createVolumeTexture(device, options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>, label);
     if (extra.volumeMajorant) {
       const mj = (options.volumeGrid as NonNullable<PtWavefrontOptions['volumeGrid']>).majorant as { resolution: readonly [number, number, number]; values: Float32Array; minima?: Float32Array };
-      if ((resolved.volumes?.shadowTracking === 'residual' || resolved.volumes?.shadowTracking === 'telescoping') && !mj.minima) throw new Error("PtWavefront: integrator.volumes.shadowTracking 'residual' / 'telescoping' needs `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
+      if ((resolved.volumes?.shadowTracking === 'residual' || resolved.volumes?.shadowTracking === 'telescoping' || resolved.volumes?.freeFlight === 'decomposition') && !mj.minima) throw new Error("PtWavefront: integrator.volumes.shadowTracking 'residual' / 'telescoping' and freeFlight 'decomposition' need `volumeGrid.majorant.minima` (brickMajorants(.., .., { minima: true }))");
       kernel.majorantTexture = createMajorantTexture(device, mj, label, options.volumeGrid?.format === 'r8unorm' ? options.volumeGrid.scale : 1);
     }
     if (specTable) kernel.specTexture = createSpectralTexture(device, specTable, label);
