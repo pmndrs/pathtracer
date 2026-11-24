@@ -906,6 +906,8 @@ ${vbHit ? `    var primary = true;
     // light as it arrives: surface radiance times transmittance plus the multiple scattering, which the surface's albedo does not modulate).
     {
         var gRay = ray;
+        var gHas = false;
+        var gEnter = vec3f(0.0);
         var gTrav = ${o.volumes!.cameraStack ? o.volumes!.cameraStack.length > 0 : !!o.volumes!.cameraMedium};
         for (var gk = 0u; gk < 16u; gk++) {
             let gh = rtClosest(gRay, RT_MASK_ALL);
@@ -916,6 +918,10 @@ ${vbHit ? `    var primary = true;
             if (gmv.w != 0u) {
                 gTrav = true;
                 let gp = gRay.origin + gRay.direction * gh.t;
+                if (!gHas) {
+                    gHas = true;
+                    gEnter = gp;
+                }
                 gRay = RtRay(ptOffsetOrigin(gp, ptSideNormal(gh.normal, gRay.direction)), 0.0, gRay.direction, PT_FAR);
                 continue;
             }
@@ -933,6 +939,14 @@ ${vbHit ? `    var primary = true;
                 fSpec = ptAovSpecular(gm);
             }
             break;
+        }
+        if (!fSeen && gHas) {
+            // No solid surface behind the medium (a cloud against the sky): the point where the ray first enters a medium boundary is the guide (normal facing the camera, roughness 1, albedo 1).
+            fSeen = true;
+            fNormal = -ray.direction;
+            fViewZ = -dot(gEnter - origin, normalize(ptParams.forward.xyz));
+            fMotion = ptFrameMotion(gEnter);
+            fRough = 1.0;
         }
     }
 ` : ''}    loop {

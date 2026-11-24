@@ -97,6 +97,6 @@ describe('realtime preset frameMedia (V7.5)', () => {
     expect(on).toContain('gTrav');
     expect(off).toContain('fAlbedo = ptVolMedium(curMed).albedo');
     expect(on).not.toContain('fAlbedo = ptVolMedium(curMed).albedo');
-    expect(on.match(/fSeen = true/g)?.length).toBe(1);
+    expect(on.match(/fSeen = true/g)?.length).toBe(2);
   });
 });
