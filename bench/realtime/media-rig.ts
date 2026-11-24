@@ -57,7 +57,7 @@ export class MediaRig {
 
   static async create(o: MediaRigOptions): Promise<MediaRig> {
     const kernels = o.kernels ?? ['all', 'split'];
-    const mk = (split: boolean) =>
+    const mk = (split: boolean, share?: RealtimePipelineSession) =>
       RealtimePipelineSession.create({
         scene: o.scene,
         width: o.width,
@@ -65,11 +65,12 @@ export class MediaRig {
         displayWidth: 2 * o.width,
         displayHeight: 2 * o.height,
         maxDepth: o.maxDepth,
+        ...(share ? { shareDeviceWith: share } : {}),
         adapter: { ...o.media, seed: o.seed, ...(split ? { frameMedia: true } : {}) },
         ...(split ? { emissionTemporal: { alpha: o.alpha ?? 0.1, clip: o.clip ?? 0 } } : {}),
       });
     const a = kernels.includes('all') ? await mk(false) : undefined;
-    const b = kernels.includes('split') ? await mk(true) : undefined;
+    const b = kernels.includes('split') ? await mk(true, a) : undefined;
     return new MediaRig({ a, b, o });
   }
 

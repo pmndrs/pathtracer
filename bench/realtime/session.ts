@@ -39,6 +39,8 @@ export interface RealtimeSessionOptions {
   emissionTemporal?: PipelineSettings['emissionTemporal'];
   /** The P4.7 preview pipeline: maxDepth 4 and OIDN small every frame unless the options above say otherwise. */
   preview?: boolean;
+  /** V7.4: run on the device of another session (textures of the two can then be combined, e.g. in a live split view). */
+  shareDeviceWith?: RealtimePipelineSession;
   /** Extra adapter settings (A/B knobs: `sampler`, `blueNoiseShift`, `materialLod` ...). */
   adapter?: Record<string, unknown>;
 }
@@ -72,6 +74,7 @@ export class RealtimePipelineSession {
     const maxDepth = o.maxDepth ?? (o.preview ? 4 : 2);
     const limits = { maxDepth, rrStartDepth: 0 };
     const adapter = new PtMegakernelAdapter({ nee: true, mode: 'realtime', scenePacking: 'packed', maxDepth, rrStartDepth: 0, ...(o.restir ? { restir: o.restir } : {}), ...(o.adapter ?? {}) });
+    if (o.shareDeviceWith?.adapter.deviceHandle) adapter.sharedDevice = o.shareDeviceWith.adapter.deviceHandle;
     await adapter.load(o.scene);
     const device = adapter.gpuContext!.device;
     const kernel = adapter.renderer as PtMegakernel;

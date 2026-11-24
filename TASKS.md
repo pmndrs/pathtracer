@@ -429,3 +429,4 @@ glTF loader made public, hand-written API tables, experimental and research feat
     < 0.3% on both and the error stays within the pbrt-vs-Mitsuba floor.
 
 - ~~Sponza reference spp~~: settled by P0.9: keep 4096 for both (at 2048 the pbrt-vs-Mitsuba floor rises to 6.2e-3 and even 1e-2 becomes unmeasurable on Sponza).
+- V7.4 (partial, scope cut): SVGF on media, whole vs split, vol-cornell-fog 256x256 frame 4: bench/results/v74-media/ (page media-realtime, kernel option frameMedia, chain emissionTemporal); sweeps, moving camera, live page, cloud, docs NOT done.
