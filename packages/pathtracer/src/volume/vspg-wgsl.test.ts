@@ -60,5 +60,9 @@ describe('VSPG decision (V4.3)', () => {
     const media = [{ sigmaT: [0.1, 0.1, 0.1], albedo: [1, 1, 1], g: 0 }] as never;
     expect(() => ptIntegratorWgsl({ volumes: { media, materials: [], outputs: true, guiding: 'vspg' } as never })).toThrow(/outputs/);
     expect(() => ptIntegratorWgsl({ accumulate: false, volumes: { media, materials: [], guiding: 'vspg' } as never })).toThrow(/accumulate/);
+    const h = [{ sigmaT: [0.1, 0.1, 0.1], albedo: [1, 1, 1], g: 0, height: { H: 1, y0: 0 } }] as never;
+    expect(() => ptIntegratorWgsl({ volumes: { media: h, materials: [], guiding: 'vspg' } as never })).toThrow(/homogeneous and plain-loop grid/);
+    const gr = [{ sigmaT: [0.1, 0.1, 0.1], albedo: [1, 1, 1], g: 0, grid: { densityMax: 1 } }] as never;
+    expect(() => ptIntegratorWgsl({ volumes: { media: gr, materials: [], majorant: 'brick', guiding: 'vspg' } as never })).toThrow(/homogeneous and plain-loop grid/);
   });
 });
