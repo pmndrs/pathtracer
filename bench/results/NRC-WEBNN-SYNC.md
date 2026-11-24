@@ -109,6 +109,7 @@ Rows 16-19 (load 4.2-4.7) add the `fold` arm, which packs the frame into one wid
 | 19 | gpu | `tensors=chunk` (export) | `sync` drain vs none | 37.3, 38.5 | 36.1, 37.1 | 0.97 | 0.4 | 0, 0 | 4.6 | 20261124T091655Z |
 | 20 | gpu | `tensors=chunk fold=8 sync=none` (export) | `webnnFlat` 0 vs 1 (this file vs the flat rewrite) | 6.1, 6.1 | 6.0, 6.1 | 0.99 | 0.3 | 0, 0 | 4.0 | 20261124T095057Z |
 | 21 | gpu | `webnnFlat=1` | `wait` 0 vs 1 (queue wait before `dispatch`) | 6.0, 6.1 | 6.5, 6.5 | 1.07 | 0.3-0.4 | 0, 0 | 4.0 | 20261124T095103Z |
+| 22 | gpu | `webnnFlat=1` | `check` 1 vs 0 (with vs without the untimed correctness check and its read-backs) | 6.1, 6.0 | 6.0, 6.0 | 0.99 | 0.3-0.4 | not checked | 4.4 | 20261124T101305Z |
 
 Other numbers from the same runs:
 

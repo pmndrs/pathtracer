@@ -6,7 +6,11 @@
  * A frame = encode the recorded queries on WebGPU, hand weights and queries to WebNN, ONE `dispatch`, hand the answers back, unpack.
  *
  * Run: `--page nrc-study --args webnnReplay=1 webnnFlat=1 ...` (the other args as in NRC-WEBNN-SYNC.md). `wait=1` adds a WebGPU queue
- * wait before `dispatch`, the one optional await.
+ * wait before `dispatch`, the one optional await. `check=0` skips the correctness check that runs before the timing.
+ *
+ * The file has three parts: setup (once), `frame()` (the thing being measured), and the measurement harness. The harness calls
+ * `frame()` 4 times untimed to check the answers (with GPU read-backs after each, which are not part of a frame), then `repeats` + 2
+ * times to time it, one call at a time.
  *
  * Fixed layout: the network is f16, 64 inputs, 4 outputs (RGB + one zero). An exportable tensor is capped at 8,192 rows on macOS, so a
  * frame of up to 32,768 queries crosses as [4096, 512] and the graph reshapes it to [32768, 64], and the result back to [4096, 32].
@@ -171,11 +175,17 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
     } finally { b.destroy(); }
   };
   try {
-    // Correctness: four frames with different live weights. WebNN's answers are compared with the renderer's own WGSL answers on every
+    // ---- Correctness check. NOT timed, and not part of a frame: `check=0` skips it and the times below do not change. ----
+    // Four frames with different live weights, one after the other on purpose (each must see the weights the training just changed). WebNN's answers are compared with the renderer's own WGSL answers on every
     // row, and with a CPU forward pass (current weights, and the previous frame's weights to catch stale answers) on a sample of rows.
     let failures = 0, count = 0;
     let priorWeights: Float32Array | undefined;
-    for (let sample = 0; sample < 4; sample++) {
+    const snapshots = args.check === '0' ? 0 : 4;
+    if (!snapshots) {
+      for (let i = 0; i < 8; i++) submit(e => cache.encodeFrame(e));
+      count = await cache.readQueryCount();
+    }
+    for (let sample = 0; sample < snapshots; sample++) {
       for (let i = 0; i < 8; i++) submit(e => cache.encodeFrame(e)); // Train, so the weights change.
       count = await cache.readQueryCount();
       if (count < 1) throw new Error('No NRC queries to replay');
@@ -211,8 +221,11 @@ ${nrcInputsWgsl(true, nrcEncodingWgsl(4))}
       priorWeights = w;
     }
     metrics.parity_failures = failures;
+    metrics.parity_snapshots_checked = snapshots;
 
-    // Timing: our WGSL inference and one WebNN frame, alternating, each timed until the WebGPU queue is idle. Two warm-ups.
+    // ---- Timing. Each `frame(count)` call is one whole frame (all of its queries, one dispatch) and is timed on its own; the
+    // reported number is the median of `repeats` single calls, never a sum. No read-back happens in this loop. ----
+    // Our WGSL inference and one WebNN frame, alternating, each timed until the WebGPU queue is idle. Two warm-ups.
     const wgslTimes: number[] = [], nnTimes: number[] = [], phases: Record<string, number>[] = [];
     for (let i = 0; i < repeats + 2; i++) {
       let t = performance.now();
