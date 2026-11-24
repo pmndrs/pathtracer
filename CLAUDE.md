@@ -877,3 +877,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.
   CI installs only the two packages (`--filter`): bench's `link:` siblings do not exist there. Check a release with `pnpm pack` + a clean consumer install before bumping.
+- WebNN next to WebGPU (N12.14, Chrome 158 / M5 Pro, `bench/results/NRC-WEBNN-SYNC.md`): `exportToGPU` is the SLOW hand-off on macOS. Each exported buffer handed back to WebNN costs ~4.5 ms before the WebGPU queue is idle
+  again, and an input export ~2.2 ms (47 ms for 6 chunks); copying through script (`mapAsync` read-back, `writeTensor`, `readTensor`, `queue.writeBuffer`) runs the same replay in 3 ms. Never assume the interop path is the fast
+  one: A/B it with `route=export,cpu`. Skipping the `onSubmittedWorkDone` before `dispatch` (`sync=none`) is faster but returns garbage (relative RMS ~1, not even the previous frame's answers): keep the wait and keep a parity
+  check in any WebNN timing. `device=npu` and `ctx=device` gave the same times as the default and nothing reports which processor Core ML used. An ABBA pair of this page takes ~16 s: queue all pairs of a study in one background script.
