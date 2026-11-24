@@ -35,6 +35,8 @@ export interface RealtimeSessionOptions {
   upscaler?: PipelineSettings['upscaler'];
   /** Reactive mask for the upscaler from the SVGF history length (default off). */
   reactive?: PipelineSettings['reactive'];
+  /** V7.4: temporal accumulation of the emission plane before it is added back (with `adapter.frameMedia`: the camera ray's single scattering). */
+  emissionTemporal?: PipelineSettings['emissionTemporal'];
   /** The P4.7 preview pipeline: maxDepth 4 and OIDN small every frame unless the options above say otherwise. */
   preview?: boolean;
   /** Extra adapter settings (A/B knobs: `sampler`, `blueNoiseShift`, `materialLod` ...). */
@@ -88,6 +90,7 @@ export class RealtimePipelineSession {
       ...(o.denoiser ? { denoiser: o.denoiser } : {}),
       ...(o.upscaler ? { upscaler: o.upscaler } : {}),
       ...(o.reactive ? { reactive: o.reactive } : {}),
+      ...(o.emissionTemporal ? { emissionTemporal: o.emissionTemporal } : {}),
     };
     const arm = await PipelineArm.create(device, ps, o.preview ? 'preview' : 'realtime');
     return new RealtimePipelineSession({ adapter, device, kernel, arm, options: o, limits });
@@ -131,12 +134,12 @@ export class RealtimePipelineSession {
    * One frame: trace + pack in one submit, then denoise + composite + upscale (+ tonemap). `denoise: false` sends the raw sample to the upscaler.
    * No readback; OIDN is awaited by the chain.
    */
-  async frame(camera: PtLookAtCamera, o: { denoise?: boolean; tonemap?: boolean } = {}): Promise<void> {
+  async frame(camera: PtLookAtCamera, o: { denoise?: boolean; tonemap?: boolean; upscale?: boolean } = {}): Promise<void> {
     this.setCamera(camera);
     const encoder = this.device.createCommandEncoder({ label: 'realtime frame' });
     this.encodeTrace(encoder);
     this.device.queue.submit([encoder.finish()]);
-    await this.arm.post(camera, { ...(o.denoise === false ? { denoise: false } : {}), ...(o.tonemap ? { tonemap: true } : {}) });
+    await this.arm.post(camera, { ...(o.denoise === false ? { denoise: false } : {}), ...(o.tonemap ? { tonemap: true } : {}), ...(o.upscale === false ? { upscale: false } : {}) });
   }
 
   /** Switch the chain's denoiser (resets the histories). */

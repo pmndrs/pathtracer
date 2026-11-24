@@ -223,6 +223,65 @@ fn pipeComposite(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+/**
+ * Temporal accumulation of the emission plane (V7.4, `PipelineSettings.emissionTemporal`): with `integrator.frameMedia` the plane holds the camera ray's single scattering in a medium, which is noisy
+ * (a stochastic distance / light) and bypasses SVGF. History reprojected with the (jitter-free) motion vector at this pixel's first vertex, bilinear, exponential blend 1 / min(n, ceil(1 / alpha)); no spatial filter.
+ * History is dropped off screen, on a cut, and (clip > 0) clipped to mean +- clip x sigma of the current 3x3 (a variance clip, the usual TAA ghost control).
+ */
+const EMIS_TEMPORAL_WGSL = /* wgsl */ `
+struct P { w: u32, h: u32, alpha: f32, clip: f32, reset: u32, _a: u32, _b: u32, _c: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var cur: texture_2d<f32>;
+@group(0) @binding(2) var motion: texture_2d<f32>;
+@group(0) @binding(3) var prev: texture_2d<f32>;
+@group(0) @binding(4) var outH: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn pipeEmisTemporal(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x >= p.w || gid.y >= p.h) { return; }
+  let q = vec2i(gid.xy);
+  let size = vec2i(i32(p.w), i32(p.h));
+  let c = textureLoad(cur, q, 0).xyz;
+  var m1 = vec3f(0.0);
+  var m2 = vec3f(0.0);
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      let v = textureLoad(cur, clamp(q + vec2i(dx, dy), vec2i(0), size - 1), 0).xyz;
+      m1 += v;
+      m2 += v * v;
+    }
+  }
+  let mean = m1 / 9.0;
+  let sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3f(0.0)));
+  let mo = textureLoad(motion, q, 0).xy;
+  let ndc = vec2f((f32(q.x) + 0.5) / f32(p.w) * 2.0 - 1.0, 1.0 - (f32(q.y) + 0.5) / f32(p.h) * 2.0);
+  let pn = ndc - mo;
+  let pp = vec2f((pn.x * 0.5 + 0.5) * f32(p.w) - 0.5, (0.5 - pn.y * 0.5) * f32(p.h) - 0.5);
+  let f = floor(pp);
+  let t = pp - f;
+  let i0 = vec2i(f);
+  var h = vec4f(0.0);
+  var ok = p.reset == 0u && i0.x >= 0 && i0.y >= 0 && i0.x + 1 < size.x && i0.y + 1 < size.y;
+  if (ok) {
+    let a = textureLoad(prev, i0, 0);
+    let b = textureLoad(prev, i0 + vec2i(1, 0), 0);
+    let cc = textureLoad(prev, i0 + vec2i(0, 1), 0);
+    let d = textureLoad(prev, i0 + vec2i(1, 1), 0);
+    h = mix(mix(a, b, t.x), mix(cc, d, t.x), t.y);
+    ok = h.w >= 1.0;
+  }
+  let cap = ceil(1.0 / max(p.alpha, 1e-4));
+  var n = 1.0;
+  var out = c;
+  if (ok) {
+    var hist = h.xyz;
+    if (p.clip > 0.0) { hist = clamp(hist, mean - p.clip * sigma, mean + p.clip * sigma); }
+    n = min(h.w + 1.0, cap);
+    out = mix(hist, c, 1.0 / n);
+  }
+  textureStore(outH, q, vec4f(out, n));
+}
+`;
+
 /** Per-pixel sum over frames of |L_t - L_(t-1)| (luminance), for the stability measure; read once at the end. */
 const FLICKER_WGSL = /* wgsl */ `
 struct P { w: u32, h: u32, measure: u32, _a: u32 }
@@ -375,6 +434,11 @@ export interface PipelineSettings {
    * pixel is no longer reactive (default 8); `strength`: mask value of a fresh pixel (default 1). Reads the denoiser's `accum` debug texture (internal API).
    */
   reactive?: { cap?: number; strength?: number } | false;
+  /**
+   * V7.4: temporal accumulation of the emission plane (plane 6) before it is added back after the filter (no spatial filter): `alpha` = the history's weight floor (default 0.1, SVGF's), `clip` = variance clip
+   * in sigmas of the current 3x3 (0 = off, default). For `integrator.frameMedia` (the plane then holds the camera ray's single scattering). Default off: the track N chain is unchanged.
+   */
+  emissionTemporal?: { alpha?: number; clip?: number } | false;
 }
 
 const align = (n: number, a: number) => Math.ceil(n / a) * a;
@@ -428,6 +492,20 @@ export class PipelineArm {
   private readonly reactiveParams?: GPUBuffer;
   private readonly tonemapPipe!: GPUComputePipeline;
   private readonly tonemapParams!: GPUBuffer;
+  /** V7.4 emission history (ping-pong rgba16float, count in alpha) and its pass; only with `settings.emissionTemporal`. */
+  private readonly emisHist?: [GPUTexture, GPUTexture];
+  private readonly emisPipe?: GPUComputePipeline;
+  private readonly emisParams?: GPUBuffer;
+  private emisIndex = 0;
+  /** Runtime switches of the emission plane's temporal pass (when it exists): `alpha`, `clip`; `enabled` false adds the plane's current frame unfiltered. */
+  emissionTemporal = { enabled: true, alpha: 0.1, clip: 0 };
+  /** The stage the display transform reads (`tonemap`); default 'final' (the upscaler's output). */
+  private tonemapStageName: PipelineStage = 'final';
+  setTonemapStage(stage: PipelineStage): void {
+    if (stage === this.tonemapStageName) return;
+    this.tonemapStageName = stage;
+    this.tonemapGroup = null;
+  }
   private tonemapGroup: GPUBindGroup | null = null;
   private prevView: Float32Array | null = null;
   private prevProj: Float32Array | null = null;
@@ -517,6 +595,10 @@ export class PipelineArm {
     const reactiveMask = s.reactive ? mk('reactive', 'rgba8unorm', TEX | GPUTextureUsage.STORAGE_BINDING) : undefined;
     const reactiveParams = s.reactive ? device.createBuffer({ label: `${label} reactive params`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : undefined;
     if (reactiveParams && s.reactive) device.queue.writeBuffer(reactiveParams, 0, new Float32Array([s.reactive.cap ?? 8, s.reactive.strength ?? 1, 0, 0]));
+    const et = s.emissionTemporal || undefined;
+    const emisHist = et ? ([mk('emission history a', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T), mk('emission history b', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T)] as [GPUTexture, GPUTexture]) : undefined;
+    const emisPipe = et ? await device.createComputePipelineAsync({ label: `${label} emission temporal`, layout: 'auto', compute: { module: module(EMIS_TEMPORAL_WGSL, 'emission temporal'), entryPoint: 'pipeEmisTemporal' } }) : undefined;
+    const emisParams = et ? device.createBuffer({ label: `${label} emission params`, size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : undefined;
     const host = new UpscalerHost(device);
     const upscaler = new Upscaler({ renderer: host as never });
     upscaler.configure({ displayWidth: s.displayWidth, displayHeight: s.displayHeight, renderWidth: w, renderHeight: h, path: 'temporal', jitter: false });
@@ -524,7 +606,8 @@ export class PipelineArm {
     Object.assign(upscaler.settings, s.upscaler ?? {});
     const keys = { color: host.texture(color, `${label} color`), depth: host.texture(depth, `${label} depth`), velocity: host.texture(tex.motion, `${label} motion`), ...(reactiveMask ? { reactive: host.texture(reactiveMask, `${label} reactive`) } : {}) };
     // The accumulate and pack groups need the kernel's planes buffer: built on the first `accumulate`.
-    const arm = new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys, oidnPrepPipe, oidnParams, oidnProg, oidnTex, display, reactiveMask, reactivePipe, reactiveParams, tonemapPipe, tonemapParams });
+    const arm = new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys, oidnPrepPipe, oidnParams, oidnProg, oidnTex, display, reactiveMask, reactivePipe, reactiveParams, tonemapPipe, tonemapParams, emisHist, emisPipe, emisParams });
+    if (et) arm.emissionTemporal = { enabled: true, alpha: et.alpha ?? 0.1, clip: et.clip ?? 0 };
     arm.setDenoiser(s.denoise ?? 'svgf', s.oidn ?? {});
     return arm;
   }
@@ -637,7 +720,7 @@ export class PipelineArm {
    * Denoise, composite, upscale. Call after the frame's path tracing + `pack` were submitted. `camera` = this frame's (unjittered) camera;
    * the previous one is remembered. Records and submits its own work (the denoiser and the upscaler submit theirs).
    */
-  async post(camera: PtLookAtCamera, options: { denoise?: boolean; progressiveInput?: boolean; deltaTime?: number; tonemap?: boolean } = {}): Promise<void> {
+  async post(camera: PtLookAtCamera, options: { denoise?: boolean; progressiveInput?: boolean; deltaTime?: number; tonemap?: boolean; upscale?: boolean } = {}): Promise<void> {
     const { width: w, height: h } = this.s;
     const aspect = w / h;
     const view = viewMatrix(camera);
@@ -658,7 +741,25 @@ export class PipelineArm {
         { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near: PIPE_NEAR, far: PIPE_FAR, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };
       const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
-      const group = this.device.createBindGroup({ layout: this.compositePipe.getBindGroupLayout(0), entries: [dOut.diffuse.createView(), dOut.specular.createView(), t.raw.createView(), t.specF.createView(), this.color.createView(), t.emission.createView()].map((resource, binding) => ({ binding, resource })) });
+      let emission = t.emission;
+      if (this.emisHist && this.emisPipe && this.emisParams) {
+        // V7.4: temporal accumulation of the emission plane (a disabled pass restarts the history every frame: the plain plane)
+        const w2 = this.emisIndex;
+        const pp = new ArrayBuffer(32);
+        new Uint32Array(pp, 0, 2).set([w, h]);
+        new Float32Array(pp, 8, 2).set([this.emissionTemporal.alpha, this.emissionTemporal.clip]);
+        new Uint32Array(pp, 16, 1).set([reset || !this.emissionTemporal.enabled ? 1 : 0]);
+        this.device.queue.writeBuffer(this.emisParams, 0, pp);
+        const eg = this.device.createBindGroup({ layout: this.emisPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.emisParams } }, { binding: 1, resource: t.emission.createView() }, { binding: 2, resource: t.motion.createView() }, { binding: 3, resource: (this.emisHist[w2] as GPUTexture).createView() }, { binding: 4, resource: (this.emisHist[1 - w2] as GPUTexture).createView() }] });
+        const ep = encoder.beginComputePass({ label: 'pipe emission temporal' });
+        ep.setPipeline(this.emisPipe);
+        ep.setBindGroup(0, eg);
+        ep.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+        ep.end();
+        this.emisIndex = 1 - w2;
+        emission = this.emisHist[this.emisIndex] as GPUTexture;
+      }
+      const group = this.device.createBindGroup({ layout: this.compositePipe.getBindGroupLayout(0), entries: [dOut.diffuse.createView(), dOut.specular.createView(), t.raw.createView(), t.specF.createView(), this.color.createView(), emission.createView()].map((resource, binding) => ({ binding, resource })) });
       const pass = encoder.beginComputePass({ label: 'pipe composite' });
       pass.setPipeline(this.compositePipe);
       pass.setBindGroup(0, group);
@@ -691,7 +792,7 @@ export class PipelineArm {
       await this.upscaler.init();
       this.tonemapGroup = null;
     }
-    this.upscale(camera, reset, options.deltaTime ?? 1 / 60, kind === 'svgf' && this.reactiveEnabled);
+    if (options.upscale !== false) this.upscale(camera, reset, options.deltaTime ?? 1 / 60, kind === 'svgf' && this.reactiveEnabled);
     if (options.tonemap) this.tonemap();
     this.prevView = view;
     this.prevProj = proj;
@@ -713,7 +814,7 @@ export class PipelineArm {
    */
   tonemap(exposure: number | 'auto' = 1): void {
     if (exposure !== 'auto') this.device.queue.writeBuffer(this.tonemapParams, 0, new Float32Array([exposure, 0, 0, 0]));
-    this.tonemapGroup ??= this.device.createBindGroup({ layout: this.tonemapPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.tonemapParams } }, { binding: 1, resource: this.stage('final').createView() }, { binding: 2, resource: this.display.createView() }] });
+    this.tonemapGroup ??= this.device.createBindGroup({ layout: this.tonemapPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.tonemapParams } }, { binding: 1, resource: this.stage(this.tonemapStageName).createView() }, { binding: 2, resource: this.display.createView() }] });
     const encoder = this.device.createCommandEncoder({ label: 'pipe tonemap' });
     if (exposure === 'auto') {
       const auto = this.autoExposure();
@@ -868,8 +969,8 @@ export class PipelineArm {
   destroy(): void {
     this.denoiser.dispose();
     this.upscaler.dispose();
-    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams, this.oidnParams, this.oidnProg, this.tonemapParams, ...(this.reactiveParams ? [this.reactiveParams] : [])]) b.destroy();
-    for (const t of [...Object.values(this.tex), ...Object.values(this.oidnTex), this.depth, this.color, this.display, ...(this.reactiveMask ? [this.reactiveMask] : [])]) t.destroy();
+    for (const b of [...(this.emisParams ? [this.emisParams] : []), this.sums, this.packBuf, this.packParams, this.accumParams, this.oidnParams, this.oidnProg, this.tonemapParams, ...(this.reactiveParams ? [this.reactiveParams] : [])]) b.destroy();
+    for (const t of [...Object.values(this.tex), ...Object.values(this.oidnTex), this.depth, this.color, this.display, ...(this.reactiveMask ? [this.reactiveMask] : []), ...(this.emisHist ?? [])]) t.destroy();
     for (const f of this.flicker) {
       f.state.destroy();
       f.params.destroy();
