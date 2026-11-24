@@ -107,6 +107,8 @@ Rows 16-19 (load 4.2-4.7) add the `fold` arm, which packs the frame into one wid
 | 17 | gpu | `tensors=chunk` (export) | `fold` 1 vs 8 (6 dispatches vs 1) | 35.2, 36.1 | **6.1, 6.4** | **0.175** | 0.3-0.4 | 0 | 4.7 | 20261124T091639Z |
 | 18 | gpu | `tensors=chunk fold=8` (export) | `sync` drain vs none | 6.9, 6.3 | 6.4, 6.4 | 0.97 | 0.3 | 0, 0 | 4.7 | 20261124T091648Z |
 | 19 | gpu | `tensors=chunk` (export) | `sync` drain vs none | 37.3, 38.5 | 36.1, 37.1 | 0.97 | 0.4 | 0, 0 | 4.6 | 20261124T091655Z |
+| 20 | gpu | `tensors=chunk fold=8 sync=none` (export) | `webnnFlat` 0 vs 1 (this file vs the flat rewrite) | 6.1, 6.1 | 6.0, 6.1 | 0.99 | 0.3 | 0, 0 | 4.0 | 20261124T095057Z |
+| 21 | gpu | `webnnFlat=1` | `wait` 0 vs 1 (queue wait before `dispatch`) | 6.0, 6.1 | 6.5, 6.5 | 1.07 | 0.3-0.4 | 0, 0 | 4.0 | 20261124T095103Z |
 
 Other numbers from the same runs:
 
@@ -159,6 +161,11 @@ What this says:
 - **With batched tensors the queue wait before `dispatch` is not needed for correctness, and dropping it gains nothing** (rows 18-19):
   parity holds in all four snapshots of both runs, and the time moves from `wait` into `out` (2.4 ms folded, 21 ms unfolded). The wrong
   answers of row 1 are specific to the one-tensor-pair sequence, where a tensor is exported again right after being returned.
+- **The structure of the replay code is not the cost** (rows 20-21). [`webnn-replay-flat.ts`](../nrc/webnn-replay-flat.ts) is the one-dispatch
+  frame written as a single function with three awaits: one `Promise.all` to borrow the weight and input tensors, one to borrow the output
+  after `dispatch`, and the final queue wait that ends the timed frame. It takes 6.0-6.1 ms, the same as the switch-driven version. Per phase:
+  borrowing the inputs 0.0-0.1 ms, copying in 0.1, `dispatch` plus borrowing the output 1.6-1.7, copying out and the final wait 4.2-4.3.
+  Runs 20261124T095031Z and 095037Z failed on a wrong capacity check in the first draft of that file (fixed before it was committed).
 - On the script route one dispatch for the whole frame is slightly faster folded (2.4-2.5 ms, row 16) and the same unfolded (rows 6, 7, 12, 14).
 - **The script route has a floor of its own.** Reading the query features back from the GPU and writing them to WebNN is 1.0 ms, the weight
   read-back 0.2 ms, the results 0.9-1.4 ms, the final upload and unpack 0.5 ms. About 1.7 ms of the 2.7 ms would remain even if the network
