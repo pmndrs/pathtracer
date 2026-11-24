@@ -7,7 +7,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { compareImages, readPFM } from '../metrics/index.ts';
-import type { Image } from '../metrics/index.ts';
+import type { Image } from '../src/adapter.ts';
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
 const SPPS = [16, 64, 256, 1024];
