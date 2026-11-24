@@ -9,7 +9,7 @@ import { GENERATED_DIR } from './vdb-grid.ts';
 
 const webvdb = process.env.WEBVDB_DIR ?? join(homedir(), 'Developer', 'WebVDB');
 const smoke = join(webvdb, 'fixtures', 'vdb-samples', 'smoke.vdb');
-const tools = join(webvdb, 'packages', 'vdb-web-tools', 'dist', 'index.js');
+const tools = join(webvdb, 'packages', 'vdb', 'dist', 'tools', 'index.js');
 const have = existsSync(smoke) && existsSync(tools);
 
 describe.skipIf(!have)("WebVDB's smoke.vdb as a dense density (P5.v7)", () => {

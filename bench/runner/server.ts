@@ -8,7 +8,8 @@
  * through CDP `Runtime.evaluate`: a 30 MB Float32Array as JSON is slow and blows the message limit.
  */
 
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, searchForWorkspaceRoot, type ViteDevServer } from 'vite';
@@ -48,6 +49,19 @@ function linkedDenoiserRoot(): string | null {
 function linkedUpscalerRoot(): string | null {
   try {
     return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'upscaler'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The WebVDB checkout (`WEBVDB_DIR`, default `~/Developer/WebVDB`) when it has its built `packages/vdb/dist/tools`, else null. The browser `.vdb` loader (V3.4, `vdb-worker.ts`)
+ * imports `parseVdb` from there through `/@fs/` and the `vdb-browser` page fetches its fixtures, so Vite needs it in `server.fs.allow`.
+ */
+export function webVdbRoot(): string | null {
+  try {
+    const root = realpathSync(process.env.WEBVDB_DIR ?? resolve(homedir(), 'Developer', 'WebVDB'));
+    return existsSync(resolve(root, 'packages', 'vdb', 'dist', 'tools', 'index.js')) ? root : null;
   } catch {
     return null;
   }
@@ -135,7 +149,7 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
     // Pages have no dependencies that need pre-bundling; skipping the scan keeps startup fast and quiet.
     optimizeDeps: { noDiscovery: true, include: [], exclude: ['@pmndrs/bvh'] },
     // Where the page finds the OIDN `.tza` weights of the linked Denoiser checkout (undefined when it is not linked).
-    define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? fsUrl(`${linkedDenoiserRoot()}/tzas`) : null) },
+    define: { __BENCH_DENOISER_TZAS__: JSON.stringify(linkedDenoiserRoot() ? fsUrl(`${linkedDenoiserRoot()}/tzas`) : null), __BENCH_WEBVDB__: JSON.stringify(webVdbRoot() ? fsUrl(webVdbRoot() as string) : null) },
     server: {
       host: '127.0.0.1',
       port: 5291,
@@ -143,7 +157,7 @@ export async function startBenchServer(runId: string): Promise<BenchServer> {
       // The runner reloads pages itself; hot reload and file watching would only add noise (and watch research/).
       hmr: false,
       // REFLECTIONS_REPO: a reflections checkout the `reflections-ab` page loads by path (P1.5; not a dependency).
-      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : []), ...(linkedUpscalerRoot() ? [linkedUpscalerRoot() as string] : []), ...(process.env.REFLECTIONS_REPO ? [process.env.REFLECTIONS_REPO] : [])] },
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), ...(linkedBvhRoot() ? [linkedBvhRoot() as string] : []), ...(linkedDenoiserRoot() ? [linkedDenoiserRoot() as string] : []), ...(linkedUpscalerRoot() ? [linkedUpscalerRoot() as string] : []), ...(webVdbRoot() ? [webVdbRoot() as string] : []), ...(process.env.REFLECTIONS_REPO ? [process.env.REFLECTIONS_REPO] : [])] },
       watch: null,
     },
     plugins: [
