@@ -84,6 +84,7 @@ Treat the absolute numbers as best effort; the ratios are paired within one sess
 
 Rows 1-4 are the planned arms, each against the November 19 default. Rows 5-10 are follow-ups on the winner of row 4. Rows 11-15
 (run later the same day at load 4.4-5.6) ask the review question "why not one dispatch per frame?" with the batched tensors.
+Rows 16-19 (load 4.2-4.7) add the `fold` arm, which packs the frame into one wider tensor so that one exported dispatch fits under the row cap.
 
 | # | WebNN device | Fixed args | Arm (A vs B) | A p50 ms | B p50 ms | B / A | WGSL p50 ms | B parity failures | Load | Run id |
 |---:|---|---|---|---:|---:|---:|---:|---:|---|---|
@@ -102,6 +103,10 @@ Rows 1-4 are the planned arms, each against the November 19 default. Rows 5-10 a
 | 13 | gpu | `tensors=chunk` (export) | `rows` 4096 vs 16384 (6 dispatches vs 2) | 36.4, 33.5 | **failed, failed** | — | 0.4 | — | 5.6 | 20261124T090959Z |
 | 14 | gpu | `route=cpu tensors=chunk` | `rows` 4096 vs 16384 (6 dispatches vs 2) | 2.7, 2.7 | 2.8, 2.9 | 1.06 | 0.4 | 0 | 5.5 | 20261124T091007Z |
 | 15 | gpu | `tensors=chunk` (export) | `rows` 4096 vs 8192 (6 dispatches vs 3) | 35.3, 39.0 | 38.8, 37.3 | 1.02 | 0.4 | 0 | 5.6 | 20261124T091040Z |
+| 16 | gpu | `route=cpu tensors=chunk` | `fold` 1 vs 8 (6 dispatches vs 1) | 2.8, 2.7 | **2.5, 2.4** | 0.89 | 0.3-0.4 | 0 | 4.2 | 20261124T091632Z |
+| 17 | gpu | `tensors=chunk` (export) | `fold` 1 vs 8 (6 dispatches vs 1) | 35.2, 36.1 | **6.1, 6.4** | **0.175** | 0.3-0.4 | 0 | 4.7 | 20261124T091639Z |
+| 18 | gpu | `tensors=chunk fold=8` (export) | `sync` drain vs none | 6.9, 6.3 | 6.4, 6.4 | 0.97 | 0.3 | 0, 0 | 4.7 | 20261124T091648Z |
+| 19 | gpu | `tensors=chunk` (export) | `sync` drain vs none | 37.3, 38.5 | 36.1, 37.1 | 0.97 | 0.4 | 0, 0 | 4.6 | 20261124T091655Z |
 
 Other numbers from the same runs:
 
@@ -146,11 +151,15 @@ What this says:
   another 2.2 ms per chunk (13 ms). Exporting the output is cheap (about 0.2 ms per chunk, compute included).
 - **The cost moves instead of going away.** Dropping the wait pushes the time into the next export and gives wrong answers. Batching all six
   chunks removes the per-chunk input cost (13 ms to 0.5 ms), but the single remaining wait takes 21-22 ms and the final one 16 ms.
-- **Fewer dispatches do not help either route.** In the batched export arm, three dispatches of 8,192 rows take the same time as six of 4,096
-  (row 15: `wait` 20.6-20.7 ms and `finish` 15.2-16.4 ms against 17.7-21.2 and 15.5-16.0). So the two stalls are a roughly fixed cost
-  per hand-off round on this machine. They do not scale with the number of buffers exported, which corrects the per-buffer reading an
-  earlier version of this note took from the unbatched arm (28 ms of `wait` over six chunks). On the script route one dispatch for the
-  whole frame takes 2.8-3.0 ms against 2.7-3.0 ms for six (rows 6, 7, 12, 14).
+- **One exported dispatch is about six times faster than six; three is not faster than six.** With the frame folded into one tensor pair
+  (`fold=8`, row 17) the export route takes 6.1-6.9 ms: `in` 0.1, `wait` 2.3-2.4, `out` 0.5, `finish` 3.1-3.7. Six pairs take 35-38 ms
+  (`wait` 18-21, `finish` 15-16), and three pairs of 8,192 rows take the same as six (row 15). So the stalls do depend on how many tensors
+  are exported, but not in proportion; why three costs as much as six is not established. An earlier version of this note read the cost
+  as 4.5 ms per returned buffer, and a later one as a fixed cost per frame. Neither fits all three points.
+- **With batched tensors the queue wait before `dispatch` is not needed for correctness, and dropping it gains nothing** (rows 18-19):
+  parity holds in all four snapshots of both runs, and the time moves from `wait` into `out` (2.4 ms folded, 21 ms unfolded). The wrong
+  answers of row 1 are specific to the one-tensor-pair sequence, where a tensor is exported again right after being returned.
+- On the script route one dispatch for the whole frame is slightly faster folded (2.4-2.5 ms, row 16) and the same unfolded (rows 6, 7, 12, 14).
 - **The script route has a floor of its own.** Reading the query features back from the GPU and writing them to WebNN is 1.0 ms, the weight
   read-back 0.2 ms, the results 0.9-1.4 ms, the final upload and unpack 0.5 ms. About 1.7 ms of the 2.7 ms would remain even if the network
   took no time at all. One chunk of 32,768 rows instead of six of 4,096 does not help (rows 6-7).
@@ -168,10 +177,11 @@ Mac only; the Windows rows are still open, and the numbers come from a Mac in no
 - It is still short of both bars. The whole of our WGSL cache frame, training included, takes about 1.1-1.4 ms; WebNN inference alone
   takes about twice that. Against WGSL inference alone (0.4-0.5 ms) it is about 6 times slower. And WebNN cannot train, so the WGSL training
   pass stays and the weights still cross every frame.
-- One dispatch per frame is not the missing piece. Through JavaScript, one dispatch of the whole frame takes the same 2.8-3.0 ms as six.
-  Through `exportToGPU` it cannot be run with this tensor shape (8,192-row cap, see the failed rows), and going from six dispatches to
-  three changed nothing. Not tested: folding the frame into a wider tensor (for example [3072, 512] reshaped in the graph) to get one
-  exported dispatch, and expressing training as WebNN graph operations. Training stayed in WGSL in every arm.
+- **One dispatch per frame was the missing piece for the export route** (a reviewer's point, and he was right). A [rows, 64] exportable
+  tensor cannot hold a frame (8,192-row cap), but the same bytes as [4096, 512], reshaped inside the graph, can. That runs the frame in
+  one exported dispatch in **6.1-6.9 ms**, against 35-38 ms for six and 44-50 ms for the November 19 sequence, with identical results.
+  It is still 2.5 times the script route (2.4-2.5 ms folded), about 6 times our whole WGSL cache frame (1.1 ms) and 15-20 times WGSL
+  inference (0.3-0.4 ms). Not tested: expressing training as WebNN graph operations. Training stayed in WGSL in every arm.
 - Of the three ideas taken from the MLTensor explainer, none made the export route competitive: dropping the extra wait is 20% faster but
   returns wrong answers; a tensor pair per chunk is 14% faster (39-40 ms); creating the context from the `GPUDevice` changes nothing.
   The best export-route arm is still about 28 times over the 1.4 ms bar.
@@ -186,7 +196,8 @@ Where the written expectations were wrong:
 | `route=cpu` | `export` faster, though not by enough | **Wrong, by a wide margin.** The script route is 16 times faster than `export` |
 
 What this does and does not change for us: the earlier statement "WebNN is about 100 times slower than our WGSL inference" should now read
-"about 6 times slower when the data is copied through JavaScript; about 100 times slower through `exportToGPU` on macOS". The decision to
+"about 6 times slower when the data is copied through JavaScript; 15-20 times slower through `exportToGPU` with the frame in one
+dispatch; about 100 times slower through `exportToGPU` one 4,096-row chunk at a time". The decision to
 keep the network in WGSL stands on the measured numbers: WebNN inference alone costs twice our whole cache frame. Two limits on the script
 route's number: it was measured at 320x180 (3 MB of query features read back per frame, and that copy grows with the query count), and it
 puts a GPU read-back in every frame, which our frame loop otherwise avoids.
