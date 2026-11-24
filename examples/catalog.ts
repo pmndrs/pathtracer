@@ -395,6 +395,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
       'A closed box with a medium-boundary material bounds a procedural density grid (soft blobs times fractal noise). Rays are tracked through it by delta tracking against 8\u00b3 brick majorants. ' +
       'The medium is grey with albedo 0.99, so light scatters many times (the core optical depth is about 40; 128 scattering events per path are plenty), and the phase is strongly forward: ' +
       'one Henyey-Greenstein lobe, or the water-droplet Mie fit of `ptPhaseLobes`. Move the sun, thicken the cloud, change the droplet size. Extinction, albedo and phase are compiled into the kernel, so a change rebuilds it.',
+    brief: {
+      kind: 'feature',
+      shows: 'A dense, bright cloud from a density grid: light scatters dozens of times inside it, and the forward-peaked droplet phase makes the silver lining when the sun is behind it.',
+      tryThis: ['Lower the sun elevation behind the cloud to see the silver lining', 'Switch the phase between Mie droplets and Henyey-Greenstein', 'Lower the density scale to see the cloud thin out'],
+    },
     category: 'pathtracer',
     status: 'experimental',
     tags: ['volumes', 'cloud', 'density grid', 'Mie phase', 'brick majorant'],
@@ -411,6 +416,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'A closed box with a medium-boundary material fills a dark room with thin homogeneous fog (optical depth about 0.4); a low sun shines through narrow slits. The view is split, each half with its own estimator at the same sample count. In thin fog most rays never collide, so the plain estimator, which samples light only at real collisions, leaves the shafts very noisy. ' +
       '`forcedNee` adds one light sample per free-flight segment at a distance drawn on the segment; `equiangular` draws that distance around the lamp, so a lamp inside the fog no longer gives 1/r\u00b2 noise. All three estimators converge to the same image. The estimator is compiled into the kernel, so a change rebuilds it.',
+    brief: {
+      kind: 'quality',
+      shows: 'Light shafts in thin fog: the plain estimator leaves them as noise, forced in-scatter NEE (and equiangular sampling for a lamp) makes them smooth at the same sample count.',
+      tryThis: ['Compare the two halves of the split view at a few samples', 'Turn the lamp on and set one half to equiangular'],
+      compare: 'Comparison: Estimators, left half plain (light only at real collisions)',
+    },
     category: 'pathtracer',
     status: 'experimental',
     tags: ['volumes', 'fog', 'god rays', 'forced NEE', 'equiangular sampling'],
