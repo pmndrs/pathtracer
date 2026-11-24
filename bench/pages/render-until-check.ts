@@ -14,7 +14,7 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, summarizeAdapter, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { getScene } from '../scenes/index.ts';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
-import { ptRenderAllocated, type PtStopOptions } from '../../packages/pathtracer/src/integrator/render-until.ts';
+import { ptRenderAllocated, ptStopMeasure, type PtStopOptions } from '../../packages/pathtracer/src/integrator/render-until.ts';
 
 let adapterSummary: AdapterSummary | undefined;
 try {
@@ -132,6 +132,34 @@ try {
     }
     (globalThis as Record<string, unknown>).__biasTable = table;
     console.log(table.join('\n'));
+  }
+  if (args.match === '1') {
+    // V2.5 close: NOISE-MATCHED allocated vs uniform. Per seed: allocate (PtMegakernel.renderAllocated) -> its achieved image-mean relSE and p99 pixel relSE;
+    // a uniform render of `uni` spp gives the same two numbers, and 1/sqrt(N) scaling (verified by V2.5a) gives the uniform spp that matches: spp = uni (m_uni / m_alloc)^2.
+    if (pixel <= 0) throw new Error('match=1 needs pixel=<target>');
+    const base = (adapter as unknown as { lastKernelOptions: { integrator: { volumes: object } } }).lastKernelOptions.integrator.volumes;
+    const ak = await adapter.createKernel({ integrator: { volumes: { ...base, adaptive: true } } as never });
+    const px = o.width * o.height, seeds = numberArg(args, 'seeds', 3), uni = numberArg(args, 'uni', 256), q = { below: pixel, quantile: numberArg(args, 'pixelq', 0.99) };
+    const rows: string[] = [];
+    const acc = { alloc: 0, uniMean: 0, uniP99: 0, aMs: 0, uMs: 0 };
+    for (let k = 0; k < seeds; k++) {
+      await ak.restartFresh(1 + k);
+      let t = performance.now();
+      const a = await ak.renderAllocated({ pixelRelSe: q, pilotSamples: numberArg(args, 'pilot', 64), minSamples: numberArg(args, 'amin', 16), maxSamples: numberArg(args, 'max', 4096), firstBatch: numberArg(args, 'agrid', 16), seed: 5000 + k, budgetScale: numberArg(args, 'budgetscale', 1) });
+      const aMs = performance.now() - t;
+      const am = ptStopMeasure(a.outputs, { pixelRelSe: q });
+      await ak.restartFresh(100 + k);
+      t = performance.now();
+      const u = await ak.renderUntil({ pixelRelSe: { below: 0 }, firstBatch: uni, maxSamples: uni });
+      const uMs = performance.now() - t;
+      const um = ptStopMeasure(u.outputs, { pixelRelSe: q });
+      const needMean = uni * (um.meanRelSe / am.meanRelSe) ** 2, needP99 = uni * (um.pixelRelSe / am.pixelRelSe) ** 2;
+      acc.alloc += a.totalWithPilot / px; acc.uniMean += needMean; acc.uniP99 += needP99; acc.aMs += aMs; acc.uMs += uMs * Math.max(needMean, needP99) / uni;
+      rows.push(`seed ${k}: alloc spp=${(a.totalWithPilot / px).toFixed(1)} (pilot incl.) meanSE=${am.meanRelSe.toExponential(2)} p99=${am.pixelRelSe.toFixed(4)} wall=${aMs.toFixed(0)}ms | uniform@${uni}: meanSE=${um.meanRelSe.toExponential(2)} p99=${um.pixelRelSe.toFixed(4)} -> equal-mean spp=${needMean.toFixed(1)} equal-p99 spp=${needP99.toFixed(1)}`);
+    }
+    Object.assign(metrics, { match_alloc_spp: acc.alloc / seeds, match_uniform_spp_equal_mean_se: acc.uniMean / seeds, match_uniform_spp_equal_p99: acc.uniP99 / seeds, match_saving_mean_se: 1 - (acc.alloc / seeds) / (acc.uniMean / seeds), match_saving_p99: 1 - (acc.alloc / seeds) / (acc.uniP99 / seeds), match_alloc_wall_ms: acc.aMs / seeds, match_uniform_wall_ms_estimated: acc.uMs / seeds });
+    (globalThis as Record<string, unknown>).__biasTable = rows;
+    console.log(rows.join('\n'));
   }
   const scale = r.history.map((h) => h.meanRelSe * Math.sqrt(h.samples));
   reportResult({
