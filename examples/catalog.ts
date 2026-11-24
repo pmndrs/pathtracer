@@ -3,6 +3,11 @@
  * (`node scripts/build-site.mjs` writes docs/getting-started/examples.mdx from it) all read this list.
  *
  * Adding an example: a folder `examples/<category>/<slug>/` with `index.html` + `main.ts` (copy `start/hello`), and an entry here.
+ *
+ * Every example follows three principles, and its `brief` answers them on the page (the info panel opens on a first visit):
+ *  1. What is the point? A feature, a performance or quality trade-off, a lesson, a debugging aid or information (`brief.kind`, `brief.shows`).
+ *  2. Can a visitor see it? The page has the controls that make the point (`brief.tryThis`) and shows things as they would really be used.
+ *  3. A performance or quality page also shows the "bad" version, so the difference can be perceived (`brief.compare`, required for those kinds).
  * Pure data: no DOM, no imports (vite.config.ts and Node scripts load it).
  */
 
@@ -21,6 +26,20 @@ export interface Category {
   blurb: string;
 }
 
+/** What kind of point an example makes (principle 1). */
+export type ExampleKind = 'showcase' | 'feature' | 'performance' | 'quality' | 'educational' | 'debugging' | 'informative';
+
+/** The example's brief, shown at the top of its info panel: what it shows, what to try, and what to compare it against. */
+export interface ExampleBrief {
+  kind: ExampleKind;
+  /** What this shows and why it matters, in one or two sentences a newcomer can follow. */
+  shows: string;
+  /** The one to three things to do on the page that make the point. */
+  tryThis: readonly string[];
+  /** The baseline to compare against: the control that shows the slower, noisier or plainer way. Required for `performance` and `quality`. */
+  compare?: string;
+}
+
 export interface ExampleEntry {
   /** Unique, also the anchor on the index. */
   slug: string;
@@ -29,8 +48,10 @@ export interface ExampleEntry {
   title: string;
   /** One line for the card. */
   summary: string;
-  /** What to look for, shown in the page's info panel. */
+  /** How it works, shown in the page's info panel below the brief. */
   description: string;
+  /** What it shows, what to try and what to compare against (the three principles above). */
+  brief: ExampleBrief;
   category: CategoryId;
   status: ExampleStatus;
   /** Features, shown as tags (`gltf`, `openpbr`, `nee`, ...). */
@@ -85,6 +106,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'Blender’s Classroom scene path traced at 640 × 360, one bounce traced before a neural radiance cache that trains while you look around, ' +
       'denoised with SVGF and upscaled to 1280 × 720. Split the view to compare plain path tracing with the cache, change the daylight, or step through the pipeline stages.',
+    brief: {
+      kind: "showcase",
+      shows: "A full real-time pipeline on a real interior: path tracing at 640 × 360 with a neural radiance cache for the light after the first bounce, SVGF denoising, and temporal upscaling to 1280 × 720.",
+      tryThis: ["Set Pipeline stage to Raw radiance to see what the path tracer gives in one frame, then Denoiser output, then Final output", "Choose Plain PT / NRC to split the view: the left half has no cache", "Open Render controls to move the sun"],
+      compare: "Comparison: Plain path tracing (no cache) and Pipeline stage: Raw radiance (no denoiser, no upscaler)",
+    },
     category: 'showcase',
     status: 'research',
     tags: ['nrc', 'svgf', 'upscaler', 'daylight'],
@@ -101,6 +128,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'The smallest complete program: build a scene from triangles, compile a path tracer for it and accumulate samples into the canvas. ' +
       'Drag to orbit, scroll to zoom. The image restarts when the camera moves and converges while it is still.',
+    brief: {
+      kind: "educational",
+      shows: "The smallest complete path tracer program: a scene built from triangles, a kernel compiled for it, and samples added into the canvas until the noise is gone.",
+      tryThis: ["Drag to orbit: the image restarts noisy and converges in a second or two", "Set Samples › stop at to 1 to see one sample per pixel, the raw path tracer output"],
+    },
     category: 'start',
     status: 'stable',
     tags: ['progressive', 'nee', 'area light'],
@@ -115,6 +147,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       '`loadGltf` reads the model, its textures and its cameras; `buildGpuScene` builds the trees and the scene copy; `ptSceneOptions` compiles a kernel for exactly those materials. ' +
       'Pick one of the Khronos sample models or drop your own .glb onto the page.',
+    brief: {
+      kind: "feature",
+      shows: "Loading a glTF 2.0 model in one call (`loadGltf`) and path tracing its materials and textures as OpenPBR, under a sky and a sun.",
+      tryThis: ["Pick another Khronos model", "Drop your own .glb onto the page", "Move the sun"],
+    },
     category: 'start',
     status: 'stable',
     tags: ['gltf', 'openpbr', 'textures', 'sun'],
@@ -125,11 +162,17 @@ export const EXAMPLES: readonly ExampleEntry[] = [
   {
     slug: 'hits',
     path: 'raytracer/hits/',
-    title: 'Hit inspector',
-    summary: 'A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record.',
+    title: 'Rays from your own shader',
+    summary: 'What ray tracing adds to a raster pass: shadow, reflection and AO rays traced from every hit in your own compute shader. Click a pixel to see its rays.',
     description:
-      'Every pixel is a ray traced through the BVH each frame, nothing is rasterised. The first hit of a camera ray is the surface a rasteriser would draw, so its data (base colour, normals, uv, ids) has no noise and looks like a raster G-buffer; noise only comes with lighting. ' +
-      'Pick the property to show, and click a pixel: a second entry point traces the ray through it and lists the hit record (distance, instance, triangle, material, barycentrics, uv, position, normals).',
+      'Each pixel shoots one camera ray (`rtClosest`) and decodes its hit (`rtSurface`); that first hit is exactly what a rasteriser draws. From the hit the shader traces a shadow ray to the sun, a mirror reflection ray and a few AO rays against the whole scene, ' +
+      'including what is off screen. Clicking a pixel runs a second entry point that traces its rays once more; the page draws them over the image with each hit. The G-buffer views show what the first hit carries.',
+    brief: {
+      kind: "educational",
+      shows: "What ray tracing adds to a raster pass. The first hit of each camera ray is exactly what a rasteriser draws, so that view alone looks like raster. The rays traced from each hit (shadows, reflections, ambient occlusion) are what raster cannot do without extra passes or screen-space tricks.",
+      tryThis: ["Turn on Shadow rays, Reflection rays and AO rays one at a time", "Click a pixel: its rays are drawn in the scene with each hit's distance and surface", "Switch Show to a G-buffer layer (normals, uv, ids) to see what the first hit carries"],
+      compare: "Rays from each hit: none (primary hits only), which is what a raster G-buffer gives you",
+    },
     category: 'raytracer',
     status: 'stable',
     tags: ['rtClosest', 'rtSurface', 'inline WGSL'],
@@ -145,6 +188,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'For the first hit of each pixel, a few cosine-distributed rays per frame ask `rtVisible` whether anything lies within the radius: an any-hit walk that stops at the first blocker. ' +
       'The fraction that escapes converges to the ambient occlusion. Change the radius to see contact shadows turn into broad darkening.',
+    brief: {
+      kind: "performance",
+      shows: "Ambient occlusion with `rtVisible`, the any-hit query: it only asks whether anything lies within the radius, so the walk stops at the first blocker instead of searching for the nearest one.",
+      tryThis: ["Change the radius: small gives contact shadows, large gives soft room-scale darkening", "Switch Query to rtClosest and compare the frame time: the image is the same"],
+      compare: "Query: rtClosest (closest hit) traces the same rays and gives the same image, slower",
+    },
     category: 'raytracer',
     status: 'stable',
     tags: ['rtVisible', 'any hit', 'inline WGSL'],
@@ -160,6 +209,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       '`rtShade(hit, ray, mode, u, mask)` lights a hit with one sample of the scene\u2019s lights (sun, sky, emissive triangles) and one shadow ray, and returns the environment for a miss. ' +
       'It is not a path tracer: there is no indirect light unless you plug your own cache into `rtShadeIndirect`. Compare the full, Lambert-only and flat modes.',
+    brief: {
+      kind: "feature",
+      shows: "`rtShade`: one bounce of direct light (area lights, sun and sky, with a shadow ray each) computed in your own kernel, without the path tracer.",
+      tryThis: ["Switch Mode between Flat, Lambert and Full to see what each layer of shading adds", "Pick another model"],
+      compare: "Mode: Flat (albedo only, no rays)",
+    },
     category: 'raytracer',
     status: 'stable',
     tags: ['rtShade', 'light sampling', 'inline WGSL'],
@@ -175,6 +230,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'Every pixel is ray traced, nothing is rasterised: per frame, one camera ray (`RtBatchTracer` closest hit) and one shadow ray toward the sun (`RtBatchTracer` visible), each a buffer of rays in and a buffer of results out. ' +
       'There is no denoiser. With a point sun and a constant sky only the anti-aliasing jitter is random, so the image is clean within a second; a larger **sun radius** (the default is the real sun\'s quarter degree) makes every shadow ray a random sample of a wide disc: soft, grainy penumbrae that converge, and **stop at** 1 or **pixel jitter** off shows the jagged single-ray edges.',
+    brief: {
+      kind: "performance",
+      shows: "`RtBatchTracer`: rays are written to a GPU buffer, traced in a separate pass, and the hits come back in another buffer, with no readback. Use it when your rays come from many places or you want tracing separate from shading.",
+      tryThis: ["Switch Tracing to Inline: the same rays traced inside one kernel give the same image; compare the frame time", "Raise the sun radius for soft, sampled shadows"],
+      compare: "Tracing: Inline (the rays traced inside one kernel with rtClosest / rtVisible)",
+    },
     category: 'raytracer',
     status: 'stable',
     tags: ['RtBatchTracer', 'shadow rays', 'GPU buffers'],
@@ -188,8 +249,14 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     title: 'Interval queries',
     summary: 'rtClosestInterval splits each ray into radiance-cascade intervals with no gap and no overlap.',
     description:
-      'Cascade n owns the distances (t0 · growth^(n-1), t0 · growth^n]. From each first hit, cosine rays walk the cascades in order and take the colour of the interval their first hit is in, ' +
-      'so the colours add up to the full occlusion. Or look at one cascade on its own, or at the camera ray\'s own distance bands. Change the first interval and the growth.',
+      'Cascade n owns the distances (t0 · growth^(n-1), t0 · growth^n]. The final view lights each surface by the sky it can see, tracing every sky ray interval by interval with `rtClosestInterval`; the reference traces the same rays whole with `rtClosest`, and the two match exactly. ' +
+      'The broken view shortens each interval at both ends, the classic off-by-epsilon bug exaggerated: whatever lies in a gap is missed and light leaks in.',
+    brief: {
+      kind: "feature",
+      shows: "Interval queries split a ray into consecutive distance ranges with no gap and no overlap, the building block of radiance cascades. The final image is sky light gathered cascade by cascade, and it matches one full-length ray exactly.",
+      tryThis: ["Compare Final with Reference (one full-length ray): the same image, pixel for pixel", "Switch Show to Broken: naive intervals with gaps let the sky leak onto the back wall and into the corners", "Switch to the Pieces views: which cascade each ray hit in, or one cascade alone"],
+      compare: "Naive intervals with a small gap between cascades, and one full-length ray as the reference",
+    },
     category: 'raytracer',
     status: 'experimental',
     tags: ['rtClosestInterval', 'radiance cascades', 'inline WGSL'],
@@ -206,6 +273,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
       '`PtMegakernel` traces a whole path per thread; `PtWavefront` splits a sample into camera, intersect, shade and shadow kernels joined by queues and indirect dispatch, ' +
       'and can refill a pixel as soon as its path ends. The image is the same per pixel. Switch schedulers and their options and watch the frame time; ' +
       'the stats show what `ptwfAutoPolicy` would pick for this film and path length. Frame times here are wall-clock readings, not benchmarks.',
+    brief: {
+      kind: "performance",
+      shows: "The same path tracer compiled two ways: one megakernel, or a wavefront of queues with separate intersect and shade passes. The images match per pixel; which is faster depends on the scene and the GPU.",
+      tryThis: ["Switch Scheduler and compare the frame time", "On the wavefront, try refill and sorting on a bigger model"],
+      compare: "Scheduler: Megakernel against Wavefront",
+    },
     category: 'pathtracer',
     status: 'stable',
     tags: ['PtMegakernel', 'PtWavefront', 'ptwfAutoPolicy'],
@@ -221,6 +294,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'Start from a preset (gold, glass, car paint, velvet, a soap bubble) and change any parameter. The kernel is compiled once with every lobe switched on, ' +
       'so a slider only rewrites the scene copy (`buildSceneCopy` + `writeSceneCopy`) and the image restarts at once. The studio environment is an HDR map generated on the page.',
+    brief: {
+      kind: "feature",
+      shows: "Every OpenPBR lobe of one material, live: edit a parameter and the image restarts at once, because the kernel is compiled once and only the scene copy changes.",
+      tryThis: ["Pick a preset: gold, glass, car paint, velvet, a soap bubble", "Raise the coat or fuzz weight", "Set specular anisotropy on Brushed aluminium"],
+    },
     category: 'pathtracer',
     status: 'stable',
     tags: ['openpbr', 'coat', 'fuzz', 'thin film', 'transmission', 'env map'],
@@ -235,6 +313,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       '`buildGpuScene(device, input, { nodeFormat })` builds a quantized or f32 binary tree, or a 4-wide or compressed 8-wide one (both experimental); the kernel compiles the matching walk. ' +
       'The images agree; build time, memory and speed differ by GPU. Benchmark each format here and compare them on this machine.',
+    brief: {
+      kind: "performance",
+      shows: "One scene built into four BVH node formats, with build time, GPU memory and path tracing speed measured on your GPU.",
+      tryThis: ["Switch Node format and read the build time and memory", "Press Benchmark for each format and compare the ms per sample"],
+      compare: "Node format: Quantized (the default) against f32, BVH4 and CWBVH8",
+    },
     category: 'pathtracer',
     status: 'stable',
     tags: ['bvh', 'bvh4', 'cwbvh8', 'benchmark'],
@@ -250,6 +334,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'Cards with an `alphaMode` MASK material are cut out where their texture alpha is below the cutoff: camera and bounce rays step through the holes. ' +
       'Shadow rays are the expensive part. Compare the exact test with opaque shadows (card-shaped, too dark), roulette (unbiased, noisier) and transmit (uniform partial shadow).',
+    brief: {
+      kind: "quality",
+      shows: "Leaves and fences made of textured cards with alpha cutouts. The exact shadow rays test the texture at every card they cross; the fast policies skip that work and get the shadows slightly wrong.",
+      tryThis: ["Switch Shadow rays between Exact and the fast policies and look at the shadows on the ground", "Move the sun to stretch the shadows"],
+      compare: "Shadow rays: Opaque shadows (fast, biased) against Exact",
+    },
     category: 'pathtracer',
     status: 'stable',
     tags: ['alpha mask', 'textures', 'shadows'],
@@ -264,6 +354,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'Next-event estimation picks one light per vertex; how it picks decides the noise. Switch the light table\u2019s selection rule (pbrt, power, kind, capped), ' +
       'or turn on ReSTIR DI (experimental), which resamples several candidates per pixel and reuses good picks over time and between neighbours.',
+    brief: {
+      kind: "quality",
+      shows: "With many lights, which light each shadow ray goes to decides the noise. The light-selection strategy changes the noise at the same sample count; ReSTIR DI goes further by reusing good picks.",
+      tryThis: ["Set Samples › stop at to 16, then change Light selection and compare the noise", "Turn on ReSTIR DI"],
+      compare: "Light selection: power or kind against pbrt, and ReSTIR DI off against on",
+    },
     category: 'pathtracer',
     status: 'stable',
     tags: ['NEE', 'light selection', 'ReSTIR DI'],
@@ -278,6 +374,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'A medium lives inside a closed mesh whose material is a medium boundary: rays pass through it and switch the medium they travel in. ' +
       'Set the extinction, the scattering albedo and the Henyey-Greenstein anisotropy, or switch to a cloud whose density comes from a procedural 3D grid.',
+    brief: {
+      kind: "feature",
+      shows: "Participating media: light scattering inside fog and a cloud, with soft beams and shadows through the volume.",
+      tryThis: ["Switch between Homogeneous fog and Cloud", "Raise the extinction for thicker fog, or the anisotropy g for forward-scattering haze"],
+    },
     category: 'pathtracer',
     status: 'experimental',
     tags: ['volumes', 'media', 'density grid'],
@@ -326,6 +427,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'With `integrator.spectral` every path carries three wavelengths: colours are lifted to spectra and converted back at the end. A dispersive glass prism and slab stand in front of bright bars, ' +
       'so the split shows as colour fringes in the refracted view. Turn spectral off to see the same scene in RGB, where dispersion is ignored.',
+    brief: {
+      kind: "quality",
+      shows: "Spectral rendering: paths carry wavelengths of light instead of RGB, so a dispersive glass splits white light into colours. RGB rendering cannot.",
+      tryThis: ["Turn spectral off: the prism's colours disappear", "Raise the dispersion"],
+      compare: "Spectral: off (RGB transport)",
+    },
     category: 'pathtracer',
     status: 'experimental',
     tags: ['spectral', 'dispersion', 'glass'],
@@ -340,6 +447,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       '`buildMaterialX` reads a `.mtlx` document. Codegen turns its graph into WGSL that runs at every hit, so anything it reads (uv, position, images) is exact; ' +
       'bake renders the uv-driven inputs into textures and needs no kernel change, but a position-driven graph only averages. Compare both on a texture graph and on procedural stripes.',
+    brief: {
+      kind: "feature",
+      shows: "MaterialX documents as path tracer materials, compiled into the kernel (exact per hit) or baked into textures (no kernel change).",
+      tryThis: ["Pick the procedural stripes document and switch Approach between codegen and bake: baking cannot follow a position-driven pattern", "Pick the texture graph"],
+      compare: "Approach: Bake (textures over uv) against Codegen (WGSL per hit)",
+    },
     category: 'pathtracer',
     status: 'experimental',
     tags: ['MaterialX', 'codegen', 'bake'],
@@ -354,6 +467,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       '`mode: \'realtime\'` renders one blue-noise sample per pixel per frame at two bounces. Step through the frame planes, check that diffuse x albedo + specular x factor + emission ' +
       'gives back the beauty, average the frames while the camera is still, and compare blue noise with Owen-Sobol on a single frame.',
+    brief: {
+      kind: "educational",
+      shows: "What one real-time frame contains: one sample per pixel, plus the planes a denoiser and an upscaler read (lighting split from surface colour, normals, depth, motion).",
+      tryThis: ["Step through the views", "Turn Average while still off to see the single noisy frame a denoiser starts from", "Switch the sampler to compare blue noise with Owen-Sobol on one frame"],
+      compare: "Sampler: Owen-Sobol or PCG against Blue noise (one frame each)",
+    },
     category: 'realtime',
     status: 'stable',
     tags: ['realtime', 'frame planes', 'blue noise', 'motion vectors'],
@@ -366,16 +485,22 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     slug: 'realtime-restir',
     path: 'realtime/restir/',
     title: 'ReSTIR DI in real time',
-    summary: '64 lamps at one sample per pixel per frame: plain next-event estimation against reservoir resampling with temporal and spatial reuse.',
+    summary: 'Plain light sampling and ReSTIR DI side by side at one sample per pixel over 64 lamps, with the error of each single frame measured live.',
     description:
-      'Plain next-event estimation picks one light per pixel and frame; ReSTIR DI draws several candidates, keeps one by its contribution and reuses good picks from the previous frame and from neighbours. ' +
-      'Compare single frames, switch between unbiased and biased reuse, and turn the temporal and spatial passes off one at a time.',
+      'Both halves render the same frame with one sample per pixel. Plain next-event estimation picks one lamp per pixel at random; ReSTIR DI keeps the best of several candidates and reuses picks from neighbours and the previous frame. ' +
+      'While the camera is still, the page averages plain NEE frames into a reference and reads each method\'s single-frame error against it (about 15x lower with ReSTIR). Average while still shows that both converge to the same image.',
+    brief: {
+      kind: "quality",
+      shows: "At the same one sample per pixel, ReSTIR DI gives a far less noisy frame than plain light sampling with many lights, and both converge to the same image: less noise, not a different answer. That is what makes many-light real time feasible behind a denoiser.",
+      tryThis: ["Hold the camera still for a few seconds and read the error per frame for each half", "Turn on Average while still: both halves converge to the same picture", "Turn temporal or spatial reuse off to see what each part of ReSTIR adds"],
+      compare: "The left half: plain NEE (one light per pixel), same frame, same sample count",
+    },
     category: 'realtime',
     status: 'experimental',
     tags: ['ReSTIR DI', 'realtime', 'many lights'],
     docs: 'pathtracer/restir',
     source: 'examples/realtime/restir',
-    check: { samples: 8, thumbQuery: 'accumulate=1', thumbSamples: 64 },
+    check: { samples: 8 },
   },
   {
     slug: 'convergence',
@@ -385,6 +510,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       'The page renders a reference, then renders the same view again from scratch and measures the relMSE against the reference at 1, 2, 4, ... samples per pixel. ' +
       'Monte Carlo error falls as 1/spp; Owen-scrambled Sobol points are stratified and fall faster at low counts. Near the reference\'s own sample count the curve flattens: its noise is the floor.',
+    brief: {
+      kind: "educational",
+      shows: "How fast a path traced image approaches the right answer: the error against a reference at 1, 2, 4 … samples, on log-log axes. Monte Carlo error falls as 1/spp; stratified Owen-Sobol samples fall faster at low counts.",
+      tryThis: ["Run it and compare the two curves with the dashed 1/spp line", "Switch to 64 lamps, where the lights make the noise"],
+      compare: "PCG (independent random numbers) against Owen-Sobol, with the 1/spp guide",
+    },
     category: 'lab',
     status: 'stable',
     tags: ['relMSE', 'sampling', 'owen-sobol', 'pcg'],
@@ -400,6 +531,11 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     description:
       '`detectCaps(adapter)` as the libraries see it: the adapter, the optional WebGPU features and what each is used for, the device limits against the adapter\'s maximum, ' +
       'and which examples this machine can run. Copy the report into a bug report.',
+    brief: {
+      kind: "informative",
+      shows: "What this browser and GPU offer the libraries: the capability tier, optional features and what each is used for, the device limits, and which examples run here.",
+      tryThis: ["Copy the report into a bug report"],
+    },
     category: 'lab',
     status: 'stable',
     tags: ['caps', 'webgpu features', 'limits'],

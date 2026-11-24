@@ -38,7 +38,7 @@ The smallest complete programs: a first image, a glTF model.
 
 | Example | What it shows | Status |
 | --- | --- | --- |
-| [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) | A G-buffer made by rays: rtClosest and rtSurface in your own compute shader. Click any pixel to read its hit record. |  |
+| [Rays from your own shader](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/) | What ray tracing adds to a raster pass: shadow, reflection and AO rays traced from every hit in your own compute shader. Click a pixel to see its rays. |  |
 | [Ambient occlusion](https://pmndrs.github.io/pathtracer/examples/raytracer/ao/) | rtVisible, the cheapest query: cosine rays over the hemisphere ask only whether anything is within a radius. |  |
 | [One-bounce shading](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/) | rtShade at the first hit: emission and one light sample with its shadow ray, the lighting a reflection or GI effect needs. |  |
 | [Batch tracing](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/) | RtBatchTracer: camera rays and shadow rays from GPU buffers, hits and visibility back into GPU buffers, five passes and no readback. |  |
@@ -68,7 +68,7 @@ One sample per pixel per frame, denoised and upscaled.
 | Example | What it shows | Status |
 | --- | --- | --- |
 | [Real-time frames](https://pmndrs.github.io/pathtracer/examples/realtime/frame/) | One sample per pixel per frame with the planes a denoiser takes: demodulated diffuse and specular, albedo, normals, depth, motion. |  |
-| [ReSTIR DI in real time](https://pmndrs.github.io/pathtracer/examples/realtime/restir/) | 64 lamps at one sample per pixel per frame: plain next-event estimation against reservoir resampling with temporal and spatial reuse. | **Experimental** |
+| [ReSTIR DI in real time](https://pmndrs.github.io/pathtracer/examples/realtime/restir/) | Plain light sampling and ReSTIR DI side by side at one sample per pixel over 64 lamps, with the error of each single frame measured live. | **Experimental** |
 
 ## Lab
 

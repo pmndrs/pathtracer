@@ -6,7 +6,7 @@
  * A page whose top-left corner is taken moves the pill: `<meta name="example-nav-offset" content="64px 16px">` (top, left), or puts it in the
  * bottom-left corner with `<meta name="example-nav-placement" content="bottom">`.
  */
-import { CATEGORIES, EXAMPLES, REPOSITORY, SITE_URL, STATUS_LABELS, type ExampleEntry } from '../catalog.ts';
+import { CATEGORIES, EXAMPLES, REPOSITORY, SITE_URL, STATUS_LABELS, type ExampleEntry, type ExampleKind } from '../catalog.ts';
 import logo from './pmndrs-logo.svg?raw';
 
 const STYLE = `
@@ -24,18 +24,28 @@ const STYLE = `
 .ex-nav .status { margin: 0 4px; padding: 1px 8px; border: 1px solid currentColor; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; }
 .ex-nav .status.experimental { color: #ffc35a; }
 .ex-nav .status.research { color: #c9a7ff; }
-.ex-info { position: fixed; z-index: 100000; width: min(420px, calc(100vw - 24px)); padding: 14px 16px; border-radius: 12px;
+.ex-info { position: fixed; z-index: 100000; width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 90px); overflow: auto; padding: 14px 16px; border-radius: 12px;
   background: rgba(14, 14, 12, 0.92); border: 1px solid rgba(255, 255, 240, 0.12); backdrop-filter: blur(8px); color: #ecebe4;
   font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif; }
 .ex-info h2 { margin: 0 0 6px; font-size: 15px; }
 .ex-info p { margin: 0 0 8px; color: #cfcdc2; }
 .ex-info .note { color: #a3a194; font-size: 12px; }
+.ex-info h3 { margin: 10px 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #a3a194; }
+.ex-info ul { margin: 0 0 8px; padding-left: 18px; color: #cfcdc2; }
+.ex-info li { margin: 2px 0; }
+.ex-info .kind { display: inline-block; margin-left: 8px; padding: 0 7px; border: 1px solid rgba(255, 255, 240, 0.25); border-radius: 999px; font-size: 11px;
+  font-weight: 500; vertical-align: 2px; color: #a3a194; }
+.ex-info .how { font-size: 12px; color: #a3a194; }
+.ex-info .close { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border: 0; border-radius: 999px; background: none; color: #a3a194; font-size: 18px; cursor: pointer; }
+.ex-info .close:hover { color: #ecebe4; background: rgba(255, 255, 240, 0.08); }
 .ex-info code { font: 12px ui-monospace, Menlo, monospace; color: #caf543; }
 .ex-info[hidden] { display: none; }
 @media (max-width: 1100px) { .ex-nav .label { display: none; } }
 @media (max-width: 900px) { .ex-nav .crumb .cat { display: none; } }
 @media (max-width: 520px) { .ex-nav .crumb { display: none; } }
 `;
+
+const KIND_LABELS: Record<ExampleKind, string> = { showcase: 'Showcase', feature: 'Feature', performance: 'Performance', quality: 'Quality', educational: 'Learn', debugging: 'Debugging', informative: 'Info' };
 
 const icon = (path: string): string => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 const ICONS = {
@@ -94,19 +104,37 @@ function mount(): void {
   info.style.left = left ?? '12px';
   const h = el('h2');
   h.textContent = entry.title;
-  const p = el('p');
-  p.innerHTML = inlineMarkdown(entry.description);
-  info.append(h, p);
+  h.append(el('span', { className: 'kind', textContent: KIND_LABELS[entry.brief.kind] }));
+  const section = (title: string, ...nodes: HTMLElement[]) => info.append(el('h3', { textContent: title }), ...nodes);
+  info.append(h);
+  section('What this shows', el('p', {}, inlineMarkdown(entry.brief.shows)));
+  section('Try this', el('ul', {}, entry.brief.tryThis.map((t) => `<li>${inlineMarkdown(t)}</li>`).join('')));
+  if (entry.brief.compare) section('Compare against', el('p', {}, inlineMarkdown(entry.brief.compare)));
+  section('How it works', el('p', { className: 'how' }, inlineMarkdown(entry.description)));
+  const close = el('button', { type: 'button', className: 'close', title: 'Close', ariaLabel: 'Close' }, '×');
+  info.append(close);
   if (entry.status !== 'stable') {
     const note = el('p', { className: 'note' });
     note.textContent = `${STATUS_LABELS[entry.status].label}: ${STATUS_LABELS[entry.status].blurb}`;
     info.append(note);
   }
   const infoButton = el('button', { type: 'button', title: 'About this example', ariaExpanded: 'false' }, `${ICONS.info}<span class="label">Info</span>`);
-  infoButton.addEventListener('click', () => {
-    info.hidden = !info.hidden;
-    infoButton.ariaExpanded = String(!info.hidden);
-  });
+  const setOpen = (open: boolean) => {
+    info.hidden = !open;
+    infoButton.ariaExpanded = String(open);
+  };
+  infoButton.addEventListener('click', () => setOpen(info.hidden));
+  close.addEventListener('click', () => setOpen(false));
+  // The brief opens on a visitor's first look at an example (per browser; storage may be blocked, then it simply stays closed).
+  try {
+    const key = `pt-example-seen:${entry.slug}`;
+    if (!localStorage.getItem(key) && !new URLSearchParams(location.search).has('offscreen')) {
+      setOpen(true);
+      localStorage.setItem(key, '1');
+    }
+  } catch {
+    // no storage: closed by default
+  }
   nav.append(infoButton);
 
   const docs = docsUrl(entry, root);
