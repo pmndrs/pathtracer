@@ -201,6 +201,74 @@ The oblique single-scatter cells read +1-2e-4 high at three seeds (a small consi
 Primary transmittance: absorber slab 0.493432 vs 0.493435, grid slab 0.496876 vs 0.497029 (ratio tracking, 1024 spp). Orders 0-1 = a maxDepth 1 render per pixel (bit for bit), orders 0-1 + 2+ = beauty;
 beauty bit-identical with outputs on or off. Standard error vs the seed-to-seed difference: mean diff^2 / mean (se_a^2 + se_b^2) = 1.005 (PCG), 0.93 / 1.006 (Owen-Sobol, tau 10 / 50).
 
+### Split denoising (V7.3, 2026-11-24; full tables in `SPLIT-DENOISE.md`)
+
+`volumes.outputs` with `forcedNee` / `equiangular` / `marchSamples`: order-0-1 plane = the `maxDepth` 1 render bit for bit (cornell-fog forced + equi + march 4, equi + march 2, `vol-lamp-fog` equi + march 8, `vol-thin-fog-sun` forced + march 4, 16 spp, seed 3);
+order01 mean forced + equi + march 4 vs default, 4 seeds x 512 spp each: -0.055% (SE 0.10%, z -0.54). OIDN (colour only) on the beauty vs on `radiance - order01` (+ order01 back) and Gaussian baselines, vs our 8192 spp render (relMSE floor ~1.7e-4 at 1024 spp rows):
+
+| scene | spp | arm | relMSE | relBias | edge relMSE | LDR-FLIP |
+|---|---|---|---|---|---|---|
+| cornell | 1 | raw | 1.01e+0 | 2.97% | 8.52e-1 | 0.2807 |
+| cornell | 1 | oidn_all | 9.47e-3 | 0.60% | 4.28e-2 | 0.1161 |
+| cornell | 1 | split_oidn | 7.28e-2 | 2.26% | 3.34e-1 | 0.1353 |
+| cornell | 1 | blur_all_s1 | 1.18e-1 | 2.97% | 3.00e-1 | 0.2446 |
+| cornell | 1 | split_gauss_s4 | 7.78e-2 | 2.52% | 3.45e-1 | 0.1702 |
+| cornell | 4 | raw | 3.13e-1 | -0.07% | 1.89e-1 | 0.1906 |
+| cornell | 4 | oidn_all | 3.23e-3 | -1.66% | 1.19e-2 | 0.0871 |
+| cornell | 4 | split_oidn | 1.20e-2 | -0.63% | 5.36e-2 | 0.0863 |
+| cornell | 4 | blur_all_s1 | 5.29e-2 | -0.08% | 1.81e-1 | 0.1676 |
+| cornell | 4 | split_gauss_s4 | 1.52e-2 | -0.48% | 6.40e-2 | 0.1234 |
+| cornell | 16 | raw | 8.67e-2 | 0.71% | 5.57e-2 | 0.1272 |
+| cornell | 16 | oidn_all | 2.18e-3 | -0.52% | 8.26e-3 | 0.0706 |
+| cornell | 16 | split_oidn | 3.33e-3 | 0.20% | 1.33e-2 | 0.0667 |
+| cornell | 16 | blur_all_s0.75 | 2.15e-2 | 0.71% | 6.21e-2 | 0.1208 |
+| cornell | 16 | split_gauss_s3 | 5.43e-3 | 0.50% | 2.04e-2 | 0.0979 |
+| cornell | 64 | raw | 1.92e-2 | 0.52% | 1.58e-2 | 0.0863 |
+| cornell | 64 | oidn_all | 9.43e-4 | 0.11% | 2.96e-3 | 0.0519 |
+| cornell | 64 | split_oidn | 1.01e-3 | -0.05% | 3.23e-3 | 0.0476 |
+| cornell | 64 | blur_all_s0.75 | 1.19e-2 | 0.52% | 5.64e-2 | 0.0823 |
+| cornell | 64 | split_gauss_s1.5 | 2.04e-3 | 0.50% | 5.99e-3 | 0.0695 |
+| cornell | 256 | raw | 4.88e-3 | 0.06% | 4.07e-3 | 0.0557 |
+| cornell | 256 | oidn_all | 5.18e-4 | -0.17% | 1.24e-3 | 0.0399 |
+| cornell | 256 | split_oidn | 4.60e-4 | -0.14% | 1.09e-3 | 0.0362 |
+| cornell | 256 | blur_all_s0.75 | 9.71e-3 | 0.06% | 5.35e-2 | 0.0561 |
+| cornell | 256 | split_gauss_s1 | 9.91e-4 | 0.06% | 2.45e-3 | 0.0494 |
+| cornell | 1024 | raw | 1.35e-3 | 0.17% | 1.13e-3 | 0.0356 |
+| cornell | 1024 | oidn_all | 3.28e-4 | -0.07% | 6.06e-4 | 0.0309 |
+| cornell | 1024 | split_oidn | 2.81e-4 | 0.13% | 4.68e-4 | 0.0282 |
+| cornell | 1024 | blur_all_s0.75 | 9.44e-3 | 0.17% | 5.45e-2 | 0.0412 |
+| cornell | 1024 | split_gauss_s0.75 | 5.34e-4 | 0.17% | 1.15e-3 | 0.0344 |
+| wdas | 1 | raw | 1.81e+0 | 0.23% | 3.43e+0 | 0.0811 |
+| wdas | 1 | oidn_all | 5.92e-3 | -2.09% | 2.94e-2 | 0.0438 |
+| wdas | 1 | split_oidn | 1.15e-2 | -2.14% | 4.69e-2 | 0.0379 |
+| wdas | 1 | blur_all_s4 | 1.51e-2 | 0.23% | 6.87e-2 | 0.0478 |
+| wdas | 1 | split_gauss_s4 | 3.27e-2 | 0.23% | 1.75e-1 | 0.0713 |
+| wdas | 4 | raw | 3.18e-1 | -0.74% | 5.59e-1 | 0.0555 |
+| wdas | 4 | oidn_all | 5.07e-3 | -2.63% | 2.44e-2 | 0.0379 |
+| wdas | 4 | split_oidn | 5.12e-3 | -0.97% | 1.97e-2 | 0.0278 |
+| wdas | 4 | blur_all_s3 | 7.34e-3 | -0.74% | 4.40e-2 | 0.0377 |
+| wdas | 4 | split_gauss_s2 | 1.35e-2 | -0.74% | 6.41e-2 | 0.0453 |
+| wdas | 16 | raw | 8.05e-2 | -0.33% | 1.27e-1 | 0.0344 |
+| wdas | 16 | oidn_all | 2.85e-3 | -2.20% | 1.39e-2 | 0.0291 |
+| wdas | 16 | split_oidn | 2.54e-3 | -1.09% | 1.09e-2 | 0.0213 |
+| wdas | 16 | blur_all_s2 | 3.97e-3 | -0.33% | 2.38e-2 | 0.0257 |
+| wdas | 16 | split_gauss_s1.5 | 6.46e-3 | -0.33% | 3.39e-2 | 0.0305 |
+| wdas | 64 | raw | 2.05e-2 | -0.22% | 3.39e-2 | 0.0203 |
+| wdas | 64 | oidn_all | 4.03e-3 | -1.21% | 1.10e-2 | 0.0237 |
+| wdas | 64 | split_oidn | 1.48e-3 | -0.65% | 5.89e-3 | 0.0159 |
+| wdas | 64 | blur_all_s1.5 | 2.28e-3 | -0.22% | 1.39e-2 | 0.0185 |
+| wdas | 64 | split_gauss_s1 | 3.17e-3 | -0.22% | 1.46e-2 | 0.0201 |
+| wdas | 256 | raw | 5.25e-3 | -0.02% | 8.94e-3 | 0.0116 |
+| wdas | 256 | oidn_all | 2.30e-3 | -0.31% | 4.47e-3 | 0.0169 |
+| wdas | 256 | split_oidn | 8.59e-4 | -0.12% | 3.06e-3 | 0.0118 |
+| wdas | 256 | blur_all_s1 | 1.17e-3 | -0.02% | 6.32e-3 | 0.0121 |
+| wdas | 256 | split_gauss_s0.75 | 1.56e-3 | -0.02% | 7.22e-3 | 0.0130 |
+| wdas | 1024 | raw | 1.40e-3 | 0.02% | 2.51e-3 | 0.0069 |
+| wdas | 1024 | oidn_all | 5.49e-4 | -0.12% | 1.50e-3 | 0.0124 |
+| wdas | 1024 | split_oidn | 5.04e-4 | -0.03% | 1.81e-3 | 0.0084 |
+| wdas | 1024 | blur_all_s0.75 | 6.16e-4 | 0.02% | 3.16e-3 | 0.0081 |
+| wdas | 1024 | split_gauss_s0.75 | 9.78e-4 | 0.02% | 6.21e-3 | 0.0100 |
+
 ### Real OpenVDB clouds, equal-spp noise (V3.4b)
 
 Scenes `vol-vdb-wdas-cloud` (WDAS cloud quarter, 3^3 average -> 170x117x209, sigma_t peak 0.22/unit, max column tau 58, mean over covered columns 14),

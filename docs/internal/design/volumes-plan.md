@@ -116,7 +116,7 @@ Idea: a raymarcher looks finished in a frame because it takes several light esti
 |---|---|---|
 | V7.1 | Homogeneous media: `volumes.marchSamples` N stratified distances on the camera segment (see forced-wgsl.ts header and DIVERGES V330). Megakernel only, implies `forcedNee`, composes with `equiangular`. Unbiased on `vol-cornell-fog` (within 1 SE at 1024 spp); error vs pbrt: x0.55-0.62 of the default at 1-64 spp from forced + equiangular, N adds a further gain only where one light sample per segment is the noise (lamp close to the ray: 6-18x at 1 spp, floor from 16 spp up) | done (2026-11-24) |
 | V7.2 | Grid media: the same N-strata estimate through the majorant / ratio-tracking transmittance (a grid segment has no closed-form exponential CDF: needs a distance proposal, e.g. equal-optical-depth strata from the brick majorants) | on hold: no headroom (below) |
-| V7.3 | Split denoising: filter the orders-2+ (multiple scattering) radiance on its own and add the orders 0-1 back (needs `outputs` to accept `forcedNee` / `equiangular`: the forced estimate belongs to order 1), then the real denoiser (OIDN with guides) on that plane instead of a blur | in progress (2026-11-24, worktree `media-split`) |
+| V7.3 | Split denoising: filter the orders-2+ (multiple scattering) radiance on its own and add the orders 0-1 back (needs `outputs` to accept `forcedNee` / `equiangular`: the forced estimate belongs to order 1), then the real denoiser (OIDN with guides) on that plane instead of a blur | step 1 done (outputs + forced / equi / march, order-0-1 plane bit-exact vs `maxDepth` 1); step 2 measured (2026-11-24): OIDN on the MS plane beats OIDN on the beauty only for the soft cloud at >= 16 spp, loses on Cornell fog at <= 16 spp, so it is NOT a general default; guides and the real-time chain open (`bench/results/SPLIT-DENOISE.md`) |
 
 **Where the noise is (2026-11-24, `pt_volume_outputs=1`, relMSE against our own 1024 spp render).** At 16 spp the orders 0-1 plane carries 0% of the error on
 `vol-vdb-wdas-cloud` (65% of the radiance) and 4% on `vol-cornell-fog` (57% of the radiance): multiple scattering is the noise in both, so improving single
@@ -124,6 +124,13 @@ scattering (V7.1 N > 1, V7.2) cannot help dense clouds or room fog; it helps onl
 Crude test of V7.3 (a Gaussian blur, sigma in pixels, stands in for a denoiser): Cornell fog 4 spp raw 0.556, blur everything 0.070 at best (0.37 at sigma 4:
 edges smear), blur only orders 2+ 0.027 (sigma 4); 16 spp 0.131 -> 0.010. WDAS cloud (soft everywhere at 128 px) 4 spp 0.351 -> 0.0145 split, 0.0092 blur all;
 16 spp 0.089 -> 0.0090 split. A filter is biased, so it is a real-time / preview tool and fades out as samples accumulate; the converged image stays the path tracer's.
+
+**V7.3 measured with OIDN (2026-11-24, `bench/results/SPLIT-DENOISE.md`, vs our own 8192 spp render, seeds 1-2, 128x128).** relMSE raw -> `oidn_all` -> `split_oidn`:
+Cornell fog (forced + equiangular) 1 spp 1.01 -> 9.5e-3 -> 7.3e-2, 4 spp 0.31 -> 3.2e-3 -> 1.2e-2, 16 spp 8.7e-2 -> 2.2e-3 -> 3.3e-3, 64 spp 1.9e-2 -> 9.4e-4 -> 1.0e-3, 256 spp 4.9e-3 -> 5.2e-4 -> 4.6e-4, 1024 spp 1.35e-3 -> 3.3e-4 -> 2.8e-4;
+WDAS cloud 1 spp 1.81 -> 5.9e-3 -> 1.2e-2, 4 spp 0.32 -> 5.1e-3 -> 5.1e-3, 16 spp 8.1e-2 -> 2.9e-3 -> 2.5e-3, 64 spp 2.1e-2 -> 4.0e-3 -> 1.5e-3, 256 spp 5.3e-3 -> 2.3e-3 -> 8.6e-4, 1024 spp 1.4e-3 -> 5.5e-4 -> 5.0e-4.
+The crude blur test above is confirmed for Gaussians (split_gauss beats blur_all on Cornell at 4-16 spp), but OIDN's own network on the whole beauty uses the structure of the noisy colour and is the better filter on Cornell at <= 16 spp:
+the MS plane alone is sparse and structure-poor at 1-4 spp. Split pays on the soft cloud from 16 spp up (lower relMSE, edge error and bias: OIDN darkens `oidn_all` by 1.2-2.6% at <= 64 spp, split by 0.65-1.1% from 4 spp). Using the order-0-1 plane as OIDN's albedo guide does not help.
+No crossover to raw within 1-1024 spp (the denoised arms are at the 8192 spp reference's own noise floor, ~1.7e-4, at 1024 spp); extrapolating the gain (x2-2.5 less per x4 spp) puts it at roughly 8k-16k spp, so the fade is by spp (w = 1 up to 256, linear in log2(spp) to 0 at 4096), not by the pixel's standard error: a per-pixel rho = se / (mean + 0.05) fade only gives back error (every rho0 tried was worse than w = 1 at every spp) and the standard error needs >= 4 samples anyway.
 
 ## Suggested order
 
