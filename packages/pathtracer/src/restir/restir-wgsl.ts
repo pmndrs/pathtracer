@@ -208,6 +208,9 @@ export function ptRestirWgsl(integrator: PtIntegratorOptions = {}, part: 'all' |
   const gl = ptRestirGbufLayout(integrator);
   const mixExpr = 'ptSample2D(pixelSeed, P.dims.z, ptVertexPair(0u, PT_SLOT_RR)).y';
   const visible = maskShadow ? 'ptVisibleMasked' : 'rtVisible';
+  // V5.4: with media the G-buffer holds the first surface that is not a medium boundary ("interface"): the shade's camera ray passes through those the same way.
+  const ifaceMats = (o.volumes?.materials ?? []).map((m) => (m.boundary ? 1 : 0));
+  const iface = ifaceMats.includes(1);
   return /* wgsl */ `
 ${head}
 
@@ -244,7 +247,8 @@ const PT_RS_KEY_OFFSET: u32 = ${PT_RESTIR_KEY.spatialOffset}u;
 const PT_RS_KEY_SPATIAL: u32 = ${PT_RESTIR_KEY.spatialSelect}u;
 const PT_RS_WORDS: u32 = ${gl.words}u;
 const PT_RS_MISS: u32 = ${PT_RESTIR_GBUF_MISS}u;
-${shared ? `@group(2) @binding(${PT_RESTIR_BINDING.hit}) var<storage, read_write> ptRsHit: array<vec4u>;
+${iface ? `var<private> ptRsIfaceMats: array<u32, ${ifaceMats.length}> = array<u32, ${ifaceMats.length}>(${ifaceMats.map((b) => `${b}u`).join(', ')});
+` : ''}${shared ? `@group(2) @binding(${PT_RESTIR_BINDING.hit}) var<storage, read_write> ptRsHit: array<vec4u>;
 ` : ''}
 struct PtRsGeom {
     p: vec3f,
@@ -432,6 +436,7 @@ ${bn ? `    ptBnPixel = id.xy;
     var ray = RtRay(origin, 0.0, normalize(P.curForward.xyz + P.curRight.xyz * ndc.x + P.curUp.xyz * ndc.y), PT_FAR);
 ${tex ? `    var cone = RtCone(0.0, bitcast<f32>(P.reg2.y) * 2.0 * length(P.curUp.xyz) / (length(P.curForward.xyz) * f32(P.dims.y)));
 ` : ''}${mask ? `    var skips = 0u;
+` : ''}${iface ? `    var ifaceSkips = 0u;
 ` : ''}${vb ? `    var primary = true;
 ` : ''}    loop {
 ${vb ? `        var hit: RtHit;
@@ -447,7 +452,16 @@ ${vb ? `        var hit: RtHit;
             ptRsHit[pix] = vec4u(0u);` : ''}
             return;
         }
-${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME);
+${iface ? `        if (hit.material < ${ifaceMats.length}u && ptRsIfaceMats[min(hit.material, ${ifaceMats.length - 1}u)] != 0u) {
+            ifaceSkips += 1u;
+            if (ifaceSkips > 256u) {
+                ptRsGbuf[i + 4u] = PT_RS_MISS;
+                return;
+            }
+            ray = RtRay(ptOffsetOrigin(ray.origin + ray.direction * hit.t, ptSideNormal(hit.normal, ray.direction)), 0.0, ray.direction, PT_FAR);
+            continue;
+        }
+` : ''}${tex ? `        let surf = rtSurface(hit, ray, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL | RT_SURF_UV | RT_SURF_TEXFRAME);
         let coneW = rtConeAt(cone, hit.t);
         let fp = select(0.0, coneW * surf.uvDensity / max(abs(dot(hit.normal, ray.direction)), 0.001), PT_TEX_CONE);
         let mat = rtApplyMaterialTextures(rtMaterial(hit.material), surf.uv, fp);

@@ -149,17 +149,20 @@ interface Mode {
   integrator: PtIntegratorOptions;
 }
 
-function modes(m: number, k: number, radius: number): Mode[] {
+function modes(m: number, k: number, radius: number, media = false): Mode[] {
   const base = { candidates: m, spatialRadius: radius };
-  return [
+  // V5.4: a scene with media refuses initialVisibility (its binary shadow ray would stop at medium boundaries): that mode is left out there.
+  return ([
     { name: 'ris', integrator: rs({ ...base, temporal: false, spatial: 0, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_t_unb', integrator: rs({ ...base, temporal: true, spatial: 0, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_s_unb', integrator: rs({ ...base, temporal: false, spatial: k, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_ts_unb', integrator: rs({ ...base, temporal: true, spatial: k, bias: 'unbiased', initialVisibility: false }) },
     { name: 'ris_ts_bia', integrator: rs({ ...base, temporal: true, spatial: k, bias: 'biased', initialVisibility: false }) },
     { name: 'ris_ts_bia_vis', integrator: rs({ ...base, temporal: true, spatial: k, bias: 'biased', initialVisibility: true }) },
-  ];
+  ] as Mode[]).filter((x) => !media || x.name !== 'ris_ts_bia_vis');
 }
+
+const hasMedia = (ctx: Ctx): boolean => Object.keys(ctx.scene.media ?? {}).length > 0;
 
 async function checkConverge(name: string, frameCount: number, refFrames: number, m: number, k: number, radius: number): Promise<void> {
   const ctx = await load(name);
@@ -171,7 +174,7 @@ async function checkConverge(name: string, frameCount: number, refFrames: number
   log(`${p}__nee_relmse`, base.relMse);
   log(`${p}__nee_relbias`, base.relBias);
   log(`${p}__ref_mean_g`, meanChannel(ref, 1));
-  for (const mode of modes(m, k, radius)) {
+  for (const mode of modes(m, k, radius, hasMedia(ctx))) {
     const kernel = await makeKernel(ctx, mode.integrator);
     const a = await accumulate(ctx, kernel, frameCount, 1);
     log(`${p}__${mode.name}_mean_g`, meanChannel(a, 1));
@@ -196,6 +199,9 @@ async function checkBiasScan(name: string, frameCount: number, refFrames: number
   const nee = await makeKernel(ctx, NEE);
   const ref = await accumulate(ctx, nee, refFrames, 100);
   const p = `biasscan__${name}`;
+  let refSum = 0;
+  for (let i = 0; i < ref.data.length; i += 4) refSum += (ref.data[i] as number) + (ref.data[i + 1] as number) + (ref.data[i + 2] as number);
+  log(`${p}__ref_mean`, refSum / ((ref.data.length / 4) * 3));
   const stats = (v: number[]): { mean: number; se: number } => {
     const mean = v.reduce((a, b) => a + b, 0) / v.length;
     const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) * (b - mean), 0) / Math.max(1, v.length - 1));
@@ -206,7 +212,7 @@ async function checkBiasScan(name: string, frameCount: number, refFrames: number
   const nb = stats(neeBias);
   log(`${p}__nee_relbias_mean`, nb.mean);
   log(`${p}__nee_relbias_se`, nb.se);
-  for (const mode of modes(m, k, radius).filter((x) => x.name.endsWith('unb') || x.name === 'ris')) {
+  for (const mode of modes(m, k, radius, hasMedia(ctx)).filter((x) => x.name.endsWith('unb') || x.name === 'ris')) {
     const kernel = await makeKernel(ctx, mode.integrator);
     const v: number[] = [];
     const blk = new Float64Array(32 * 32);
@@ -260,7 +266,12 @@ async function checkNoise(name: string, refFrames: number, seeds: number, m: num
     for (let s = 0; s < seeds; s++) sum += cmp(await accumulate(ctx, nee, n, 200 + s), ref).relMse;
     log(`${p}__nee_${n}spp_relmse`, sum / seeds);
   }
-  for (const mode of modes(m, k, radius)) {
+  // NEE with independent (PCG) numbers, 1 spp: the like-for-like per-frame noise of ReSTIR's own sampler (CLAUDE.md trap: Owen-Sobol NEE is stratified over frames).
+  const neePcg = await makeKernel(ctx, { sampler: 'pcg' });
+  let pcgSum = 0;
+  for (let s = 0; s < seeds; s++) pcgSum += cmp(await accumulate(ctx, neePcg, 1, 250 + s), ref).relMse;
+  log(`${p}__nee_pcg_1spp_relmse`, pcgSum / seeds);
+  for (const mode of modes(m, k, radius, hasMedia(ctx))) {
     const kernel = await makeKernel(ctx, mode.integrator);
     const acc: Record<number, number> = { 1: 0, 4: 0, 8: 0 };
     for (let s = 0; s < seeds; s++) {

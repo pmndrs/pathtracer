@@ -203,6 +203,10 @@ export function restirKernelVariants(caps: Caps, scenePacking?: SceneCopyPacking
     pbr: { ...base, integrator: { restir: {}, materials: pbr } },
     'tex-pbr-mask': { ...tex, integrator: { restir: {}, alphaMask: true, materials: pbr } },
     realtime: { ...tex, integrator: { restir: { sharedHit: true }, sampler: 'bluenoise', frame: true, alphaMask: true, materials: pbr } },
+    // V5.4: ReSTIR DI behind a homogeneous medium (one interface boundary): plain, PBR, and the real-time frame without sharedHit (refused with volumes).
+    vol: { ...base, integrator: { restir: {}, volumes: { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] } } },
+    'vol-pbr': { ...base, integrator: { restir: {}, materials: pbr, volumes: { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] } } },
+    'vol-realtime': { ...base, integrator: { restir: {}, sampler: 'bluenoise', frame: true, volumes: { media: [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }], materials: [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }] } } },
     // P5: ReSTIR GI on top of DI (no textures / alpha MASK: refused).
     gi: { ...base, integrator: { restir: { gi: {} } } },
     'gi-unbiased': { ...base, integrator: { restir: { bias: 'unbiased', initialVisibility: false, gi: { bias: 'unbiased' } } } },
