@@ -163,7 +163,7 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
   /**
    * Participating media (P5, both schedulers; docs/internal/design/volumes.md): homogeneous and dense-grid media bounded by closed meshes, delta tracking for free flight,
    * Henyey-Greenstein scattering with next-event estimation and MIS, transmittance on shadow rays, medium-boundary ("interface") surfaces that rays pass through.
-   * Default null: no volume code at all (the kernel text is unchanged). Cannot be combined with `restir`, `frame`, `primary: 'vbuffer'`, `alphaMask`, hooks or the
+   * Default null: no volume code at all (the kernel text is unchanged). Combines with `restir` only for homogeneous media on the megakernel (V5.4, `ptRestirVolumeUnsupported`); cannot be combined with `primary: 'vbuffer'`, `alphaMask`, hooks or the
    * `materials.features.medium` absorber (`materials` may be set for other lobes).
    */
   volumes?: PtVolumeOptions | null;
@@ -263,6 +263,23 @@ export interface ResolvedIntegratorOptions {
   mtlxNormal: boolean;
 }
 
+/**
+ * V5.4: ReSTIR DI runs on surfaces behind HOMOGENEOUS media (megakernel only). The passes stay medium-unaware except that the G-buffer pass skips medium-boundary
+ * ("interface") surfaces as the shade's camera ray does; the target is unshadowed and ignores transmittance (positive wherever the integrand is), and the shade's
+ * final shadow ray goes through `ptVolTr`. Why a combination is refused, or null.
+ */
+export function ptRestirVolumeUnsupported(r: PtRestirOptions, v: PtVolumeOptions): string | null {
+  if (r.gi) return 'ReSTIR GI is not supported with volumes (its reconnection would need the transmittance of the shifted segment)';
+  if (r.sharedHit) return 'restir.sharedHit is not supported with volumes (the shared primary hit skips the medium-boundary crossings the free flight needs)';
+  if (r.initialVisibility ?? (r.bias ?? 'unbiased') === 'biased') return 'restir.initialVisibility is not supported with volumes (its binary shadow ray would treat medium boundaries as occluders); set initialVisibility: false';
+  if (v.mediumStack) return 'volumes.mediumStack is not supported with ReSTIR yet';
+  if (v.outputs) return 'volumes.outputs is not supported with ReSTIR yet';
+  if (v.guiding === 'vspg') return "volumes.guiding 'vspg' is not supported with ReSTIR yet";
+  const i = v.media.findIndex((m) => m.grid || m.height || ptMediumsEmit([m]));
+  if (i >= 0) return `medium ${i} is not homogeneous (grid, height or emissive media are not supported with ReSTIR: V5.4 covers homogeneous media only)`;
+  return null;
+}
+
 export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedIntegratorOptions {
   const alphaMask = (o.alphaMask ?? false) && (o.textures ?? false);
   const alphaPolicy: PtAlphaPolicy = alphaMask ? o.alphaPolicy ?? 'exact' : 'exact';
@@ -275,7 +292,9 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const alphaCoverage = o.alphaCoverage ?? [];
   if ((alphaShadow === 'coverage' || alphaShadow === 'stochastic') && alphaCoverage.length === 0) throw new RangeError(`integrator.alphaShadow '${alphaShadow}' needs alphaCoverage (one fraction per material)`);
   if (o.volumes) {
-    const clash = o.restir ? 'restir' : (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
+    const rsVol = o.restir ? ptRestirVolumeUnsupported(o.restir, o.volumes) : null;
+    if (rsVol) throw new Error(`integrator.volumes with integrator.restir: ${rsVol}`);
+    const clash = (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
     if (o.frame && o.volumes.outputs) throw new Error('integrator.frame cannot be combined with integrator.volumes.outputs (V5.1c: both write the accumulator tail; the megakernel frame planes and the guide / order outputs are separate products)');
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
@@ -730,7 +749,7 @@ ${maskShadow || shadowWeightedScene || (o.restir && mask) ? PT_VISIBLE_MASKED_WG
 ${restir ? `
 ${PT_RESTIR_UNPACK_WGSL}
 
-fn ptRestirLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32) -> vec3f {
+fn ptRestirLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pxIndex: u32${vol ? ', medIn: u32, medOut: u32' : ''}) -> vec3f {
     let r = ptRestirRes[ptParams.limits.w + pxIndex];
     let rw = bitcast<f32>(r.z);
     if (r.x == RT_NONE || !(rw > 0.0)) {
@@ -754,17 +773,22 @@ fn ptRestirLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtB
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);
     }
 ${counters ? `    ptCountRay(pxIndex, 0u, 1u);
-` : ''}    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
+` : ''}${vol ? `    // V5.4: the reservoir's shadow ray carries the transmittance of the (homogeneous) media and passes through medium boundaries.
+    let tr = ptVolTr(ray, select(medOut, medIn, dot(li.wi, ng) < 0.0));
+    if (!(${o.volumes?.shadowTracking === 'telescoping' ? 'ptMax3(abs(tr)) > 0.0' : 'ptMax3(tr) > 0.0'})) {
         return vec3f(0.0);
     }
-    return li.radiance * f * (rw / li.pdf);
+    return li.radiance * f * tr * (rw / li.pdf);` : `    if (!${mask ? 'ptVisibleMasked' : 'rtVisible'}(ray, RT_MASK_ALL)) {
+        return vec3f(0.0);
+    }
+    return li.radiance * f * (rw / li.pdf);`}
 }
 ` : ''}${gi ? `
 ${PT_RESTIR_OCT_WGSL}
 ${ptRestirGiShadeWgsl(evalFn)}` : ''}
 fn ptSampleLd(p: vec3f, pe: vec3f, ng: vec3f, frame: PtFrame, wo: vec3f, bp: PtBsdfParams, pixelSeed: u32, sampleIndex: u32, vertex: u32${counters || restir ? ', pxIndex: u32' : ''}${vol ? ', medIn: u32, medOut: u32' : ''}) -> vec3f {
 ${restir ? `    if (vertex == 0u) {
-        return ptRestirLd(p, pe, ng, frame, wo, bp, pxIndex);
+        return ptRestirLd(p, pe, ng, frame, wo, bp, pxIndex${vol ? ', medIn, medOut' : ''});
     }
 ` : ''}    let selectU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_SELECT_COMPONENT)).x;
     let pointU = ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_LIGHT_POINT));

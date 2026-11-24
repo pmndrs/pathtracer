@@ -83,6 +83,22 @@ BSDF-sampled continuation gets `prevPdf = 0` exactly as in the megakernel, and t
 (`create` throws): `sharedHit` (join the primary hit into the camera kernel: follow-up), alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk whatever the shadow policy; the shadow kernel follows the policy), hooks, refill.
 Checked per pixel against the megakernel's frame (same reservoirs expected): `wf-frame-check restir=unbiased` (TASKS P4.2a).
 
+**Behind homogeneous media (V5.4, megakernel).** `integrator.restir` + `integrator.volumes` compile together when every medium is homogeneous (`ptRestirVolumeUnsupported`, called from
+`resolveIntegratorOptions`, says what is refused: grid / height / emissive media, `mediumStack`, `volumes.outputs`, VSPG, ReSTIR GI, `sharedHit`, `initialVisibility`; the wavefront refuses
+the pair). The estimator: the reservoir is an unbiased estimate of the direct light at the FIRST SURFACE vertex; the shade's camera ray does its normal free flight, and only when it reaches
+that surface as vertex 0 (no medium scatter before it) does `ptSampleLd` read the reservoir, whose shadow ray then goes through `ptVolTr` (transmittance through the media and the interface
+surfaces; closed form for homogeneous media, ratio tracking with `shadowTracking: 'ratio'`) instead of `rtVisible`. A medium scatter before the surface makes it vertex >= 1: ordinary NEE, the
+reservoir is unused for that sample. The free-flight decision and the transmittance estimate draw from the path's volume stream, the reservoir from the ReSTIR keys: independent, so the
+product is unbiased. The passes stay medium-unaware apart from ONE thing: the G-buffer pass skips medium-boundary ("interface") surfaces exactly as the shade's camera ray does (same
+`ptOffsetOrigin` step; a private table of the boundary flags, +317 B of passes text), or the G-buffer would hold the fog box's surface and the target would live on the wrong point. The target
+stays unshadowed and ignores transmittance: it only has to be positive where the integrand is, and a homogeneous medium's transmittance is never zero. `initialVisibility` is refused because
+its binary shadow ray stops at boundary meshes; `sharedHit` because the shared hit would jump over the boundary crossings the free flight needs. Bytes: shade kernel +1.2 KB over the volume
+megakernel (`restir-shade-vol` 46.5 KB; with OpenPBR 55.8 KB, over the 50 KB class; real-time frame 51.9 KB). Check (`restir-check check=biasscan`, unbiased modes, NEE reference
+of the same scene with media): `many-lights-64-fog` (fog layer under 64 lamps, 128^2, 24 seeds x 512 frames) `ris` -8.7e-4 +- 0.7e-4, `many-lights-64-absorb` (32 x 256) -1.09e-3 +- 0.11e-3,
+against -9.1e-4 +- 0.4e-4 for the SAME scene without media at the same film (32 x 256): the media add nothing measurable. That -0.09% is a pre-existing ReSTIR offset at a 128^2 film
+(`many-lights-64` at 256^2 reads +0.3e-4 against NEE; at M = 1 the offset is -0.23% at 128^2 and -0.05% at 256^2; open, TASKS). `vol-cornell-fog` (24 x 128) -3e-4 +- 5e-4 (NEE
+-1.5e-3 +- 0.4e-3: in-scatter noise dominates). Per-frame noise (`check=noise`, 8 seeds): `ris_ts_unb` relMSE 2.5 / 3.6 (frames 1 / 8) against NEE-PCG 6.2 and Owen-Sobol NEE 4.1 at 1 spp.
+
 ## Not done (open)
 
 - The wavefront's `sharedHit` (one camera-ray trace per frame: the camera kernel would fill its path from the hit buffer) and alpha MASK / hooks with ReSTIR on the wavefront (TASKS P4.2a follow-ups).

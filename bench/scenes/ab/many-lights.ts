@@ -58,4 +58,27 @@ function manyLights(name: string, n: number): SceneDesc {
 
 export const manyLights256 = manyLights('many-lights-256', 16);
 export const manyLights64 = manyLights('many-lights-64', 8);
-export const manyLightsScenes: readonly SceneDesc[] = [manyLights256, manyLights64];
+
+/**
+ * V5.4 (ReSTIR DI behind homogeneous media): `many-lights-64` inside a homogeneous fog box (sigma_t 0.4/m, albedo 0.8, g 0.3) up to 0.8 m (the plane and the blockers inside, the lamps
+ * 0.2 m above it and the camera outside), so every camera ray enters through the box's interface surface first (the G-buffer pass must skip it) and every light sample crosses it. 128^2, direct light only (maxDepth 1: the surface direct
+ * light and the single scattering of the fog). No native reference: compare to our own high-spp NEE.
+ */
+export const manyLights64Fog: SceneDesc = (() => {
+  const base = manyLights('many-lights-64-fog', 8);
+  const inFog = { interior: 'fog', exterior: 'fog' };
+  return {
+    ...base,
+    purpose: `${base.purpose} V5.4: under a homogeneous fog layer (sigma_t 0.4/m, albedo 0.8, lamps above it) the camera looks into from outside: ReSTIR DI behind media.`,
+    film: { width: 128, height: 128, filter: 'box' },
+    materials: { ...base.materials, boundary: { type: 'interface' } },
+    media: { fog: { type: 'homogeneous', sigmaA: [0.08, 0.08, 0.08], sigmaS: [0.32, 0.32, 0.32], g: 0.3 } },
+    meshes: [
+      ...base.meshes.map((m) => (m.name === 'plane' || m.name === 'box' || m.name === 'ball' ? { ...m, medium: inFog } : m)),
+      { name: 'fog-box', geometry: { type: 'box', size: [8.4, 0.9, 8.4] }, material: 'boundary', transform: translation(0, 0.35, 0), medium: { interior: 'fog' } },
+    ],
+  };
+})();
+/** `many-lights-64-fog` with a purely absorbing layer (sigma_a 0.4/m, no scattering): the image is only the attenuated surface direct light, so a ReSTIR bias scan resolves it without the in-scatter noise. */
+export const manyLights64Absorb: SceneDesc = { ...manyLights64Fog, name: 'many-lights-64-absorb', purpose: `${manyLights64Fog.purpose} Absorbing only (sigma_s 0).`, media: { fog: { type: 'homogeneous', sigmaA: [0.4, 0.4, 0.4], sigmaS: [0, 0, 0], g: 0 } } };
+export const manyLightsScenes: readonly SceneDesc[] = [manyLights256, manyLights64, manyLights64Fog, manyLights64Absorb];
