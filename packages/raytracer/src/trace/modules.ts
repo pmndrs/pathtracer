@@ -373,7 +373,7 @@ function inlineSource(options: RtModuleOptions & { traceSlot: BindingSlot }): st
   if (options.scene && options.scene.textures && !(layout && layout.uvs && layout.positions)) throw new Error('rtModuleWgsl: scene textures need a surface layout with uvs and positions');
   if (layout) {
     const offsets = surfaceVertexOffsets(layout);
-    const base = { vertexStride: Math.max(offsets.stride, 1), normalOffset: offsets.normal, uvOffset: offsets.uv, positionOffset: offsets.position, tangentOffset: offsets.tangent, tangents: !!layout.tangents };
+    const base = { vertexStride: Math.max(offsets.stride, 1), normalOffset: offsets.normal, uvOffset: offsets.uv, positionOffset: offsets.position, tangentOffset: offsets.tangent, tangents: !!layout.tangents, rayPositionError: !layout.positions };
     source += rtSurfaceWgsl({ ...base, headerVec4s: SCENE_HEADER_VEC4S });
   }
   if (options.shade) source += rtShadeWgsl(options.shade === true ? {} : options.shade);

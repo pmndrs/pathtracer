@@ -349,10 +349,10 @@ ${maskShadow ? PT_VISIBLE_MASKED_WGSL : ''}fn ptRsVisible(g: PtRsGeom, light: u3
     if (!li.valid) {
         return false;
     }
-    let origin = ptOffsetOrigin(g.p, ptSideNormal(g.n, li.wi));
+    let origin = ptOffsetOriginScene(g.p, ptSideNormal(g.n, li.wi));
     var ray: RtRay;
     if (li.distance < 1.0e30) {
-        let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
+        let end = ptOffsetOriginScene(li.point, ptSideNormal(li.normal, -li.wi));
         ray = rtSegment(origin, end, 0.0, 0.0);
     } else {
         ray = RtRay(origin, 0.0, li.wi, PT_FAR);

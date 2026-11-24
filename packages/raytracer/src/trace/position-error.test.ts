@@ -19,4 +19,11 @@ describe('surface position error bound', () => {
     expect(text).toContain('let eo = RT_GAMMA7 * (abs(c0) + abs(c1) + abs(c2));');
     expect(text).toContain('s.positionError = vec3f(max(pe.x, max(pe.y, pe.z)));');
   });
+  it("positions: 'ray' (no vertex decode) reports the scene-wide bound 4 gamma(7) R from the scene header (V1.7); decoded layouts do not carry it", () => {
+    const ray = rtModuleWgsl(caps, { scene: { slot: { group: 2, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: false } } });
+    expect(ray).toContain('const RT_SCENE_ERR_SCALE: f32 = ');
+    expect(ray).toContain('s.positionError = vec3f(RT_SCENE_ERR_SCALE * bitcast<f32>(rtSTable(3u).y));');
+    const decoded = rtModuleWgsl(caps, { scene: { slot: { group: 2, firstBinding: 0 }, layout: { normals: true, uvs: false, positions: true } } });
+    expect(decoded).not.toContain('RT_SCENE_ERR_SCALE');
+  });
 });

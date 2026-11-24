@@ -24,6 +24,8 @@ const hex = (value: number): string => `0x${value.toString(16)}u`;
 export const rtGamma = (n: number): number => (n * 2 ** -24) / (1 - n * 2 ** -24);
 const RT_GAMMA3 = Math.fround(rtGamma(3)).toString();
 const RT_GAMMA7 = Math.fround(rtGamma(7)).toString();
+/** V1.7: scene-wide position error bound = 4 gamma(7) x (bounding sphere radius): a triangle is at most 2 R long, and the next ray's test against it errs by about gamma(7) x its extent. For paths with no per-hit vertex decode. */
+export const RT_SCENE_ERR_SCALE = Math.fround(4 * rtGamma(7)).toString();
 
 /** L0 and L1 on top of the bvh walk. No bindings of its own. */
 export const RT_CORE_WGSL = /* wgsl */ `
@@ -135,6 +137,8 @@ export interface SurfaceWgslOptions {
   tangentOffset?: number;
   /** Compile the vertex tangent decode (`RT_SURF_TANGENT`, `RtSurface.vertexTangent`); the layout stores tangents. Default false: the text is unchanged. */
   tangents?: boolean;
+  /** The layout stores no vertex positions (`positions: 'ray'`): `rtSurface` then reports the scene-wide `positionError` (V1.7, see `rtSceneErr`). Default false: the text is unchanged. */
+  rayPositionError?: boolean;
   /** vec4u units before the first instance record: the scene header (`SCENE_HEADER_VEC4S`). Default `SURFACE_TABLE.HEADER_VEC4S`. */
   headerVec4s?: number;
 }
@@ -177,7 +181,8 @@ const RT_MESH_HAS_NORMALS: u32 = ${MESH_FLAG.HAS_NORMALS}u;
 const RT_MESH_HAS_UVS: u32 = ${MESH_FLAG.HAS_UVS}u;
 const RT_GAMMA3: f32 = ${RT_GAMMA3};
 const RT_GAMMA7: f32 = ${RT_GAMMA7};
-const RT_SV_STRIDE: u32 = ${o.vertexStride}u;
+${o.rayPositionError ? `const RT_SCENE_ERR_SCALE: f32 = ${RT_SCENE_ERR_SCALE};
+` : ''}const RT_SV_STRIDE: u32 = ${o.vertexStride}u;
 const RT_SV_NORMAL: u32 = ${o.normalOffset}u;
 const RT_SV_UV: u32 = ${o.uvOffset}u;
 const RT_SV_POSITION: u32 = ${o.positionOffset}u;
@@ -259,7 +264,8 @@ ${o.tangents ? `    s.vertexTangent = vec4f(0.0, 0.0, 0.0, 1.0);
     }
     if ((want & RT_SURF_POSITION) != 0u) {
         s.position = ray.origin + ray.direction * hit.t;
-    }
+${o.rayPositionError ? `        s.positionError = vec3f(RT_SCENE_ERR_SCALE * bitcast<f32>(rtSTable(3u).y));
+` : ''}    }
 ${o.tangents ? `    if ((want & RT_SURF_TANGENT) != 0u) {
         s.vertexTangent = rtSurfaceTangent(hit);
     }

@@ -197,8 +197,8 @@ fn ptGiTarget(g: PtRsGeom, bp: PtBsdfParams, y: PtGiRes, vis: bool) -> vec3f {
         return vec3f(0.0);
     }
     if (vis) {
-        let origin = ptOffsetOrigin(g.p, ptSideNormal(g.ng, w));
-        let end = ptOffsetOrigin(y.x2, ptSideNormal(y.n2, -w));
+        let origin = ptOffsetOriginScene(g.p, ptSideNormal(g.ng, w));
+        let end = ptOffsetOriginScene(y.x2, ptSideNormal(y.n2, -w));
         if (!rtVisible(rtSegment(origin, end, 0.0, 0.0), RT_MASK_ALL)) {
             return vec3f(0.0);
         }
@@ -302,7 +302,7 @@ fn ptRestirGiInit(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
     let wi = ptFromLocal(frame1, s.wi);
-    let ray = RtRay(ptOffsetOrigin(g.p, ptSideNormal(g.ng, wi)), 0.0, wi, PT_FAR);
+    let ray = RtRay(ptOffsetOriginScene(g.p, ptSideNormal(g.ng, wi)), 0.0, wi, PT_FAR);
     let hit = rtClosest(ray, RT_MASK_ALL);
     if (hit.t < 0.0) {
         ptGiStore(P.reg.w, pix, ptGiEmpty(1.0));
@@ -337,7 +337,7 @@ fn ptRestirGiInit(@builtin(global_invocation_id) id: vec3u) {
                 let origin = ptOffsetOriginErr(surf.position, ptSideNormal(hit.normal, li.wi), surf.positionError);
                 var lray: RtRay;
                 if (li.distance < 1.0e30) {
-                    let end = ptOffsetOrigin(li.point, ptSideNormal(li.normal, -li.wi));
+                    let end = ptOffsetOriginScene(li.point, ptSideNormal(li.normal, -li.wi));
                     lray = rtSegment(origin, end, 0.0, 0.0);
                 } else {
                     lray = RtRay(origin, 0.0, li.wi, PT_FAR);
