@@ -53,7 +53,23 @@ describe('optional integrator outputs (R10 hooks, R4 counters, AOVs)', () => {
     const emissive = { ...volumes, media: [{ ...media[0], emission: [1, 1, 1] }] };
     expect(mk({ volumes: emissive, frame: true }, false)).toMatch(/if \(fPure\) \{\s*fEmit \+= ptVolEmitTake\(\);/);
     expect(() => mk({ volumes: { ...volumes, outputs: true }, frame: true })).toThrow(/frame.*volumes.outputs/);
-    expect(ptwfUnsupported({ volumes, frame: true } as never)).toMatch(/frame with integrator.volumes/);
+    expect(ptwfUnsupported({ volumes, frame: true } as never)).toBeNull(); // V5.1d: the plain wavefront writes the same planes
+  });
+
+  it('volumes + frame on the wavefront (V5.1d): scatter planes in shade, first-bounce distance and flight emission from intersect, transmittance-weighted NEE in the planes', () => {
+    const media = [{ sigmaT: [1, 1, 1], albedo: [0.9, 0.9, 0.9], g: 0.3 }];
+    const materials = [{ interior: 0, exterior: 0, boundary: false }, { interior: 1, exterior: 0, boundary: true }];
+    const wf = (volumes: object, frameEmission?: string) => ptWavefrontBuild(caps, { format: {}, layout, integrator: { volumes, frame: true, ...(frameEmission ? { frameEmission } : {}) }, minify: false, shortenNames: false } as never);
+    const plain = wf({ media, materials }, 'mirror');
+    expect(plain.shade.code).toContain('ptVolMedium(curMed).albedo, vec3f(1.0)');
+    expect(plain.shade.code).toContain('ptFrameBounce(path, n, bitcast<f32>(h2.w))');
+    expect(plain.shade.code).toContain('next.impure = true;');
+    expect(plain.shade.code).not.toContain('fPrior');
+    expect(plain.intersect.code).toContain('bitcast<u32>(fbT)');
+    expect(plain.shadow.code).toContain('ptFrameAdd(path, n, ptwfF3(r2) * tr)');
+    const emissive = wf({ media: [{ ...media[0], emission: [1, 1, 1] }], materials }, 'none');
+    expect(emissive.shade.code).toContain('ptFramePlanes(path, n, fDirect + fPrior, fDirect');
+    expect(emissive.intersect.code).toContain('ptFrameAdd(path, n, fE)');
   });
 
   it('hooks: both functions are called after NEE and before the BSDF sample, in both schedulers', () => {

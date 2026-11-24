@@ -68,6 +68,15 @@ const CASES: Record<string, Case> = {
   // `foliage` above is the depth-1 case (every indirect hit reduced); this one moves the threshold to depth 2 over 4 bounces, so the bias is applied at some depths and not at others
   'foliage-lod2': { scene: 'foliage-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy', maxDepth: 4, materialLodDepth: 2 } },
   'tex-mask': { scene: 'tex-mask', rgbOnly: ['diffuse'], settings: { alphaShadow: 'policy', maxDepth: 3 } },
+  // V5.1d: media (free flight and interface skips in the intersect kernel, the scatter vertex at the top of shade). The realtime preset's materialLod 'secondary' is refused with media on the wavefront.
+  'vol-smoke': { scene: 'vol-cornell-smoke', settings: { materialLod: 'full' } },
+  'vol-cloud': { scene: 'vol-grid-cloud', settings: { materialLod: 'full' } },
+  'vol-emit': { scene: 'vol-emit-sphere', settings: { materialLod: 'full' } },
+  'vol-smoke-d4': { scene: 'vol-cornell-smoke', settings: { materialLod: 'full', maxDepth: 4 } },
+  // the smoke cube 1 mm off the floor: vol-cornell-smoke's coplanar cube-bottom / floor faces make ~0.1% of paths depend on the last bit of a scatter point (compiler contraction), see the scene's comment
+  'vol-smoke-lift': { scene: 'vol-cornell-smoke-lift', settings: { materialLod: 'full', maxDepth: 4 } },
+  // control: the same without the realtime preset (Owen-Sobol, full materials): separates a preset effect from a frame-plane effect
+  'vol-smoke-plain': { scene: 'vol-cornell-smoke', settings: { mode: undefined, frame: true } },
 };
 
 function orbit(scene: SceneDesc, frames: number, stepDeg: number, pan: boolean): PtLookAtCamera[] {
@@ -104,9 +113,19 @@ interface Agree {
   maxRelChannel: number;
   sumRel: number;
   rels: number[];
+  /** The first pixels over the tolerance: `pixel: megakernel | wavefront` (all four floats), for the notes. */
+  examples: string[];
+}
+
+/** Mean |value| of the first three channels (the floor of the per-pixel relative difference: 1e-3 of it, as in wf-p5-check, so a dim pixel's last-ulp sums do not read as a disagreement). */
+function meanAbs(a: Float32Array): number {
+  let s = 0;
+  for (let i = 0; i < a.length; i += 4) s += Math.abs(a[i] as number) + Math.abs(a[i + 1] as number) + Math.abs(a[i + 2] as number);
+  return s / Math.max(1, (a.length / 4) * 3);
 }
 
 function compare(a: Float32Array, b: Float32Array, tol: number, into: Agree, channels = 4): void {
+  const floor = 1e-3 * meanAbs(a);
   for (let i = 0; i < a.length; i += 4) {
     let diff = 0;
     let size = 0;
@@ -120,20 +139,23 @@ function compare(a: Float32Array, b: Float32Array, tol: number, into: Agree, cha
         continue;
       }
       diff = Math.max(diff, Math.abs(x - y));
-      size = Math.max(size, Math.abs(x), Math.abs(y));
+      size = Math.max(size, Math.abs(x), Math.abs(y), floor);
       into.maxRelChannel = Math.max(into.maxRelChannel, Math.abs(x - y) / Math.max(Math.abs(x), Math.abs(y), 1e-6));
     }
     const rel = size > 0 ? diff / size : diff > 0 ? Infinity : 0;
     into.maxRel = Math.max(into.maxRel, rel);
     into.sumRel += rel;
-    if (rel > tol) into.over++;
+    if (rel > tol) {
+      into.over++;
+      if (into.examples.length < 3) into.examples.push(`px ${i / 4}: [${Array.from(a.subarray(i, i + 4), (v) => v.toPrecision(6)).join(', ')}] | [${Array.from(b.subarray(i, i + 4), (v) => v.toPrecision(6)).join(', ')}]`);
+    }
     if (identical) into.same++;
     into.total++;
     if (rel > 1e-7 && into.rels.length < 4096) into.rels.push(rel);
   }
 }
 
-const fresh = (): Agree => ({ maxRel: 0, over: 0, same: 0, total: 0, maxRelChannel: 0, sumRel: 0, rels: [] });
+const fresh = (): Agree => ({ maxRel: 0, over: 0, same: 0, total: 0, maxRelChannel: 0, sumRel: 0, rels: [], examples: [] });
 
 interface Opts {
   frames: number;
@@ -149,6 +171,8 @@ interface Opts {
   batch: number;
   minMs: number;
   agree: boolean;
+  /** Also render the megakernel built for the other scene packing (same maths, other compiled code) and report its radiance disagreement with the first (`<case>_control_*`, not gated). */
+  control: boolean;
   wavefront: Partial<PtWavefrontOptions>;
 }
 
@@ -239,6 +263,17 @@ async function runCase(name: string, c: Case, o: Opts): Promise<void> {
   const agree = Object.fromEntries(PLANES.map((p) => [p, fresh()])) as Record<(typeof PLANES)[number], Agree>;
   let identityWorst = 0;
   let nonFinite = 0;
+  // control: a second megakernel for the other scene packing, compared with the first (the floor of "per pixel" for a scene whose paths amplify ulp noise)
+  const ctlAdapter = o.control ? new PtMegakernelAdapter({ ...settings, scenePacking: o.packing === 'packed' ? 'split' : 'packed' }) : null;
+  if (ctlAdapter) await ctlAdapter.load(scene);
+  const ctl = ctlAdapter ? (ctlAdapter.renderer as PtMegakernel) : null;
+  const ctlAgree = fresh();
+  if (ctl) {
+    if (o.res) ctl.setFilm(o.res[0], o.res[1]);
+    ctl.setFrameIndex(0);
+    ctl.setPrevCamera(null);
+    ctl.setCamera(cams[0] as PtLookAtCamera);
+  }
   for (let f = 0; f < cams.length; f++) {
     if (f > 0) {
       mk.nextFrame(cams[f] as PtLookAtCamera);
@@ -252,6 +287,14 @@ async function runCase(name: string, c: Case, o: Opts): Promise<void> {
     device.queue.submit([e2.finish()]);
     const a: PtFrame = await mk.readFrame();
     const b: PtFrame = await wf.readFrame();
+    if (ctl) {
+      if (f > 0) ctl.nextFrame(cams[f] as PtLookAtCamera);
+      const dev = ctlAdapter!.gpuContext!.device;
+      const e3 = dev.createCommandEncoder({ label: 'control frame' });
+      ctl.encode(e3, 1);
+      dev.queue.submit([e3.finish()]);
+      compare(a.radiance, (await ctl.readFrame()).radiance, o.tol, ctlAgree, 3);
+    }
     for (const p of PLANES) compare(a[p], b[p], o.tol, agree[p], c.rgbOnly?.includes(p) ? 3 : 4);
     for (let i = 0; i < b.radiance.length; i += 4) {
       for (let k = 0; k < 3; k++) {
@@ -271,7 +314,13 @@ async function runCase(name: string, c: Case, o: Opts): Promise<void> {
     metrics[`${tag}_${p}_bit_identical_frac`] = g.same / Math.max(1, g.total);
     metrics[`${tag}_${p}_rel_channel_max`] = g.maxRelChannel;
     worstPlane = Math.max(worstPlane, g.maxRel);
-    if (g.over > 0) note(`${tag}: plane ${p}: ${g.over} of ${g.total} pixels differ by more than ${o.tol} (max ${g.maxRel})`);
+    if (g.over > 0) note(`${tag}: plane ${p}: ${g.over} of ${g.total} pixels differ by more than ${o.tol} (max ${g.maxRel}); first: ${g.examples.join('; ')}`);
+  }
+  if (ctl) {
+    metrics[`${tag}_control_packing_radiance_rel_max`] = ctlAgree.maxRel;
+    metrics[`${tag}_control_packing_radiance_over_tol`] = ctlAgree.over;
+    if (ctlAgree.over > 0) note(`${tag}: CONTROL (megakernel vs megakernel, other packing, not gated): ${ctlAgree.over} of ${ctlAgree.total} radiance pixels differ (max ${ctlAgree.maxRel})`);
+    ctlAdapter!.dispose();
   }
   metrics[`${tag}_plane_rel_max`] = worstPlane;
   metrics[`${tag}_identity_rel_max`] = identityWorst;
@@ -310,6 +359,7 @@ try {
     batch: numberArg(args, 'batch', 0),
     minMs: numberArg(args, 'minms', 250),
     agree: numberArg(args, 'agree', 1) === 1,
+    control: numberArg(args, 'control', 0) === 1,
     wavefront,
   };
   if (opts.timing) metrics.timing_best_effort = 1;

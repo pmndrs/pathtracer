@@ -45,7 +45,6 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   if (o.volumes?.guiding === 'vspg') return "integrator.volumes.guiding 'vspg' (volume scattering probability guiding is megakernel only: V4.3)";
   if (o.volumes?.marchSamples && o.volumes.marchSamples > 1) return 'integrator.volumes.marchSamples (stratified march estimate builds on the forced NEE, megakernel only: V7.1)';
   if (o.volumes?.forcedNee) return 'integrator.volumes.forcedNee (forced in-scatter NEE is megakernel only: V4.2)';
-  if (o.frame && o.volumes) return 'integrator.frame with integrator.volumes (V5.1c: the megakernel only; the wavefront scatter vertex lives in the shade kernel and has no frame planes)';
   if (o.frame && o.aovs) return 'integrator.frame with integrator.aovs (both live in the tail of the accumulation buffer; the real-time mode has no AOVs)';
   if (o.restir && o.alphaMask) return "integrator.restir with alpha MASK (the megakernel tests reservoir visibility with the exact cutout walk; the wavefront's shadow kernel follows the shadow policy)";
   if (o.restir && o.restirShared) return 'integrator.restir.sharedHit (the shared primary hit joins the wavefront camera kernel: TASKS P4.2a follow-up)';
@@ -386,13 +385,19 @@ function ptwfIntersectVolWgsl(o: ResolvedIntegratorOptions, wf: PtwfConfig): str
   const sk = !!v.mediumStack; // V6.2: \`med\` is a stack word; skMed = its top (the current medium id)
   const skMed = (e: string): string => (sk ? `ptVolTop(${e})` : e);
   const emissive = ptMediumsEmit(v.media); // V4.6: the intersect kernel adds the segments' emission to the accumulator (the shade kernel never sees the flight)
+  // V5.1d \`integrator.frame\`: the first bounce ray's hit distance (the megakernel's fBounce: the FIRST hit of the depth-1 ray, an interface included) rides in the hit record's free lane;
+  // with an emissive medium the flight emission is routed like the megakernel's addPure: depth 0 = plane 6 (written, the shade's depth-0 plane write folds it in), later = plane 6 if the path is
+  // still mirror-pure, else the primary class plane.
+  const fr = !!o.frame;
+  const frEmit = fr && emissive;
+  const frPure = o.frameEmission === 'mirror' ? '!st.impure' : 'false';
   return /* wgsl */ `
 ${PT_PARAMS_WGSL}
 ${bindings(vo || emissive ? ['params', 'accum', 'state', 'hit', 'count', 'queue'] : ['params', 'state', 'hit', 'count', 'queue'])}
 ${ptCommonHeadWgsl(o)}
 ${PT_MIS_WGSL}
 ${ptVolumeWgsl(v, vo ? ['seedOf', 'bind', 'tables', 'density', 'flight', 'tr', 'outputsMarch'] : ['seedOf', 'bind', 'tables', 'density', 'flight'])}
-${commonWgsl(wf)}${stateWgsl(o)}${vo ? `
+${frEmit ? `${ptFrameAddWgsl()}\n` : ''}${commonWgsl(wf)}${stateWgsl(o)}${vo ? `
 // the sampler's pixel seed (\`ptPixelSeed\`: rtHash32 of the pixel and the seed), which the walk-only intersect module does not carry
 fn ptwfVoHash(x0: u32) -> u32 {
     var x = x0;
@@ -426,13 +431,18 @@ ${vo ? `    if (iter == 0u) {
 ` : ''}    var skips = st.skips;
     var back = st.volBack;
     var flag = 0u;
-    var hit: RtHit;
+${fr ? `    var fbT = 0.0;
+` : ''}${frEmit ? `    var fE = vec3f(0.0);
+` : ''}    var hit: RtHit;
     loop {
         hit = rtClosest(ray, RT_MASK_ALL);
         if (${skMed('med')} != 0u) {
             let segMax = select(PT_FAR, hit.t, hit.t >= 0.0) + back;
             let ev = ptVolSample(${skMed('med')}, ray.origin - ray.direction * back, ray.direction, segMax, &st.beta);
-${emissive ? `            ptAccum[path] = ptAccum[path] + vec4f(ptVolEmitTake(), 0.0);
+${frEmit ? `            let fe = ptVolEmitTake();
+            ptAccum[path] = ptAccum[path] + vec4f(fe, 0.0);
+            fE += fe;
+` : emissive ? `            ptAccum[path] = ptAccum[path] + vec4f(ptVolEmitTake(), 0.0);
 ` : ''}            if (ev.kind == 2u) {
                 flag = 3u;
                 break;
@@ -446,7 +456,10 @@ ${emissive ? `            ptAccum[path] = ptAccum[path] + vec4f(ptVolEmitTake(),
         if (hit.t < 0.0) {
             break;
         }
-        let mv = ptVolMat(hit.material);
+${fr ? `        if (skips == st.skips) {
+            fbT = hit.t; // the first segment of this ray reached a surface (no scatter, no kill, no miss)
+        }
+` : ''}        let mv = ptVolMat(hit.material);
         if (mv.w != 0u) {
             skips += 1u;
             if (skips > ${sk ? 255 : 256}u) {
@@ -465,7 +478,17 @@ ${sk ? `            med = ptVolCross(med, mv, dot(ray.direction, hit.normal) < 0
         }
         break;
     }
-    st.origin = ray.origin;
+${frEmit ? `    let fb = ptFrameBase(n);
+    if (st.depth == 0u) {
+        ptAccum[fb + 6u * n + path] = vec4f(fE, 0.0); // the shade's depth-0 plane write adds it to plane 6 (emission) or to the class plane (frameEmission 'none')
+    } else if (!(fE.x == 0.0 && fE.y == 0.0 && fE.z == 0.0)) {
+        if (${frPure}) {
+            ptAccum[fb + 6u * n + path] = ptAccum[fb + 6u * n + path] + vec4f(fE, 0.0);
+        } else {
+            ptFrameAdd(path, n, fE);
+        }
+    }
+` : ''}    st.origin = ray.origin;
     st.med = med;
     st.skips = skips;
     st.volBack = back;
@@ -473,7 +496,7 @@ ${sk ? `            med = ptVolCross(med, mv, dot(ray.direction, hit.normal) < 0
     ptwfStorePath(path, n, st);
     ptwfHit[path] = vec4u(bitcast<u32>(hit.t), hit.instance, hit.triangle, hit.material);
     ptwfHit[n + path] = vec4u(bitcast<vec2u>(hit.bary), select(0u, 1u, hit.frontFace), flag);
-    ptwfHit[2u * n + path] = vec4u(bitcast<vec3u>(hit.normal), 0u);
+    ptwfHit[2u * n + path] = vec4u(bitcast<vec3u>(hit.normal), ${fr ? 'bitcast<u32>(fbT)' : '0u'});
 }
 `;
 }
@@ -607,7 +630,7 @@ ${bindings(['params', 'accum', 'count', 'queue', 'shadow'])}
 ${ptCommonHeadWgsl(o)}
 ${PT_MIS_WGSL}
 ${ptVolumeWgsl(v, ['seedOf', 'bind', 'tables', 'density', 'tr'])}
-${commonWgsl(wf)}
+${o.frame ? `${ptFrameAddWgsl()}\n` : ''}${commonWgsl(wf)}
 @compute @workgroup_size(${PTWF_WORKGROUP})
 fn ptwfShadow(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
     let iter = ptParams.limits.w;
@@ -631,7 +654,8 @@ ${v.outputs ? `        let c = vec4f(ptwfF3(r2) * tr, 0.0);
             ptAccum[n + path] = ptAccum[n + path] + c;
         }
 ` : `        ptAccum[path] = ptAccum[path] + vec4f(ptwfF3(r2) * tr, 0.0);
-`}    }
+${o.frame ? `        ptFrameAdd(path, n, ptwfF3(r2) * tr);
+` : ''}`}    }
 }
 `;
 }
@@ -797,18 +821,28 @@ ${ind}ptwfQueue[2u * n + ss] = path;
   // P5 (V270): the two non-surface outcomes of the intersect kernel's medium loop. `hit.w` = 3: the path is dead (the megakernel's `break`); `hit.w` = 2: a real scattering event at distance `hit.t`
   // along the (already updated) ray: a vertex without a BSDF: NEE with the phase function (the shadow kernel adds the transmittance), HG sampling, roulette, the next ray starts at the event.
   const appendNext = (ind: string): string => (wf.subgroup ? `${ind}ptwfWantNext = true;\n` : `${ind}let nq = (iter + 1u) & 1u;\n${ind}let slot = atomicAdd(&ptwfCount[nq], 1u);\n${ind}ptwfQueue[nq * n + slot] = path;\n`);
+  // V5.1d frame planes with media (the megakernel's V5.1c semantics): a first-vertex scatter is the diffuse class (albedo sigma_s / sigma_t, normal -ray, viewZ / motion of the scatter point,
+  // roughness 1); a depth-0 path that dies in the medium writes unseen planes. \`fPrior\` = the flight emission the intersect kernel stashed in plane 6 before the first vertex (emissive media only).
+  const frVol = frameOut && vol;
+  const frPrior = frVol && ptMediumsEmit((o.volumes as NonNullable<typeof o.volumes>).media);
+  const priorOr0 = frPrior ? 'fPrior' : 'vec3f(0.0)';
+  const frPlanes = (seen: boolean, ind: string): string => {
+    const lit = emitMode ? `vec3f(0.0), vec3f(0.0), ${priorOr0}` : `${priorOr0}, vec3f(0.0), vec3f(0.0)`;
+    const geo = seen ? 'true, false, -ray.direction, -dot(pm - ptParams.origin.xyz, normalize(ptParams.forward.xyz)), ptFrameMotion(pm), 1.0, ptVolMedium(curMed).albedo, vec3f(1.0)' : 'false, false, vec3f(0.0), 0.0, vec3f(0.0), 0.0, vec3f(1.0), vec3f(1.0)';
+    return `${ind}if (${seen ? 'vertex' : 'depth'} == 0u) {\n${ind}    ptFramePlanes(path, n, ${lit}, 0.0, ${geo});\n${ind}}\n`;
+  };
   const mediumVertex = vol
     ? `    if (h1.w == 3u) {
-        return; // a path delta tracking killed, or one past the interface skip limit: the megakernel's break
+${frVol ? frPlanes(false, '        ') : ''}        return; // a path delta tracking killed, or one past the interface skip limit: the megakernel's break
     }
     if (h1.w == 2u) {
         if (${sd ? 'mdepth >= maxVolDepth' : 'depth >= maxDepth'}) {
-            return;
+${frVol ? frPlanes(false, '            ') : ''}            return;
         }
         let vertex = depth;
         depth += 1u;${sd ? '\n        mdepth += 1u;' : ''}
         let pm = st.origin - st.dir * st.volBack + st.dir * hit.t;
-${aovs ? `        if (vertex == 0u) {
+${frVol ? frPlanes(true, '        ') : ''}${aovs ? `        if (vertex == 0u) {
             // V5.1b: the megakernel's first-scatter guides: albedo = single-scattering albedo of the medium, normal = -ray direction, viewZ of the scatter point
             ptAovPrimary(path, n, -dot(pm - ptParams.origin.xyz, normalize(ptParams.forward.xyz)));
             ptAovGuide(path, n, ptVolMedium(curMed).albedo, -ray.direction);
@@ -852,6 +886,7 @@ ${sd ? `        next.mdepth = mdepth;
         next.med = ${o.volumes?.mediumStack ? 'curStack' : 'curMed'};
         next.skips = st.skips;
 ${aovs ? `        next.aovDone = st.aovDone || vertex == 0u;
+` : ''}${frVol && o.frameEmission === 'mirror' ? `        next.impure = true; // every scatter ends the mirror-pure chain
 ` : ''}        ptwfStorePath(path, n, next);
 ${appendNext('        ')}        return;
     }
@@ -1111,6 +1146,10 @@ ${medium ? `    var sigma = st.sigma;
 ${emitMode ? `    var fEmit = vec3f(0.0);
     var fEmitW = vec3f(0.0);
 ` : frameOut ? `    var fDirect = vec3f(0.0);
+` : ''}${frPrior ? `    var fPrior = vec3f(0.0);
+    if (depth == 0u) {
+        fPrior = ptAccum[ptFrameBase(n) + 6u * n + path].xyz; // flight emission before the first vertex (intersect kernel)
+    }
 ` : ''}${onRadiance ? `    let ptHookFlags = ptHookUpdateFlag(path % dims.x, path / dims.x, sampleIndex);
 ` : ''}
     let h0 = ptwfHit[path];
@@ -1120,13 +1159,16 @@ ${emitMode ? `    var fEmit = vec3f(0.0);
 ${o.alphaMask ? `    if (h1.w != 0u) {
         return; // the intersect kernel ran out of cutout skips (PT_MASK_SKIPS): the path ends, as in the megakernel
     }
+` : ''}${frVol ? `    if (depth == 1u && h2.w != 0u) {
+        ptFrameBounce(path, n, bitcast<f32>(h2.w)); // the first bounce ray's first hit (intersect kernel), whatever the path does after it
+    }
 ` : ''}${vol ? mediumVertex : ''}    if (hit.t < 0.0) {
 ${emitMode ? addPure('beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf)', 'depth', '        ') : addRadiance('beta * ptEscaped(ray.direction, depth == 0u || specularBounce, prevPdf)', 'depth', '        ')}${emitMode ? `        if (depth == 0u) {
-            ptFramePlanes(path, n, vec3f(0.0), vec3f(0.0), fEmit, 0.0, false, false, vec3f(0.0), 0.0, vec3f(0.0), 0.0, vec3f(1.0), vec3f(1.0));
+            ptFramePlanes(path, n, vec3f(0.0), vec3f(0.0), fEmit${frPrior ? ' + fPrior' : ''}, 0.0, false, false, vec3f(0.0), 0.0, vec3f(0.0), 0.0, vec3f(1.0), vec3f(1.0));
             fEmitW = fEmit;
         }
 ` : frameOut ? `        if (depth == 0u) {
-            ptFramePlanes(path, n, radiance, vec3f(0.0), vec3f(0.0), 0.0, false, false, vec3f(0.0), 0.0, vec3f(0.0), 0.0, vec3f(1.0), vec3f(1.0));
+            ptFramePlanes(path, n, radiance${frPrior ? ' + fPrior' : ''}, vec3f(0.0), vec3f(0.0), 0.0, false, false, vec3f(0.0), 0.0, vec3f(0.0), 0.0, vec3f(1.0), vec3f(1.0));
             fDirect = radiance;
         }
 ` : ''}        ${addOut};
@@ -1135,7 +1177,7 @@ ${counters ? `        ptCountRay(path, 1u, 0u);
 ` : ''}        return;
     }${counters ? `
     ptCountRay(path, 1u, 0u);` : ''}${aovs ? `
-    var aovDone = st.aovDone;` : ''}${frameOut ? `
+    var aovDone = st.aovDone;` : ''}${frameOut && !vol ? `
     if (depth == 1u) {
         ptFrameBounce(path, n, hit.t);
     }` : ''}
@@ -1198,11 +1240,11 @@ ${lodS.bsdf(mixU, shadingNormal, true) ?? `    let bp = ptBsdfFromMaterial(mat${
         ptAovGuide(path, n, ptAovAlbedo(mat), ${shadingNormal});
     }
 ` : ''}${emitMode ? `    if (depth == 0u) {
-        ptFramePlanes(path, n, vec3f(0.0), vec3f(0.0), fEmit, 0.0, true, bp.kind == PT_BSDF_CONDUCTOR || bp.kind == PT_BSDF_DIELECTRIC, ${shadingNormal}, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)), ptFrameMotion(surf.position), mat.specularRoughness, ptAovAlbedo(mat), ptAovSpecular(mat));
+        ptFramePlanes(path, n, vec3f(0.0), vec3f(0.0), fEmit${frPrior ? ' + fPrior' : ''}, 0.0, true, bp.kind == PT_BSDF_CONDUCTOR || bp.kind == PT_BSDF_DIELECTRIC, ${shadingNormal}, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)), ptFrameMotion(surf.position), mat.specularRoughness, ptAovAlbedo(mat), ptAovSpecular(mat));
         fEmitW = fEmit;
     }
 ` : frameOut ? `    if (depth == 0u) {
-        ptFramePlanes(path, n, fDirect, fDirect, vec3f(0.0), 0.0, true, bp.kind == PT_BSDF_CONDUCTOR || bp.kind == PT_BSDF_DIELECTRIC, ${shadingNormal}, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)), ptFrameMotion(surf.position), mat.specularRoughness, ptAovAlbedo(mat), ptAovSpecular(mat));
+        ptFramePlanes(path, n, fDirect${frPrior ? ' + fPrior' : ''}, fDirect, vec3f(0.0), 0.0, true, bp.kind == PT_BSDF_CONDUCTOR || bp.kind == PT_BSDF_DIELECTRIC, ${shadingNormal}, -dot(surf.position - ptParams.origin.xyz, normalize(ptParams.forward.xyz)), ptFrameMotion(surf.position), mat.specularRoughness, ptAovAlbedo(mat), ptAovSpecular(mat));
     }
 ` : ''}    if (${black} || ${sd ? '(depth - mdepth)' : 'depth'} >= maxDepth) {
         ${addOut};
