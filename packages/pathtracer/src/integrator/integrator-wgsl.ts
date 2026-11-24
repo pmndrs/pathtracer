@@ -21,7 +21,12 @@ import { ptVolPhaseSampleWgsl, ptVolumeWgsl } from '../volume/volume-wgsl.ts';
 import { ptMediumStackPack, ptMediumsEmit, type PtVolumeOptions } from '../volume/volume.ts';
 import { ptSpectralWgsl, resolveSpectralOptions, type PtSpectralOptions, type ResolvedSpectralOptions } from '../spectral/spectral-wgsl.ts';
 import { PT_RESTIR_HIT_BINDING, PT_RESTIR_OCT_WGSL, PT_RESTIR_SHADE_BINDING, PT_RESTIR_UNPACK_WGSL, type PtRestirOptions } from '../restir/restir-wgsl.ts';
+
 import { PT_RESTIR_GI_SHADE_BINDING, ptRestirGiShadeWgsl } from '../restir/restir-gi-wgsl.ts';
+
+/** V1.7 scene-wide position error scale = 4 gamma(7) (same value as `RT_SCENE_ERR_SCALE` of the trace module), times the scene's bounding radius. */
+/** (V1.7) `ptOffsetOriginScene` offsets a point that carries no per-hit error bound (a stored G-buffer position, a light-sample end point) by this scene-wide bound times the bounding sphere's radius (scene header word 13). */
+const PT_SCENE_ERR_SCALE = Math.fround(4 * ((7 * 2 ** -24) / (1 - 7 * 2 ** -24))).toString();
 
 export interface PtIntegratorOptions extends PtBsdfOptions {
   /** `'owen-sobol'` (reference), `'pcg'` (debug) or `'bluenoise'` (P4.1, real-time frames: the `blueNoise` option, default the package's `gf-vec2-64` via `loadBlueNoise`; both schedulers, the wavefront without refill / layers; `dimensions.ts`). */
@@ -339,6 +344,7 @@ const PT_NEE: bool = ${o.nee};
 const PT_ENV_SAMPLING: bool = ${o.envSampling !== 'none'};
 const PT_SUN_VISIBLE: bool = ${o.sunVisible};
 const PT_ORIGIN: f32 = 0.03125;
+const PT_SCENE_ERR_SCALE: f32 = ${PT_SCENE_ERR_SCALE};
 const PT_FLOAT_SCALE: f32 = 0.0000152587890625;
 const PT_INT_SCALE: f32 = 256.0;
 ${mask ? `const PT_MASK_SKIPS: u32 = 64u;
@@ -357,6 +363,10 @@ fn ptOffsetOriginErr(p0: vec3f, n: vec3f, err: vec3f) -> vec3f {
 
 fn ptOffsetOrigin(p: vec3f, n: vec3f) -> vec3f {
     return ptOffsetOriginErr(p, n, vec3f(0.0));
+}
+
+fn ptOffsetOriginScene(p: vec3f, n: vec3f) -> vec3f {
+    return ptOffsetOriginErr(p, n, vec3f(PT_SCENE_ERR_SCALE * bitcast<f32>(rtSceneTable[3].y)));
 }
 
 fn ptSideNormal(n: vec3f, w: vec3f) -> vec3f {

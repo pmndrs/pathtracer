@@ -105,4 +105,26 @@ export const restirPbrLampsFloor: SceneDesc = retarget('restir-pbr-lamps-floor',
 export const restirPbrLampsMixOnly: SceneDesc = retarget('restir-pbr-lamps-mixonly', { floor: lam([0.5, 0.45, 0.4]), gold: lam([0.8, 0.6, 0.3]), mix: mixMat }, 'restir-pbr-lamps with only the box at metalness 0.5 (stochastic mix), the rest Lambert.');
 export const restirPbrLampsGoldOnly: SceneDesc = retarget('restir-pbr-lamps-goldonly', { floor: lam([0.5, 0.45, 0.4]), gold: goldMat, mix: lam([0.2, 0.5, 0.8]) }, 'restir-pbr-lamps with only the ball gold, the rest Lambert.');
 
-export const restirScenes: readonly SceneDesc[] = [restirTexLamps, restirPbrLamps, restirMaskLamps, restirPbrLampsNoMix, restirPbrLampsGold, restirPbrLampsLambert, restirPbrLampsFloor, restirPbrLampsMixOnly, restirPbrLampsGoldOnly];
+/**
+ * `restir-ground-sun` (V1.7): the offset-bound diagnostic without media. A 2 km Lambert ground (two triangles, vertices 1 km from the origin) under a sun 30 degrees off the zenith, a 40 m black box
+ * 100 m aside (out of the camera's view), camera 0.3 m above the origin looking straight down at 1 degree: direct light only, pixel = rho / pi E cos = 0.5 / pi * 3 * cos 30.
+ * A shadow ray that starts inside the ground's own triangle error hits it and darkens the pixel.
+ */
+export const restirGroundSun: SceneDesc = {
+  version: 1,
+  name: 'restir-ground-sun',
+  purpose: 'A 2 km ground under a sun with the camera 0.3 m above the origin: pixel = 0.5 / pi * 3 * cos 30 = 0.41350 (direct, maxDepth 1). Shadow rays leaving the ground at a point far from its vertices (V1.7).',
+  tier: 1,
+  camera: { type: 'perspective', position: [0, 0.3, 0.0001], target: [0, 0, 0], up: [0, 1, 0], yFovDeg: 1 },
+  film: { width: 32, height: 32, filter: 'box' },
+  integrator: { maxDepth: 1 },
+  materials: { ground: { type: 'diffuse', reflectance: [0.5, 0.5, 0.5] }, black: { type: 'diffuse', reflectance: [0, 0, 0] } },
+  meshes: [
+    { name: 'ground', geometry: { type: 'quad', size: [2000, 2000] }, material: 'ground' },
+    { name: 'box', geometry: { type: 'box', size: [40, 1, 40] }, material: 'black', transform: translation(100, 1, 0) },
+  ],
+  lights: [{ type: 'directional', direction: [-0.5, -Math.cos((30 * Math.PI) / 180), 0], irradiance: [3, 3, 3] }],
+  expected: { type: 'mean', value: [0.4135, 0.4135, 0.4135], tolerance: 0.002, pixelwise: false },
+};
+
+export const restirScenes: readonly SceneDesc[] = [restirGroundSun, restirTexLamps, restirPbrLamps, restirMaskLamps, restirPbrLampsNoMix, restirPbrLampsGold, restirPbrLampsLambert, restirPbrLampsFloor, restirPbrLampsMixOnly, restirPbrLampsGoldOnly];

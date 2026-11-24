@@ -66,6 +66,7 @@ describe('integrator WGSL', () => {
     const names = new Set(declared(code));
     const called = new Set([...ptIntegratorWgsl().matchAll(/\b((?:pt|rt)[A-Z]\w*)\(/g)].map((m) => m[1] as string));
     called.delete('PtRadiance');
+    called.delete('ptOffsetOriginScene'); // declared by the integrator text, used only by the ReSTIR passes (pruned from the plain kernel; V1.7)
     for (const n of called) expect(names.has(n) || /^Rt|^Pt/.test(n), n).toBe(true);
     const missing = [...called].filter((n) => !names.has(n) && !/^(Rt|Pt)/.test(n));
     expect(missing).toEqual([]);

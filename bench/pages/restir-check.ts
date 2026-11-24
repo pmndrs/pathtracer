@@ -103,6 +103,14 @@ async function accumulate(ctx: Ctx, k: PtMegakernel, n: number, seed: number): P
 const NEE: PtIntegratorOptions = {};
 const rs = (o: PtRestirOptions): PtIntegratorOptions => ({ restir: o });
 
+/** Mean of one colour channel (absolute level: V1.7 compares it with a closed form). */
+function meanChannel(im: Image, c: number): number {
+  let t = 0;
+  const n = im.width * im.height;
+  for (let i = 0; i < n; i++) t += im.data[i * im.channels + c]!;
+  return t / n;
+}
+
 function cmp(test: Image, ref: Image) {
   const m = compareImages(test, ref);
   return { relMse: m.relMse, relBias: m.relBias, firefly: m.fireflyPct, nonFinite: m.nonFiniteTest };
@@ -162,9 +170,11 @@ async function checkConverge(name: string, frameCount: number, refFrames: number
   const p = `converge__${name}`;
   log(`${p}__nee_relmse`, base.relMse);
   log(`${p}__nee_relbias`, base.relBias);
+  log(`${p}__ref_mean_g`, meanChannel(ref, 1));
   for (const mode of modes(m, k, radius)) {
     const kernel = await makeKernel(ctx, mode.integrator);
     const a = await accumulate(ctx, kernel, frameCount, 1);
+    log(`${p}__${mode.name}_mean_g`, meanChannel(a, 1));
     const b = await accumulate(ctx, kernel, frameCount, 2);
     const ca = cmp(a, ref);
     const cb = cmp(b, ref);
