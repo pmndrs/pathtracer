@@ -286,6 +286,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
       if (o.volumes.outputs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.volumes.outputs (both live in the accumulator tail)");
       if (o.aovs) throw new Error("integrator.volumes.guiding 'vspg' cannot be combined with integrator.aovs (both live in the accumulator tail)");
       if (o.accumulate === false) throw new Error("integrator.volumes.guiding 'vspg' needs accumulate (the guide is a sum over samples)");
+      if (o.volumes.media.some((m) => m.height) || (o.volumes.majorant === 'brick' && o.volumes.media.some((m) => m.grid))) throw new Error("integrator.volumes.guiding 'vspg' covers homogeneous and plain-loop grid media only (a height medium or majorant 'brick' has no single-majorant free flight to guide; V4.3 refuses it instead of silently running unguided)");
     }
     if (o.volumes.adaptive && !o.volumes.outputs) throw new Error('integrator.volumes.adaptive needs integrator.volumes.outputs (the done flag lives in its accumulator tail)');
     if (o.volumes.outputs && o.accumulate === false) throw new Error('integrator.volumes.outputs needs accumulate (the outputs are sums over samples)');
