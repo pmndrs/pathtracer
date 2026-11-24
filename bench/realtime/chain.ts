@@ -33,13 +33,13 @@ const COPY_SRC_T = GPUTextureUsage.COPY_SRC;
  */
 class UpscalerCamera {
   readonly isPerspectiveCamera = true;
-  readonly near = PIPE_NEAR;
-  readonly far = PIPE_FAR;
+  near = PIPE_NEAR;
+  far = PIPE_FAR;
   readonly projectionMatrix = { elements: new Float32Array(16) };
   readonly matrixWorld = { elements: new Float32Array(16) };
   readonly matrixWorldInverse = { elements: new Float32Array(16) };
   set(c: PtLookAtCamera, aspect: number): void {
-    this.projectionMatrix.elements.set(projectionMatrix(c.yFovDeg, aspect));
+    this.projectionMatrix.elements.set(projectionMatrix(c.yFovDeg, aspect, this.near, this.far));
     this.matrixWorld.elements.set(worldMatrix(c));
     this.matrixWorldInverse.elements.set(viewMatrix(c));
   }
@@ -439,6 +439,12 @@ export interface PipelineSettings {
    * in sigmas of the current 3x3 (0 = off, default). For `integrator.frameMedia` (the plane then holds the camera ray's single scattering). Default off: the track N chain is unchanged.
    */
   emissionTemporal?: { alpha?: number; clip?: number } | false;
+  /**
+   * Clip planes of the chain's camera (metres; default PIPE_NEAR / PIPE_FAR = 0.05 / 200). The denoiser treats viewZ beyond `far` as sky and outputs 0 there, so a scene
+   * larger than 200 m from the camera (the WDAS cloud at ~1250) must raise it: `RealtimePipelineSession` derives it from the scene bounds.
+   */
+  near?: number;
+  far?: number;
 }
 
 const align = (n: number, a: number) => Math.ceil(n / a) * a;
@@ -584,7 +590,7 @@ export class PipelineArm {
       }),
     ]);
     const depthParams = device.createBuffer({ label: `${label} depth params`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(depthParams, 0, new Float32Array([PIPE_NEAR, PIPE_FAR, 0, 0]));
+    device.queue.writeBuffer(depthParams, 0, new Float32Array([s.near ?? PIPE_NEAR, s.far ?? PIPE_FAR, 0, 0]));
     const depthGroup = device.createBindGroup({ layout: depthPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: depthParams } }, { binding: 1, resource: tex.viewZ.createView() }] });
 
     const denoiser = new DiffuseSpecularDenoiser(device, { ...(s.denoiser ?? {}), remodulate: true } as never);
@@ -724,7 +730,9 @@ export class PipelineArm {
     const { width: w, height: h } = this.s;
     const aspect = w / h;
     const view = viewMatrix(camera);
-    const proj = projectionMatrix(camera.yFovDeg, aspect);
+    const near = this.s.near ?? PIPE_NEAR;
+    const far = this.s.far ?? PIPE_FAR;
+    const proj = projectionMatrix(camera.yFovDeg, aspect, near, far);
     const reset = this.resetNext;
     this.resetNext = false;
     if (reset) {
@@ -738,7 +746,7 @@ export class PipelineArm {
       const dOut = this.denoiser.dispatchBoth(
         { diffuse: { radiance: t.diffuse, hitDistance: t.hitD }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF } } as never,
         { depth: this.depth, normal: t.normal, motion: t.motion, roughness: t.roughness, albedo: t.albedo, viewZ: t.viewZ, motionZ: t.motionZ },
-        { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near: PIPE_NEAR, far: PIPE_FAR, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
+        { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near, far, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };
       const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
       let emission = t.emission;
@@ -800,6 +808,8 @@ export class PipelineArm {
 
   /** The upscaler on `color` (render res -> display res). `reactive`: pass the reactive mask (only when `settings.reactive` and the SVGF branch wrote it this frame). */
   upscale(camera: PtLookAtCamera, reset: boolean, deltaTime = 1 / 60, reactive = false): void {
+    this.upCamera.near = this.s.near ?? PIPE_NEAR;
+    this.upCamera.far = this.s.far ?? PIPE_FAR;
     this.upCamera.set(camera, this.s.width / this.s.height);
     this.upscaler.beginFrame(this.upCamera as never);
     this.upscaler.endFrame(this.upCamera as never);

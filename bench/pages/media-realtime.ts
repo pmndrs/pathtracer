@@ -301,7 +301,6 @@ try {
       }
     }
   }
-  void readTextureRgba16f;
   reportResult(
     { scene: keys.join('+'), renderer: 'media-realtime', config: { scenes: keys, scenarios, res, maxDepth, seeds, frames, checkpoints, stableFrom, moveDeg, moveFrames, moveCheckpoints, refSpp, moveRefSpp, alpha, clip }, valid: deviceErrors.length === 0, metrics, notes },
     { adapter: adapterSummary, deviceErrors },

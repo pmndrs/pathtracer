@@ -16,6 +16,7 @@
 import { resolveIntegratorOptions, type PtLookAtCamera, type PtMegakernel, type PtRestirOptions } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
+import { PIPE_FAR } from './chain-math.ts';
 import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from './chain.ts';
 
 export interface RealtimeSessionOptions {
@@ -93,6 +94,8 @@ export class RealtimePipelineSession {
       ...(o.denoiser ? { denoiser: o.denoiser } : {}),
       ...(o.upscaler ? { upscaler: o.upscaler } : {}),
       ...(o.reactive ? { reactive: o.reactive } : {}),
+      // The denoiser reads viewZ beyond `far` as sky (output 0): raise the 200 m default for a scene that reaches past it (V7.5b, the WDAS cloud at ~1250 read -29%).
+      ...sceneFar(adapter, o.scene.camera as PtLookAtCamera),
       // V7.5: a kernel with `frameMedia` gets the emission temporal pass by default (an explicit `emissionTemporal: false` wins).
       ...(o.emissionTemporal !== undefined ? (o.emissionTemporal ? { emissionTemporal: o.emissionTemporal } : {}) : resolveIntegratorOptions(kernel.options.integrator ?? {}).frameMedia ? { emissionTemporal: {} } : {}),
     };
@@ -221,4 +224,12 @@ export class RealtimePipelineSession {
     this.arm.destroy();
     this.adapter.dispose();
   }
+}
+
+/** `{ far }` when the scene's bounding sphere reaches past PIPE_FAR from the camera (2x margin for camera motion), else nothing (every smaller scene keeps the old chain). */
+function sceneFar(adapter: PtMegakernelAdapter, camera: PtLookAtCamera): { far?: number } {
+  const b = adapter.debug.copy.bounds;
+  const p = camera.position;
+  const reach = Math.hypot(p[0] - b.center[0], p[1] - b.center[1], p[2] - b.center[2]) + b.radius;
+  return Number.isFinite(reach) && reach > PIPE_FAR ? { far: 2 * reach } : {};
 }
