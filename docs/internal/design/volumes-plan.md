@@ -115,7 +115,15 @@ Idea: a raymarcher looks finished in a frame because it takes several light esti
 | Item | What | Status |
 |---|---|---|
 | V7.1 | Homogeneous media: `volumes.marchSamples` N stratified distances on the camera segment (see forced-wgsl.ts header and DIVERGES V330). Megakernel only, implies `forcedNee`, composes with `equiangular`. Unbiased on `vol-cornell-fog` (within 1 SE at 1024 spp); error vs pbrt: x0.55-0.62 of the default at 1-64 spp from forced + equiangular, N adds a further gain only where one light sample per segment is the noise (lamp close to the ray: 6-18x at 1 spp, floor from 16 spp up) | done (2026-11-24) |
-| V7.2 | Grid media: the same N-strata estimate through the majorant / ratio-tracking transmittance (a grid segment has no closed-form exponential CDF: needs a distance proposal, e.g. equal-optical-depth strata from the brick majorants) | open |
+| V7.2 | Grid media: the same N-strata estimate through the majorant / ratio-tracking transmittance (a grid segment has no closed-form exponential CDF: needs a distance proposal, e.g. equal-optical-depth strata from the brick majorants) | on hold: no headroom (below) |
+| V7.3 | Split denoising: filter the orders-2+ (multiple scattering) radiance on its own and add the orders 0-1 back (needs `outputs` to accept `forcedNee` / `equiangular`: the forced estimate belongs to order 1), then the real denoiser (OIDN with guides) on that plane instead of a blur | proposed |
+
+**Where the noise is (2026-11-24, `pt_volume_outputs=1`, relMSE against our own 1024 spp render).** At 16 spp the orders 0-1 plane carries 0% of the error on
+`vol-vdb-wdas-cloud` (65% of the radiance) and 4% on `vol-cornell-fog` (57% of the radiance): multiple scattering is the noise in both, so improving single
+scattering (V7.1 N > 1, V7.2) cannot help dense clouds or room fog; it helps only single-scatter-dominated scenes (thin fog under a sun, a lamp close to the ray).
+Crude test of V7.3 (a Gaussian blur, sigma in pixels, stands in for a denoiser): Cornell fog 4 spp raw 0.556, blur everything 0.070 at best (0.37 at sigma 4:
+edges smear), blur only orders 2+ 0.027 (sigma 4); 16 spp 0.131 -> 0.010. WDAS cloud (soft everywhere at 128 px) 4 spp 0.351 -> 0.0145 split, 0.0092 blur all;
+16 spp 0.089 -> 0.0090 split. A filter is biased, so it is a real-time / preview tool and fades out as samples accumulate; the converged image stays the path tracer's.
 
 ## Suggested order
 
