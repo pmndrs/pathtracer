@@ -20,7 +20,6 @@ import type { AdapterSummary } from '../runner/contract.ts';
 import { getArgs, numberArg, reportError, reportResult, uploadImage, watchDevice } from '../runner/page-client.ts';
 import { getScene } from '../scenes/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
-import { readTextureRgba16f } from '../realtime/chain.ts';
 import { MediaRig, type MediaArm, type MediaImg } from '../realtime/media-rig.ts';
 import { edgeMask, maskedRelMse, temporalExcess, type MImg } from '../realtime/media-metrics.ts';
 
@@ -111,6 +110,8 @@ try {
   const moveRefSpp = numberArg(args, 'moveRefSpp', 1024);
   const alpha = numberArg(args, 'alpha', 0.1);
   const clip = numberArg(args, 'clip', 0);
+  const dn = args.dn ? Object.fromEntries(args.dn.split(';').map((kv) => { const [k, v] = kv.split(':') as [string, string]; return [k, Number.isNaN(Number(v)) ? v : Number(v)]; })) : undefined;
+  const tag = args.tag ?? '';
   const doFlip = numberArg(args, 'flip', 1) === 1;
   const doUpload = numberArg(args, 'upload', 1) === 1;
   const uploadFrames = (args.uploadFrames ?? '4,16').split(',').map(Number);
@@ -227,9 +228,10 @@ try {
       metrics[`${key}_edge_fraction`] = fraction;
       const arms: MediaArm[] = ['raw', 'raw-acc', 'svgf-all', 'svgf-split'];
       for (const seed of seeds) {
-        const rig = await MediaRig.create({ scene, width: W, height: H, maxDepth, media: def.media, seed, alpha, clip, trackRaw: true });
+        const rig = await MediaRig.create({ scene, width: W, height: H, maxDepth, media: def.media, seed, alpha, clip, trackRaw: true, ...(dn ? { denoiser: dn } : {}) });
         track(rig);
         adapterSummary = rig.a!.adapter.gpuContext!.summary;
+        { const o = rig.a!.arm.denoiser.options.diffuse as unknown as Record<string, number>; metrics.dn_atrous = o.atrousIterations as number; metrics.dn_keys = Object.keys(dn ?? {}).length; metrics.dn_s = JSON.stringify((rig.a as any).options.denoiser ?? null).length; metrics.dn_alpha = o.temporalAlpha as number; metrics.dn_sigmaL = o.sigmaLuminance as number; }
         rig.cut();
         for (let f = 1; f <= frames; f++) {
           await rig.frame(baseCam);
@@ -239,7 +241,7 @@ try {
             for (const arm of arms) {
               const img = await rig.image(arm);
               score(`${key}_static_s${seed}_f${f}_${arm}`, img, ref, mask, doFlip);
-              if (doUpload && seed === seeds[0] && uploadFrames.includes(f)) await uploadImage(`${key}-static-s${seed}-f${f}-${arm}`, img as never);
+              if (doUpload && seed === seeds[0] && uploadFrames.includes(f)) await uploadImage(`${key}-static-s${seed}-f${f}-${arm}${tag}`, img as never);
             }
           } else {
             for (const d of await rig.device()) await d.queue.onSubmittedWorkDone();

@@ -41,6 +41,8 @@ export interface MediaRigOptions {
   clip?: number;
   /** Keep a CPU mean of the raw frames (`raw-acc`; one readback per frame, never in a timed region). */
   trackRaw?: boolean;
+  /** SVGF options passed to the chain's denoiser (diagnostics). */
+  denoiser?: Record<string, unknown>;
 }
 
 export class MediaRig {
@@ -65,6 +67,7 @@ export class MediaRig {
         displayWidth: 2 * o.width,
         displayHeight: 2 * o.height,
         maxDepth: o.maxDepth,
+        ...(o.denoiser ? { denoiser: o.denoiser } : {}),
         ...(share ? { shareDeviceWith: share } : {}),
         adapter: { ...o.media, seed: o.seed, frameMedia: split },
         emissionTemporal: split ? { alpha: o.alpha ?? 0.1, clip: o.clip ?? 0 } : false,
