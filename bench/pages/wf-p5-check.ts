@@ -39,6 +39,8 @@ const note = (m: string): void => {
 interface Case {
   scene: string;
   settings?: PtAdapterSettings;
+  /** Also compare this case's megakernel image with the megakernel image of another case (same scene, other settings that should not move the beauty), not gated: `<case>_vs_*`. */
+  vs?: string;
 }
 
 const SPECTRAL: PtAdapterSettings = { spectral: {} };
@@ -81,6 +83,11 @@ const CASES: Record<string, Case> = {
   // V5.1b: first-scatter AOV guides (albedo, normal, viewZ) on the wavefront, compared per pixel as well as the beauty
   'vol-grid-cloud-aovs': { scene: 'vol-grid-cloud', settings: { aovs: true } },
   'vol-cornell-smoke-aovs': { scene: 'vol-cornell-smoke', settings: { aovs: true } },
+  // V5.1d controls for wf-frame-check's media cases (maxDepth 2, no roulette; with and without the frame planes)
+  'vol-cornell-smoke-d2': { scene: 'vol-cornell-smoke', settings: { maxDepth: 2, rrStartDepth: 0 } },
+  'vol-cornell-smoke-d2-frame': { scene: 'vol-cornell-smoke', settings: { maxDepth: 2, rrStartDepth: 0, frame: true }, vs: 'vol-cornell-smoke-d2' },
+  'vol-cornell-smoke-d2-frame-none': { scene: 'vol-cornell-smoke', settings: { maxDepth: 2, rrStartDepth: 0, frame: true, frameEmission: 'none' } },
+  'vol-cornell-smoke-d2-frame-primary': { scene: 'vol-cornell-smoke', settings: { maxDepth: 2, rrStartDepth: 0, frame: true, frameEmission: 'primary' } },
   'vol-grid-cloud-r8': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r8unorm' } },
   // spectral transport
   cornell: { scene: 'cornell', settings: SPECTRAL },
@@ -223,6 +230,17 @@ async function runCase(name: string, c: Case, variants: string[], o: { spp: numb
     metrics[`${name}_control_packing_relpx_over_tol`] = a.overPx;
     metrics[`${name}_control_packing_rel_max`] = a.maxRel;
     metrics[`${name}_control_packing_pixels_over_1e-3`] = a.over1e3;
+    other.dispose();
+  }
+  if (c.vs) {
+    const vc = CASES[c.vs] as Case;
+    const other = new PtMegakernelAdapter({ scenePacking: o.packing, ...(vc.settings ?? {}) });
+    await other.load(getScene(vc.scene));
+    const mk2 = other.renderer as PtMegakernel;
+    await render(other.gpuContext!.device, mk2, o.spp);
+    const a = compare(ref, (await mk2.readImage()).data, o.tol);
+    metrics[`${name}_vs_mk_relpx_over_tol`] = a.overPx;
+    metrics[`${name}_vs_mk_relpx_max`] = a.maxRelPx;
     other.dispose();
   }
   const aovRef = c.settings?.aovs ? await mk.readAovs() : null;

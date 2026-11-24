@@ -482,7 +482,19 @@ export const volNestedFurnace: SceneDesc = {
   expected: { type: 'mean', value: [1, 1, 1], tolerance: 0.01, pixelwise: false },
 };
 
+/**
+ * V5.1d control: `vol-cornell-smoke` with the cube lifted 1 mm off the floor. In the original the cube's bottom face (an interface) is coplanar with the floor, so a ray from a scatter point
+ * toward the floor hits two triangles at the same t up to an ulp: which one wins depends on the last bit of the scatter point, i.e. on how the compiler contracted its arithmetic. Two differently
+ * compiled kernels (the megakernel with and without AOVs, V5.1a; the wavefront with and without frame planes, V5.1d) then flip ~0.1% of the paths. Without the contact they agree per pixel.
+ */
+export const volCornellSmokeLift: SceneDesc = {
+  ...volCornellSmoke,
+  name: 'vol-cornell-smoke-lift',
+  purpose: 'vol-cornell-smoke with the smoke cube 1 mm above the floor (no coplanar interface / floor faces): per-pixel scheduler agreement control (V5.1d).',
+  meshes: volCornellSmoke.meshes.map((m) => (m.name === 'smoke-cube' ? { ...m, transform: translation(0.185, 0.111, 0.169) } : m)),
+};
+
 export const volumeCheckScenes: readonly SceneDesc[] = [volEmitSlab, volEmitGridSlab, volAbsorbSlab, volCameraMedium, volFurnaceSphere, volFurnaceSphereBack, volSlabSingle, volSlabSingleOblique, volGridSlab, volCameraGrid, volCameraGridAuto];
 export const volumeReferenceScenes: readonly SceneDesc[] = [volCornellSmoke, volCornellFog, volCornellFogEmpty, volMilkSphere, volGridCloud, volVdbSmoke, volVdbWdasCloud, volVdbBunnyCloud];
 export const volumeStackScenes: readonly SceneDesc[] = [volNestedAbsorb, volNestedOverlap, volNestedCamera, volNestedFurnace];
-export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, ...cloudScenes];
+export const volumeScenes: readonly SceneDesc[] = [...volumeCheckScenes, ...volumeStackScenes, ...volumeReferenceScenes, volEmitSphere, volCornellSmokeLift, ...cloudScenes];
