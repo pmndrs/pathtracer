@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "runId": "20261124T051012Z-render-until-check",
+  "startedAt": "2026-11-24T05:10:12.731Z",
+  "commit": "6426176-dirty",
+  "page": "render-until-check",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-sampling-resource-table",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/158.0.8127.88 headless",
+  "ok": true,
+  "totalMs": 260183,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 261 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "scene": "vol-cl-sph-g85-a99-t50",
+        "match": "1",
+        "pixel": "0.05",
+        "seeds": "6",
+        "w": "64",
+        "h": "64",
+        "max": "4096"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 259648,
+      "result": {
+        "scene": "vol-cl-sph-g85-a99-t50",
+        "renderer": "ours",
+        "config": {
+          "se": 0.001,
+          "pixel": 0.05,
+          "max": 4096,
+          "first": 64,
+          "width": 64,
+          "height": 64
+        },
+        "valid": true,
+        "metrics": {
+          "samples": 4096,
+          "met": 1,
+          "achieved_mean_rel_se": 0.0004097932312847192,
+          "achieved_pixel_rel_se": 0.045136358588933945,
+          "image_mean_luminance": 0.41591634832002455,
+          "wall_ms": 38558.40000003576,
+          "match_alloc_spp": 1173.56640625,
+          "match_uniform_spp_equal_mean_se": 1764.7233071074606,
+          "match_uniform_spp_equal_p99": 1087.5482228538428,
+          "match_saving_mean_se": 0.3349856028288195,
+          "match_saving_p99": -0.0790936728951992,
+          "match_alloc_wall_ms": 34303.9166666766,
+          "match_uniform_wall_ms_estimated": 16843.23998246784
+        },
+        "notes": {
+          "history": "64: se=3.136e-3 px=4.28e-1 batch=616ms | 128: se=2.298e-3 px=3.33e-1 batch=611ms | 256: se=1.633e-3 px=2.41e-1 batch=1191ms | 512: se=1.159e-3 px=1.64e-1 batch=2404ms | 1024: se=8.199e-4 px=1.05e-1 batch=4834ms | 2048: se=5.777e-4 px=6.75e-2 batch=9669ms | 4096: se=4.098e-4 px=4.51e-2 batch=19225ms",
+          "se_times_sqrt_n": "2.509e-2 2.600e-2 2.612e-2 2.623e-2 2.624e-2 2.614e-2 2.623e-2",
+          "reason": "target",
+          "bias_table": "seed 0: alloc spp=1198.5 (pilot incl.) meanSE=6.03e-4 p99=0.1164 wall=34046ms | uniform@256: meanSE=1.62e-3 p99=0.2391 -> equal-mean spp=1860.4 equal-p99 spp=1079.9 || seed 1: alloc spp=1133.4 (pilot incl.) meanSE=6.20e-4 p99=0.1121 wall=34141ms | uniform@256: meanSE=1.67e-3 p99=0.2403 -> equal-mean spp=1859.8 equal-p99 spp=1175.3 || seed 2: alloc spp=1155.8 (pilot incl.) meanSE=6.25e-4 p99=0.1100 wall=34346ms | uniform@256: meanSE=1.61e-3 p99=0.2307 -> equal-mean spp=1692.6 equal-p99 spp=1126.8 || seed 3: alloc spp=1149.9 (pilot incl.) meanSE=6.50e-4 p99=0.1243 wall=33832ms | uniform@256: meanSE=1.64e-3 p99=0.2353 -> equal-mean spp=1628.1 equal-p99 spp=916.9 || seed 4: alloc spp=1218.1 (pilot incl.) meanSE=6.19e-4 p99=0.1107 wall=34810ms | uniform@256: meanSE=1.63e-3 p99=0.2370 -> equal-mean spp=1785.9 equal-p99 spp=1172.9 || seed 5: alloc spp=1185.7 (pilot incl.) meanSE=6.32e-4 p99=0.1178 wall=34649ms | uniform@256: meanSE=1.66e-3 p99=0.2390 -> equal-mean spp=1761.6 equal-p99 spp=1053.5",
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.42333984375,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "Fabric",
+          "Linear",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 47,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": null
+}

@@ -42,7 +42,7 @@ Gate: `vol-cl-cloud256` and `vol-cl-sph-g85-a99-t200` at 256 spp keep their mean
 | ✅ V1.5 | Doc fixes: volumes.md sections 3 / 6.1 and DIVERGES V243 still describe the global majorant only | read-through |
 | ✅ V1.6 ★ | Per-pixel wavefront check of lobe scenes | `wf-p5-check cases=vol-cl-single-mie10,vol-cl-sph-hg2-a99-t50 spp=16` |
 | ✅ V1.7 (scene-wide bound for ReSTIR / 'ray' positions; interface skips need nothing; NEE light ends: maintainer's call) | Offset-bound follow-ups: ReSTIR G-buffer positions, light-sample end points, medium interface skips, `positions: 'ray'` | `vol-cl-ground-occluder` with each path on |
-| V1.8 ★ | Windows DXC compile of the 50-54 KB volume megakernels (and the wavefront split as fallback) | `kernel-compile` page on the 3060, cold / warm |
+| V1.8 ★ | Windows DXC compile of the 50-54 KB volume megakernels (and the wavefront split as fallback) | `kernel-compile` page on the 3060, cold / warm: handed off as [WINDOWS-HANDOFF W18](../WINDOWS-HANDOFF.md#w18-volume-kernels-on-dxc-v18) |
 
 ### ✅ V2 — Noise per time (all built, 2026-11-24; gate = quiet pass)
 

@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "runId": "20261124T051544Z-realtime-check",
+  "startedAt": "2026-11-24T05:15:44.168Z",
+  "commit": "6426176-dirty",
+  "page": "realtime-check",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-sampling-resource-table",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/158.0.8127.88 headless",
+  "ok": true,
+  "totalMs": 57446,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 58 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "check": "timing",
+        "rounds": "5",
+        "batch": "64"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 56901,
+      "result": {
+        "scene": "realtime-check",
+        "renderer": "ours",
+        "config": {
+          "frames": 16,
+          "checks": "timing",
+          "scenes": "cornell,sponza-white",
+          "restir": "off",
+          "scheduler": "megakernel"
+        },
+        "valid": true,
+        "metrics": {
+          "timing_best_effort": 1,
+          "timing_cornell_plain_owen_ms_min": 1.4734375001862645,
+          "timing_cornell_plain_owen_ms_max": 1.478125000372529,
+          "timing_cornell_frame_owen_ms_min": 1.551562499254942,
+          "timing_cornell_frame_owen_ms_max": 1.5609375005587935,
+          "timing_cornell_frame_bluenoise_ms_min": 1.6140625001862645,
+          "timing_cornell_frame_bluenoise_ms_max": 1.626562500372529,
+          "timing_cornell_plain_bluenoise_ms_min": 1.53125,
+          "timing_cornell_plain_bluenoise_ms_max": 1.5968749998137355,
+          "timing_cornell_realtime_mode_ms_min": 1.6171875,
+          "timing_cornell_realtime_mode_ms_max": 1.629687499254942,
+          "timing_cornell_frame_owen_over_plain_owen_min": 1.049682875125735,
+          "timing_cornell_frame_owen_over_plain_owen_max": 1.058324496281068,
+          "timing_cornell_frame_bluenoise_over_plain_owen_min": 1.09196617321233,
+          "timing_cornell_frame_bluenoise_over_plain_owen_max": 1.1039236480454089,
+          "timing_cornell_plain_bluenoise_over_plain_owen_min": 1.037037037037037,
+          "timing_cornell_plain_bluenoise_over_plain_owen_max": 1.0837751853145223,
+          "timing_cornell_realtime_mode_over_plain_owen_min": 1.0962962959178542,
+          "timing_cornell_realtime_mode_over_plain_owen_max": 1.1025369971039085,
+          "timing_sponza_white_plain_owen_ms_min": 26.38124999962747,
+          "timing_sponza_white_plain_owen_ms_max": 26.50156250037253,
+          "timing_sponza_white_frame_owen_ms_min": 26.862499999813735,
+          "timing_sponza_white_frame_owen_ms_max": 26.899999999441206,
+          "timing_sponza_white_frame_bluenoise_ms_min": 26.995312499813735,
+          "timing_sponza_white_frame_bluenoise_ms_max": 27.3046875,
+          "timing_sponza_white_plain_bluenoise_ms_min": 26.62656250037253,
+          "timing_sponza_white_plain_bluenoise_ms_max": 26.753124999813735,
+          "timing_sponza_white_realtime_mode_ms_min": 27.18125000037253,
+          "timing_sponza_white_realtime_mode_ms_max": 27.317187500186265,
+          "timing_sponza_white_frame_owen_over_plain_owen_min": 1.0149218519681042,
+          "timing_sponza_white_frame_owen_over_plain_owen_max": 1.0182421227270528,
+          "timing_sponza_white_frame_bluenoise_over_plain_owen_min": 1.0232764747764012,
+          "timing_sponza_white_frame_bluenoise_over_plain_owen_max": 1.0318866253321524,
+          "timing_sponza_white_plain_bluenoise_over_plain_owen_min": 1.0067802605977467,
+          "timing_sponza_white_plain_bluenoise_over_plain_owen_max": 1.010947393301381,
+          "timing_sponza_white_realtime_mode_over_plain_owen_min": 1.0272217301587492,
+          "timing_sponza_white_realtime_mode_over_plain_owen_max": 1.0343807325658367,
+          "mismatches": 0
+        },
+        "notes": {
+          "problems": [],
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.67822265625,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "Fabric",
+          "Linear",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 49,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": null
+}

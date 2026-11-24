@@ -1,0 +1,714 @@
+{
+  "schema": 1,
+  "runId": "20261124T051943Z-rc-cascades",
+  "startedAt": "2026-11-24T05:19:43.034Z",
+  "commit": "6426176-dirty",
+  "page": "rc-cascades",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-sampling-resource-table",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/158.0.8127.88 headless",
+  "ok": true,
+  "totalMs": 43482,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 44 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "dirs0": "8"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 42850,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "rt-interval-cascades",
+        "config": {
+          "width": 1280,
+          "height": 720,
+          "cascades": 4,
+          "spacing": 0.25,
+          "dirs0": 8,
+          "growth": 4,
+          "sampleMs": 300,
+          "rounds": 6,
+          "caps": {
+            "tier": 3,
+            "subgroups": true
+          }
+        },
+        "metrics": {
+          "kernel_bytes_probes_hit": 31745,
+          "kernel_bytes_rays_hit": 31529,
+          "kernel_bytes_probes_shaded": 47418,
+          "pixels": 921600,
+          "visible_pixels": 917366,
+          "c0_probes": 5879,
+          "c0_dirs": 64,
+          "c0_rays": 376256,
+          "c0_t0": 0,
+          "c0_t1": 0.5,
+          "c1_probes": 1623,
+          "c1_dirs": 256,
+          "c1_rays": 415488,
+          "c1_t0": 0.5,
+          "c1_t1": 2,
+          "c2_probes": 494,
+          "c2_dirs": 1024,
+          "c2_rays": 505856,
+          "c2_t0": 2,
+          "c2_t1": 8,
+          "c3_probes": 152,
+          "c3_dirs": 4096,
+          "c3_rays": 622592,
+          "c3_t0": 8,
+          "c3_t1": 32,
+          "total_rays": 1920192,
+          "split_rays": 917366,
+          "c0.probes-hit.mrays_median": 233.97981623077328,
+          "c0.probes-hit.mrays_min": 211.72736013869317,
+          "c0.probes-hit.mrays_max": 240.09614251325536,
+          "c0.probes-hit.ms_median": 1.6442439411764707,
+          "c0.probes-hit.dispatches": 289,
+          "c0.rays-hit.mrays_median": 232.10713264774625,
+          "c0.rays-hit.mrays_min": 212.49946116787177,
+          "c0.rays-hit.mrays_max": 249.81113035785543,
+          "c0.rays-hit.ms_median": 1.6731209642857143,
+          "c0.rays-hit.dispatches": 252,
+          "c0.plain-clamped.mrays_median": 238.76717966947038,
+          "c0.plain-clamped.mrays_min": 221.4662085580069,
+          "c0.plain-clamped.mrays_max": 246.9951694553525,
+          "c0.plain-clamped.ms_median": 1.5840679612068964,
+          "c0.plain-clamped.dispatches": 232,
+          "c0.plain-full.mrays_median": 103.5696876046892,
+          "c0.plain-full.mrays_min": 97.83968368749514,
+          "c0.plain-full.mrays_max": 107.04032957344144,
+          "c0.plain-full.ms_median": 3.723427269662921,
+          "c0.plain-full.dispatches": 89,
+          "c0.probes-shaded.mrays_median": 139.90618137147945,
+          "c0.probes-shaded.mrays_min": 130.93185892571825,
+          "c0.probes-shaded.mrays_max": 140.96838635441858,
+          "c0.probes-shaded.ms_median": 2.8191946857142858,
+          "c0.probes-shaded.dispatches": 105,
+          "c1.probes-hit.mrays_median": 201.310073056938,
+          "c1.probes-hit.mrays_min": 196.26963016874433,
+          "c1.probes-hit.mrays_max": 207.8244915290621,
+          "c1.probes-hit.ms_median": 2.1060139557522124,
+          "c1.probes-hit.dispatches": 113,
+          "c1.rays-hit.mrays_median": 197.38886914517664,
+          "c1.rays-hit.mrays_min": 192.6886197646178,
+          "c1.rays-hit.mrays_max": 206.2294728474235,
+          "c1.rays-hit.ms_median": 2.1291809489795916,
+          "c1.rays-hit.dispatches": 98,
+          "c1.plain-clamped.mrays_median": 202.73927419683358,
+          "c1.plain-clamped.mrays_min": 195.06846380689046,
+          "c1.plain-clamped.mrays_max": 207.46195658540898,
+          "c1.plain-clamped.ms_median": 2.0944330967741935,
+          "c1.plain-clamped.dispatches": 93,
+          "c1.plain-full.mrays_median": 115.80874576967926,
+          "c1.plain-full.mrays_min": 110.0148209801231,
+          "c1.plain-full.mrays_max": 117.42195938232707,
+          "c1.plain-full.ms_median": 3.677610549019608,
+          "c1.plain-full.dispatches": 51,
+          "c1.probes-shaded.mrays_median": 116.16051474691346,
+          "c1.probes-shaded.mrays_min": 114.42159637131448,
+          "c1.probes-shaded.mrays_max": 121.27173028240038,
+          "c1.probes-shaded.ms_median": 3.58800775,
+          "c1.probes-shaded.dispatches": 52,
+          "c2.probes-hit.mrays_median": 149.82898076988795,
+          "c2.probes-hit.mrays_min": 143.33723015559895,
+          "c2.probes-hit.mrays_max": 154.05577901186746,
+          "c2.probes-hit.ms_median": 3.472772,
+          "c2.probes-hit.dispatches": 50,
+          "c2.rays-hit.mrays_median": 147.90473398082898,
+          "c2.rays-hit.mrays_min": 141.57724148697838,
+          "c2.rays-hit.mrays_max": 151.3855798503699,
+          "c2.rays-hit.ms_median": 3.521636375,
+          "c2.rays-hit.dispatches": 48,
+          "c2.plain-clamped.mrays_median": 150.06868228650313,
+          "c2.plain-clamped.mrays_min": 143.74968030745833,
+          "c2.plain-clamped.mrays_max": 153.66134383453314,
+          "c2.plain-clamped.ms_median": 3.4585985,
+          "c2.plain-clamped.dispatches": 46,
+          "c2.plain-full.mrays_median": 126.23144774854562,
+          "c2.plain-full.mrays_min": 120.91546947838191,
+          "c2.plain-full.mrays_max": 127.8279974348029,
+          "c2.plain-full.ms_median": 4.135965025,
+          "c2.plain-full.dispatches": 40,
+          "c2.probes-shaded.mrays_median": 88.07285400760696,
+          "c2.probes-shaded.mrays_min": 84.95317333760946,
+          "c2.probes-shaded.mrays_max": 89.79934315122344,
+          "c2.probes-shaded.ms_median": 5.844707838709677,
+          "c2.probes-shaded.dispatches": 31,
+          "c3.probes-hit.mrays_median": 251.91675517096283,
+          "c3.probes-hit.mrays_min": 232.22544609919066,
+          "c3.probes-hit.mrays_max": 259.692368725836,
+          "c3.probes-hit.ms_median": 2.5067013375,
+          "c3.probes-hit.dispatches": 80,
+          "c3.rays-hit.mrays_median": 249.40009987849248,
+          "c3.rays-hit.mrays_min": 233.81482258088906,
+          "c3.rays-hit.mrays_max": 254.76039739654524,
+          "c3.rays-hit.ms_median": 2.5063627875,
+          "c3.rays-hit.dispatches": 80,
+          "c3.plain-clamped.mrays_median": 254.93568948437724,
+          "c3.plain-clamped.mrays_min": 240.1164033234241,
+          "c3.plain-clamped.mrays_max": 259.05826218305634,
+          "c3.plain-clamped.ms_median": 2.5102735268817202,
+          "c3.plain-clamped.dispatches": 93,
+          "c3.plain-full.mrays_median": 157.23118141895586,
+          "c3.plain-full.mrays_min": 148.91074412846902,
+          "c3.plain-full.mrays_max": 162.40387025367423,
+          "c3.plain-full.ms_median": 3.997912152542373,
+          "c3.plain-full.dispatches": 59,
+          "c3.probes-shaded.mrays_median": 139.01686264628094,
+          "c3.probes-shaded.mrays_min": 135.9276151492963,
+          "c3.probes-shaded.mrays_max": 142.77453694587905,
+          "c3.probes-shaded.ms_median": 4.482303017241379,
+          "c3.probes-shaded.dispatches": 58,
+          "split.rays-hit.mrays_median": 87.295910847658,
+          "split.rays-hit.mrays_min": 85.03720133069521,
+          "split.rays-hit.mrays_max": 87.72037629984221,
+          "split.rays-hit.ms_median": 10.573081708333333,
+          "split.rays-hit.dispatches": 24,
+          "split.rays-shaded.mrays_median": 61.11263402017116,
+          "split.rays-shaded.mrays_min": 61.00248900281066,
+          "split.rays-shaded.mrays_max": 62.89283962790337,
+          "split.rays-shaded.ms_median": 15.028148,
+          "split.rays-shaded.dispatches": 18,
+          "split.plain-clamped.mrays_median": 87.22569824325193,
+          "split.plain-clamped.mrays_min": 86.03150182601925,
+          "split.plain-clamped.mrays_max": 87.87957393637176,
+          "split.plain-clamped.ms_median": 10.559300519999999,
+          "split.plain-clamped.dispatches": 25,
+          "split.plain-full.mrays_median": 86.77439298712467,
+          "split.plain-full.mrays_min": 85.53796441750738,
+          "split.plain-full.mrays_max": 88.2673260782721,
+          "split.plain-full.ms_median": 10.625929192307693,
+          "split.plain-full.dispatches": 26,
+          "frame_probes_shaded_ms": 16.73421329166534,
+          "frame_probes_hit_ms": 9.729731234428684,
+          "frame_plain_full_ms": 15.534914996224902,
+          "frame_mrays_probes_hit": 197.35303614609566,
+          "merge_sparse_probes": 1176,
+          "merge_sparse_rc": 0.32529013338241397,
+          "merge_sparse_brute": 0.3559335948021443,
+          "merge_sparse_ratio": 0.9139068020910912,
+          "merge_sparse_p50": 0.2694053910244628,
+          "merge_sparse_p90": 0.9856871186323009,
+          "merge_colocated_probes": 1176,
+          "merge_colocated_rc": 0.3456489969781791,
+          "merge_colocated_brute": 0.3559335948021443,
+          "merge_colocated_ratio": 0.9711052904975652,
+          "merge_colocated_p50": 0.18759486633440556,
+          "merge_colocated_p90": 0.8303596135615938,
+          "merge_chain_cells": 75264,
+          "merge_chain_differing": 0,
+          "merge_chain_worst_relative": 2.0732050279424704e-8
+        },
+        "notes": {
+          "cascades": [
+            "c0: 5879 probes x 64 dirs = 376256 rays, (0, 0.5]",
+            "c1: 1623 probes x 256 dirs = 415488 rays, (0.5, 2]",
+            "c2: 494 probes x 1024 dirs = 505856 rays, (2, 8]",
+            "c3: 152 probes x 4096 dirs = 622592 rays, (8, 32]"
+          ],
+          "timing": {
+            "c0.probes-hit": {
+              "mrays": [
+                228.83222530276475,
+                233.97981623077328,
+                235.5397263070347,
+                211.72736013869317,
+                216.09773768759865,
+                240.09614251325536
+              ],
+              "ms_per_dispatch": [
+                1.6442439411764707,
+                1.608070328719723,
+                1.597420553633218,
+                1.77707784083045,
+                1.741138079584775,
+                1.5671055605536333
+              ]
+            },
+            "c0.rays-hit": {
+              "mrays": [
+                232.10713264774625,
+                234.9079202641558,
+                224.88272398202272,
+                212.49946116787177,
+                216.28282682819872,
+                249.81113035785543
+              ],
+              "ms_per_dispatch": [
+                1.6210445396825397,
+                1.6017169603174604,
+                1.6731209642857143,
+                1.7706209603174603,
+                1.7396480595238095,
+                1.506161873015873
+              ]
+            },
+            "c0.plain-clamped": {
+              "mrays": [
+                238.76717966947038,
+                246.02129955256123,
+                237.52516256520443,
+                221.4662085580069,
+                234.03973087238245,
+                246.9951694553525
+              ],
+              "ms_per_dispatch": [
+                1.575827969827586,
+                1.5293635172413793,
+                1.5840679612068964,
+                1.6989318706896552,
+                1.6076586594827587,
+                1.5233334353448276
+              ]
+            },
+            "c0.plain-full": {
+              "mrays": [
+                103.5696876046892,
+                107.04032957344144,
+                99.80551375208412,
+                97.83968368749514,
+                101.05098683290842,
+                105.40664238687835
+              ],
+              "ms_per_dispatch": [
+                3.632877617977528,
+                3.515086337078652,
+                3.7698919213483144,
+                3.8456379438202246,
+                3.723427269662921,
+                3.5695663146067416
+              ]
+            },
+            "c0.probes-shaded": {
+              "mrays": [
+                139.90618137147945,
+                140.8238398236186,
+                130.93185892571825,
+                131.08668079426604,
+                133.46222660911047,
+                140.96838635441858
+              ],
+              "ms_per_dispatch": [
+                2.6893450761904765,
+                2.671820342857143,
+                2.8736779809523814,
+                2.870283980952381,
+                2.8191946857142858,
+                2.6690807047619045
+              ]
+            },
+            "c1.probes-hit": {
+              "mrays": [
+                196.26963016874433,
+                197.28644193699026,
+                196.8291751407585,
+                201.310073056938,
+                205.8603062379046,
+                207.8244915290621
+              ],
+              "ms_per_dispatch": [
+                2.116924557522124,
+                2.1060139557522124,
+                2.110906575221239,
+                2.0639205663716815,
+                2.0183006991150445,
+                1.999225389380531
+              ]
+            },
+            "c1.rays-hit": {
+              "mrays": [
+                192.6886197646178,
+                195.13982604396415,
+                193.84066828980087,
+                197.38886914517664,
+                198.55468843831795,
+                206.2294728474235
+              ],
+              "ms_per_dispatch": [
+                2.156266418367347,
+                2.1291809489795916,
+                2.143451132653061,
+                2.10492112244898,
+                2.092562020408163,
+                2.0146877857142855
+              ]
+            },
+            "c1.plain-clamped": {
+              "mrays": [
+                195.06846380689046,
+                198.3773082271889,
+                197.23742835596443,
+                202.73927419683358,
+                203.44729485628275,
+                207.46195658540898
+              ],
+              "ms_per_dispatch": [
+                2.129959870967742,
+                2.0944330967741935,
+                2.106537301075269,
+                2.049371053763441,
+                2.042239,
+                2.002718989247312
+              ]
+            },
+            "c1.plain-full": {
+              "mrays": [
+                110.0148209801231,
+                112.97770507830482,
+                111.52378345408825,
+                117.42195938232707,
+                115.80874576967926,
+                116.80144921433742
+              ],
+              "ms_per_dispatch": [
+                3.7766547843137257,
+                3.677610549019608,
+                3.725555098039216,
+                3.5384182156862742,
+                3.5877083137254906,
+                3.557216137254902
+              ]
+            },
+            "c1.probes-shaded": {
+              "mrays": [
+                114.42159637131448,
+                116.16051474691346,
+                115.01887205646317,
+                115.79908098024593,
+                119.01095896965195,
+                121.27173028240038
+              ],
+              "ms_per_dispatch": [
+                3.6312026153846158,
+                3.576843653846154,
+                3.6123463269230767,
+                3.58800775,
+                3.4911742884615387,
+                3.426091134615384
+              ]
+            },
+            "c2.probes-hit": {
+              "mrays": [
+                143.33723015559895,
+                145.32677025485395,
+                145.6634642297277,
+                149.82898076988795,
+                154.05577901186746,
+                150.49159936612028
+              ],
+              "ms_per_dispatch": [
+                3.5291319600000004,
+                3.48081774,
+                3.472772,
+                3.3762226600000003,
+                3.2835899,
+                3.3613570600000005
+              ]
+            },
+            "c2.rays-hit": {
+              "mrays": [
+                141.57724148697838,
+                143.00437961325267,
+                143.64231457599027,
+                147.90473398082898,
+                148.45419246699288,
+                151.3855798503699
+              ],
+              "ms_per_dispatch": [
+                3.5730036458333334,
+                3.5373462083333336,
+                3.521636375,
+                3.4201474583333336,
+                3.4074888125,
+                3.3415071666666667
+              ]
+            },
+            "c2.plain-clamped": {
+              "mrays": [
+                143.74968030745833,
+                146.26039998571676,
+                145.56773976239268,
+                150.06868228650313,
+                151.07746016617784,
+                153.66134383453314
+              ],
+              "ms_per_dispatch": [
+                3.5190060869565216,
+                3.4585985,
+                3.475055673913044,
+                3.3708298913043477,
+                3.348322108695652,
+                3.2920185869565217
+              ]
+            },
+            "c2.plain-full": {
+              "mrays": [
+                120.91546947838191,
+                122.19176354912075,
+                122.30664353840854,
+                127.8279974348029,
+                126.23144774854562,
+                127.80555816962708
+              ],
+              "ms_per_dispatch": [
+                4.183550725,
+                4.1398535,
+                4.135965025,
+                3.9573177250000002,
+                4.007369075,
+                3.958012525
+              ]
+            },
+            "c2.probes-shaded": {
+              "mrays": [
+                84.95317333760946,
+                85.78585220992933,
+                86.54940742284846,
+                89.79934315122344,
+                88.07285400760696,
+                88.2475396809555
+              ],
+              "ms_per_dispatch": [
+                5.9545274193548385,
+                5.896729903225807,
+                5.844707838709677,
+                5.633181516129032,
+                5.743608580645161,
+                5.732239129032258
+              ]
+            },
+            "c3.probes-hit": {
+              "mrays": [
+                248.37103275371751,
+                232.8180780437466,
+                232.22544609919066,
+                257.87023783015763,
+                251.91675517096283,
+                259.692368725836
+              ],
+              "ms_per_dispatch": [
+                2.5067013375,
+                2.6741566,
+                2.6809809625,
+                2.4143616000000003,
+                2.4714195749999996,
+                2.3974212375
+              ]
+            },
+            "c3.rays-hit": {
+              "mrays": [
+                249.40009987849248,
+                234.79938033060202,
+                233.81482258088906,
+                254.06219337554106,
+                248.40458177286115,
+                254.76039739654524
+              ],
+              "ms_per_dispatch": [
+                2.4963582625000003,
+                2.651591325,
+                2.6627567625,
+                2.450549575,
+                2.5063627875,
+                2.443833525
+              ]
+            },
+            "c3.plain-clamped": {
+              "mrays": [
+                255.29027078877067,
+                241.95277046038376,
+                240.1164033234241,
+                248.01759383304665,
+                254.93568948437724,
+                259.05826218305634
+              ],
+              "ms_per_dispatch": [
+                2.438761172043011,
+                2.5731964086021506,
+                2.592875752688172,
+                2.5102735268817202,
+                2.4421531612903227,
+                2.403289494623656
+              ]
+            },
+            "c3.plain-full": {
+              "mrays": [
+                158.81718549635883,
+                155.72928474780971,
+                148.91074412846902,
+                155.61361466619655,
+                157.23118141895586,
+                162.40387025367423
+              ],
+              "ms_per_dispatch": [
+                3.9201802881355934,
+                3.997912152542373,
+                4.1809743389830505,
+                4.00088386440678,
+                3.959723474576271,
+                3.833603220338983
+              ]
+            },
+            "c3.probes-shaded": {
+              "mrays": [
+                138.90002474289938,
+                139.01686264628094,
+                135.9276151492963,
+                136.96710704273153,
+                139.1805293192485,
+                142.77453694587905
+              ],
+              "ms_per_dispatch": [
+                4.482303017241379,
+                4.4785358275862075,
+                4.580320189655172,
+                4.54555851724138,
+                4.473269379310344,
+                4.3606655172413795
+              ]
+            },
+            "split.rays-hit": {
+              "mrays": [
+                87.295910847658,
+                86.01138846960025,
+                85.03720133069521,
+                86.76429685367552,
+                87.41722147752103,
+                87.72037629984221
+              ],
+              "ms_per_dispatch": [
+                10.508693833333334,
+                10.665634125,
+                10.787819749999999,
+                10.573081708333333,
+                10.494110708333332,
+                10.457843875
+              ]
+            },
+            "split.rays-shaded": {
+              "mrays": [
+                61.19148156859399,
+                62.89283962790337,
+                61.04318376422697,
+                61.11263402017116,
+                61.022148447705334,
+                61.00248900281066
+              ],
+              "ms_per_dispatch": [
+                14.991727222222222,
+                14.586175555555554,
+                15.028148,
+                15.011069555555556,
+                15.033328444444445,
+                15.038173277777778
+              ]
+            },
+            "split.plain-clamped": {
+              "mrays": [
+                87.87957393637176,
+                86.03150182601925,
+                86.80274318794815,
+                86.8775349524762,
+                87.22569824325193,
+                87.57730405973214
+              ],
+              "ms_per_dispatch": [
+                10.438899039999999,
+                10.663140599999998,
+                10.56839872,
+                10.559300519999999,
+                10.517152840000001,
+                10.47492852
+              ]
+            },
+            "split.plain-full": {
+              "mrays": [
+                87.0177210266964,
+                85.53796441750738,
+                86.77439298712467,
+                88.2673260782721,
+                85.80659190968801,
+                86.33277931722887
+              ],
+              "ms_per_dispatch": [
+                10.542289423076925,
+                10.724664846153846,
+                10.571851538461537,
+                10.393041692307692,
+                10.691090038461539,
+                10.625929192307693
+              ]
+            }
+          },
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 4.26611328125,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "Fabric",
+          "Linear",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 67,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": null
+}

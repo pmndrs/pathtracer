@@ -19,6 +19,12 @@ commits, `git merge origin/main`), then `pnpm install` (new npm dependencies) an
 changed). The open 3060 work, in priority order: **W13** (P3 gate), **P4.5b / W14** (30 fps), **W15** (wide BVH default),
 **W10** (DXC compile), **W16** (GPU mips), **W17** (bindless textures: first real-driver verdict). Each decides a default or a gate that is provisional on the M5 until then.
 
+**Update 2026-11-24 (volumes):** the participating-media track (docs/internal/design/volumes-plan.md, phases V1-V6) is closed on the Mac
+except **V1.8**, which needs this machine: see [W18](#w18-volume-kernels-on-dxc-v18) below. The code is on `origin/clouds/volume-reference`
+(not yet on main). Bring it in with `git fetch origin && git switch windows-testing && git merge origin/clouds/volume-reference`. Only docs and
+result CSVs conflict (TASKS.md, CLAUDE.md, `bench/results/{caps,competitor,realtime-pipeline}.csv`): keep both sides' rows / Traps / lines, nothing
+needs choosing. Then `pnpm install` and `pnpm typecheck`.
+
 ## Rules for this branch
 
 - **Where work goes:** work on `windows-testing`. Commit and push this branch only. Never push `main`; the Mac side
@@ -88,11 +94,68 @@ changed). The open 3060 work, in priority order: **W13** (P3 gate), **P4.5b / W1
 | W11 | **VkNRC native NRC baseline** (TASKS N6.1, D28) | Clone AdamYuan/VkNRC at `a667859` into `.cache/native/vknrc`, build x64 Release as in its `windows-msvc.yml` (Vulkan SDK + VS 2022), apply the three local patches in [docs/internal/design/nrc.md §9](design/nrc.md) (per-pass timestamps to CSV, fixed camera + frame count, PFM dump), run on the sponza-white OBJ (N6.2) | Per-pass ms on the 3060 and a PFM after a fixed frame count. Patches stay local (never commit VkNRC code, D29). Quiet-machine rules apply. |
 | W12 | **Track N (neural radiance cache) on the 3060** (milestone M6) | Its own handoff with its own branch (`windows-nrc`): [docs/internal/design/nrc-windows-handoff.md](design/nrc-windows-handoff.md), tasks WN1-WN7 (W11 is WN7 there) | As listed there |
 | W13 | **P3 gate on the RTX 3060** (PHASES P3 is closed provisionally on the M5, D32; this is the 3060 half) | (a) time to equal quality against the web competitors: `node bench/adapters/matrix.ts --renderers tgpt-wavefront,tgpt-megakernel,mutracer,pt-auto,pt-megakernel --scenes cornell --spp 1024 --snapshots 4,16,64,256 --repeat 3 --interleave --name p3-gate-3060`, then `--scenes sponza-white --spp 512 --append`, then `node bench/adapters/baseline.ts --report p3-gate-3060 --csv` (the M5 table is `bench/results/P3-GATE.md`); (b) the Mrays/s gate: `node bench/runner/run.ts --page trace-timing --gpu nvidia --args scene=sponza-white` (incoherent bounce rays, batch method; gate >= 150 Mrays/s; last 3060 read: 102 bounce / 229 primary, P-W1, before any wide BVH) and the same with the wide-BVH branch once it is merged; (c) `ptwfAutoPolicy`'s choice on the 3060 (`pt-auto` vs the best fixed scheduler, `--page wf-sched-ab`) | The gate numbers on the 3060 in the same format; if `pt-auto` is not the fastest of ours, the policy constants get a per-device note. |
-
 | W14 | **P4 gate on the RTX 3060: 30 fps** (TASKS P4.5b) | `node bench/adapters/export-scenes.ts sponza-lamps`, then `node bench/runner/run.ts --page realtime-pipeline --gpu nvidia --timeout 3600000 --args scenes=sponza-white,sponza-lamps restir=off,on` (a worktree needs the `.claude/worktrees/upscaler` junction, CLAUDE.md Windows traps) | Frame ms and the stage split (kernel, SVGF, upscaler) at 960x540 -> 1080p, maxDepth 2, with and without ReSTIR, in TASKS P4.5b. The M5 estimate for the 3060 is 23-32 fps without ReSTIR, 19-29 with. |
 | W15 | **Wide BVH default** (TASKS X1.i, D33) | `node bench/runner/run.ts --page trace-timing --gpu nvidia --ab nodeFormat=quantized,cwbvh8 --repeat 3 --args scene=sponza-white wideDecode=folded`, then the same with `--ab nodeFormat=quantized,bvh4` (the page's own `pageAb` does not take `nodeFormat`); then `node bench/adapters/matrix.ts --renderers pt-megakernel --scenes cornell,sponza-white --spp 256 --repeat 3 --interleave --extra pt_bvh=cwbvh8 --name wide-3060` against the same without `--extra` | Mrays/s per ray class and ms/spp per format on the 3060 (the M5: cwbvh8 -26% Cornell, -16% Sponza megakernel time). Also check the wide walks' loops are not hit by the D3D12 loop-counter cost (P-W1): wide megakernel vs wavefront on Sponza should stay in the M5's ratio. Picks the library default. |
 | W16 | **GPU mips on D3D12** (TASKS X5, D34) | `node bench/runner/run.ts --page downsampler-check --gpu nvidia` | Level 0 identical, levels 1+ within 2 codes of the CPU chain on both the render and buffer paths for sRGB; GPU vs CPU load time. D34 made GPU mips the default on M5 evidence only. |
 | W17 | **Bindless textures on real drivers** (TASKS P1.4c2a, DIVERGES V296-V297) | Chrome stable (the runner passes `--enable-unsafe-webgpu`; check `node bench/runner/run.ts --page caps --gpu nvidia` lists `chromium-experimental-sampling-resource-table`): `node bench/runner/run.ts --page bindless-check --gpu nvidia --args check=lookup,render scenes=tex-checker,tex-mask spp=16`, then the same with `--dawn vulkan --dawn-toggles allow_unsafe_apis,dump_shaders --verbose` and `--dawn d3d12 --dawn-toggles allow_unsafe_apis,dump_shaders --verbose` (grep the dump for `NonUniformResourceIndex` / `NonUniform`), then `--args check=lookup timing=1 rounds=8` on a quiet, cool card | `issues` 0 and `findings` 0 per backend (divergent and holed lookups equal to arrays; tex-checker / tex-mask images per-pixel identical); if findings appear, which backend and whether the shader dump lacks the non-uniform marker. Timing: `*_table_over_arrays` for coh / div on `fit` and `many` (provisional unless quiet). On the Mac (Canary 160) Metal fails compute passes with a table (render passes work and are correct, `check=fragment`) and SwiftShader takes lane 0's index, so this is the first compute verdict on real drivers. |
+| W18 | **Volume kernels on DXC** (volumes plan V1.8, TASKS V1.8) | See [W18](#w18-volume-kernels-on-dxc-v18) | The V1.8 row in TASKS filled in with the compile table, the runtime ratios and a one-line verdict. |
+
+### W18: volume kernels on DXC (V1.8)
+
+**Why.** Media (`integrator.volumes`) put the megakernel at 45-51 KB of minified WGSL by themselves (`vol-homogeneous` 45.3 KB,
+`vol-grid` 46.9 KB, `vol-grid-equi-march4-fgrid` 49.3 KB, `vol-grid-brick` 50.0 KB, `vol-grid-brick-decomp` 50.7 KB) and 52-56 KB with ReSTIR or
+spectral PBR on top. Every media kernel of the wavefront split stays at or under 38.7 KB (shade 35.1-38.7 KB, intersect 17.4-21.5 KB, shadow
+14.9-19.5 KB). On the Mac the megakernel compile is cheap (`plain` about 190 ms cold) and ~50 KB is no wall. On this machine the W10 smoke
+(loaded) read `plain` 40.7 KB at 1.55 s cold, so a 50 KB media kernel could take many seconds to compile on DXC, or trip a TDR. The answer decides
+whether `ptwfAutoPolicy` sends media scenes to the wavefront on D3D12 (`PTWF_AUTO_KERNEL_LIMIT`, 50 KB today) and the media row of the auto
+policy (volumes plan V5.2).
+
+**Quiet machine** (rules above: plugged in, card under ~55 °C, no other GPU app or headless Chrome). About 30-45 minutes in all.
+
+1. **Compile, megakernel** (the volume variants, with `plain` and spectral as anchors):
+   `node bench/runner/run.ts --page kernel-compile --gpu nvidia --timeout 3600000 --args prefix=plain,vol-,spectral repeat=5`
+2. **Compile, wavefront** (`set=wavefront` compiles each wavefront kernel as its own module; its cache-defeat nonce is `literal`, every
+   standalone `1.0` made unique):
+   `node bench/runner/run.ts --page kernel-compile --gpu nvidia --timeout 3600000 --args set=wavefront prefix=wf-plain,wf-vol- repeat=5`
+3. **Cache check** for both: in `run.json` `notes.table`, `cold_ms_per_repeat` must be flat across repeats (repeat 1 about equal to the
+   rest) and `warm` far below `cold`. If repeats 2+ are 10x faster, a driver cache answered: rerun with a fresh browser profile per repeat
+   (`repeat=1`, five runner calls) and say so in the row.
+4. **Runtime on D3D12** (Tint's loop counters, the P-W1 trap). The volume tracking loops have literal bounds (`for (i < 4096u)` and similar),
+   so Tint should not add counters. This step checks that, and gives the megakernel / wavefront ratio for media on this GPU:
+   `node bench/scenes/volumes/cloud-grid.ts` (writes `cloud256.f32`; the `vol-vdb-*` scenes need WebVDB-derived files from the Mac, skip
+   them), then
+   `node bench/runner/run.ts --page wf-p5-check --gpu nvidia --timeout 1800000 --args cases=vol-cornell-smoke,vol-grid-cloud,vol-milk-sphere variants=plain,inline spp=64 timing=1 rounds=5`
+   (agreement gate first, then ABBA timing in one page). If the megakernel is more than ~1.5x the M5's megakernel / wavefront ratio on any
+   case, repeat that case under dawn.node, `--dawn vulkan --dawn-toggles allow_unsafe_apis` against `--dawn d3d12 --dawn-toggles allow_unsafe_apis`
+   (P-W1's method). A D3D12-only slowdown is a loop or DXC problem: `dump_shaders` and look for the `vec2u` loop counters.
+5. **Optional:** the same compile runs with `--gpu intel` (the iGPU many users have), `repeat=3`.
+
+**Mac reference** (M5 Pro, Metal, Chrome 158, quiet pass 2026-11-24, same commands without `--gpu`; full tables in
+[REPORT](../../bench/results/quiet-pass/20261124-vol/REPORT.md)): cold median ms, 5 repeats, flat (no cache answered), warm ~1 ms.
+
+| megakernel | KB | cold ms | | wavefront kernel | KB | cold ms |
+|---|---|---|---|---|---|---|
+| plain | 41.6 | 207 | | wf-plain-shade | 30.4 | 141 |
+| vol-homogeneous | 45.3 | 281 | | wf-vol-homogeneous-shade | 35.2 | 175 |
+| vol-grid | 46.9 | 364 | | wf-vol-grid-intersect | 18.4 | 140 |
+| vol-grid-brick | 50.1 | 443 | | wf-vol-grid-brick-intersect | 20.9 | 165 |
+| vol-grid-brick-decomp | 50.7 | 451 | | wf-vol-grid-brick-decomp (all 5 kernels) | | 512 |
+| spectral-pbr-albedo | 56.2 | 520 | | wf-vol-tex-shade | 38.8 | 274 |
+
+The `*-args` kernels have no float literal, so they get the comment nonce (listed in `notes.commentNonce`); their ~0.7 ms is a cache
+answer and does not matter (1.1 KB). Compare ratios to these, not absolute times: e.g. if `vol-grid-brick-decomp` / `plain` is far above
+the Mac's 2.2x on D3D12, DXC is superlinear there.
+
+**Suggested verdict rule** (the maintainer decides; give the numbers either way):
+- the heaviest media megakernel (`vol-grid-brick-decomp`) under ~3 s cold: the megakernel stays the media default on D3D12;
+- 3-10 s: media scenes go to the wavefront on D3D12 (an auto-policy rule keyed on `volumes` plus the platform, or a lower
+  `PTWF_AUTO_KERNEL_LIMIT` for D3D12), provided the step 4 ratio does not make the wavefront slower per sample;
+- over 10 s, a device loss or a TDR: the wavefront is mandatory for media on Windows. Record the variant and the error in TASKS and DIVERGES
+  (kind `platform`).
+
+Record in TASKS V1.8: device, driver, Chrome version, load / temperature at start, the compile table (variant, bytes, cold min / median / max,
+warm, per-repeat list) for both sets, the step 4 ratios with `max_rel_pixel`, and the one-line verdict. Add any new Windows trap to CLAUDE.md
+("Windows:" prefix).
 
 Later, once the Mac side asks for it: the wide-BVH experiment (X1) in `~/Developer/bvh` needs its RTX 3060 runs.
 Its branch and exact commands will be in that repo's HANDOFF.md. The 1.3× decision gate needs this machine too.

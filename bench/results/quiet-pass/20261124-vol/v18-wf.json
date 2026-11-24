@@ -1,0 +1,1234 @@
+{
+  "schema": 1,
+  "runId": "20261124T052400Z-kernel-compile",
+  "startedAt": "2026-11-24T05:24:00.521Z",
+  "commit": "6426176-dirty",
+  "page": "kernel-compile",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-sampling-resource-table",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/158.0.8127.88 headless",
+  "ok": true,
+  "totalMs": 15502,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 17 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "set": "wavefront",
+        "prefix": "wf-plain,wf-vol-",
+        "repeat": "5"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 15039,
+      "result": {
+        "scene": "kernel-compile",
+        "renderer": "ours",
+        "config": {
+          "set": "wavefront",
+          "repeat": 5,
+          "warm": true,
+          "nonce": "literal",
+          "variants": [
+            "wf-plain-camera",
+            "wf-plain-intersect",
+            "wf-plain-shade",
+            "wf-plain-shadow",
+            "wf-plain-args",
+            "wf-vol-homogeneous-camera",
+            "wf-vol-homogeneous-intersect",
+            "wf-vol-homogeneous-shade",
+            "wf-vol-homogeneous-shadow",
+            "wf-vol-homogeneous-args",
+            "wf-vol-ratio-camera",
+            "wf-vol-ratio-intersect",
+            "wf-vol-ratio-shade",
+            "wf-vol-ratio-shadow",
+            "wf-vol-ratio-args",
+            "wf-vol-grid-camera",
+            "wf-vol-grid-intersect",
+            "wf-vol-grid-shade",
+            "wf-vol-grid-shadow",
+            "wf-vol-grid-args",
+            "wf-vol-grid-brick-camera",
+            "wf-vol-grid-brick-intersect",
+            "wf-vol-grid-brick-shade",
+            "wf-vol-grid-brick-shadow",
+            "wf-vol-grid-brick-args",
+            "wf-vol-grid-brick-decomp-camera",
+            "wf-vol-grid-brick-decomp-intersect",
+            "wf-vol-grid-brick-decomp-shade",
+            "wf-vol-grid-brick-decomp-shadow",
+            "wf-vol-grid-brick-decomp-args",
+            "wf-vol-tex-camera",
+            "wf-vol-tex-intersect",
+            "wf-vol-tex-shade",
+            "wf-vol-tex-shadow",
+            "wf-vol-tex-args"
+          ]
+        },
+        "valid": true,
+        "metrics": {
+          "wf-plain-camera_wgsl_bytes": 3302,
+          "wf-plain-camera_cold_ms_min": 18.4,
+          "wf-plain-camera_cold_ms_median": 18.7,
+          "wf-plain-camera_cold_ms_max": 57.1,
+          "wf-plain-camera_warm_ms_median": 0.3,
+          "wf-plain-intersect_wgsl_bytes": 12668,
+          "wf-plain-intersect_cold_ms_min": 53.9,
+          "wf-plain-intersect_cold_ms_median": 54.6,
+          "wf-plain-intersect_cold_ms_max": 57.6,
+          "wf-plain-intersect_warm_ms_median": 0.4,
+          "wf-plain-shade_wgsl_bytes": 30389,
+          "wf-plain-shade_cold_ms_min": 139,
+          "wf-plain-shade_cold_ms_median": 140.6,
+          "wf-plain-shade_cold_ms_max": 143.5,
+          "wf-plain-shade_warm_ms_median": 0.6,
+          "wf-plain-shadow_wgsl_bytes": 10748,
+          "wf-plain-shadow_cold_ms_min": 45.2,
+          "wf-plain-shadow_cold_ms_median": 45.6,
+          "wf-plain-shadow_cold_ms_max": 46.4,
+          "wf-plain-shadow_warm_ms_median": 0.4,
+          "wf-plain-args_wgsl_bytes": 1139,
+          "wf-plain-args_cold_ms_min": 0.6,
+          "wf-plain-args_cold_ms_median": 0.7,
+          "wf-plain-args_cold_ms_max": 0.8,
+          "wf-plain-args_warm_ms_median": 0.2,
+          "wf-vol-homogeneous-camera_wgsl_bytes": 3707,
+          "wf-vol-homogeneous-camera_cold_ms_min": 19.1,
+          "wf-vol-homogeneous-camera_cold_ms_median": 19.4,
+          "wf-vol-homogeneous-camera_cold_ms_max": 20.1,
+          "wf-vol-homogeneous-camera_warm_ms_median": 0.3,
+          "wf-vol-homogeneous-intersect_wgsl_bytes": 17571,
+          "wf-vol-homogeneous-intersect_cold_ms_min": 76.2,
+          "wf-vol-homogeneous-intersect_cold_ms_median": 76.5,
+          "wf-vol-homogeneous-intersect_cold_ms_max": 79.1,
+          "wf-vol-homogeneous-intersect_warm_ms_median": 0.5,
+          "wf-vol-homogeneous-shade_wgsl_bytes": 35166,
+          "wf-vol-homogeneous-shade_cold_ms_min": 170.7,
+          "wf-vol-homogeneous-shade_cold_ms_median": 174.7,
+          "wf-vol-homogeneous-shade_cold_ms_max": 176.1,
+          "wf-vol-homogeneous-shade_warm_ms_median": 0.7,
+          "wf-vol-homogeneous-shadow_wgsl_bytes": 15071,
+          "wf-vol-homogeneous-shadow_cold_ms_min": 65.3,
+          "wf-vol-homogeneous-shadow_cold_ms_median": 65.5,
+          "wf-vol-homogeneous-shadow_cold_ms_max": 66.8,
+          "wf-vol-homogeneous-shadow_warm_ms_median": 0.4,
+          "wf-vol-homogeneous-args_wgsl_bytes": 1139,
+          "wf-vol-homogeneous-args_cold_ms_min": 0.6,
+          "wf-vol-homogeneous-args_cold_ms_median": 0.7,
+          "wf-vol-homogeneous-args_cold_ms_max": 0.7,
+          "wf-vol-homogeneous-args_warm_ms_median": 0.2,
+          "wf-vol-ratio-camera_wgsl_bytes": 3707,
+          "wf-vol-ratio-camera_cold_ms_min": 19.2,
+          "wf-vol-ratio-camera_cold_ms_median": 19.6,
+          "wf-vol-ratio-camera_cold_ms_max": 19.9,
+          "wf-vol-ratio-camera_warm_ms_median": 0.3,
+          "wf-vol-ratio-intersect_wgsl_bytes": 17699,
+          "wf-vol-ratio-intersect_cold_ms_min": 76,
+          "wf-vol-ratio-intersect_cold_ms_median": 76.7,
+          "wf-vol-ratio-intersect_cold_ms_max": 77.5,
+          "wf-vol-ratio-intersect_warm_ms_median": 0.5,
+          "wf-vol-ratio-shade_wgsl_bytes": 35338,
+          "wf-vol-ratio-shade_cold_ms_min": 171.8,
+          "wf-vol-ratio-shade_cold_ms_median": 173.7,
+          "wf-vol-ratio-shade_cold_ms_max": 175.5,
+          "wf-vol-ratio-shade_warm_ms_median": 0.7,
+          "wf-vol-ratio-shadow_wgsl_bytes": 16330,
+          "wf-vol-ratio-shadow_cold_ms_min": 68.5,
+          "wf-vol-ratio-shadow_cold_ms_median": 69,
+          "wf-vol-ratio-shadow_cold_ms_max": 69.8,
+          "wf-vol-ratio-shadow_warm_ms_median": 0.5,
+          "wf-vol-ratio-args_wgsl_bytes": 1139,
+          "wf-vol-ratio-args_cold_ms_min": 0.6,
+          "wf-vol-ratio-args_cold_ms_median": 0.7,
+          "wf-vol-ratio-args_cold_ms_max": 0.7,
+          "wf-vol-ratio-args_warm_ms_median": 0.2,
+          "wf-vol-grid-camera_wgsl_bytes": 3707,
+          "wf-vol-grid-camera_cold_ms_min": 19.2,
+          "wf-vol-grid-camera_cold_ms_median": 19.3,
+          "wf-vol-grid-camera_cold_ms_max": 19.7,
+          "wf-vol-grid-camera_warm_ms_median": 0.3,
+          "wf-vol-grid-intersect_wgsl_bytes": 18396,
+          "wf-vol-grid-intersect_cold_ms_min": 138.6,
+          "wf-vol-grid-intersect_cold_ms_median": 139.8,
+          "wf-vol-grid-intersect_cold_ms_max": 141.5,
+          "wf-vol-grid-intersect_warm_ms_median": 0.5,
+          "wf-vol-grid-shade_wgsl_bytes": 35338,
+          "wf-vol-grid-shade_cold_ms_min": 171.7,
+          "wf-vol-grid-shade_cold_ms_median": 172.3,
+          "wf-vol-grid-shade_cold_ms_max": 173.2,
+          "wf-vol-grid-shade_warm_ms_median": 0.8,
+          "wf-vol-grid-shadow_wgsl_bytes": 17038,
+          "wf-vol-grid-shadow_cold_ms_min": 130.6,
+          "wf-vol-grid-shadow_cold_ms_median": 130.9,
+          "wf-vol-grid-shadow_cold_ms_max": 131.8,
+          "wf-vol-grid-shadow_warm_ms_median": 0.4,
+          "wf-vol-grid-args_wgsl_bytes": 1139,
+          "wf-vol-grid-args_cold_ms_min": 0.7,
+          "wf-vol-grid-args_cold_ms_median": 0.7,
+          "wf-vol-grid-args_cold_ms_max": 0.8,
+          "wf-vol-grid-args_warm_ms_median": 0.2,
+          "wf-vol-grid-brick-camera_wgsl_bytes": 3707,
+          "wf-vol-grid-brick-camera_cold_ms_min": 19.4,
+          "wf-vol-grid-brick-camera_cold_ms_median": 19.5,
+          "wf-vol-grid-brick-camera_cold_ms_max": 20.1,
+          "wf-vol-grid-brick-camera_warm_ms_median": 0.3,
+          "wf-vol-grid-brick-intersect_wgsl_bytes": 20929,
+          "wf-vol-grid-brick-intersect_cold_ms_min": 164.8,
+          "wf-vol-grid-brick-intersect_cold_ms_median": 164.9,
+          "wf-vol-grid-brick-intersect_cold_ms_max": 165,
+          "wf-vol-grid-brick-intersect_warm_ms_median": 0.5,
+          "wf-vol-grid-brick-shade_wgsl_bytes": 35338,
+          "wf-vol-grid-brick-shade_cold_ms_min": 172.5,
+          "wf-vol-grid-brick-shade_cold_ms_median": 173.4,
+          "wf-vol-grid-brick-shade_cold_ms_max": 200.5,
+          "wf-vol-grid-brick-shade_warm_ms_median": 0.7,
+          "wf-vol-grid-brick-shadow_wgsl_bytes": 19557,
+          "wf-vol-grid-brick-shadow_cold_ms_min": 148.5,
+          "wf-vol-grid-brick-shadow_cold_ms_median": 149.4,
+          "wf-vol-grid-brick-shadow_cold_ms_max": 155.6,
+          "wf-vol-grid-brick-shadow_warm_ms_median": 0.5,
+          "wf-vol-grid-brick-args_wgsl_bytes": 1139,
+          "wf-vol-grid-brick-args_cold_ms_min": 0.6,
+          "wf-vol-grid-brick-args_cold_ms_median": 0.7,
+          "wf-vol-grid-brick-args_cold_ms_max": 5.6,
+          "wf-vol-grid-brick-args_warm_ms_median": 0.2,
+          "wf-vol-grid-brick-decomp-camera_wgsl_bytes": 3707,
+          "wf-vol-grid-brick-decomp-camera_cold_ms_min": 19.2,
+          "wf-vol-grid-brick-decomp-camera_cold_ms_median": 19.4,
+          "wf-vol-grid-brick-decomp-camera_cold_ms_max": 20,
+          "wf-vol-grid-brick-decomp-camera_warm_ms_median": 0.3,
+          "wf-vol-grid-brick-decomp-intersect_wgsl_bytes": 21585,
+          "wf-vol-grid-brick-decomp-intersect_cold_ms_min": 169.5,
+          "wf-vol-grid-brick-decomp-intersect_cold_ms_median": 171,
+          "wf-vol-grid-brick-decomp-intersect_cold_ms_max": 171.5,
+          "wf-vol-grid-brick-decomp-intersect_warm_ms_median": 0.5,
+          "wf-vol-grid-brick-decomp-shade_wgsl_bytes": 35338,
+          "wf-vol-grid-brick-decomp-shade_cold_ms_min": 172,
+          "wf-vol-grid-brick-decomp-shade_cold_ms_median": 172.8,
+          "wf-vol-grid-brick-decomp-shade_cold_ms_max": 173.9,
+          "wf-vol-grid-brick-decomp-shade_warm_ms_median": 0.7,
+          "wf-vol-grid-brick-decomp-shadow_wgsl_bytes": 19592,
+          "wf-vol-grid-brick-decomp-shadow_cold_ms_min": 148.3,
+          "wf-vol-grid-brick-decomp-shadow_cold_ms_median": 149,
+          "wf-vol-grid-brick-decomp-shadow_cold_ms_max": 149.7,
+          "wf-vol-grid-brick-decomp-shadow_warm_ms_median": 0.5,
+          "wf-vol-grid-brick-decomp-args_wgsl_bytes": 1139,
+          "wf-vol-grid-brick-decomp-args_cold_ms_min": 0.6,
+          "wf-vol-grid-brick-decomp-args_cold_ms_median": 0.7,
+          "wf-vol-grid-brick-decomp-args_cold_ms_max": 0.7,
+          "wf-vol-grid-brick-decomp-args_warm_ms_median": 0.2,
+          "wf-vol-tex-camera_wgsl_bytes": 3857,
+          "wf-vol-tex-camera_cold_ms_min": 19.7,
+          "wf-vol-tex-camera_cold_ms_median": 19.7,
+          "wf-vol-tex-camera_cold_ms_max": 20.1,
+          "wf-vol-tex-camera_warm_ms_median": 0.3,
+          "wf-vol-tex-intersect_wgsl_bytes": 17476,
+          "wf-vol-tex-intersect_cold_ms_min": 76,
+          "wf-vol-tex-intersect_cold_ms_median": 76.3,
+          "wf-vol-tex-intersect_cold_ms_max": 76.8,
+          "wf-vol-tex-intersect_warm_ms_median": 0.4,
+          "wf-vol-tex-shade_wgsl_bytes": 38773,
+          "wf-vol-tex-shade_cold_ms_min": 272.5,
+          "wf-vol-tex-shade_cold_ms_median": 274,
+          "wf-vol-tex-shade_cold_ms_max": 275.2,
+          "wf-vol-tex-shade_warm_ms_median": 0.8,
+          "wf-vol-tex-shadow_wgsl_bytes": 14899,
+          "wf-vol-tex-shadow_cold_ms_min": 65.2,
+          "wf-vol-tex-shadow_cold_ms_median": 65.5,
+          "wf-vol-tex-shadow_cold_ms_max": 67.3,
+          "wf-vol-tex-shadow_warm_ms_median": 0.4,
+          "wf-vol-tex-args_wgsl_bytes": 1139,
+          "wf-vol-tex-args_cold_ms_min": 0.6,
+          "wf-vol-tex-args_cold_ms_median": 0.7,
+          "wf-vol-tex-args_cold_ms_max": 0.8,
+          "wf-vol-tex-args_warm_ms_median": 0.2
+        },
+        "notes": {
+          "entryPoint": "per kernel (@compute fn)",
+          "layout": "auto",
+          "caps": {
+            "tier": 3,
+            "subgroups": true,
+            "shaderF16": true,
+            "timestampQuery": true,
+            "subgroupSizes": [
+              32,
+              32
+            ],
+            "features": [
+              "chromium-experimental-sampling-resource-table",
+              "chromium-experimental-subgroup-matrix",
+              "core-features-and-limits",
+              "float32-filterable",
+              "rg11b10ufloat-renderable",
+              "shader-f16",
+              "subgroup-size-control",
+              "subgroups",
+              "texture-compression-astc",
+              "texture-compression-bc",
+              "texture-compression-bc-sliced-3d",
+              "texture-compression-etc2",
+              "texture-formats-tier1",
+              "timestamp-query"
+            ]
+          },
+          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",
+          "adapter": {
+            "vendor": "apple",
+            "architecture": "metal-3",
+            "device": "0x0000",
+            "description": "Apple M5 Pro",
+            "isFallbackAdapter": false,
+            "features": [
+              "atomic-vec2u-min-max",
+              "bgra8unorm-storage",
+              "chromium-experimental-sampling-resource-table",
+              "chromium-experimental-subgroup-matrix",
+              "clip-distances",
+              "core-features-and-limits",
+              "depth-clip-control",
+              "depth32float-stencil8",
+              "dual-source-blending",
+              "float32-blendable",
+              "float32-filterable",
+              "indirect-first-instance",
+              "primitive-index",
+              "rg11b10ufloat-renderable",
+              "shader-f16",
+              "subgroup-size-control",
+              "subgroups",
+              "texture-component-swizzle",
+              "texture-compression-astc",
+              "texture-compression-astc-sliced-3d",
+              "texture-compression-bc",
+              "texture-compression-bc-sliced-3d",
+              "texture-compression-etc2",
+              "texture-compression-unaligned",
+              "texture-formats-tier1",
+              "texture-formats-tier2",
+              "timestamp-query"
+            ]
+          },
+          "failed": {},
+          "table": [
+            {
+              "variant": "wf-plain-camera",
+              "bytes": 3302,
+              "nonce": "literal",
+              "cold_min": 18.4,
+              "cold_median": 18.7,
+              "cold_max": 57.1,
+              "warm_median": 0.3,
+              "cold_over_warm": 62.33,
+              "cold_ms_per_repeat": [
+                57.1,
+                18.4,
+                18.7,
+                18.7,
+                19
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.3,
+                0.3,
+                0.3,
+                0.2
+              ]
+            },
+            {
+              "variant": "wf-plain-intersect",
+              "bytes": 12668,
+              "nonce": "literal",
+              "cold_min": 53.9,
+              "cold_median": 54.6,
+              "cold_max": 57.6,
+              "warm_median": 0.4,
+              "cold_over_warm": 136.5,
+              "cold_ms_per_repeat": [
+                57.6,
+                53.9,
+                54.6,
+                54.4,
+                54.8
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.4,
+                0.4,
+                0.4,
+                0.4
+              ]
+            },
+            {
+              "variant": "wf-plain-shade",
+              "bytes": 30389,
+              "nonce": "literal",
+              "cold_min": 139,
+              "cold_median": 140.6,
+              "cold_max": 143.5,
+              "warm_median": 0.6,
+              "cold_over_warm": 234.33,
+              "cold_ms_per_repeat": [
+                143.5,
+                139,
+                140,
+                140.6,
+                141.4
+              ],
+              "warm_ms_per_repeat": [
+                0.7,
+                0.6,
+                0.6,
+                0.6,
+                0.7
+              ]
+            },
+            {
+              "variant": "wf-plain-shadow",
+              "bytes": 10748,
+              "nonce": "literal",
+              "cold_min": 45.2,
+              "cold_median": 45.6,
+              "cold_max": 46.4,
+              "warm_median": 0.4,
+              "cold_over_warm": 114,
+              "cold_ms_per_repeat": [
+                46.4,
+                45.6,
+                45.2,
+                45.4,
+                46.1
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.4,
+                0.4,
+                0.4,
+                0.4
+              ]
+            },
+            {
+              "variant": "wf-plain-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.6,
+              "cold_median": 0.7,
+              "cold_max": 0.8,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.8,
+                0.6,
+                0.7,
+                0.6,
+                0.7
+              ],
+              "warm_ms_per_repeat": [
+                0.2,
+                0.2,
+                0.7,
+                0.3,
+                0.1
+              ]
+            },
+            {
+              "variant": "wf-vol-homogeneous-camera",
+              "bytes": 3707,
+              "nonce": "literal",
+              "cold_min": 19.1,
+              "cold_median": 19.4,
+              "cold_max": 20.1,
+              "warm_median": 0.3,
+              "cold_over_warm": 64.67,
+              "cold_ms_per_repeat": [
+                20.1,
+                19.3,
+                19.4,
+                19.1,
+                19.6
+              ],
+              "warm_ms_per_repeat": [
+                0.3,
+                0.3,
+                4.8,
+                0.4,
+                0.3
+              ]
+            },
+            {
+              "variant": "wf-vol-homogeneous-intersect",
+              "bytes": 17571,
+              "nonce": "literal",
+              "cold_min": 76.2,
+              "cold_median": 76.5,
+              "cold_max": 79.1,
+              "warm_median": 0.5,
+              "cold_over_warm": 153,
+              "cold_ms_per_repeat": [
+                79.1,
+                76.2,
+                76.5,
+                76.5,
+                77.6
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-homogeneous-shade",
+              "bytes": 35166,
+              "nonce": "literal",
+              "cold_min": 170.7,
+              "cold_median": 174.7,
+              "cold_max": 176.1,
+              "warm_median": 0.7,
+              "cold_over_warm": 249.57,
+              "cold_ms_per_repeat": [
+                176.1,
+                170.7,
+                175.8,
+                171.8,
+                174.7
+              ],
+              "warm_ms_per_repeat": [
+                0.7,
+                0.7,
+                0.8,
+                0.7,
+                0.7
+              ]
+            },
+            {
+              "variant": "wf-vol-homogeneous-shadow",
+              "bytes": 15071,
+              "nonce": "literal",
+              "cold_min": 65.3,
+              "cold_median": 65.5,
+              "cold_max": 66.8,
+              "warm_median": 0.4,
+              "cold_over_warm": 163.75,
+              "cold_ms_per_repeat": [
+                66.8,
+                65.5,
+                65.5,
+                65.3,
+                66.4
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.4,
+                0.4,
+                0.4,
+                0.4
+              ]
+            },
+            {
+              "variant": "wf-vol-homogeneous-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.6,
+              "cold_median": 0.7,
+              "cold_max": 0.7,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.7,
+                0.7,
+                0.6,
+                0.7,
+                0.7
+              ],
+              "warm_ms_per_repeat": [
+                0.2,
+                0.2,
+                0.3,
+                0.2,
+                0.1
+              ]
+            },
+            {
+              "variant": "wf-vol-ratio-camera",
+              "bytes": 3707,
+              "nonce": "literal",
+              "cold_min": 19.2,
+              "cold_median": 19.6,
+              "cold_max": 19.9,
+              "warm_median": 0.3,
+              "cold_over_warm": 65.33,
+              "cold_ms_per_repeat": [
+                19.9,
+                19.6,
+                19.6,
+                19.2,
+                19.6
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.4,
+                0.3,
+                0.3,
+                0.3
+              ]
+            },
+            {
+              "variant": "wf-vol-ratio-intersect",
+              "bytes": 17699,
+              "nonce": "literal",
+              "cold_min": 76,
+              "cold_median": 76.7,
+              "cold_max": 77.5,
+              "warm_median": 0.5,
+              "cold_over_warm": 153.4,
+              "cold_ms_per_repeat": [
+                77.5,
+                76.6,
+                76.7,
+                76,
+                77.3
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.6,
+                0.5,
+                0.4,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-ratio-shade",
+              "bytes": 35338,
+              "nonce": "literal",
+              "cold_min": 171.8,
+              "cold_median": 173.7,
+              "cold_max": 175.5,
+              "warm_median": 0.7,
+              "cold_over_warm": 248.14,
+              "cold_ms_per_repeat": [
+                175.5,
+                171.8,
+                174,
+                173,
+                173.7
+              ],
+              "warm_ms_per_repeat": [
+                0.6,
+                0.7,
+                0.7,
+                0.7,
+                0.6
+              ]
+            },
+            {
+              "variant": "wf-vol-ratio-shadow",
+              "bytes": 16330,
+              "nonce": "literal",
+              "cold_min": 68.5,
+              "cold_median": 69,
+              "cold_max": 69.8,
+              "warm_median": 0.5,
+              "cold_over_warm": 138,
+              "cold_ms_per_repeat": [
+                69.8,
+                68.5,
+                69,
+                69.1,
+                68.7
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-ratio-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.6,
+              "cold_median": 0.7,
+              "cold_max": 0.7,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.6,
+                0.7,
+                0.7,
+                0.7,
+                0.6
+              ],
+              "warm_ms_per_repeat": [
+                0.2,
+                0.1,
+                0.2,
+                0.2,
+                0.2
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-camera",
+              "bytes": 3707,
+              "nonce": "literal",
+              "cold_min": 19.2,
+              "cold_median": 19.3,
+              "cold_max": 19.7,
+              "warm_median": 0.3,
+              "cold_over_warm": 64.33,
+              "cold_ms_per_repeat": [
+                19.7,
+                19.2,
+                19.2,
+                19.3,
+                19.7
+              ],
+              "warm_ms_per_repeat": [
+                0.3,
+                0.4,
+                0.3,
+                0.3,
+                0.3
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-intersect",
+              "bytes": 18396,
+              "nonce": "literal",
+              "cold_min": 138.6,
+              "cold_median": 139.8,
+              "cold_max": 141.5,
+              "warm_median": 0.5,
+              "cold_over_warm": 279.6,
+              "cold_ms_per_repeat": [
+                139.8,
+                138.6,
+                140.2,
+                138.8,
+                141.5
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.5,
+                0.5,
+                0.4,
+                0.4
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-shade",
+              "bytes": 35338,
+              "nonce": "literal",
+              "cold_min": 171.7,
+              "cold_median": 172.3,
+              "cold_max": 173.2,
+              "warm_median": 0.8,
+              "cold_over_warm": 215.38,
+              "cold_ms_per_repeat": [
+                173.2,
+                171.7,
+                173.1,
+                172.3,
+                172.2
+              ],
+              "warm_ms_per_repeat": [
+                0.8,
+                0.8,
+                0.7,
+                0.7,
+                0.8
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-shadow",
+              "bytes": 17038,
+              "nonce": "literal",
+              "cold_min": 130.6,
+              "cold_median": 130.9,
+              "cold_max": 131.8,
+              "warm_median": 0.4,
+              "cold_over_warm": 327.25,
+              "cold_ms_per_repeat": [
+                131,
+                130.6,
+                130.8,
+                130.9,
+                131.8
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.5,
+                0.4,
+                0.5,
+                0.4
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.7,
+              "cold_median": 0.7,
+              "cold_max": 0.8,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.8,
+                0.7,
+                0.7,
+                0.8,
+                0.7
+              ],
+              "warm_ms_per_repeat": [
+                0.1,
+                0.2,
+                0.2,
+                0.1,
+                0.2
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-camera",
+              "bytes": 3707,
+              "nonce": "literal",
+              "cold_min": 19.4,
+              "cold_median": 19.5,
+              "cold_max": 20.1,
+              "warm_median": 0.3,
+              "cold_over_warm": 65,
+              "cold_ms_per_repeat": [
+                19.5,
+                19.4,
+                19.4,
+                20.1,
+                19.6
+              ],
+              "warm_ms_per_repeat": [
+                0.3,
+                0.2,
+                0.2,
+                0.3,
+                0.3
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-intersect",
+              "bytes": 20929,
+              "nonce": "literal",
+              "cold_min": 164.8,
+              "cold_median": 164.9,
+              "cold_max": 165,
+              "warm_median": 0.5,
+              "cold_over_warm": 329.8,
+              "cold_ms_per_repeat": [
+                165,
+                164.9,
+                164.9,
+                164.8,
+                164.8
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.6,
+                0.5,
+                0.5,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-shade",
+              "bytes": 35338,
+              "nonce": "literal",
+              "cold_min": 172.5,
+              "cold_median": 173.4,
+              "cold_max": 200.5,
+              "warm_median": 0.7,
+              "cold_over_warm": 247.71,
+              "cold_ms_per_repeat": [
+                200.5,
+                172.5,
+                174.5,
+                172.5,
+                173.4
+              ],
+              "warm_ms_per_repeat": [
+                0.8,
+                0.7,
+                0.7,
+                0.6,
+                0.6
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-shadow",
+              "bytes": 19557,
+              "nonce": "literal",
+              "cold_min": 148.5,
+              "cold_median": 149.4,
+              "cold_max": 155.6,
+              "warm_median": 0.5,
+              "cold_over_warm": 298.8,
+              "cold_ms_per_repeat": [
+                155.6,
+                148.5,
+                149.4,
+                149.1,
+                149.9
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.5,
+                0.6,
+                1.1,
+                0.4
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.6,
+              "cold_median": 0.7,
+              "cold_max": 5.6,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.7,
+                0.7,
+                0.6,
+                5.6,
+                0.7
+              ],
+              "warm_ms_per_repeat": [
+                0.8,
+                0.2,
+                0.2,
+                0.2,
+                0.2
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-decomp-camera",
+              "bytes": 3707,
+              "nonce": "literal",
+              "cold_min": 19.2,
+              "cold_median": 19.4,
+              "cold_max": 20,
+              "warm_median": 0.3,
+              "cold_over_warm": 64.67,
+              "cold_ms_per_repeat": [
+                20,
+                19.3,
+                19.6,
+                19.4,
+                19.2
+              ],
+              "warm_ms_per_repeat": [
+                3.7,
+                0.3,
+                0.3,
+                0.3,
+                0.3
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-decomp-intersect",
+              "bytes": 21585,
+              "nonce": "literal",
+              "cold_min": 169.5,
+              "cold_median": 171,
+              "cold_max": 171.5,
+              "warm_median": 0.5,
+              "cold_over_warm": 342,
+              "cold_ms_per_repeat": [
+                171.5,
+                169.5,
+                171.4,
+                170.8,
+                171
+              ],
+              "warm_ms_per_repeat": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-decomp-shade",
+              "bytes": 35338,
+              "nonce": "literal",
+              "cold_min": 172,
+              "cold_median": 172.8,
+              "cold_max": 173.9,
+              "warm_median": 0.7,
+              "cold_over_warm": 246.86,
+              "cold_ms_per_repeat": [
+                172,
+                172.8,
+                173.9,
+                173.4,
+                172.4
+              ],
+              "warm_ms_per_repeat": [
+                0.7,
+                0.6,
+                0.7,
+                0.7,
+                0.6
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-decomp-shadow",
+              "bytes": 19592,
+              "nonce": "literal",
+              "cold_min": 148.3,
+              "cold_median": 149,
+              "cold_max": 149.7,
+              "warm_median": 0.5,
+              "cold_over_warm": 298,
+              "cold_ms_per_repeat": [
+                148.3,
+                149.3,
+                148.6,
+                149.7,
+                149
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.5,
+                0.6,
+                0.5,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-grid-brick-decomp-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.6,
+              "cold_median": 0.7,
+              "cold_max": 0.7,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.7,
+                0.6,
+                0.7,
+                0.7,
+                0.7
+              ],
+              "warm_ms_per_repeat": [
+                0.2,
+                0.3,
+                0.1,
+                0.2,
+                0.1
+              ]
+            },
+            {
+              "variant": "wf-vol-tex-camera",
+              "bytes": 3857,
+              "nonce": "literal",
+              "cold_min": 19.7,
+              "cold_median": 19.7,
+              "cold_max": 20.1,
+              "warm_median": 0.3,
+              "cold_over_warm": 65.67,
+              "cold_ms_per_repeat": [
+                19.7,
+                19.7,
+                20.1,
+                19.8,
+                19.7
+              ],
+              "warm_ms_per_repeat": [
+                0.3,
+                0.3,
+                0.3,
+                0.3,
+                0.3
+              ]
+            },
+            {
+              "variant": "wf-vol-tex-intersect",
+              "bytes": 17476,
+              "nonce": "literal",
+              "cold_min": 76,
+              "cold_median": 76.3,
+              "cold_max": 76.8,
+              "warm_median": 0.4,
+              "cold_over_warm": 190.75,
+              "cold_ms_per_repeat": [
+                76.7,
+                76.1,
+                76.8,
+                76.3,
+                76
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.5,
+                0.4,
+                0.4,
+                0.5
+              ]
+            },
+            {
+              "variant": "wf-vol-tex-shade",
+              "bytes": 38773,
+              "nonce": "literal",
+              "cold_min": 272.5,
+              "cold_median": 274,
+              "cold_max": 275.2,
+              "warm_median": 0.8,
+              "cold_over_warm": 342.5,
+              "cold_ms_per_repeat": [
+                274,
+                275,
+                273.2,
+                275.2,
+                272.5
+              ],
+              "warm_ms_per_repeat": [
+                0.8,
+                0.9,
+                0.7,
+                0.8,
+                0.8
+              ]
+            },
+            {
+              "variant": "wf-vol-tex-shadow",
+              "bytes": 14899,
+              "nonce": "literal",
+              "cold_min": 65.2,
+              "cold_median": 65.5,
+              "cold_max": 67.3,
+              "warm_median": 0.4,
+              "cold_over_warm": 163.75,
+              "cold_ms_per_repeat": [
+                65.2,
+                65.5,
+                65.4,
+                67.3,
+                65.8
+              ],
+              "warm_ms_per_repeat": [
+                0.4,
+                0.4,
+                0.5,
+                0.4,
+                4.6
+              ]
+            },
+            {
+              "variant": "wf-vol-tex-args",
+              "bytes": 1139,
+              "nonce": "comment",
+              "cold_min": 0.6,
+              "cold_median": 0.7,
+              "cold_max": 0.8,
+              "warm_median": 0.2,
+              "cold_over_warm": 3.5,
+              "cold_ms_per_repeat": [
+                0.7,
+                0.8,
+                0.6,
+                0.7,
+                0.7
+              ],
+              "warm_ms_per_repeat": [
+                0.1,
+                0.1,
+                0.2,
+                0.2,
+                0.2
+              ]
+            }
+          ],
+          "nonce": "literal",
+          "commentNonce": [
+            "wf-plain-args",
+            "wf-vol-homogeneous-args",
+            "wf-vol-ratio-args",
+            "wf-vol-grid-args",
+            "wf-vol-grid-brick-args",
+            "wf-vol-grid-brick-decomp-args",
+            "wf-vol-tex-args"
+          ],
+          "cacheDefeat": "literal nonce: every standalone 1.0 replaced by a unique f32 per compile (plus a comment)",
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 7.1787109375,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "Fabric",
+          "Linear",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 49,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": null
+}

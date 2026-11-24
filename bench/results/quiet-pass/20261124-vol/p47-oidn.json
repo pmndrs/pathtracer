@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "runId": "20261124T051833Z-realtime-pipeline",
+  "startedAt": "2026-11-24T05:18:33.417Z",
+  "commit": "6426176-dirty",
+  "page": "realtime-pipeline",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-sampling-resource-table",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/158.0.8127.88 headless",
+  "ok": true,
+  "totalMs": 7633,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 9 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "scenes": "sponza-white",
+        "scenarios": "timing",
+        "restir": "off",
+        "timingVariant": "oidn-fast",
+        "res": "640x360",
+        "maxDepth": "4"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 7050,
+      "result": {
+        "scene": "sponza-white",
+        "renderer": "realtime-pipeline",
+        "config": {
+          "scenes": [
+            "sponza-white"
+          ],
+          "restir": [
+            "off"
+          ],
+          "scenarios": [
+            "timing"
+          ],
+          "staticVariants": [
+            "svgf",
+            "none"
+          ],
+          "pathVariants": [
+            "svgf",
+            "svgf-reactive",
+            "oidn-fast",
+            "none"
+          ],
+          "frames": 64,
+          "checkpoints": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64
+          ],
+          "stableFrom": 32,
+          "pathFrames": 64,
+          "pathRefs": 3,
+          "pathRefSpp": 512,
+          "refSpp": 2048,
+          "maxDepth": 4
+        },
+        "valid": true,
+        "metrics": {
+          "sponza-white_nee_time_trace_ms": 16.433333333995606,
+          "sponza-white_nee_time_trace_min_ms": 13.82777777645323,
+          "sponza-white_nee_time_trace_max_ms": 22.149999999337727,
+          "sponza-white_nee_time_pack_ms": 0.751562500372529,
+          "sponza-white_nee_time_pack_min_ms": 0.728125000372529,
+          "sponza-white_nee_time_pack_max_ms": 0.796875,
+          "sponza-white_nee_time_postNoDenoise_ms": 0.8312500007450581,
+          "sponza-white_nee_time_postNoDenoise_min_ms": 0.7875000005587935,
+          "sponza-white_nee_time_postNoDenoise_max_ms": 0.9109375001862645,
+          "sponza-white_nee_time_post_ms": 14.795238097508749,
+          "sponza-white_nee_time_post_min_ms": 13.133333333900996,
+          "sponza-white_nee_time_post_max_ms": 21.109523807253158,
+          "sponza-white_nee_time_tonemap_ms": 0.04531249962747097,
+          "sponza-white_nee_time_tonemap_min_ms": 0.04062500037252903,
+          "sponza-white_nee_time_tonemap_max_ms": 0.06562499981373549,
+          "sponza-white_nee_time_frame_ms": 32.833333333333336,
+          "sponza-white_nee_time_frame_min_ms": 29.733333339293797,
+          "sponza-white_nee_time_frame_max_ms": 40.36666667461395,
+          "sponza-white_nee_time_denoise_composite_ms": 13.963988096763691,
+          "sponza-white_nee_time_upscale_ms": 0.8312500007450581,
+          "sponza-white_nee_time_fps": 30.45685279187817
+        },
+        "notes": {
+          "sponza-white_nee_sampler": "bluenoise (realtime preset; ReSTIR binds the texture too since P4.2e)",
+          "sponza-white_nee_scheduler": "megakernel",
+          "sponza-white_nee_adapter": "{\"scheduler\":\"megakernel\",\"scenePacking\":\"packed\",\"sampler\":\"owen-sobol\",\"mode\":\"realtime\",\"blueNoise\":\"gf-vec2-64\",\"nee\":true,\"envSampling\":\"auto\",\"sunVisible\":false,\"positions\":\"barycentric\",\"vndf\":\"standard\",\"transport\":\"radiance\",\"maxDepth\":4,\"rrStartDepth\":0,\"seed\":0,\"lightSelection\":\"pbrt\",\"textureLod\":0,\"layering\":\"stochastic\",\"layerDepth\":64,\"layerThickness\":0.000001,\"transmissionTint\":true}",
+          "sponza-white_nee_timing": "PROVISIONAL: wall clock of batched submissions (>= 250 ms per round, 5 rounds, median; no GPU timestamps); machine load recorded by the runner",
+          "staticTable": "| config | variant | frame | raw relMSE | denoised relMSE | final relMSE | bias raw / den / final | final FLIP |\n|---|---|---|---|---|---|---|---|",
+          "pathTable": "| config | variant | boil final k=1 | k=4 | denoised k=1 | albedo control k=1 | valid | per-pose final error |\n|---|---|---|---|---|---|---|---|",
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 4.28857421875,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "Fabric",
+          "Linear",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 64,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": null
+}

@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "runId": "20261124T051433Z-render-until-check",
+  "startedAt": "2026-11-24T05:14:33.027Z",
+  "commit": "6426176-dirty",
+  "page": "render-until-check",
+  "gpuRequested": null,
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "0x0000",
+    "description": "Apple M5 Pro",
+    "isFallbackAdapter": false,
+    "features": [
+      "atomic-vec2u-min-max",
+      "bgra8unorm-storage",
+      "chromium-experimental-sampling-resource-table",
+      "chromium-experimental-subgroup-matrix",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "shader-f16",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-astc",
+      "texture-compression-astc-sliced-3d",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2",
+      "texture-compression-unaligned",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ]
+  },
+  "browser": "Chrome/158.0.8127.88 headless",
+  "ok": true,
+  "totalMs": 71028,
+  "error": null,
+  "timingVerdict": {
+    "kind": "valid",
+    "reason": "no macOS thermal warning or speed limit in 72 samples (pmset -g therm; a coarse signal, GPU clocks are not readable without sudo)"
+  },
+  "runs": [
+    {
+      "index": 1,
+      "variant": "-",
+      "args": {
+        "scene": "vol-cl-cloud256",
+        "match": "1",
+        "pixel": "0.15",
+        "seeds": "6",
+        "w": "64",
+        "h": "64",
+        "max": "4096"
+      },
+      "outcome": "pass",
+      "reasons": [],
+      "durationMs": 70451,
+      "result": {
+        "scene": "vol-cl-cloud256",
+        "renderer": "ours",
+        "config": {
+          "se": 0.001,
+          "pixel": 0.15,
+          "max": 4096,
+          "first": 64,
+          "width": 64,
+          "height": 64
+        },
+        "valid": true,
+        "metrics": {
+          "samples": 512,
+          "met": 1,
+          "achieved_mean_rel_se": 0.0009380000300164415,
+          "achieved_pixel_rel_se": 0.1395721137523651,
+          "image_mean_luminance": 0.41639275951092714,
+          "wall_ms": 5615.399999976158,
+          "match_alloc_spp": 158.08723958333334,
+          "match_uniform_spp_equal_mean_se": 220.02116716937405,
+          "match_uniform_spp_equal_p99": 202.62110461176675,
+          "match_saving_mean_se": 0.28149076919659954,
+          "match_saving_p99": 0.21978887694725957,
+          "match_alloc_wall_ms": 7869.816666642825,
+          "match_uniform_wall_ms_estimated": 2385.2428257963543
+        },
+        "notes": {
+          "history": "64: se=2.771e-3 px=3.91e-1 batch=720ms | 128: se=1.898e-3 px=2.86e-1 batch=701ms | 256: se=1.338e-3 px=1.94e-1 batch=1401ms | 512: se=9.380e-4 px=1.40e-1 batch=2789ms",
+          "se_times_sqrt_n": "2.217e-2 2.147e-2 2.141e-2 2.122e-2",
+          "reason": "target",
+          "bias_table": "seed 0: alloc spp=155.5 (pilot incl.) meanSE=1.40e-3 p99=0.2208 wall=8092ms | uniform@256: meanSE=1.34e-3 p99=0.1966 -> equal-mean spp=232.0 equal-p99 spp=203.0 || seed 1: alloc spp=157.6 (pilot incl.) meanSE=1.42e-3 p99=0.2245 wall=7312ms | uniform@256: meanSE=1.34e-3 p99=0.2050 -> equal-mean spp=227.8 equal-p99 spp=213.6 || seed 2: alloc spp=162.1 (pilot incl.) meanSE=1.43e-3 p99=0.2144 wall=8014ms | uniform@256: meanSE=1.35e-3 p99=0.2019 -> equal-mean spp=227.6 equal-p99 spp=227.0 || seed 3: alloc spp=163.7 (pilot incl.) meanSE=1.35e-3 p99=0.2121 wall=9064ms | uniform@256: meanSE=1.30e-3 p99=0.1936 -> equal-mean spp=235.9 equal-p99 spp=213.2 || seed 4: alloc spp=157.5 (pilot incl.) meanSE=1.62e-3 p99=0.2382 wall=7446ms | uniform@256: meanSE=1.31e-3 p99=0.1945 -> equal-mean spp=167.8 equal-p99 spp=170.6 || seed 5: alloc spp=152.1 (pilot incl.) meanSE=1.36e-3 p99=0.2304 wall=7291ms | uniform@256: meanSE=1.29e-3 p99=0.1975 -> equal-mean spp=229.1 equal-p99 spp=188.2",
+          "uploads": []
+        }
+      },
+      "load": {
+        "load1": 3.67919921875,
+        "loadSource": "loadavg",
+        "gpuProcs": 1,
+        "backgroundApps": [
+          "ChatGPT",
+          "Claude",
+          "Creative Cloud",
+          "Cursor",
+          "Discord",
+          "Fabric",
+          "Linear",
+          "Slack",
+          "Spotify"
+        ],
+        "loaded": false,
+        "waitedMs": 47,
+        "reasons": []
+      }
+    }
+  ],
+  "uploads": [],
+  "csvFile": null
+}
