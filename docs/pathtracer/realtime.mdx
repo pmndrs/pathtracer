@@ -88,7 +88,7 @@ It needs the `blueNoise` create option: a 2-channel texture with power-of-two si
 
 ## The chain to a denoiser and an upscaler
 
-The library stops at the frame planes. A full real-time pipeline adds a temporal denoiser and an upscaler, which are separate packages. The project's bench wires one in [`bench/realtime/chain.ts`](https://github.com/pmndrs/pathtracer/blob/main/bench/realtime/chain.ts); copy it as a starting point. Its data flow per frame:
+The library stops at the frame planes. A full real-time pipeline adds a temporal denoiser and an upscaler, which are separate packages (`denoiser` 2.0 and `@pmndrs/upscaler`). The [denoised real-time chain example](https://pmndrs.github.io/pathtracer/examples/realtime/chain/) runs one, with the raw frame beside the final image; its [`examples/shared/realtime-chain.ts`](https://github.com/pmndrs/pathtracer/blob/main/examples/shared/realtime-chain.ts) is a single file to copy as a starting point. Its data flow per frame:
 
 1. **Path trace** at a reduced size (for example half the display), one `encode(encoder, 1)`.
 2. **Pack.** A compute pass copies the planes into the textures the denoiser takes (`rgba16float` colour and guides, `r32float` depth), and derives device depth from view depth with the camera's projection.
@@ -97,6 +97,6 @@ The library stops at the frame planes. A full real-time pipeline adds a temporal
 5. **Upscale** with [`@pmndrs/upscaler`](https://github.com/pmndrs/upscaler) in temporal mode, jitter off: colour, depth, and plane 3's motion as velocity.
 6. **Tone map** to the canvas.
 
-The denoiser and the upscaler submit their own command buffers; nothing in the chain reads back to the CPU.
+The denoiser and the upscaler submit their own command buffers; nothing in the chain reads back to the CPU. The temporal upscaler darkens small, very bright emitters seen directly (a lamp in view loses part of its energy); the rest of the image keeps its brightness.
 
 ReSTIR DI and GI add better light sampling to the same loop. See [ReSTIR](/pathtracer/restir).
