@@ -22,6 +22,9 @@ browser runs WebGPU: Apple, Windows / D3D12, Intel iGPUs; sensible defaults; dem
 
 ## Phases
 
+**Closed out 2026-11-25.** V1-V6 are merged with main; the remaining work (V1.8, V5.4b, V4.3c, V1.7 NEE offsets, the brick / roulette / preview
+default decisions, V4.4 and wavefront follow-ups, several grids, the V6 examples) is tracked as GitHub issues #9-#23 (list in TASKS `V.close`).
+
 Status: ⬜ not started · 🟨 in progress · ✅ done. ★ = the clouds handoff needs it or it attacks its grain / memory problem.
 
 ### ✅ V0 — Validation and outputs (P5.v13-v19, 2026-11-21)
