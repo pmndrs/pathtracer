@@ -65,7 +65,7 @@ const scene = await buildGpuScene(device, input);
 
 ## Examples
 
-- [Hit inspector](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/): `rtClosest` and `rtSurface` in your own compute shader.
+- [Rays from your own shader](https://pmndrs.github.io/pathtracer/examples/raytracer/hits/): `rtClosest`, `rtVisible` and `rtSurface` in your own compute shader, with the shadow, reflection and AO rays a raster pass cannot trace.
 - [Ambient occlusion](https://pmndrs.github.io/pathtracer/examples/raytracer/ao/): short `rtVisible` rays from each pixel.
 - [Batch shadow rays](https://pmndrs.github.io/pathtracer/examples/raytracer/batch/): `RtBatchTracer` over a buffer of rays.
 - [One-bounce shading](https://pmndrs.github.io/pathtracer/examples/raytracer/shade/): `rtShade` lighting the hits.

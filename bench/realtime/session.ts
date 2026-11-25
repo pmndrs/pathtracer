@@ -13,9 +13,10 @@
  * Jitter owner: the path tracer's sampler (pair 0, per pixel; Owen-Sobol with ReSTIR, blue noise without), as in the track N chain
  * (nrc-pipeline.md section 4): the upscaler runs with `jitter: false`, the denoiser gets `jitter` [0, 0], and motion is jitter-free by construction.
  */
-import type { PtLookAtCamera, PtMegakernel, PtRestirOptions } from '@pmndrs/pathtracer';
+import { resolveIntegratorOptions, type PtLookAtCamera, type PtMegakernel, type PtRestirOptions } from '@pmndrs/pathtracer';
 import { PtMegakernelAdapter } from '../adapters/pt-megakernel/index.ts';
 import type { SceneDesc } from '../scenes/schema.ts';
+import { PIPE_FAR } from './chain-math.ts';
 import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from './chain.ts';
 
 export interface RealtimeSessionOptions {
@@ -35,8 +36,12 @@ export interface RealtimeSessionOptions {
   upscaler?: PipelineSettings['upscaler'];
   /** Reactive mask for the upscaler from the SVGF history length (default off). */
   reactive?: PipelineSettings['reactive'];
+  /** V7.4: temporal accumulation of the emission plane before it is added back (with `adapter.frameMedia`: the camera ray's single scattering). */
+  emissionTemporal?: PipelineSettings['emissionTemporal'];
   /** The P4.7 preview pipeline: maxDepth 4 and OIDN small every frame unless the options above say otherwise. */
   preview?: boolean;
+  /** V7.4: run on the device of another session (textures of the two can then be combined, e.g. in a live split view). */
+  shareDeviceWith?: RealtimePipelineSession;
   /** Extra adapter settings (A/B knobs: `sampler`, `blueNoiseShift`, `materialLod` ...). */
   adapter?: Record<string, unknown>;
 }
@@ -70,6 +75,7 @@ export class RealtimePipelineSession {
     const maxDepth = o.maxDepth ?? (o.preview ? 4 : 2);
     const limits = { maxDepth, rrStartDepth: 0 };
     const adapter = new PtMegakernelAdapter({ nee: true, mode: 'realtime', scenePacking: 'packed', maxDepth, rrStartDepth: 0, ...(o.restir ? { restir: o.restir } : {}), ...(o.adapter ?? {}) });
+    if (o.shareDeviceWith?.adapter.deviceHandle) adapter.sharedDevice = o.shareDeviceWith.adapter.deviceHandle;
     await adapter.load(o.scene);
     const device = adapter.gpuContext!.device;
     const kernel = adapter.renderer as PtMegakernel;
@@ -88,6 +94,10 @@ export class RealtimePipelineSession {
       ...(o.denoiser ? { denoiser: o.denoiser } : {}),
       ...(o.upscaler ? { upscaler: o.upscaler } : {}),
       ...(o.reactive ? { reactive: o.reactive } : {}),
+      // The denoiser reads viewZ beyond `far` as sky (output 0): raise the 200 m default for a scene that reaches past it (V7.5b, the WDAS cloud at ~1250 read -29%).
+      ...sceneFar(adapter, o.scene.camera as PtLookAtCamera),
+      // V7.5: a kernel with `frameMedia` gets the emission temporal pass by default (an explicit `emissionTemporal: false` wins).
+      ...(o.emissionTemporal !== undefined ? (o.emissionTemporal ? { emissionTemporal: o.emissionTemporal } : {}) : resolveIntegratorOptions(kernel.options.integrator ?? {}).frameMedia ? { emissionTemporal: {} } : {}),
     };
     const arm = await PipelineArm.create(device, ps, o.preview ? 'preview' : 'realtime');
     return new RealtimePipelineSession({ adapter, device, kernel, arm, options: o, limits });
@@ -131,12 +141,12 @@ export class RealtimePipelineSession {
    * One frame: trace + pack in one submit, then denoise + composite + upscale (+ tonemap). `denoise: false` sends the raw sample to the upscaler.
    * No readback; OIDN is awaited by the chain.
    */
-  async frame(camera: PtLookAtCamera, o: { denoise?: boolean; tonemap?: boolean } = {}): Promise<void> {
+  async frame(camera: PtLookAtCamera, o: { denoise?: boolean; tonemap?: boolean; upscale?: boolean } = {}): Promise<void> {
     this.setCamera(camera);
     const encoder = this.device.createCommandEncoder({ label: 'realtime frame' });
     this.encodeTrace(encoder);
     this.device.queue.submit([encoder.finish()]);
-    await this.arm.post(camera, { ...(o.denoise === false ? { denoise: false } : {}), ...(o.tonemap ? { tonemap: true } : {}) });
+    await this.arm.post(camera, { ...(o.denoise === false ? { denoise: false } : {}), ...(o.tonemap ? { tonemap: true } : {}), ...(o.upscale === false ? { upscale: false } : {}) });
   }
 
   /** Switch the chain's denoiser (resets the histories). */
@@ -214,4 +224,12 @@ export class RealtimePipelineSession {
     this.arm.destroy();
     this.adapter.dispose();
   }
+}
+
+/** `{ far }` when the scene's bounding sphere reaches past PIPE_FAR from the camera (2x margin for camera motion), else nothing (every smaller scene keeps the old chain). */
+function sceneFar(adapter: PtMegakernelAdapter, camera: PtLookAtCamera): { far?: number } {
+  const b = adapter.debug.copy.bounds;
+  const p = camera.position;
+  const reach = Math.hypot(p[0] - b.center[0], p[1] - b.center[1], p[2] - b.center[2]) + b.radius;
+  return Number.isFinite(reach) && reach > PIPE_FAR ? { far: 2 * reach } : {};
 }

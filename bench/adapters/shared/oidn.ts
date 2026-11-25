@@ -69,8 +69,16 @@ let cached: { device: GPUDevice; denoiser: { denoiseTextures(o: unknown): Promis
 
 /** Denoises `image` (linear HDR, row 0 = top) with OIDN `rt_hdr_calb_cnrm` on `device`. Returns linear RGBA float32. */
 export async function denoiseWithOidn(device: GPUDevice, image: Image, aovs: PtAovs, camera: PtLookAtCamera, options: OidnOptions = {}): Promise<Image> {
+  if (aovs.width !== image.width || aovs.height !== image.height) throw new Error('denoiseWithOidn: AOV and image sizes differ');
+  return denoiseColorWithOidn(device, image, oidnAux(aovs, camera), options);
+}
+
+/**
+ * V7.3: OIDN on a colour image with optional guides (rgba32float arrays, `oidnAux` shapes). No guides = the plain `rt_hdr` net; both = `rt_hdr_calb_cnrm`.
+ * `image` must be finite and non-negative (clamp a difference image first).
+ */
+export async function denoiseColorWithOidn(device: GPUDevice, image: Image, aux: { albedo?: Float32Array; normal?: Float32Array } | null, options: OidnOptions = {}): Promise<Image> {
   const { width, height } = image;
-  if (aovs.width !== width || aovs.height !== height) throw new Error('denoiseWithOidn: AOV and image sizes differ');
   const tzaUrl = options.tzaUrl ?? (typeof __BENCH_DENOISER_TZAS__ === 'string' ? __BENCH_DENOISER_TZAS__ : undefined);
   if (!tzaUrl) throw new Error('denoiseWithOidn: no OIDN weights: link the Denoiser checkout (bench/package.json `denoiser`) or pass tzaUrl');
   const precision = options.precision ?? 'fp32';
@@ -79,7 +87,6 @@ export async function denoiseWithOidn(device: GPUDevice, image: Image, aovs: PtA
     const { Denoiser } = (await import('denoiser')) as unknown as { Denoiser: { create(o: unknown): Promise<{ denoiseTextures(o: unknown): Promise<GPUTexture | undefined> }> } };
     cached = { device, key, denoiser: await Denoiser.create({ device, precision, tzaUrl }) };
   }
-  const aux = oidnAux(aovs, camera);
   const upload = (data: Float32Array): GPUTexture => {
     const texture = device.createTexture({ size: { width, height }, format: 'rgba32float', usage: TEXTURE_BINDING | COPY_DST });
     device.queue.writeTexture({ texture }, data as unknown as GPUAllowSharedBufferSource, { bytesPerRow: width * 16, rowsPerImage: height }, { width, height });
@@ -88,10 +95,10 @@ export async function denoiseWithOidn(device: GPUDevice, image: Image, aovs: PtA
   const color = new Float32Array(width * height * 4);
   for (let p = 0; p < width * height; p++) for (let c = 0; c < 4; c++) color[p * 4 + c] = c === 3 ? 1 : (image.data[p * image.channels + c] as number);
   const colorTexture = upload(color);
-  const albedoTexture = upload(aux.albedo);
-  const normalTexture = upload(aux.normal);
+  const albedoTexture = aux?.albedo ? upload(aux.albedo) : undefined;
+  const normalTexture = aux?.normal ? upload(aux.normal) : undefined;
   const output = device.createTexture({ size: { width, height }, format: 'rgba16float', usage: STORAGE_BINDING | COPY_SRC | TEXTURE_BINDING });
-  const result = await cached.denoiser.denoiseTextures({ color: colorTexture, albedo: albedoTexture, normal: normalTexture, hdr: true, output, transfer: 'linear' });
+  const result = await cached.denoiser.denoiseTextures({ color: colorTexture, ...(albedoTexture ? { albedo: albedoTexture } : {}), ...(normalTexture ? { normal: normalTexture } : {}), hdr: true, output, transfer: 'linear' });
   if (!result) throw new Error('denoiseWithOidn: the denoiser run was aborted');
   // rgba16float readback: rows padded to 256 bytes
   const bytesPerRow = Math.ceil((width * 8) / 256) * 256;
@@ -110,6 +117,6 @@ export async function denoiseWithOidn(device: GPUDevice, image: Image, aovs: PtA
       for (let c = 0; c < 4; c++) out[(y * width + x) * 4 + c] = c === 3 ? 1 : halfToFloat(halves[y * stride + x * 4 + c] as number);
     }
   }
-  for (const t of [colorTexture, albedoTexture, normalTexture, output]) t.destroy();
+  for (const t of [colorTexture, albedoTexture, normalTexture, output]) t?.destroy();
   return { width, height, channels: 4, data: out };
 }

@@ -26,7 +26,7 @@ export type FrameViewMode = (typeof FRAME_VIEWS)[keyof typeof FRAME_VIEWS];
 const RADIANCE_VIEWS = new Set<number>([0, 1, 2, 3, 4]);
 
 const COMMON = /* wgsl */ `
-struct View { width: u32, height: u32, mode: u32, count: u32, exposure: f32, radiance: u32, pad0: u32, pad1: u32 }
+struct View { width: u32, height: u32, mode: u32, count: u32, exposure: f32, radiance: u32, divider: u32, pad1: u32 }
 @group(0) @binding(0) var<uniform> view: View;
 `;
 
@@ -83,6 +83,8 @@ fn srgb(c: vec3f) -> vec3f {
 
 @fragment fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let p = vec2u(pos.xy);
+  // A 2-pixel line at the divider column (split views); 0xffffffff = none.
+  if (view.divider != 0xffffffffu && p.x >= view.divider && p.x < view.divider + 2u) { return vec4f(0.85, 0.85, 0.8, 1.0); }
   let s = sums[p.y * view.width + p.x];
   var c = max(select(vec3f(0.0), s.rgb / s.w, s.w > 0.0), vec3f(0.0));
   if (view.radiance == 1u) { c = aces(c * view.exposure); } else { c = clamp(c, vec3f(0.0), vec3f(1.0)); }
@@ -121,8 +123,18 @@ export class FrameView {
     this.count = 0;
   }
 
-  /** Records the pick pass and the draw into `target` for a frame whose buffers are `frame` (`pt.frameBuffers`). */
-  encode(encoder: GPUCommandEncoder, frame: { accum: GPUBuffer; planes: GPUBuffer; width: number; height: number }, target: GPUTextureView): void {
+  /**
+   * Records the pick pass and the draw into `target` for a frame whose buffers are `frame` (`pt.frameBuffers`). `target` null only adds
+   * to the running sum (a reference average that is read back, not drawn). `options` draw part of a split view: `columns` [x0, x1) is the
+   * pixel range drawn (the target is the film's size), `load` keeps what an earlier draw put in the target, `divider` draws a 2-pixel line
+   * at column x0.
+   */
+  encode(
+    encoder: GPUCommandEncoder,
+    frame: { accum: GPUBuffer; planes: GPUBuffer; width: number; height: number },
+    target: GPUTextureView | null,
+    options: { columns?: [number, number]; load?: boolean; divider?: boolean } = {},
+  ): void {
     const { width, height } = frame;
     const key = [frame.accum, frame.planes, width, height];
     if (key.some((k, i) => k !== this.key[i])) {
@@ -147,15 +159,22 @@ export class FrameView {
     new Uint32Array(u).set([width, height, this.mode, this.count]);
     new Float32Array(u)[4] = this.exposure;
     new Uint32Array(u)[5] = RADIANCE_VIEWS.has(this.mode) ? 1 : 0;
+    new Uint32Array(u)[6] = options.divider && options.columns ? options.columns[0] : 0xffffffff;
     this.device.queue.writeBuffer(this.uniform, 0, u);
     const cp = encoder.beginComputePass({ label: 'frame view pick' });
     cp.setPipeline(this.pickPipeline);
     cp.setBindGroup(0, this.pickGroup!);
     cp.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
     cp.end();
-    const rp = encoder.beginRenderPass({ label: 'frame view draw', colorAttachments: [{ view: target, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    if (!target) return;
+    const rp = encoder.beginRenderPass({ label: 'frame view draw', colorAttachments: [{ view: target, loadOp: options.load ? 'load' : 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
     rp.setPipeline(this.drawPipeline);
     rp.setBindGroup(0, this.drawGroup!);
+    if (options.columns) {
+      const x0 = Math.max(0, Math.min(width, Math.floor(options.columns[0])));
+      const x1 = Math.max(x0, Math.min(width, Math.floor(options.columns[1])));
+      rp.setScissorRect(x0, 0, x1 - x0, height);
+    }
     rp.draw(3);
     rp.end();
   }

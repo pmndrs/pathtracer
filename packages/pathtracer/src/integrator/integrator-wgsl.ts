@@ -49,6 +49,12 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    *  - `'mirror'` (default): also what a chain of perfect-mirror bounces (smooth conductors) from the primary hit reaches (an emitter or the sky seen in a mirror, throughput included).
    */
   frameEmission?: 'none' | 'primary' | 'mirror';
+  /**
+   * With `frame`, `volumes` and a `frameEmission` other than 'none' (V7.4, docs/internal/design/volumes-plan.md): the camera ray's own single scattering (the forced / equiangular / march estimate of the camera segment and a
+   * first-vertex collision's NEE, i.e. the orders 0-1 light of the medium) goes to the emission plane (plane 6, noise-free of the demodulation, added back AFTER the filter) instead of the demodulated diffuse plane. A chain can then
+   * accumulate it over time without a spatial filter and run SVGF on the multiple scattering only. Default false: the kernel text is unchanged.
+   */
+  frameMedia?: boolean;
   /** `false`: the accumulator is overwritten with this dispatch's sample instead of summed (a frame, not a progressive pass). Default true, or false with `frame`. */
   accumulate?: boolean;
   /** Next-event estimation + MIS. Default true. False = BSDF sampling only (debug; delta suns contribute nothing). */
@@ -227,6 +233,8 @@ export interface ResolvedIntegratorOptions {
   frame: boolean;
   /** `frame`'s plane 6: `'none'` without `frame` (see `PtIntegratorOptions.frameEmission`). */
   frameEmission: 'none' | 'primary' | 'mirror';
+  /** `PtIntegratorOptions.frameMedia` (false unless frame + volumes + a frameEmission plane). */
+  frameMedia: boolean;
   accumulate: boolean;
   nee: boolean;
   envSampling: 'uniform' | 'importance' | 'none';
@@ -302,6 +310,8 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
     const clash = (o.primary ?? 'trace') === 'vbuffer' ? "primary 'vbuffer'" : alphaMask ? 'alphaMask' : o.hooks ? 'hooks' : o.materials?.features.medium ? 'the Beer-law absorber (materials.features.medium)' : o.counters ? 'counters' : '';
     if (clash) throw new Error(`integrator.volumes cannot be combined with ${clash} yet`);
     if (o.frame && o.volumes.outputs) throw new Error('integrator.frame cannot be combined with integrator.volumes.outputs (V5.1c: both write the accumulator tail; the megakernel frame planes and the guide / order outputs are separate products)');
+    if (o.frameMedia && !o.frame) throw new Error('integrator.frameMedia needs integrator.frame');
+    if (o.frameMedia && o.frameEmission === 'none') throw new Error("integrator.frameMedia needs the emission plane (integrator.frameEmission other than 'none')");
     if (o.aovs && o.volumes.outputs) throw new Error('integrator.aovs cannot be combined with integrator.volumes.outputs yet (both live in the accumulator tail)');
     const marchN = ptMarchCount(o.volumes ?? undefined);
     if ((o.volumes.forcedNee || o.volumes.equiangular || marchN > 1) && o.nee === false) throw new Error('integrator.volumes.forcedNee / equiangular needs integrator.nee');
@@ -321,7 +331,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const spectral = resolveSpectralOptions(o.spectral);
   if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
   if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', frameMedia: !!(o.frame && o.volumes && o.frameMedia), accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -624,6 +634,7 @@ export function ptIntegratorWgsl(options: PtIntegratorOptions = {}): string {
   // P4.5a: light the primary BSDF does not modulate (an emitter or the sky seen directly, or through perfect mirrors) goes to `fEmit` instead of `radiance`; the beauty is their sum.
   const emit = o.frameEmission !== 'none';
   const emitMirror = o.frameEmission === 'mirror';
+  const fm = o.frameMedia; // V7.4: the camera ray's single scattering goes to the emission plane
   const pureCond = emitMirror ? 'fPure' : 'depth == 0u';
   const addPure = (value: string, index: string, indent: string): string =>
     !emit
@@ -668,8 +679,14 @@ ${volOut ? `                // V7.3: the camera segment's estimate (depth 0) is 
                 } else {
                     radiance += fAdd;
                 }
+` : `${fm ? `                let fAdd = beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
+                if (depth == 0u) {
+                    fEmit += fAdd;
+                } else {
+                    radiance += fAdd;
+                }
 ` : `                radiance += beta * ${equi ? 'ptVolEquiNee' : 'ptVolForcedNee'}(curMed, vo, ray.direction, segMax, pixelSeed, sampleIndex, depth);
-`}            }
+`}`}            }
 ` : ''}${vspg ? `            // V4.3 VSPG: the first medium segment of the primary ray takes a guided collision-exists decision (volume/vspg-wgsl.ts); the radiance added after it is the statistic.
             var vsSet = false;
             if (!vspgDone && depth == 0u) {
@@ -709,7 +726,8 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     ptAovGuide(pxIndex, dims.x * dims.y, ptVolMedium(curMed).albedo, -ray.direction);
                     aovDone = true;
                 }
-` : ''}${frame ? `                // V5.1c: a medium scatter is the "diffuse" class (the phase function is the medium's BSDF): albedo = sigma_s / sigma_t, normal -ray.direction, viewZ and motion of the scatter point, roughness 1.
+` : ''}${frame ? `${fm ? '' : `                // V5.1c: a medium scatter is the "diffuse" class (the phase function is the medium's BSDF): albedo = sigma_s / sigma_t, normal -ray.direction, viewZ and motion of the scatter point, roughness 1.
+                // (With frameMedia the guides come from the guide ray before the loop instead: a random scatter point is no stable guide, V7.5.)
                 if (vertex == 0u) {
                     fSeen = true;
                     fNormal = -ray.direction;
@@ -718,11 +736,17 @@ ${volOut ? `                if (vertex == 0u && ptVoHas == 0.0) {
                     fRough = 1.0;
                     fAlbedo = ptVolMedium(curMed).albedo;
                 }
-${emitMirror ? `                fPure = false;
+`}${emitMirror ? `                fPure = false;
 ` : ''}` : ''}                let woM = -ray.direction;
                 if (PT_NEE${forced ? ' && !fHomog' : ''}) {
-                    radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
-                }
+${fm ? `                    let mAdd = beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
+                    if (vertex == 0u) {
+                        fEmit += mAdd;
+                    } else {
+                        radiance += mAdd;
+                    }
+` : `                    radiance += beta * ptSampleLdMedium(pm, woM, curMed, pixelSeed, sampleIndex, vertex);
+`}                }
 ${ptVolPhaseSampleWgsl(o.volumes!, '                ', 'curMed', 'woM', 'ptSample2D(pixelSeed, sampleIndex, ptVertexPair(vertex, PT_SLOT_BSDF_DIRECTION))', 'wiM', 'prevPdf')}                specularBounce = false;
                 prevP = pm;
                 ray = RtRay(pm, 0.0, wiM, PT_FAR);
@@ -915,6 +939,54 @@ ${vspg ? `    var vspgDone = false;
 ` : ''}` : ''}${tex ? `    var cone = RtCone(0.0, bitcast<f32>(ptParams.limits.z) * 2.0 * length(ptParams.up.xyz) / (length(ptParams.forward.xyz) * f32(dims.y)));
 ` : ''}
 ${vbHit ? `    var primary = true;
+` : ''}${fm ? `    // V7.5: the frame planes' guides (viewZ, normal, motion, albedo, roughness) come from the first SOLID surface along the camera ray (medium boundaries are skipped), whatever the medium does to the
+    // path: a random scatter point would change them from frame to frame and SVGF would reject its history. A miss stays a miss. Through a medium the albedo guides are 1 (the planes then hold the
+    // light as it arrives: surface radiance times transmittance plus the multiple scattering, which the surface's albedo does not modulate).
+    {
+        var gRay = ray;
+        var gHas = false;
+        var gEnter = vec3f(0.0);
+        var gTrav = ${o.volumes!.cameraStack ? o.volumes!.cameraStack.length > 0 : !!o.volumes!.cameraMedium};
+        for (var gk = 0u; gk < 16u; gk++) {
+            let gh = rtClosest(gRay, RT_MASK_ALL);
+            if (gh.t < 0.0) {
+                break;
+            }
+            let gmv = ptVolMat(gh.material);
+            if (gmv.w != 0u) {
+                gTrav = true;
+                let gp = gRay.origin + gRay.direction * gh.t;
+                if (!gHas) {
+                    gHas = true;
+                    gEnter = gp;
+                }
+                gRay = RtRay(ptOffsetOrigin(gp, ptSideNormal(gh.normal, gRay.direction)), 0.0, gRay.direction, PT_FAR);
+                continue;
+            }
+            let gs = rtSurface(gh, gRay, RT_SURF_POSITION | RT_SURF_SHADING_NORMAL${tex ? ' | RT_SURF_UV' : ''});
+            let gm = ${tex ? 'rtApplyMaterialTextures(rtMaterial(gh.material), gs.uv, 0.0)' : 'rtMaterial(gh.material)'};
+            let gb = ptBsdfFromMaterial(gm${mats ? `, ${mixU.replaceAll('depth', '0u')}` : ''});
+            fSeen = true;
+            fNormal = gs.shadingNormal;
+            fViewZ = -dot(gs.position - origin, normalize(ptParams.forward.xyz));
+            fMotion = ptFrameMotion(gs.position);
+            fRough = gm.specularRoughness;
+            fIsSpec = gb.kind == PT_BSDF_CONDUCTOR || gb.kind == PT_BSDF_DIELECTRIC;
+            if (!(gTrav || gmv.z != 0u)) {
+                fAlbedo = ptAovAlbedo(gm);
+                fSpec = ptAovSpecular(gm);
+            }
+            break;
+        }
+        if (!fSeen && gHas) {
+            // No solid surface behind the medium (a cloud against the sky): the point where the ray first enters a medium boundary is the guide (normal facing the camera, roughness 1, albedo 1).
+            fSeen = true;
+            fNormal = -ray.direction;
+            fViewZ = -dot(gEnter - origin, normalize(ptParams.forward.xyz));
+            fMotion = ptFrameMotion(gEnter);
+            fRough = 1.0;
+        }
+    }
 ` : ''}    loop {
 ${vbHit ? `        var hit: RtHit;
         if (primary) {
@@ -1001,7 +1073,7 @@ ${lodS.bsdf(mixU, shadingNormal, true) ?? `        let bp = ptBsdfFromMaterial(m
             aovDone = true;
             ptAovGuide(pxIndex, dims.x * dims.y, ptAovAlbedo(mat), ${shadingNormal});
         }
-` : ''}${frame ? `        if (depth == 0u) {
+` : ''}${frame && !fm ? `        if (depth == 0u) {
             fSeen = true;
             fNormal = ${shadingNormal};
             fViewZ = -dot(surf.position - origin, normalize(ptParams.forward.xyz));

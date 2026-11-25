@@ -2,6 +2,10 @@
  * Ambient occlusion with `rtVisible`: the cheapest query of the trace core. For each pixel's first hit, cosine-distributed rays over the
  * hemisphere ask only "is anything within `radius`?" (an any-hit walk, which stops at the first blocker). The fraction that escape is the
  * pixel's ambient occlusion; frames accumulate into a converged image.
+ *
+ * The **Query** control swaps the occlusion test for `rtClosest` (closest hit) over the same rays: the image is the same, but the walk must
+ * keep going until it has proved which hit is nearest, where `rtVisible` may stop at the first blocker it meets. Compare the frame times.
+ * `?query=closest` in the URL starts on it.
  */
 import type { GpuScene } from '@pmndrs/raytracer';
 import { Accumulation, exposeForChecks } from '../../shared/accumulation.ts';
@@ -49,13 +53,23 @@ fn ao(@builtin(global_invocation_id) id: vec3u) {
     let ng = exSide(s.geometricNormal, -ray.direction);
     let n = exSide(s.shadingNormal, -ray.direction);
     let origin = exOffsetOrigin(s.position, ng);
-    let rays = max(view.mode, 1u);
+    // view.mode: bits 0-7 the rays per frame, bit 8 the query (0 = rtVisible, 1 = rtClosest). A uniform, so the branch below is the same
+    // for every thread and both arms share one compiled kernel.
+    let rays = max(view.mode & 0xffu, 1u);
+    let closest = (view.mode & 0x100u) != 0u;
     var escaped = 0.0;
     for (var k = 0u; k < rays; k++) {
       var d = exCosineDirection(n, vec2f(exRand(&seed), exRand(&seed)));
       if (dot(d, ng) <= 0.0) { d = reflect(d, ng); }
       // radius in origin.w: anything nearer than that occludes.
-      if (rtVisible(RtRay(origin, 0.0, d, view.origin.w), RT_MASK_ALL)) { escaped += 1.0; }
+      let probe = RtRay(origin, 0.0, d, view.origin.w);
+      var escapes = false;
+      if (closest) {
+        escapes = !rtIsHit(rtClosest(probe, RT_MASK_ALL));  // the nearest hit, found and then thrown away
+      } else {
+        escapes = rtVisible(probe, RT_MASK_ALL);  // any hit: stops at the first blocker
+      }
+      if (escapes) { escaped += 1.0; }
     }
     open = escaped / f32(rays);
   }
@@ -66,7 +80,8 @@ fn ao(@builtin(global_invocation_id) id: vec3u) {
 
 defineExample(async (ctx) => {
   const { device, caps, pane, stats } = ctx;
-  const params = { radius: 0.5, raysPerFrame: 2 };
+  const QUERIES = { 'rtVisible (any hit)': 'visible', 'rtClosest (closest hit)': 'closest' } as const;
+  const params = { radius: 0.5, raysPerFrame: 2, query: (new URLSearchParams(location.search).get('query') === 'closest' ? 'closest' : 'visible') as 'visible' | 'closest' };
   const accumulation = new Accumulation(ctx);
   accumulation.maxFrames = 512;
   accumulation.view.toneMapping = 'clamp';
@@ -90,6 +105,8 @@ defineExample(async (ctx) => {
   const aoFolder = pane.addFolder({ title: 'Ambient occlusion' });
   aoFolder.addBinding(params, 'radius', { min: 0.001, max: 10, step: 0.001 }).on('change', () => accumulation.reset());
   aoFolder.addBinding(params, 'raysPerFrame', { label: 'rays / frame', min: 1, max: 16, step: 1 }).on('change', () => accumulation.reset());
+  // The baseline: the same rays through the closest-hit walk. Same image; watch the frame time.
+  aoFolder.addBinding(params, 'query', { label: 'Query', options: QUERIES }).on('change', () => accumulation.reset());
 
   ctx.loop((encoder) => {
     if (!kernel) return false;
@@ -99,7 +116,8 @@ defineExample(async (ctx) => {
         group = device.createBindGroup({ layout: k.ioLayout, entries: [{ binding: 0, resource: { buffer: viewBuffer } }, { binding: 1, resource: { buffer: accumulation.buffer! } }] });
         bound = accumulation.buffer;
       }
-      writeView(device, viewBuffer, picker.orbit.camera, accumulation.width, accumulation.height, frame, params.raysPerFrame, [params.radius, 0]);
+      stats.set('query', params.query === 'closest' ? 'rtClosest (closest hit)' : 'rtVisible (any hit)');
+      writeView(device, viewBuffer, picker.orbit.camera, accumulation.width, accumulation.height, frame, params.raysPerFrame | (params.query === 'closest' ? 0x100 : 0), [params.radius, 0]);
       k.dispatch(enc, 'ao', group!, Math.ceil(accumulation.width / 8), Math.ceil(accumulation.height / 8));
     });
   });

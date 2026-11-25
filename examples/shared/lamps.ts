@@ -28,7 +28,8 @@ export function lampsScene(selection: LightSelection = 'pbrt'): SceneCopyInput {
   ];
   const materials: RtMaterialInput[] = [{ baseColor: [0.7, 0.7, 0.7], specularRoughness: 0.5 }];
   const instances = meshes.map((_, i) => ({ meshIndex: i, instanceIndex: i, objectToWorld: identity, material: 0 }));
-  // 64 lamps: small downward-facing quads, each with its own colour (one material per lamp).
+  // 64 lamps: small quads facing down, each with its own colour (one material per lamp). They emit from both faces, so a camera above
+  // them sees them glow instead of their unlit backs (the upward light mostly escapes to the sky).
   let seed = 3;
   const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
   for (let i = 0; i < 64; i++) {
@@ -36,7 +37,7 @@ export function lampsScene(selection: LightSelection = 'pbrt'): SceneCopyInput {
     meshes.push({ positions: new Float32Array([x - s, y, z - s, x + s, y, z - s, x + s, y, z + s, x - s, y, z + s]), indices: [0, 1, 2, 0, 2, 3] });
     const h = rand() * 6;
     const rgb = [0, 2, 4].map((k) => Math.max(0, Math.min(1, Math.abs(((h + k) % 6) - 3) - 1))) as [number, number, number];
-    materials.push({ baseColor: [0, 0, 0], specularWeight: 0, emissionColor: rgb.map((c) => 40 * (0.15 + c)) as [number, number, number] });
+    materials.push({ baseColor: [0, 0, 0], specularWeight: 0, emissionTwoSided: true, emissionColor: rgb.map((c) => 40 * (0.15 + c)) as [number, number, number] });
     instances.push({ meshIndex: meshes.length - 1, instanceIndex: meshes.length - 1, objectToWorld: identity, material: materials.length - 1 });
   }
   return { meshes, instances, materials, sun: sunFrom(12, -60, 0.6), environment: { radiance: [0.02, 0.025, 0.04] }, options: { lightSelection: selection } };

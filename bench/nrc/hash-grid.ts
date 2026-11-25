@@ -91,6 +91,44 @@ const SH_DIRECTION_SCALE = 16384;
 const SH_COLOR_SCALE = SCALE / 2;
 const MIN_SH_SAMPLES = 16;
 const MAX_STORAGE_BINDING_BYTES = 128 * 1024 ** 2;
+/** Attempts of the weak compare-exchange on one slot that still reads empty, before the insert is refused (pmndrs/pathtracer#1). */
+const CAS_TRIES = 4;
+
+/**
+ * `hgInsert(k) -> i32`: the cell's slot in its bucket, claimed if absent; -1 when the bucket is full (or, in practice never, when
+ * `casTries` weak exchanges on an empty slot all fail spuriously). The caller declares `keys: array<atomic<u32>>`.
+ *
+ * One key never gets two slots (pmndrs/pathtracer#1): during an update pass slots only go from 0 to a key, and every thread probes
+ * the bucket in the same order and never passes a slot without learning its final key. A slot that reads non-zero is final (take it
+ * if it is ours); one that reads 0 is exchanged until it holds a key (ours or another's). WGSL only has the weak exchange, which
+ * may fail with the slot still empty; moving on then could claim a second slot behind a concurrent winner, so after `casTries`
+ * such failures the insert is refused instead (a dropped sample, counted with the full-bucket drops). Both loops have literal
+ * trip counts (Tint loop counters on D3D12). Eviction (`hgEvict`) runs in its own dispatch, never during inserts.
+ * Exported for `bench/pages/hash-insert-check.ts`, which runs this exact text; `hash-grid.test.ts` models the protocol.
+ */
+export function hashGridInsertWgsl(bucket = BUCKET, casTries = CAS_TRIES): string {
+  return /* wgsl */ `
+fn hgInsert(k: vec2u) -> i32 {
+  for (var i = 0u; i < ${bucket}u; i++) {
+    if (atomicLoad(&keys[k.x + i]) == k.y) { return i32(k.x + i); }
+  }
+  for (var i = 0u; i < ${bucket}u; i++) {
+    let slot = k.x + i;
+    var owner = atomicLoad(&keys[slot]);
+    for (var t = 0u; t < ${casTries}u; t++) {
+      if (owner != 0u) { break; }
+      let res = atomicCompareExchangeWeak(&keys[slot], 0u, k.y);
+      if (res.exchanged) { return i32(slot); }
+      owner = res.old_value;
+    }
+    // Still empty after spurious failures: refuse rather than risk a second slot further on.
+    if (owner == 0u) { return -1; }
+    if (owner == k.y) { return i32(slot); }
+  }
+  return -1;
+}
+`;
+}
 
 /** Allocation and per-insert payload accounting, excluding key probes and optional active-list bookkeeping. */
 export function hashGridStorage(settings: Partial<HashGridSettings> = {}) {
@@ -391,28 +429,7 @@ fn hgAddMoments(a: u32, q: u32) {
   if (squareLow > 0xffffffffu - square) { atomicAdd(&momentSums[a + 3u], 1u); }
 }
 ` : ''}
-// The cell's slot, claimed if absent; -1 when the bucket is full.
-fn hgInsert(k: vec2u) -> i32 {
-  for (var i = 0u; i < ${BUCKET}u; i++) {
-    if (atomicLoad(&keys[k.x + i]) == k.y) { return i32(k.x + i); }
-  }
-  for (var i = 0u; i < ${BUCKET}u; i++) {
-    let slot = k.x + i;
-    let current = atomicLoad(&keys[slot]);
-    // Another update may have inserted this key since the initial search.
-    if (current == k.y) { return i32(slot); }
-    if (current != 0u) { continue; }
-    loop {
-      let res = atomicCompareExchangeWeak(&keys[slot], 0u, k.y);
-      if (res.exchanged || res.old_value == k.y) { return i32(slot); }
-      // A weak CAS can fail while the slot is empty. Retry the same slot so
-      // concurrent records for a new key always converge on the same slot.
-      if (res.old_value != 0u) { break; }
-    }
-  }
-  return -1;
-}
-
+${hashGridInsertWgsl()}
 @compute @workgroup_size(64)
 fn hgUpdate(@builtin(global_invocation_id) gid: vec3u) {
   let r = gid.x;

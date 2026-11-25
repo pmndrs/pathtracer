@@ -144,7 +144,9 @@ describe('integrator.volumes (P5)', () => {
     expect(() => ptVolumeValidate({ ...homog, materials: [{ interior: 2, exterior: 0, boundary: false }] })).toThrow(/does not exist/);
     expect(() => ptVolumeValidate({ ...gridded, cameraMedium: 1 })).not.toThrow(); // V3.3: a camera inside a grid medium
     expect(() => build({ ...homog, cameraMedium: 1 })).not.toThrow();
-    expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, restir: {} as never } })).toThrow(/cannot be combined/);
+    // V5.4: ReSTIR DI behind homogeneous media is allowed; GI and grid media are still refused.
+    expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, restir: { gi: true } as never } })).toThrow(/GI is not supported with volumes/);
+    expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: gridded, restir: {} as never } })).toThrow(/not homogeneous/);
     expect(() => ptMegakernelBuild(caps, { format: {}, layout, integrator: { volumes: homog, counters: true } })).toThrow(/cannot be combined/);
     expect(ptwfUnsupported({ volumes: homog })).toBeNull();
   });

@@ -210,6 +210,9 @@ export class PtMegakernelAdapter implements RendererAdapter {
   };
 
   gpuContext: GpuContext | null = null;
+  /** The adapter / device / caps `load` got (V7.4); set `sharedDevice` of another adapter to this before `load` to run both on one device (textures can then be shared). */
+  deviceHandle: { adapter: GPUAdapter; device: GPUDevice; caps: ReturnType<typeof detectCaps> } | null = null;
+  sharedDevice: { adapter: GPUAdapter; device: GPUDevice; caps: ReturnType<typeof detectCaps> } | null = null;
   approximations: string[] = [];
   /** Extra images of the last `render` (AOVs, counter heatmaps, the denoised frame): the competitor page uploads them next to the main image. */
   extraImages: { name: string; image: Image }[] = [];
@@ -350,9 +353,11 @@ export class PtMegakernelAdapter implements RendererAdapter {
     const t0 = performance.now();
     this.scene = scene;
     if (!navigator.gpu) throw new Error('navigator.gpu is undefined: no WebGPU in this browser.');
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    const shared = this.sharedDevice;
+    const adapter = shared ? shared.adapter : await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) throw new Error('requestAdapter() returned null: no usable GPU.');
-    const { device, caps } = await requestDeviceForCaps(adapter, detectCaps(adapter), { label: this.info.id });
+    const { device, caps } = shared ? { device: shared.device, caps: shared.caps } : await requestDeviceForCaps(adapter, detectCaps(adapter), { label: this.info.id });
+    this.deviceHandle = { adapter, device, caps };
     // Imported here: page-client reads `location` when loaded, so the module must not load in Node (unit tests import this file).
     const { summarizeAdapter } = await import('../../runner/page-client.ts');
     this.gpuContext = { adapter, device, summary: summarizeAdapter(adapter) };

@@ -1,0 +1,23 @@
+{
+  "run": "20261124T043736Z-media-realtime",
+  "scenes": [
+    {
+      "id": "fog",
+      "name": "fog"
+    }
+  ],
+  "renderers": [
+    {
+      "id": "media-realtime",
+      "name": "media-realtime"
+    }
+  ],
+  "cells": [
+    {
+      "scene": "fog",
+      "renderer": "media-realtime",
+      "image": "1-run/reference-fog-2048spp.pfm",
+      "metrics": {}
+    }
+  ]
+}
