@@ -873,6 +873,10 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   a page that draws nothing sets `check: { image: false }`). The gallery finds `examples/<path>/thumb.webp` through `import.meta.glob` (a plain `src` path would not be copied by Vite). The script's
   stdout is per example: do not pipe it through `tail` in a background run (nothing shows until the end).
 - Built-in blue noise (S10): `loadBlueNoise()` reads `packages/raytracer/src/noise/builtin/<name>.ts` (base64 of the committed PNG, `png: string` so the .d.ts stays 200 B, not 105 KB). After regenerating the PNGs run `node scripts/embed-bluenoise.mjs`; `bluenoise-builtin.test.ts` fails on drift. `mode: 'realtime'` now always selects the `bluenoise` sampler and `create` loads the default texture, so a test that wants Owen-Sobol in real-time mode sets `integrator.sampler` explicitly.
+- Building pmndrs/denoiser (yarn 4 via corepack) in a cloud session: repo.yarnpkg.com is blocked, so set `COREPACK_NPM_REGISTRY=https://registry.npmjs.org COREPACK_ENABLE_DOWNLOAD_PROMPT=0`
+  (corepack then fetches yarn from npm), `yarn install --immutable`, `yarn workspaces foreach -R --topological-dev --from denoiser run build`, `npm pack` in `packages/denoiser`. To try an unpublished build
+  in the examples, add `overrides: { "@pathtracer/examples>denoiser": "file:<tgz>" }` to `pnpm-workspace.yaml`, `pnpm install`, and restore both `pnpm-workspace.yaml` and `pnpm-lock.yaml` before committing.
+  npm `denoiser` 2.0.0 (published 2026-11-25) has `denoiser/realtime`; anything older (0.0.x) is the 2024 TFJS line without it.
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.
