@@ -876,7 +876,7 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
 - Building pmndrs/denoiser (yarn 4 via corepack) in a cloud session: repo.yarnpkg.com is blocked, so set `COREPACK_NPM_REGISTRY=https://registry.npmjs.org COREPACK_ENABLE_DOWNLOAD_PROMPT=0`
   (corepack then fetches yarn from npm), `yarn install --immutable`, `yarn workspaces foreach -R --topological-dev --from denoiser run build`, `npm pack` in `packages/denoiser`. To try an unpublished build
   in the examples, add `overrides: { "@pathtracer/examples>denoiser": "file:<tgz>" }` to `pnpm-workspace.yaml`, `pnpm install`, and restore both `pnpm-workspace.yaml` and `pnpm-lock.yaml` before committing.
-  npm `denoiser@latest` was the 2024 TFJS 0.0.11 (no `denoiser/realtime`) until 2.0.0 is published.
+  npm `denoiser` 2.0.0 (published 2026-11-25) has `denoiser/realtime`; anything older (0.0.x) is the 2024 TFJS line without it.
 - Publishing (`@pmndrs/raytracer`, `@pmndrs/pathtracer`): in the workspace `exports` point at `src/*.ts`; `publishConfig.exports` swaps them to `dist/` (built by each package's
   `tsconfig.build.json`, `rewriteRelativeImportExtensions`) only in the packed tarball. Always publish with `pnpm` (`pnpm release`, or `pnpm -r publish`): `npm publish` ignores the
   swap and ships `workspace:^` literally. `pnpm -r publish` skips versions already on npm, so CI (`.github/workflows/publish.yml`, trusted publishing) releases on a version bump.

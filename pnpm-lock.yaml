@@ -90,6 +90,15 @@ importers:
       '@pmndrs/raytracer':
         specifier: workspace:*
         version: link:../packages/raytracer
+      '@pmndrs/upscaler':
+        specifier: ^0.5.0
+        version: 0.5.0(three@0.187.0)
+      denoiser:
+        specifier: ^2.0.0
+        version: 2.0.0(three@0.187.0)
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
       tweakpane:
         specifier: 4.0.5
         version: 4.0.5
@@ -389,6 +398,11 @@ packages:
     peerDependenciesMeta:
       three:
         optional: true
+
+  '@pmndrs/upscaler@0.5.0':
+    resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
+    peerDependencies:
+      three: '>=0.184.0'
 
   '@rollup/rollup-android-arm-eabi@4.68.2':
     resolution: {integrity: sha512-ItKrNMkEL3hy85kLBXwB0+M6CWWVI8vr7RV+Eb7oDlQIMXLaiEhGfdaj5jAUadYn2v3nwzAhIRl/nLyjAqV9vQ==}
@@ -728,6 +742,20 @@ packages:
 
   deep-is@0.1.4:
     resolution: {integrity: sha512-oIPzksmTg4/MriiaYGO+okXDT7ztn/w3Eptv/+gSIdMdKsJo0u4CfYNFJPy+4SKMuCqGw2wxnA+URMg3t8a/bQ==}
+
+  denoiser@2.0.0:
+    resolution: {integrity: sha512-78PG9Nq6bsIZ9Fi7a+dc9gL6W3FbxAVEOEs9oOdr+O5eE2b6y9fJtKEh+B9rdbtzIjKQVXOCXsJ/ySEOevUKnQ==}
+    peerDependencies:
+      '@huggingface/kernels': 0.0.1-preview.3
+      onnxruntime-web: ^1.27.0
+      three: '>=0.185.0'
+    peerDependenciesMeta:
+      '@huggingface/kernels':
+        optional: true
+      onnxruntime-web:
+        optional: true
+      three:
+        optional: true
 
   es-module-lexer@1.7.0:
     resolution: {integrity: sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA==}
@@ -1364,6 +1392,10 @@ snapshots:
     optionalDependencies:
       three: 0.187.0
 
+  '@pmndrs/upscaler@0.5.0(three@0.187.0)':
+    dependencies:
+      three: 0.187.0
+
   '@rollup/rollup-android-arm-eabi@4.68.2':
     optional: true
 
@@ -1683,6 +1715,10 @@ snapshots:
   deep-eql@5.0.2: {}
 
   deep-is@0.1.4: {}
+
+  denoiser@2.0.0(three@0.187.0):
+    optionalDependencies:
+      three: 0.187.0
 
   es-module-lexer@1.7.0: {}
 
