@@ -4,7 +4,7 @@
  */
 import type { CpuHit } from '@pmndrs/bvh';
 import { normalMatrixRows, type Hit, type Ray } from '@pmndrs/raytracer';
-import type { TraceTestScene } from './trace-scenes.ts';
+import { transformPoint, type TraceTestScene } from './trace-scenes.ts';
 
 export const T_RELATIVE = 1e-5;
 /** t is compared relative to max(t, T_FLOOR * scene diagonal): f32 error in t scales with the coordinates, not with t. */
@@ -31,6 +31,8 @@ export interface EdgeIndex {
   adjacent(instance: number, a: number, b: number): boolean;
   /** How two triangles of one instance relate: corners they share (by position bits), and whether they lie in one plane. */
   relation(instance: number, a: number, b: number): { sharedCorners: number; coplanar: boolean };
+  /** Two triangles of (possibly) different instances lie in one WORLD plane (coincident faces: a box standing on a floor), to 1e-6 of the larger mesh extent. */
+  coplanarWorld(instanceA: number, a: number, instanceB: number, b: number): boolean;
   /** How many object-space coordinates of the point lie on the mesh's bounding box (2 = on a box edge, 3 = a corner). */
   onBox(instance: number, triangle: number, u: number, v: number): number;
 }
@@ -128,6 +130,23 @@ export function makeEdgeIndex(scene: TraceTestScene): EdgeIndex {
       });
       return { sharedCorners, coplanar };
     },
+    coplanarWorld(instanceA, a, instanceB, b) {
+      const ra = recordOf(instanceA);
+      const rb = recordOf(instanceB);
+      const ma = ra ? perMesh[ra.meshIndex] : undefined;
+      const mb = rb ? perMesh[rb.meshIndex] : undefined;
+      if (!ra || !rb || !ma || !mb) return false;
+      const world = (record: typeof ra, m: typeof ma, t: number) =>
+        [0, 1, 2].map((k) => transformPoint(record.objectToWorld, [0, 1, 2].map((c) => m.mesh.positions[(m.mesh.indices[t * 3 + k] as number) * 3 + c] as number)));
+      const pa = world(ra, ma, a);
+      const pb = world(rb, mb, b);
+      const e1 = [0, 1, 2].map((c) => (pa[1]![c] as number) - (pa[0]![c] as number));
+      const e2 = [0, 1, 2].map((c) => (pa[2]![c] as number) - (pa[0]![c] as number));
+      const n = [e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!];
+      const length = Math.hypot(n[0]!, n[1]!, n[2]!);
+      const extent = Math.max(...[ma, mb].flatMap((m) => [0, 1, 2].map((c) => (m.hi[c] as number) - (m.lo[c] as number))), 1e-9);
+      return length > 0 && pb.every((q) => Math.abs(((q[0]! - pa[0]![0]!) * n[0]! + (q[1]! - pa[0]![1]!) * n[1]! + (q[2]! - pa[0]![2]!) * n[2]!) / length) <= 1e-6 * extent);
+    },
     onBox(instance, triangle, u, v) {
       const record = recordOf(instance);
       const m = record ? perMesh[record.meshIndex] : undefined;
@@ -177,7 +196,7 @@ export function compareClosest(gpu: Hit, cpu: CpuHit | null, edges: EdgeIndex, t
     // Grazing past a tangent edge onto something behind it, on either side.
     const nearer = gpu.t < cpu.t ? gpuEdge : cpuEdge;
     if (!sameTriangle && nearer === 'tangent' && !strict) return { verdict: 'grazing', tRelative };
-    return { verdict: 'mismatch', why: `t gpu ${gpu.t} cpu ${cpu.t} (rel ${tRelative.toExponential(2)}, cos ${cos.toFixed(3)}, tri gpu ${gpu.instance}/${gpu.triangle} cpu ${cpu.instanceIndex}/${cpu.triangleIndex})`, tRelative };
+    return { verdict: 'mismatch', why: `t gpu ${gpu.t} cpu ${cpu.t} (rel ${tRelative.toExponential(2)}, cos ${cos.toFixed(3)}, tri gpu ${gpu.instance}/${gpu.triangle} bary ${gpu.barycentrics.map((x) => x.toExponential(3))} (${gpuEdge}) cpu ${cpu.instanceIndex}/${cpu.triangleIndex} bary ${cpu.u.toExponential(3)},${cpu.v.toExponential(3)} (${cpuEdge}))`, tRelative };
   }
   if (!sameTriangle && strict) {
     // Primary rays: the instance and triangle must match (the f64 walk names the GPU's on bvh's own Sponza primary rays).

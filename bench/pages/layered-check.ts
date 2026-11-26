@@ -18,10 +18,10 @@
  */
 
 import { drainDevice, getArgs, numberArg, reportError, reportResult, summarizeAdapter, watchDevice } from '../runner/page-client.ts';
+import { layerCorrectionGroup } from './layer-corr-bind.ts';
 import type { AdapterSummary } from '../runner/contract.ts';
-import { ptBsdfEval, ptBsdfSample, type PtVec3 } from '../../packages/pathtracer/src/bsdf/bsdf.ts';
+import type { PtVec3 } from '../../packages/pathtracer/src/bsdf/bsdf.ts';
 import { ptBsdfWgsl } from '../../packages/pathtracer/src/bsdf/bsdf-wgsl.ts';
-import { ptDielectric } from '../../packages/pathtracer/src/bsdf/materials.ts';
 import { ptInternalReflectance, ptLayeredCoatedConductor, ptLayeredEval, ptLayeredSample, type PtLayeredOptions, type PtLayeredParams } from '../../packages/pathtracer/src/bsdf/layered.ts';
 import { ptLayeredWgsl } from '../../packages/pathtracer/src/bsdf/layered-wgsl.ts';
 
@@ -235,10 +235,12 @@ async function runKernel(device: GPUDevice, code: string, label: string, binding
   const readback = device.createBuffer({ size: outBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const entries = [{ binding: 0, resource: { buffer: bufs[0] as GPUBuffer } }, { binding: 1, resource: { buffer: outBuf } }, ...bufs.slice(1).map((b, i) => ({ binding: 2 + i, resource: { buffer: b } }))];
   const bindGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries });
+  const corr = await layerCorrectionGroup(device, pipeline, code);
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginComputePass();
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
+  if (corr) pass.setBindGroup(2, corr);
   pass.dispatchWorkgroups(groups);
   pass.end();
   encoder.copyBufferToBuffer(outBuf, 0, readback, 0, outBytes);
@@ -565,6 +567,7 @@ try {
     const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } });
     const buf = device.createBuffer({ size: threads * 4, usage: GPUBufferUsage.STORAGE });
     const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: buf } }] });
+    const corr = await layerCorrectionGroup(device, pipeline, code);
     runners.push({
       name,
       run: async () => {
@@ -572,6 +575,7 @@ try {
         const pass = encoder.beginComputePass();
         pass.setPipeline(pipeline);
         pass.setBindGroup(0, group);
+        if (corr) pass.setBindGroup(2, corr);
         pass.dispatchWorkgroups(threads / 64);
         pass.end();
         device.queue.submit([encoder.finish()]);
