@@ -496,6 +496,12 @@ export class PtMegakernel {
     this.jitter = [x, y];
   }
 
+  /** `cameraJitter: 'engine'` (or a V-buffer): the camera ray's offset inside every pixel for the next `encode`, in pixels, x right / y down, 0 = pixel centre, [-0.5, 0.5]. */
+  setCameraJitter(x: number, y: number): void {
+    if (this.options.integrator?.primary !== 'vbuffer' && this.options.integrator?.cameraJitter !== 'engine') throw new Error("PtMegakernel.setCameraJitter: the kernel was built with the sampler's own jitter (integrator.cameraJitter: 'engine' needed)");
+    this.jitter = [x, y];
+  }
+
   setFilm(width: number, height: number): void {
     if (width === this.width && height === this.height && this.accum) return;
     this.width = width;
@@ -580,8 +586,8 @@ export class PtMegakernel {
     const f = new Float32Array(buffer);
     u.set([this.width, this.height, sampleIndex >>> 0, this.seed, this.limits.maxDepth >>> 0, (this.limits.rrStartDepth ?? 0) >>> 0, 0, finalRegion * this.width * this.height]);
     f[6] = this.limits.textureConeScale ?? 1;
-    // With a V-buffer the (otherwise unused) w lanes of origin and right carry the frame's sample position inside the pixel (0.5 + offset): `ptPath` reads them in place of pair 0.
-    const vb = this.options.integrator?.primary === 'vbuffer';
+    // With a V-buffer or `cameraJitter: 'engine'` the (otherwise unused) w lanes of origin and right carry the frame's sample position inside the pixel (0.5 + offset): `ptPath` reads them in place of pair 0.
+    const vb = this.options.integrator?.primary === 'vbuffer' || this.options.integrator?.cameraJitter === 'engine';
     f.set([...basis.origin, vb ? 0.5 + this.jitter[0] : 0, ...basis.right, vb ? 0.5 + this.jitter[1] : 0, ...basis.up, 0, ...basis.forward, 0], 8);
     if (this.options.integrator?.volumes?.separateDepth) u[23] = Math.min(this.limits.maxVolumeDepth ?? this.limits.maxDepth, 16383) >>> 0; // forward.w: a u32 the kernel bitcasts (V1.3)
     return buffer;

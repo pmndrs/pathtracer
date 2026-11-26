@@ -645,11 +645,43 @@ export class PipelineArm {
   }
 
   setSvgfAlpha(alpha: number): void {
-    if ('temporalAlpha' in this.denoiser.options.diffuse && this.denoiser.options.diffuse.temporalAlpha === alpha) return;
+    this.setDenoiserOptions({ ...this.denoiserOverrides, temporalAlpha: alpha });
+  }
+
+  /** SVGF options on top of `settings.denoiser` (the last `setDenoiserOptions`). */
+  private denoiserOverrides: Record<string, unknown> = {};
+  private denoiserKey = '{}';
+
+  /**
+   * Rebuilds the SVGF denoiser with `options` on top of `settings.denoiser` (`remodulate` stays on) and drops its history; a call with the
+   * options already in use does nothing. The bench's chain-debug page drives every SVGF option through it.
+   */
+  setDenoiserOptions(options: Record<string, unknown>): void {
+    const key = JSON.stringify(options);
+    if (key === this.denoiserKey) return;
+    this.denoiserKey = key;
+    this.denoiserOverrides = { ...options };
     this.denoiser.dispose();
-    this.denoiser = new DiffuseSpecularDenoiser(this.device, { ...this.s.denoiser, temporalAlpha: alpha, remodulate: true });
+    this.denoiser = new DiffuseSpecularDenoiser(this.device, { ...this.s.denoiser, ...options, remodulate: true } as never);
     this.denoiser.configure({ width: this.s.width, height: this.s.height });
+    this.lastSvgf = null;
     this.resetHistory();
+  }
+
+  /** The SVGF outputs of the last `post` (diffuse and specular, remodulated, render res); null before the first SVGF frame. */
+  lastSvgf: { diffuse: GPUTexture; specular: GPUTexture } | null = null;
+
+  /**
+   * Internal textures of the denoiser (the Denoiser package's `@internal` debug access, may move): 'accum' = the diffuse signal's temporal
+   * accumulation (rgb, alpha = history length in frames), 'gradient' = the anti-lag lambda (with `antiLag` on).
+   */
+  denoiserDebug(name: 'accum' | 'gradient'): GPUTexture | undefined {
+    return (this.denoiser as unknown as { pipes: { debugTexture(n: string): GPUTexture | undefined }[] }).pipes[0]?.debugTexture(name);
+  }
+
+  /** What OIDN is fed (the progressive mean of the raw beauty, the albedo factor, the view-space normal; render res, rgba16float). */
+  get oidnInputs(): { color: GPUTexture; albedo: GPUTexture; normal: GPUTexture } {
+    return this.oidnTex;
   }
 
   /** Loads the OIDN networks of the current settings (await before timing). */
@@ -748,6 +780,7 @@ export class PipelineArm {
         { depth: this.depth, normal: t.normal, motion: t.motion, roughness: t.roughness, albedo: t.albedo, viewZ: t.viewZ, motionZ: t.motionZ },
         { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near, far, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };
+      this.lastSvgf = dOut;
       const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
       let emission = t.emission;
       if (this.emisHist && this.emisPipe && this.emisParams) {

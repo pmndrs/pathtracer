@@ -34,6 +34,10 @@ export interface SessionOptions {
   /** Denoiser of both arms: 'svgf' (default), 'oidn' (with `oidn` settings), 'none'. */
   denoise?: DenoiserKind;
   oidn?: Partial<OidnArmSettings>;
+  /** Reactive mask from the SVGF history length for the upscaler (`PipelineSettings.reactive`; then `arm.reactiveEnabled` switches it). Default off. */
+  reactive?: PipelineSettings['reactive'];
+  /** Camera-ray jitter: 'sampler' (default, per pixel and sample) or 'engine' (one offset per frame for the whole image, `setJitter`; chain-debug). */
+  cameraJitter?: 'sampler' | 'engine';
 }
 
 export type ArmName = 'plain' | 'nrc';
@@ -62,7 +66,7 @@ export class NrcPipelineSession {
   }
 
   static async create(o: SessionOptions): Promise<NrcPipelineSession> {
-    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
+    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.cameraJitter === 'engine' ? { cameraJitter: 'engine' as const } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
     await adapter.load(o.scene);
     const gpu = adapter.gpuContext!;
     const device = gpu.device;
@@ -83,7 +87,7 @@ export class NrcPipelineSession {
       training: 'inline',
       ...(o.cache ?? {}),
     });
-    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}) };
+    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}), ...(o.reactive ? { reactive: o.reactive } : {}) };
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
     return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: cache.hash ? cache.description : arm.description });
   }
@@ -123,6 +127,12 @@ export class NrcPipelineSession {
   setGate(frames: number, steps = 16): void {
     this.cache.settings.warmupFrames = Math.max(0, Math.round(frames));
     this.cache.settings.warmupStepsPerFrame = Math.max(0, Math.round(steps));
+  }
+
+  /** With `cameraJitter: 'engine'`: the camera ray's offset in every pixel for the next frames of both kernels (pixels, [-0.5, 0.5], 0 = centre). */
+  setJitter(x: number, y: number): void {
+    this.plain.setCameraJitter(x, y);
+    this.cache.render.setCameraJitter(x, y);
   }
 
   /** Both arms switch denoiser (the comparison needs the same chain). */

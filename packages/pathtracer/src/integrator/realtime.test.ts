@@ -233,6 +233,15 @@ describe('per-frame outputs (P4.1)', () => {
     expect(f.radiance).toBe(radiance);
   });
 
+  it("cameraJitter 'engine': the camera ray reads the params' w lanes instead of pair 0; 'sampler' leaves the kernel text unchanged; wavefront and ReSTIR refuse it", () => {
+    expect(resolveIntegratorOptions({}).cameraJitter).toBe('sampler');
+    expect(mk({ frame: true, cameraJitter: 'sampler' }, false)).toBe(mk({ frame: true }, false));
+    const engine = mk({ frame: true, cameraJitter: 'engine' }, false);
+    expect(engine).toContain('let jitter = vec2f(ptParams.origin.w, ptParams.right.w);');
+    expect(mk({ frame: true }, false)).toContain('let jitter = ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER);');
+    expect(ptwfUnsupported({ cameraJitter: 'engine' })).toMatch(/cameraJitter/);
+  });
+
   it('frameEmission (P4.5a): off without frame, mirror by default with it; the kernel text carries the emission plane exactly as asked', () => {
     expect(resolveIntegratorOptions({}).frameEmission).toBe('none');
     expect(resolveIntegratorOptions({ frameEmission: 'mirror' }).frameEmission).toBe('none'); // no frame, no plane
