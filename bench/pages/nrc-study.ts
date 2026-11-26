@@ -437,7 +437,11 @@ try {
     await scoreSpatial('spatial_equal_time', asImage(await cache.render.readImage()));
     Object.assign(notes, { spatialFrozenSpp: frozenSpp, spatialBudgetMs: budget });
   }
-  if (args.webnnReplay === '1') {
+  if (args.webnnReplay === '1' && args.webnnFlat === '1') {
+    // The one-dispatch frame written flat, without the hand-off switches (same work as `tensors=chunk fold=8 sync=none`).
+    const { replayWebnnFlat } = await import('../nrc/webnn-replay-flat.ts');
+    Object.assign(metrics, await replayWebnnFlat(cache, args));
+  } else if (args.webnnReplay === '1') {
     const { replayWebnn } = await import('../nrc/webnn-replay.ts');
     Object.assign(metrics, await replayWebnn(cache, args));
   }

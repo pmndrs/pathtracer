@@ -91,3 +91,5 @@ Windows phase 15 requires the RTX machine. Use this command in PowerShell to run
 $env:PT_CHROME_FLAGS = '--enable-features=WebMachineLearningNeuralNetwork'
 node bench/runner/run.ts --page nrc-study --gpu nvidia --no-csv --ab device=gpu,npu --args phase10=mlp webnnReplay=1 scene=nrc-materials-card res=320x180 scenario=static frames=16,64 warm=0 flip=0 refSpp=512 upload=0 repeats=20 weights=packed publish=frame rows=4096
 ```
+
+Follow-up (N12.14): whether a different hand-off (context from the GPUDevice, batched per-chunk tensors, no drain wait) narrows the gap is tracked in [NRC-WEBNN-SYNC.md](NRC-WEBNN-SYNC.md).
