@@ -17,9 +17,21 @@ The page opens on Classroom in a WebGPU browser. It trains the compact fp16 MLP 
 
 **Render controls → Lighting** has the sun's strength, direction and size, and two switches: **Interior lights** (the ceiling lamps and the blackboard light) and **Sky light** (the sky seen through the windows; the sun is separate, set its strength to 0). The switches rewrite the light table and the emissive materials in the scene buffer, so nothing reloads and the cache relearns the new lighting while you watch. With everything off the image is black.
 
+**Lamp brightness** scales the interior emitters (0 to 4 times what the scene ships with); the image responds linearly (denoised mean 0.044 with the lamps off, 0.083 at 0.5×, 0.122 at 1×, 0.200 at 2×).
+
+### While the camera moves
+
+Two settings change while the camera moves and return a quarter of a second after it stops: the cache trains fewer steps per frame (**Cache → Steps / frame while moving**, 1 instead of 2) and the upscaler keeps a shorter history (**Upscaler → Max history while moving**, 8 frames instead of 24: less trailing, more grain). Both are first guesses that have not been tuned by eye; set either to its still value to switch it off (`?stepsMoving=2&upHistoryMoving=24`).
+
+### Starting warm, and slower GPUs
+
+**Cache → Remember the trained network** (on) keeps the trained weights in the browser and loads them on the next visit, so the page does not start with plain path tracing behind the warm-up gate. A saved network is only used for the scene, settings and lighting it was trained under; **Reset cache** forgets it, `?saved=0` switches it off.
+
+**Scene → Lower the resolution if the GPU is slow** (on) measures the first seconds at 960 × 540 and drops to 640 × 360 once if a frame takes longer than 50 ms; the network is kept across the switch. A size you pick yourself is remembered and ends the automatic choice (`?autoRes=0`, or any `?res=`).
+
 ### Bright specks while moving
 
-The temporal upscaler runs with its **Auto pre-exposure** off here (fixed at 1, DIVERGES V343). With it on, a moving camera showed bright specks in the final stage only (values up to 139 where the denoised frame never exceeds 20; about 17 pixels per 1920 × 1080 frame, on the plain side as much as on the NRC side) and none when still. The raw and the denoised stages are the same moving or still. Turn the switch on under **Render controls → Upscaler**, or open the page with `?upAutoExposure=1`, to see the difference.
+The temporal upscaler runs with its **Auto pre-exposure** off here (fixed at 1, DIVERGES V343; reported as pmndrs/upscaler#118). With it on, a moving camera showed bright specks in the final stage only (values up to 139 where the denoised frame never exceeds 20; about 17 pixels per 1920 × 1080 frame, on the plain side as much as on the NRC side) and none when still. The raw and the denoised stages are the same moving or still. Turn the switch on under **Render controls → Upscaler**, or open the page with `?upAutoExposure=1`, to see the difference.
 
 ### Comparing reconstruction
 

@@ -74,6 +74,7 @@
           <h2>Scene</h2>
           <label>Scene <select id="scene"><option value="sponza-white">Sponza (grey)</option><option value="hero-classroom">Classroom (color)</option><option value="hero-sponza">Sponza (color)</option><option value="nrc-materials-shadow">Red card, upper wall shadow</option><option value="cornell">Cornell box</option></select></label>
           <label>Render resolution <select id="res"><option value="480x270">480 × 270</option><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
+          <label class="check" title="Drops to 640 × 360 once if frames take longer than 50 ms at 960 × 540 (measured over the first seconds of rendering; the network is kept)"><input id="autoRes" type="checkbox" /> Lower the resolution if the GPU is slow</label>
           <label>Display scale <select id="displayScale"><option value="2">2×</option><option value="1">1× (native)</option></select></label>
         </fieldset>
         <fieldset>
@@ -101,6 +102,7 @@
         <fieldset id="daylight" hidden>
           <h2>Lighting</h2>
     <label class="check" title="The ceiling lamps and the blackboard light"><input id="interiorLights" type="checkbox" checked /> Interior lights</label>
+    <label title="Brightness of the ceiling lamps and the blackboard light, times what the scene ships with">Lamp brightness <input id="lampStrength" type="range" min="0" max="4" step="0.1" value="1"><output></output></label>
     <label class="check" title="Light from the sky through the windows; the sun is separate (set Sun strength to 0)"><input id="skyLight" type="checkbox" checked /> Sky light</label>
     <label>Sun strength <input id="sunStrength" type="range" min="0" max="6" step="0.1" value="1"><output></output></label>
     <label>Sun azimuth <input id="sunAzimuth" type="range" min="-180" max="180" step="1"><output></output></label>
@@ -112,6 +114,7 @@
           <label>Upscaling <select id="upscalePath"><option value="temporal">Temporal</option><option value="spatial">Spatial</option><option value="bilinear">Bilinear</option></select></label>
           <label>Sharpness <input id="sharpness" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
           <label>Max history (frames) <input id="upHistory" type="number" min="1" max="64" value="24" /></label>
+          <label title="Upscaler history while the camera moves (N11.13): shorter trails less and shows more grain. Set it to the value above to switch this off">Max history while moving <input id="upHistoryMoving" type="number" min="1" max="64" value="8" /></label>
           <label class="check"><input id="rcasDenoise" type="checkbox" /> Suppress grain in sharpening</label>
           <label class="check" title="The upscaler's own metering of its internal pre-exposure. Off (fixed at 1) by default: on a dim interior it pushes bright pixels to the top of the upscaler's tonemap, where reprojected history overshoots into bright specks while the camera moves (DIVERGES V343)"><input id="upAutoExposure" type="checkbox" /> Auto pre-exposure</label>
         </fieldset>
@@ -121,6 +124,8 @@
           <label>Cache <select id="backend"></select></label>
           <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
           <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="4" /></label>
+          <label title="Training steps per frame while the camera moves (N11.13): fewer steps give the frame time back to rendering. Set it to the value above to switch this off">Steps / frame while moving <input id="stepsMoving" type="number" min="0" max="16" value="2" /></label>
+          <label class="check" title="Keeps the trained network in this browser (IndexedDB) and loads it on the next visit, so the scene starts warm (N11.9). Only for the lighting it was trained under; Reset cache forgets it"><input id="rememberNetwork" type="checkbox" /> Remember the trained network</label>
           <label title="Warm-up gate (N11.7): the NRC side shows plain path tracing through the same chain while the network trains, then switches to the cache. Auto: a training-step budget per denoiser (SVGF 120, OIDN 600)">Warm-up gate <select id="gate"><option value="auto" selected>Auto (per denoiser)</option><option value="off">Off</option><option value="custom">Custom</option></select></label>
           <label>Gate frames (custom) <input id="gateFrames" type="number" min="0" max="2000" value="150" /></label>
           <label title="Training steps per frame while the gate is closed (0 = the steps above; default 16, D30)">Steps / frame while gated <input id="gateSteps" type="number" min="0" max="32" value="16" /></label>

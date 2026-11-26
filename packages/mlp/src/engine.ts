@@ -318,6 +318,23 @@ export class MlpEngine {
     this.device.queue.submit([encoder.finish()]);
   }
 
+  /**
+   * Reads the f32 weights back: the trained `master` copy or the `ema` copy inference uses. A readback (copy + `mapAsync`): for saving a
+   * network, never inside a timed region.
+   */
+  async readWeights(which: 'master' | 'ema' = 'master'): Promise<Float32Array> {
+    const bytes = this.weightCount * 4;
+    const staging = this.device.createBuffer({ label: 'nn weights readback', size: Math.ceil(bytes / 16) * 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = this.device.createCommandEncoder({ label: 'nn weights readback' });
+    encoder.copyBufferToBuffer(which === 'ema' ? this.ema : this.master, 0, staging, 0, staging.size);
+    this.device.queue.submit([encoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const weights = new Float32Array(staging.getMappedRange(0, bytes).slice(0));
+    staging.unmap();
+    staging.destroy();
+    return weights;
+  }
+
   private prepareGroup(kind: 'train' | 'infer', counts: GPUBuffer): GPUBindGroup {
     const cache = kind === 'train' ? this.trainPrepareGroups : this.inferPrepareGroups;
     let group = cache.get(counts);

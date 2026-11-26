@@ -9,13 +9,22 @@ import type { NrcPipelineSession } from './pipeline-session.ts';
 
 const field = (id: string) => document.getElementById(id) as HTMLInputElement;
 const SUN_FIELDS = ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius'];
-export const LIGHTING_FIELDS = [...SUN_FIELDS, 'interiorLights', 'skyLight'];
+export const LIGHTING_FIELDS = [...SUN_FIELDS, 'interiorLights', 'lampStrength', 'skyLight'];
+
+/** The lighting the controls describe, as a string: a saved network is only valid for the lighting it learned (N11.9). */
+export const lightingState = (): string => LIGHTING_FIELDS.map((id) => (field(id).type === 'checkbox' ? Number(field(id).checked) : field(id).value)).join(',');
+
+/** Emission scale of the interior emitters: the switch times the brightness slider. */
+const lampScale = (): number => (field('interiorLights').checked ? Math.max(0, field('lampStrength').valueAsNumber) : 0);
 
 export function setupDaylight(session: NrcPipelineSession): void {
   const { copy } = session.adapter.debug;
   const sun = session.options.scene.lights?.find(light => light.type === 'directional');
   // A switch only shows when the scene has that kind of light.
-  field('interiorLights').closest('label')!.hidden = !copy.lights.some(light => light.kind === 'triangle');
+  const lamps = copy.lights.some(light => light.kind === 'triangle');
+  field('interiorLights').closest('label')!.hidden = !lamps;
+  field('lampStrength').closest('label')!.hidden = !lamps;
+  field('lampStrength').value = '1';
   field('skyLight').closest('label')!.hidden = !copy.lights.some(light => light.kind === 'environment');
   for (const id of SUN_FIELDS) field(id).closest('label')!.hidden = !sun;
   field('interiorLights').checked = true;
@@ -40,7 +49,7 @@ const scaled = (v: readonly number[], k: number): [number, number, number] => [v
 /** The scene's lights with the controls applied (`copy.lights` itself stays as built: it is what "on" means). */
 export function controlledLights(session: NrcPipelineSession): RtLight[] {
   const { copy, input } = session.adapter.debug;
-  const interior = field('interiorLights').checked ? 1 : 0;
+  const interior = lampScale();
   const sky = field('skyLight').checked ? 1 : 0;
   return copy.lights.map((light): RtLight => {
     if (light.kind === 'triangle') return { ...light, radiance: scaled(light.radiance, interior), power: light.power * interior };
@@ -68,13 +77,14 @@ export function updateDaylight(session: NrcPipelineSession): void {
   const tableByte = (vec4: number) => (PACKED_TABLE_BASE_VEC4S + vec4) * 16;
   session.device.queue.writeBuffer(packed, tableByte(copy.sections.lights), records);
   // A camera or bounce ray that hits an emitter reads the emission from its material, not from the light record.
-  const interior = field('interiorLights').checked;
+  const interior = lampScale();
   const record = new Uint32Array(MATERIAL_RECORD_VEC4S * 4);
   copy.materials.forEach((material, i) => {
     if (!(material.emissionLuminance > 0)) return;
-    packMaterial(interior ? material : { ...material, emissionColor: [0, 0, 0], emissionLuminance: 0 }, record, 0);
+    packMaterial(interior === 1 ? material : { ...material, emissionColor: scaled(material.emissionColor, interior), emissionLuminance: material.emissionLuminance * interior }, record, 0);
     session.device.queue.writeBuffer(packed, tableByte(copy.sections.materials + i * MATERIAL_RECORD_VEC4S), record);
   });
-  for (const id of SUN_FIELDS) field(id).nextElementSibling!.textContent = field(id).value + (id === 'sunStrength' ? '×' : '°');
+  for (const id of [...SUN_FIELDS, 'lampStrength']) field(id).nextElementSibling!.textContent = field(id).value + (id.endsWith('Strength') ? '×' : '°');
+  field('lampStrength').disabled = !field('interiorLights').checked;
   session.cutNext();
 }

@@ -949,12 +949,33 @@ export class NrcCache {
   }
 
   /** Loads master weights for this network shape and starts a new optimizer and warm-up schedule. */
-  loadWeights(weights: Float32Array): void {
+  loadWeights(weights: Float32Array, trained: { frames: number; steps: number } = { frames: 0, steps: 0 }): void {
     if (!this.mlp) throw new Error('NrcCache: loadWeights requires an MLP cache');
     this.mlp.uploadWeights(weights);
     this.spatial?.reset(this.settings.seed + this.frame);
-    this.trainedFrames = 0;
-    this.trainedSteps = 0;
+    // A network that arrives trained (N11.9) keeps its counts, so the warm-up gate and the learning-rate ramp do not start over.
+    this.trainedFrames = trained.frames;
+    this.trainedSteps = trained.steps;
+  }
+
+  /** Number of f32 weights of the MLP (0 for the hash grid). */
+  get weightCount(): number {
+    return this.mlp?.weightCount ?? 0;
+  }
+
+  /** Whether `exportNetwork` / a warm `loadWeights` apply (an MLP without spatial features; the hash grid has no weights). */
+  get canExportNetwork(): boolean {
+    return !!this.mlp && !this.spatial;
+  }
+
+  /**
+   * The network as it is now, for `loadWeights(weights, trained)` later (N11.9). The weights are the ones inference uses (the EMA copy when
+   * it is on): a loaded network starts with zero Adam moments and its EMA equal to these. A readback: never inside a timed region.
+   */
+  async exportNetwork(): Promise<{ weights: Float32Array; trained: { frames: number; steps: number } }> {
+    if (!this.mlp || this.spatial) throw new Error('NrcCache: exportNetwork requires an MLP cache without spatial features');
+    const trained = this.trained;
+    return { weights: await this.mlp.readWeights(this.settings.ema !== 'off' || this.settings.useEma ? 'ema' : 'master'), trained };
   }
 
   /** He-initialised weights; with outputInit 'zero' the output layer starts at 0, so a fresh cache predicts no light. */
