@@ -290,3 +290,27 @@ Correctness only (`--load-wait 0`, machine not quiet). The 1024 spp rows are not
 | smoke | 256 | 2.6e-4 | 4.4e-4 | 4.1e-4 | 0.59 | 0.63 |
 
 Mean / reference mean is within 0.4% for every row, no firefly (>10x) pixels in any image. Result: at equal spp our noise is 0.82-0.91x pbrt's and 0.99-1.16x Mitsuba's on the real clouds (no extra samples needed), and lower on the smoke.
+
+### Density filters (V7.6, 2026-11-26): manual 8-tap, one-tap stochastic, hardware
+
+`node bench/runner/run.ts --page vol-forced-grid-check --args cases=<scene>:plain,<scene>:stoch,<scene>:brick,<scene>:brick-stoch,<scene>:brick16,<scene>:brick16-stoch,<scene>:brick16-hw seeds=12 spp=<n> pairs=0-1,2-3,4-5,4-6`.
+Megakernel, 128^2, M5 Pro, Chrome 158, load average 4.1-5.4 (BEST EFFORT, not a quiet pass). Time = median of 12 paired per-round ratios against the manual filter of the same majorant and grid format (min..max within
++-3% of the median); variance = mean per-pixel variance of one seed's image against manual. `brick*` = brick majorant + ratio-tracking roulette, `16` = r16float grid.
+
+| scene (grid, spp per seed) | stochastic, global majorant: time / variance | stochastic, brick: time / variance | stochastic, brick r16: time / variance | hardware, brick r16: time / variance |
+|---|---|---|---|---|
+| vol-grid-cloud (48^3, 2048) | x0.953 / x0.99 | x0.971 / x1.01 | x0.974 / x1.05 | x0.937 / x1.03 |
+| vol-vdb-smoke (60x115x60, 1536) | x0.952 / x0.95 | x0.970 / x1.02 | x0.979 / x1.03 | x0.930 / x1.01 |
+| vol-vdb-wdas-cloud (170x117x209, 512) | x0.937 / x1.07 | x0.953 / x1.09 | x0.959 / x1.06 | x0.895 / x0.98 |
+| vol-cl-cloud256 (256^3, 192) | x0.878 / x0.99 | x0.945 / x1.00 | x0.975 / x1.01 | x0.940 / x1.02 |
+
+Mean check (48 HASHED seeds, every estimator listed twice with its own seeds; the 12-seed runs above used raw consecutive seeds, whose image-mean standard errors are too small, TASKS X-seed):
+
+| scene (estimators, spp per seed) | control manual vs manual z | control stochastic vs stochastic z | stochastic - manual, pooled (relative) | z | variance | time |
+|---|---|---|---|---|---|---|
+| vol-vdb-smoke (plain, stoch; 1536) | -1.55 | -0.28 | +1.3e-6 | +0.17 | x1.00 | x0.95 |
+| vol-cl-cloud256 (brick, brick-stoch; 384) | -1.63 | -1.36 | +1.4e-5 | +0.19 | x1.00 | x0.95 |
+| vol-grid-cloud (plain, stoch; 2048) | -1.18 | +1.01 | -7.8e-6 | -0.95 | x1.00 | x0.95 |
+
+Result: the one-tap filter is unbiased within 4e-6..3e-5 relative, costs no measurable variance on the grey clouds (6-9% on the WDAS cloud at 12 seeds) and is 3-12% faster than the manual lookup; the hardware filter is faster
+still (6-10%) where the grid format allows it. The 1.6x of Pharr et al. 2024 for the same estimator is on NanoVDB, where each of the eight lookups walks the sparse tree; our grid is a dense 3D texture.

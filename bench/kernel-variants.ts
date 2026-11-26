@@ -58,6 +58,8 @@ export function kernelVariants(caps: Caps, scenePacking?: SceneCopyPacking): Ker
   variants['vol-homogeneous'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volHomog } } as never);
   variants['vol-grid'] = () => mk(caps, { format: {}, layout, integrator: { volumes: volGrid } } as never);
   variants['vol-grid-brick'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } } as never);
+  variants['vol-grid-stoch'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, densityFilter: 'stochastic' } } } as never); // V7.6
+  variants['vol-grid-brick-stoch'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick', densityFilter: 'stochastic' } } } as never);
   variants['vol-grid-brick-decomp'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick', freeFlight: 'decomposition' } } } as never);
   // V4.1 / V4.2 forced in-scatter NEE (homogeneous segments only) and V4.4 `forcedGrid` (the same estimators on grid segments: the -fgrid rows).
   variants['vol-homogeneous-forced'] = () => mk(caps, { format: {}, layout, integrator: { volumes: { ...volHomog, forcedNee: true } } } as never);
@@ -157,6 +159,7 @@ export function wavefrontKernelVariants(caps: Caps, scenePacking?: SceneCopyPack
     'vol-ratio': { format: {}, layout, integrator: { volumes: { ...volHomog, shadowTracking: 'ratio' } } },
     'vol-grid': { format: {}, layout, integrator: { volumes: volGrid } },
     'vol-grid-brick': { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick' } } },
+    'vol-grid-stoch': { format: {}, layout, integrator: { volumes: { ...volGrid, densityFilter: 'stochastic' } } },
     'vol-grid-brick-decomp': { format: {}, layout, integrator: { volumes: { ...volGrid, majorant: 'brick', freeFlight: 'decomposition' } } },
     'vol-tex': { format: {}, layout: texLayout, textures, integrator: { volumes: volHomog } },
     spectral: { format: {}, layout, integrator: { spectral: true } },

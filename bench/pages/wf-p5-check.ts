@@ -77,6 +77,10 @@ const CASES: Record<string, Case> = {
   'vol-grid-cloud-telescoping': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeShadow: 'telescoping' } },
   'vol-grid-cloud-decomposition': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeFreeFlight: 'decomposition' } },
   'vol-grid-cloud-hw': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeDensityFilter: 'hardware' } },
+  // V7.6: one-tap stochastic density (three extra draws per lookup on the stream the lookup runs on: both schedulers must stay in lock step)
+  'vol-grid-cloud-stoch': { scene: 'vol-grid-cloud', settings: { volumeDensityFilter: 'stochastic' } },
+  'vol-grid-cloud-stoch-brick': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeTrRoulette: true, volumeDensityFilter: 'stochastic' } },
+  'vol-grid-cloud-stoch-atlas': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeGridLayout: 'atlas', volumeDensityFilter: 'stochastic' } },
   'vol-grid-cloud-atlas': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeGridFormat: 'r16float', volumeGridLayout: 'atlas' } },
   // V5.2: `volumes.outputs` on the wavefront: the three tail planes (orders 0-1 + primary transmittance, standard error, first-scatter distance + fraction) are compared as well as the beauty
   'vol-grid-cloud-outputs': { scene: 'vol-grid-cloud', settings: { volumeMajorant: 'brick', volumeOutputs: true } },

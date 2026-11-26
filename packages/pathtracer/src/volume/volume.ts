@@ -124,8 +124,12 @@ export interface PtVolumeOptions {
    * `textureSampleLevel` with a linear clamp-to-edge sampler (group 2 binding `PT_VOLUME_SAMPLER_BINDING`) times a per-axis boundary factor that restores the zero
    * outside (`gridBoundaryFactor`); the grid texture is then bound as filterable, so `r32float` needs the `float32-filterable` device feature (`r16float` does not).
    * Hardware filter weights are 8-bit, so the image differs slightly from `'manual'` (not bit-equal). Default `'manual'`: kernel text unchanged.
+   * V7.6 `'stochastic'`: ONE `textureLoad` of a texel picked with probability equal to its trilinear weight (one-tap stochastic texture filtering, Pharr et al. 2024; three draws
+   * from the stream the lookup runs on, twin `gridDensityStochastic`). Every tracking estimator here is linear in the density, so the mean is the manual lookup's (unbiased, exact f32
+   * weights, no device feature, any grid format, dense or atlas); a grey medium's free flight even has the SAME distribution (the accept test is a Bernoulli of the mean). Ratio-tracked
+   * shadows and chromatic media get a little more variance. Refused with `shadowTracking: 'telescoping'` (it exponentiates a marched optical depth: not linear).
    */
-  densityFilter?: 'manual' | 'hardware';
+  densityFilter?: 'manual' | 'hardware' | 'stochastic';
   /**
    * V3.2: how the density grid is stored. `'dense'` (default, kernel text unchanged): one 3D texture of the whole grid (group 2 binding `PT_VOLUME_BINDING`).
    * `'atlas'`: only the OCCUPIED 8^3 bricks (the bricks of `brickMajorants`: a brick whose 9^3 trilinear support is all zero is dropped), each stored with its 9^3 support
@@ -428,6 +432,26 @@ export function gridDensity(grid: PtMediumGrid, data: ArrayLike<number>): Densit
       acc += at(i0 + di, j0 + dj, k0 + dk) * (di ? fx : 1 - fx) * (dj ? fy : 1 - fy) * (dk ? fz : 1 - fz);
     }
     return acc;
+  };
+}
+
+/**
+ * V7.6 (`densityFilter: 'stochastic'`): the twin of the one-tap `ptVolDensity`. Per axis one draw `u` (x, then y, then z) takes the upper texel when `u < fraction`, so a texel
+ * is read with probability equal to its trilinear weight and the mean over `rand` is `gridDensity` (zero outside the grid, with no read). `taps` receives the texel index read.
+ */
+export function gridDensityStochastic(grid: PtMediumGrid, data: ArrayLike<number>, rand: () => number, taps?: number[]): DensityFn {
+  const [nx, ny, nz] = grid.resolution;
+  const m = grid.worldToIndex;
+  return (x, y, z) => {
+    const gx = (m[0] as number) * x + (m[1] as number) * y + (m[2] as number) * z + (m[3] as number);
+    const gy = (m[4] as number) * x + (m[5] as number) * y + (m[6] as number) * z + (m[7] as number);
+    const gz = (m[8] as number) * x + (m[9] as number) * y + (m[10] as number) * z + (m[11] as number);
+    const i0 = Math.floor(gx), j0 = Math.floor(gy), k0 = Math.floor(gz);
+    const ux = rand(), uy = rand(), uz = rand();
+    const i = i0 + (ux < gx - i0 ? 1 : 0), j = j0 + (uy < gy - j0 ? 1 : 0), k = k0 + (uz < gz - k0 ? 1 : 0);
+    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 0;
+    taps?.push(i + nx * (j + ny * k));
+    return data[i + nx * (j + ny * k)] as number;
   };
 }
 
