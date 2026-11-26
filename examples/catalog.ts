@@ -496,20 +496,21 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     slug: 'realtime-chain',
     path: 'realtime/chain/',
     title: 'Denoised real-time chain',
-    summary: 'One path-traced sample per pixel per frame at half resolution, through a denoiser and a temporal upscaler: the raw frame beside the final image.',
+    summary: 'One path-traced sample per pixel per frame at half resolution, through a denoiser (SVGF or OIDN) and a temporal upscaler: the raw frame beside the final image.',
     description:
       'The path tracer renders one sample per pixel per frame at a reduced size with its frame planes. The planes are packed into textures, filtered by the SVGF denoiser of `denoiser/realtime` ' +
       '(diffuse and specular lighting demodulated from the surface colour, so texture detail is not blurred, then remodulated) and brought to display size by the temporal path of `@pmndrs/upscaler`. ' +
-      'The split view shows the raw frame the path tracer gives on the left and the final image on the right.',
+      'OIDN (the neural denoiser of `denoiser`) is the other choice: it cleans each frame from the noisy colour, albedo and normal, with the small network while the camera moves and the standard one ' +
+      'once a few still frames are averaged; its weights load from a CDN the first time it is picked. The split view shows the raw frame the path tracer gives on the left and the final image on the right.',
     brief: {
       kind: 'quality',
       shows: 'What a denoiser and an upscaler make of one path-traced sample per pixel per frame: the raw frame is mostly noise, the final image is usable in real time. The chain is a library recipe, not raster.',
-      tryThis: ['Orbit the camera: the denoiser follows the motion vectors, so the image stays stable instead of restarting', 'Turn the denoiser off to see what the upscaler gets without it', 'Switch the upscaler to Spatial or Bilinear to see what accumulating frames adds'],
-      compare: 'The left half of the split view: the raw 1 spp frame, bilinear-stretched to display size; or the denoiser off, or the bilinear upscaler',
+      tryThis: ['Orbit the camera: the denoiser follows the motion vectors, so the image stays stable instead of restarting', 'Switch the denoiser between SVGF, OIDN and off: SVGF follows motion smoothly, OIDN is sharper once the camera stops', 'Switch the upscaler to Spatial or Bilinear to see what accumulating frames adds'],
+      compare: 'The left half of the split view: the raw 1 spp frame, bilinear-stretched to display size; SVGF against OIDN; or the denoiser off, or the bilinear upscaler',
     },
     category: 'realtime',
     status: 'experimental',
-    tags: ['realtime', 'denoiser', 'SVGF', 'upscaler', 'frame planes'],
+    tags: ['realtime', 'denoiser', 'SVGF', 'OIDN', 'upscaler', 'frame planes'],
     docs: 'pathtracer/realtime',
     source: 'examples/realtime/chain',
     check: { samples: 8 },
