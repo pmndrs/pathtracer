@@ -33,7 +33,7 @@
 | web/hush | https://github.com/kanaworksai-hue/hush | bbb74c0 | MIT | 1spp real-time denoiser: SVGF + learned filter params + TAA |
 | web/ShadyTracer | https://github.com/lampmaker/ShadyTracer | 40c046d | MIT | SDF/analytic wavefront PT, photon map caustics, extensive perf notes (docs/PERFORMANCE.md) |
 | web/rindr | https://github.com/schmarante/rindr | d2a69ae | PolyForm Noncommercial 1.0.0 - READ ONLY, FLAG | viewer built on three-gpu-pathtracer + oidn |
-| web/ThreeRT | https://github.com/meshy-dev/ThreeRT | 53346a0 | MIT | Rust+wgpu HW ray-query PT behind three.js API (native/Metal clients, not browser) |
+| web/ThreeRT | https://github.com/meshy-dev/ThreeRT | 8964dc4 (2026-11-14) | MIT (Meshy LLC); vendored glamx MIT/Apache, parry3d Apache; assets fetched separately (Bistro/Zero-Day CC BY 4.0, Tokyo ODbL) | Rust+wgpu HW ray-query PT behind a three.js-style API; native clients, wasm browser build (software BVH) since #69. **Our clone (`8964dc4`) predates the authors' provenance rewrite `5cb95f6` (meshy-dev/ThreeRT#78): never open its code; re-clone at `5cb95f6` or later and scan first** (docs/internal/CLEAN-ROOM.md §4, notes/16-threert.md §0) |
 | web/webgpu-ray-tracing | https://github.com/willwaltz/webgpu-ray-tracing | 8475692 | BSD-3-Clause | Chromium/Dawn patches adding HW ray query + acceleration structures (Vulkan) |
 | web/web-rayquery | https://github.com/ocularmagic/web-rayquery | 9580356 | Apache-2.0 | Firefox/wgpu ray-query prototype (DX12/Vulkan), bindless etc. |
 | web/Web-RTRT | https://github.com/C-none/Web-RTRT | 549613b | MIT | 2024 WebGPU ReSTIR DI/RIS + denoise + SR (large repo, assets) |
@@ -51,4 +51,6 @@
 | web/Babylon.js-PathTracing-Renderer | https://github.com/erichlof/Babylon.js-PathTracing-Renderer | 840054c | CC0 | Loftis Babylon port (2023, stale) |
 
 
-**Clean-room note (2026-11-13):** NRD code and third-party NRD ports are off limits (Denoiser RULES.md). Removed `native/nrd` and Rayzee's NRD port files (`rayzee/src/viewer/denoise/NRD.js`, `docs/design/NRD_DENOISER.md`, `tests/gpu/nrdDemodulation.test.js`) from the local clones. NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC) remain: ideas only, no code transcription, until their license terms are reviewed.
+**Clean room:** run `node research/tools/provenance-scan.ts <clone> --git` after cloning, before reading; fences and register in `docs/internal/CLEAN-ROOM.md`.
+
+**Clean-room note (2026-11-13):** NRD code and third-party NRD ports are off limits (Denoiser RULES.md). Removed `native/nrd` and Rayzee's NRD port files (`rayzee/src/viewer/denoise/NRD.js`, `docs/design/NRD_DENOISER.md`, `tests/gpu/nrdDemodulation.test.js`) from the local clones. 2026-11-14: the provenance scan still finds NRD identifiers in Rayzee's `rayzee/src/viewer/denoise/` and app settings; fenced, see `docs/internal/CLEAN-ROOM.md` §4. NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC) remain: ideas only, no code transcription, until their license terms are reviewed.

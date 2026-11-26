@@ -39,6 +39,8 @@ simplification.
 
 ## Licences and clean room
 
+Full rules, the source register, fences in force and the scan-before-reading procedure: [docs/internal/CLEAN-ROOM.md](docs/internal/CLEAN-ROOM.md).
+
 - MIT/BSD/Apache/zlib code may be ported with attribution (add to THIRD_PARTY.md when it exists).
 - **mutracer**: read, cite, compare; never copy code.
 - **NVIDIA RTX SDK repos** (RTXPT, RTXDI, RTXGI, SHaRC, NRD): no code. NVIDIA papers, books (Ray Tracing Gems),
@@ -212,6 +214,14 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   there is its bias, not ours.
 - Own renderer runs: `node bench/adapters/matrix.ts --renderers pt-megakernel --scenes ... --spp 1024 --snapshots
   16,64,256 --name <n> [--extra pt_sampler=pcg]`, then `node bench/adapters/pt-agreement.ts --report <n>`.
+- ThreeRT (research/sources/web/ThreeRT) is MIT, but its history before `5cb95f6` is fenced (D35): the authors found code written from Unreal Engine
+  source and denoiser passes whose NRD provenance they could not establish, and replaced both in `5cb95f6` (meshy-dev/ThreeRT#78, their `docs/PROVENANCE.md`).
+  Our clone (`8964dc4`) predates it: never open its code. Re-clone at `5cb95f6` or later and run the provenance scan before reading (docs/internal/CLEAN-ROOM.md §4).
+  Its "unbiased reference" is its own renderer and its defaults clamp indirect light: override them before comparing (notes/16-threert.md).
+- Rayzee's NRD port is wider than the 3 deleted files: never open `rayzee/src/viewer/denoise/` or its NRD settings
+  (docs/internal/CLEAN-ROOM.md §4).
+- Run `node research/tools/provenance-scan.ts <clone> --git` on every new third-party clone before an agent reads it.
+  Report evidence classes ("cites NRD source for X"), never conclusions you haven't seen ("written from NRD").
 - `pt-megakernel` loads file geometry (Sponza) from the web glb export, not the Node glTF loader: run
   `node bench/assets/fetch.ts` and `node bench/adapters/export-scenes.ts` first (a stale export throws on the SceneDesc
   sha256). `readGlbMeshes` (`bench/adapters/shared/glb.ts`) reads only our own export: float POSITION/NORMAL, u32

@@ -299,7 +299,7 @@ pbrt-v4 ZSobol, ZetaRay, FidelityFX FSR) - attribution in `LICENSES/`. Per brief
   specialized). web-rayquery: wgpu 30.0.0 `EXPERIMENTAL_RAY_QUERY` on DX12 (RT tier 1.1 + SM 6.5), Vulkan, Metal
   (macOS 15); Firefox 161 Nightly build, pref `dom.webgpu.experimental-ray-query.enabled`; RT *pipelines* Vulkan-only.
   **ThreeRT** (Rust/wgpu, Metal/Vulkan ray queries, software-BVH fallback) shows what a HW-RT PT looks like natively
-  (60 fps Bistro at 1280x720, 15.5 ms on Apple M3 Max, ΔE vs 4096-spp reference 3.4 vs three.js 10-12) but is *not* in-browser.
+  (60 fps Bistro at 1280x720, 15.5 ms at render scale 0.55 on Apple M5, ΔE76 vs its own 4096-spp render 3.4 vs three.js 10-12). Since 2026-11-14 its live view also runs in Chrome as wasm, on the software BVH only (hello-world scenes measured); full audit in notes/16-threert.md.
 - **tinypoly gpu-renderer, rindr, lumina-wgpu, moonlight, rayfinder, wtrace, gnikoloff:** feature-level only; rindr is
   three-gpu-pathtracer + OIDN with a CAD front-end (noncommercial license - do not reuse). Erich Loftis' renderers are
   WebGL2 real-time (analytic + BVH) with an aggressive noise-reduction culture (CC0), no WebGPU port found.
@@ -324,7 +324,7 @@ pbrt-v4 ZSobol, ZetaRay, FidelityFX FSR) - attribution in `LICENSES/`. Per brief
 | Web-RTRT | WebGPU | M + V-buffer | JS BVH in worker | RIS/**ReSTIR DI** | PBR (glTF) | RIS + spatial reuse | (n/a) | denoise + SR | temporal accum | none | MIT | stale 2024 |
 | Hush | WebGPU (denoiser) | - | - | - | - | - | - | SVGF+net+TAA | yes (motion vectors) | "few passes/frame" | MIT | new |
 | willwaltz / web-rayquery | Dawn / Firefox forks | HW ray query | driver AS (TLAS/BLAS) | - | - | - | - | - | - | HW 1.1-1.4x SW (own scene) | BSD-3 / Apache | experimental |
-| ThreeRT | native wgpu (Metal/Vulkan) | HW ray query + SW BVH fallback | driver / `bvh.rs` | (not examined) | PBR, physical units | all emissives | texpack | a-trous+variance (SVGF-style) | live, 60 fps | Bistro 15.5 ms @720p M3 Max | MIT | active, native-only |
+| ThreeRT | native wgpu (Metal/Vulkan); wasm/WebGPU live view since 2026-11-14 (SW BVH only) | M + ~40 post passes | driver BLAS/TLAS / BVH2 binned SAH, two-level "units" for edits | PCG white noise | UE5 DefaultLit port, physical units | light tree + RIS + guide-table CDF | RGBA8 array atlas | own temporal (one pass cites NRD source: fenced) + own upscaler | live, 60 fps via dynamic res | Bistro 15.5 ms @720p scale 0.55, M5 | MIT | very active; see notes/16-threert.md |
 
 ---
 

@@ -21,6 +21,7 @@ unverified and the license register. The decisions drawn from it are in [../spec
 | 13 | NRC for diffuse GI and reflections, 2026-11-19 | [13-radiance-cache.md](notes/13-radiance-cache.md) | Warm-up tail bug reproduced. Diffuse hash and traced sharp reflections are the first portable candidates. A WebNN weight-update probe establishes a correct Mac handoff. |
 | 14 | Volume rendering survey (2019-2026 focus), 2026-11-21 | [14-volumes-survey.md](notes/14-volumes-survey.md) | Ranked directions for a WebGPU volume path tracer: majorant grid + DDA (have), null-scattering MIS, equiangular NEE, Kettunen / jackknife transmittance, compact grids, volumetric ReSTIR, octave approximations as fast modes, guiding / neural caches as research. Web competition is thin. Sources marked verified / from memory |
 | 15 | Volumes: survey vs ours, 2026-11-21 | [15-volumes-vs-ours.md](notes/15-volumes-vs-ours.md) | Brick DDA and approximate Mie already built; Cycles (Apache-2.0) ships Misso 2022 transmittance, equiangular in grids and VSPG: portable; tgpt has WebGPU homogeneous fog + medium stack, no grids; cheap gaps: ratio-tracking roulette, hardware-filtered density |
+| 16 | ThreeRT (Meshy) | [16-threert.md](notes/16-threert.md) | MIT Rust/wgpu HW ray-query PT behind a three.js-style API; browser build (wasm, software BVH only) new 2026-11-14. UE5-matched with biased defaults, own-renderer reference, LDR ΔE76: a native-only internal competitor and a source of WebGPU lessons (8-storage-buffer layouts, loop guard, zero-init stacks, two-level SW BVH, light tree). One denoiser pass cites NRD's source (REBLUR_TemporalAccumulation), so its live/denoiser code is fenced off as a precaution |
 
 Local material: ~50 shallow clones in `sources/` (5.5 GB, git-ignored, listed in [sources/MANIFEST.md](sources/MANIFEST.md))
 and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
@@ -101,6 +102,8 @@ and about 50 open-access PDFs in `papers/<area>/` (git-ignored).
 - Three web repos have no license file: `relight`, `wtrace`, `webgpu-raytracer`. Read only.
 
 ## 5. License register (what we may port)
+
+The authoritative register, fences and procedure are in [../docs/internal/CLEAN-ROOM.md](../docs/internal/CLEAN-ROOM.md); this table is the research-time snapshot.
 
 | Status | Repos |
 |---|---|

@@ -68,6 +68,8 @@ Defaults: we will use our own BVH and downsampler as the core, and our denoiser 
 - Open-access papers (arXiv, author/project pages, publisher open access) may be saved as PDFs under
   `research/papers/<your-area>/` with a descriptive filename. No paywalled or pirate sources. Links are always fine.
 - Record **licenses**. GPL/LGPL/non-commercial code: read for ideas only, never port; flag it.
+- After cloning and before reading, run `node research/tools/provenance-scan.ts <clone> --git` and classify the hits
+  (docs/internal/CLEAN-ROOM.md §3). Never open a flagged file to check it; report the hit to the lead.
 - **Clean room: research agents never clone, open or summarize NVIDIA NRD code or any third-party NRD port** (e.g.
   Rayzee's), nor `~/Developer/nrd-quarantine`. Rules: `~/Developer/Denoiser/docs/research/rt-denoiser/RULES.md`.
   NRD *is* needed for native runs and comparisons: it lives only with the Windows "harness builder" role

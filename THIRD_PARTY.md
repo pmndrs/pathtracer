@@ -91,6 +91,7 @@ shader; examples only, not part of the packages.
 ### 1.4 Clean-room status
 
 - NVIDIA RTX SDK repos (RTXPT, RTXDI, RTXGI, SHaRC, NRD): nothing ported. NRD code never opened.
+- ThreeRT: nothing ported; its history before `5cb95f6` is fenced (authors' provenance rewrite, meshy-dev/ThreeRT#78). Rules and fences: [docs/internal/CLEAN-ROOM.md](docs/internal/CLEAN-ROOM.md).
 - mutracer: nothing ported (see section 2).
 - Third-party clones under `research/sources/` are read-only and git-ignored; the only code derived from them is the Apache-2.0 Cycles re-implementation in section 1.7 (attributed above), written as our own WGSL / TypeScript, not copied files.
 
