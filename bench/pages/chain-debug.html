@@ -76,17 +76,17 @@
         <details open>
           <summary>View</summary>
           <div class="fields">
-            <label>Layout <select id="layout"><option value="single">One pass</option><option value="grid" selected>Four passes (2 × 2)</option></select></label>
-            <label>Top left <select id="view0" class="viewSel"></select></label>
-            <label>Top right <select id="view1" class="viewSel"></select></label>
-            <label>Bottom left <select id="view2" class="viewSel"></select></label>
-            <label>Bottom right <select id="view3" class="viewSel"></select></label>
-            <label title="Magnifies around the clicked pixel, nearest texel">Zoom <select id="zoom"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select></label>
-            <label>Exposure (EV) <input id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
-            <label title="Scalar passes (top-left pass): the value range mapped onto the colour ramp. Filled in from the pass's default when you pick it">Range (top left) <span><input id="lo" type="number" step="any" /> <input id="hi" type="number" step="any" /></span></label>
-            <label class="check"><input id="logScale" type="checkbox" /> Log scale (top left)</label>
-            <label title="Which pass the temporal-change view measures">Temporal change of <select id="flickerSrc"></select></label>
-            <label class="check" title="Compare each pixel with the previous frame at the point it showed then (motion vectors), so camera motion itself is not counted as flicker"><input id="reproject" type="checkbox" checked /> Reproject with motion vectors</label>
+            <label>Layout <select autocomplete="off" id="layout"><option value="single">One pass</option><option value="grid" selected>Four passes (2 × 2)</option></select></label>
+            <label>Top left <select autocomplete="off" id="view0" class="viewSel"></select></label>
+            <label>Top right <select autocomplete="off" id="view1" class="viewSel"></select></label>
+            <label>Bottom left <select autocomplete="off" id="view2" class="viewSel"></select></label>
+            <label>Bottom right <select autocomplete="off" id="view3" class="viewSel"></select></label>
+            <label title="Magnifies around the clicked pixel, nearest texel">Zoom <select autocomplete="off" id="zoom"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select></label>
+            <label>Exposure (EV) <input autocomplete="off" id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
+            <label title="Scalar passes (top-left pass): the value range mapped onto the colour ramp. Filled in from the pass's default when you pick it">Range (top left) <span><input autocomplete="off" id="lo" type="number" step="any" /> <input autocomplete="off" id="hi" type="number" step="any" /></span></label>
+            <label class="check"><input autocomplete="off" id="logScale" type="checkbox" /> Log scale (top left)</label>
+            <label title="Which pass the temporal-change view measures">Temporal change of <select autocomplete="off" id="flickerSrc"></select></label>
+            <label class="check" title="Compare each pixel with the previous frame at the point it showed then (motion vectors), so camera motion itself is not counted as flicker"><input autocomplete="off" id="reproject" type="checkbox" checked /> Reproject with motion vectors</label>
             <p class="note">Scalar passes use a blue → red ramp; NaN and infinity show magenta. "Temporal change" is a running mean of |L(t) − L(t−1)| / L per pixel, the previous frame taken where the pixel was (motion vectors): the flicker map.</p>
           </div>
         </details>
@@ -95,13 +95,13 @@
           <summary>Camera</summary>
           <div class="fields">
             <div class="row"><button id="pause">Pause</button><button id="stepOne">Step 1 frame</button><button id="resetView">Scene camera</button></div>
-            <label title="A name for the next pin (optional)">Pin name <input id="pinName" type="text" placeholder="e.g. coat rack" /></label>
+            <label title="A name for the next pin (optional)">Pin name <input autocomplete="off" id="pinName" type="text" placeholder="e.g. coat rack" /></label>
             <div class="row"><button id="pinView">Pin this view</button><button id="copyLink">Copy link</button></div>
-            <label>Pinned views <select id="pinSel"></select></label>
+            <label>Pinned views <select autocomplete="off" id="pinSel"></select></label>
             <div class="row"><button id="gotoPin">Go to pin</button><button id="forgetPin">Forget pin</button></div>
-            <label title="Moves the camera the same way every time, so artefacts that show only in motion can be compared between settings">Scripted motion <select id="motion"><option value="off">Off (keys and mouse)</option><option value="strafe">Strafe left / right</option><option value="pan">Pan left / right</option><option value="dolly">Dolly in / out</option></select></label>
-            <label>Motion amplitude <input id="motionAmp" type="number" min="0" step="0.01" value="0.15" /></label>
-            <label>Motion period (frames) <input id="motionPeriod" type="number" min="4" step="1" value="120" /></label>
+            <label title="Moves the camera the same way every time, so artefacts that show only in motion can be compared between settings">Scripted motion <select autocomplete="off" id="motion"><option value="off">Off (keys and mouse)</option><option value="strafe">Strafe left / right</option><option value="pan">Pan left / right</option><option value="dolly">Dolly in / out</option></select></label>
+            <label>Motion amplitude <input autocomplete="off" id="motionAmp" type="number" min="0" step="0.01" value="0.15" /></label>
+            <label>Motion period (frames) <input autocomplete="off" id="motionPeriod" type="number" min="4" step="1" value="120" /></label>
             <p class="note" id="pinNote"></p>
           </div>
         </details>
@@ -109,63 +109,64 @@
         <details open>
           <summary>Path tracing</summary>
           <div class="fields">
-            <label>Scene <select id="scene"><option value="hero-classroom" selected>Classroom (color)</option><option value="hero-sponza">Sponza (color)</option><option value="sponza-white">Sponza (grey)</option><option value="cornell">Cornell box</option></select></label>
-            <label>Render resolution <select id="res"><option value="480x270">480 × 270</option><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
-            <label>Display scale <select id="displayScale"><option value="2">2×</option><option value="1">1× (native)</option></select></label>
-            <label>Source <select id="arm"><option value="nrc" selected>Path tracing + NRC</option><option value="plain">Plain path tracing</option></select></label>
-            <label title="Where the camera ray goes inside the pixel. Per pixel: the sampler's own point, different for every pixel and frame (the default; a thin edge then flips between foreground and background in the 1-spp guides every frame). Centre / per frame: one offset for the whole image (rebuilds the kernels)">Camera jitter <select id="jitter"><option value="sampler" selected>Per pixel (sampler)</option><option value="centre">Off: pixel centre</option><option value="halton8">Per frame: Halton 8</option><option value="halton16">Per frame: Halton 16</option></select></label>
-            <label>Samples / frame <input id="spp" type="number" min="1" max="16" value="1" /></label>
-            <label>Max path depth <input id="maxDepth" type="number" min="1" max="32" placeholder="Scene" /></label>
-            <label title="Limit each sample's linear luminance before averaging; 0 disables the clamp">Firefly clamp <input id="fireflyClamp" type="number" min="0" step="0.1" value="0" /></label>
-            <label class="check"><input id="accumulateStill" type="checkbox" /> Accumulate while still</label>
-            <label title="Effective sample history fed into SVGF while still (0 = every sample)">SVGF input history (spp) <input id="svgfHistoryLimit" type="number" min="0" max="4096" step="1" value="16" /></label>
+            <label>Scene <select autocomplete="off" id="scene"><option value="hero-classroom" selected>Classroom (color)</option><option value="hero-sponza">Sponza (color)</option><option value="sponza-white">Sponza (grey)</option><option value="cornell">Cornell box</option></select></label>
+            <label>Render resolution <select autocomplete="off" id="res"><option value="480x270">480 × 270</option><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
+            <label>Display scale <select autocomplete="off" id="displayScale"><option value="2">2×</option><option value="1">1× (native)</option></select></label>
+            <label>Source <select autocomplete="off" id="arm"><option value="nrc" selected>Path tracing + NRC</option><option value="plain">Plain path tracing</option></select></label>
+            <label title="Where the camera ray goes inside the pixel. Per pixel: the sampler's own point, different for every pixel and frame (the default; a thin edge then flips between foreground and background in the 1-spp guides every frame). Centre / per frame: one offset for the whole image (rebuilds the kernels)">Camera jitter <select autocomplete="off" id="jitter"><option value="sampler" selected>Per pixel (sampler)</option><option value="centre">Off: pixel centre</option><option value="halton8">Per frame: Halton 8</option><option value="halton16">Per frame: Halton 16</option></select></label>
+            <label>Samples / frame <input autocomplete="off" id="spp" type="number" min="1" max="16" value="1" /></label>
+            <label>Max path depth <input autocomplete="off" id="maxDepth" type="number" min="1" max="32" placeholder="Scene" /></label>
+            <label title="Limit each sample's linear luminance before averaging; 0 disables the clamp">Firefly clamp <input autocomplete="off" id="fireflyClamp" type="number" min="0" step="0.1" value="0" /></label>
+            <label class="check"><input autocomplete="off" id="accumulateStill" type="checkbox" /> Accumulate while still</label>
+            <label title="Effective sample history fed into SVGF while still (0 = every sample)">SVGF input history (spp) <input autocomplete="off" id="svgfHistoryLimit" type="number" min="0" max="4096" step="1" value="16" /></label>
           </div>
         </details>
 
         <details open>
           <summary>Denoiser</summary>
           <div class="fields">
-            <label>Denoiser <select id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still</option><option value="oidn-fast">OIDN small net always</option><option value="oidn-std">OIDN standard net always</option><option value="none">None (raw to upscaler)</option></select></label>
-            <label title="Minimum weight of the current frame in the temporal blend">Current-frame weight <input id="svgfAlpha" type="number" min="0.01" max="1" step="0.01" value="0.1" /></label>
-            <label title="History length cap (frames)">Max history <input id="maxHistory" type="number" min="1" max="256" value="64" /></label>
-            <label title="Disocclusion: plane-distance threshold relative to the camera distance">Plane distance <input id="planeDistance" type="number" min="0" step="0.001" value="0.01" /></label>
-            <label title="Disocclusion: minimum cosine between the current and previous normals">Normal threshold <input id="normalThreshold" type="number" min="-1" max="1" step="0.01" value="0.95" /></label>
-            <label title="'soft' retries a failed footprint at a looser normal with a short history; 'relative' relaxes to the 3x3 neighbourhood's own spread">Normal test <select id="normalTest"><option value="soft" selected>soft</option><option value="center">center</option><option value="relative">relative</option></select></label>
-            <label title="History when no tap of the 2x2 footprint passes: SVGF's 3x3 fallback (meant for thin geometry), none, or strict">History fallback <select id="historyFallback"><option value="3x3" selected>3 × 3</option><option value="off">off</option><option value="strict">strict</option></select></label>
-            <label>History filter <select id="historyFilter"><option value="bilinear" selected>bilinear</option><option value="catmull-rom">Catmull-Rom</option></select></label>
-            <label title="A-SVGF: shortens the history where the image changed">Anti-lag <select id="antiLag"><option value="default" selected>package default</option><option value="off">off</option><option value="auto">auto</option></select></label>
-            <label>À-trous iterations <input id="atrousIterations" type="number" min="0" max="8" value="5" /></label>
-            <label>Kernel <select id="kernel"><option value="3x3" selected>3 × 3</option><option value="5x5">5 × 5</option></select></label>
-            <label title="Edge stop on view depth">σ depth <input id="sigmaDepth" type="number" min="0" step="0.1" value="1" /></label>
-            <label title="Edge stop on normals (power)">σ normal <input id="sigmaNormal" type="number" min="0" step="1" value="128" /></label>
-            <label title="Edge stop on luminance, in standard deviations">σ luminance <input id="sigmaLuminance" type="number" min="0" step="0.1" value="4" /></label>
-            <label title="Which point the specular history follows: the surface, the reflected image, or both blended">Reflection reprojection <select id="reflectionReprojection"><option value="surface" selected>surface</option><option value="virtual">virtual</option><option value="dual">dual</option></select></label>
-            <label class="check" title="Drop specular history whose reflected hit distance changed (the reflection's own disocclusion test)"><input id="reflectionHitTest" type="checkbox" /> Reflection hit-distance test</label>
-            <label>OIDN guides <select id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
-            <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once">OIDN still samples <input id="stillSamples" type="number" min="1" max="64" value="8" /></label>
+            <label>Denoiser <select autocomplete="off" id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still</option><option value="oidn-fast">OIDN small net always</option><option value="oidn-std">OIDN standard net always</option><option value="none">None (raw to upscaler)</option></select></label>
+            <label title="Minimum weight of the current frame in the temporal blend">Current-frame weight <input autocomplete="off" id="svgfAlpha" type="number" min="0.01" max="1" step="0.01" value="0.1" /></label>
+            <label title="History length cap (frames)">Max history <input autocomplete="off" id="maxHistory" type="number" min="1" max="256" value="64" /></label>
+            <label title="Disocclusion: plane-distance threshold relative to the camera distance">Plane distance <input autocomplete="off" id="planeDistance" type="number" min="0" step="0.001" value="0.01" /></label>
+            <label title="Disocclusion: minimum cosine between the current and previous normals">Normal threshold <input autocomplete="off" id="normalThreshold" type="number" min="-1" max="1" step="0.01" value="0.95" /></label>
+            <label title="'soft' retries a failed footprint at a looser normal with a short history; 'relative' relaxes to the 3x3 neighbourhood's own spread">Normal test <select autocomplete="off" id="normalTest"><option value="soft" selected>soft</option><option value="center">center</option><option value="relative">relative</option></select></label>
+            <label title="History when no tap of the 2x2 footprint passes: SVGF's 3x3 fallback (meant for thin geometry), none, or strict">History fallback <select autocomplete="off" id="historyFallback"><option value="3x3" selected>3 × 3</option><option value="off">off</option><option value="strict">strict</option></select></label>
+            <label>History filter <select autocomplete="off" id="historyFilter"><option value="bilinear" selected>bilinear</option><option value="catmull-rom">Catmull-Rom</option></select></label>
+            <label title="A-SVGF: shortens the history where the image changed">Anti-lag <select autocomplete="off" id="antiLag"><option value="default" selected>package default</option><option value="off">off</option><option value="auto">auto</option></select></label>
+            <label class="check" title="With anti-lag on: keep (1 − λ) × the history length instead of A-SVGF's reset to 1 / α (a small λ from noise then no longer caps a still view at ~6 frames)"><input autocomplete="off" id="antiLagHistoryScale" type="checkbox" /> Anti-lag scales history (keeps it)</label>
+            <label>À-trous iterations <input autocomplete="off" id="atrousIterations" type="number" min="0" max="8" value="5" /></label>
+            <label>Kernel <select autocomplete="off" id="kernel"><option value="3x3" selected>3 × 3</option><option value="5x5">5 × 5</option></select></label>
+            <label title="Edge stop on view depth">σ depth <input autocomplete="off" id="sigmaDepth" type="number" min="0" step="0.1" value="1" /></label>
+            <label title="Edge stop on normals (power)">σ normal <input autocomplete="off" id="sigmaNormal" type="number" min="0" step="1" value="128" /></label>
+            <label title="Edge stop on luminance, in standard deviations">σ luminance <input autocomplete="off" id="sigmaLuminance" type="number" min="0" step="0.1" value="4" /></label>
+            <label title="Which point the specular history follows: the surface, the reflected image, or both blended">Reflection reprojection <select autocomplete="off" id="reflectionReprojection"><option value="surface" selected>surface</option><option value="virtual">virtual</option><option value="dual">dual</option></select></label>
+            <label class="check" title="Drop specular history whose reflected hit distance changed (the reflection's own disocclusion test)"><input autocomplete="off" id="reflectionHitTest" type="checkbox" /> Reflection hit-distance test</label>
+            <label>OIDN guides <select autocomplete="off" id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
+            <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once">OIDN still samples <input autocomplete="off" id="stillSamples" type="number" min="1" max="64" value="8" /></label>
           </div>
         </details>
 
         <details open>
           <summary>Upscaler</summary>
           <div class="fields">
-            <label>Upscaling <select id="upscalePath"><option value="temporal">Temporal</option><option value="spatial">Spatial</option><option value="bilinear">Bilinear</option></select></label>
-            <label>Sharpness <input id="sharpness" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
-            <label>Max history (frames) <input id="upHistory" type="number" min="1" max="64" value="24" /></label>
-            <label class="check" title="Feeds the upscaler a reactive mask from the SVGF history length: freshly disoccluded pixels favour the current frame (SVGF only)"><input id="reactive" type="checkbox" /> Reactive mask from SVGF history</label>
-            <label>Reactive cap (frames) <input id="reactiveCap" type="number" min="1" max="64" value="8" /></label>
-            <label class="check"><input id="rcasDenoise" type="checkbox" /> Suppress grain in sharpening</label>
-            <label class="check"><input id="upAutoExposure" type="checkbox" /> Auto pre-exposure</label>
+            <label>Upscaling <select autocomplete="off" id="upscalePath"><option value="temporal">Temporal</option><option value="spatial">Spatial</option><option value="bilinear">Bilinear</option></select></label>
+            <label>Sharpness <input autocomplete="off" id="sharpness" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
+            <label>Max history (frames) <input autocomplete="off" id="upHistory" type="number" min="1" max="64" value="24" /></label>
+            <label class="check" title="Feeds the upscaler a reactive mask from the SVGF history length: freshly disoccluded pixels favour the current frame (SVGF only)"><input autocomplete="off" id="reactive" type="checkbox" /> Reactive mask from SVGF history</label>
+            <label>Reactive cap (frames) <input autocomplete="off" id="reactiveCap" type="number" min="1" max="64" value="8" /></label>
+            <label class="check"><input autocomplete="off" id="rcasDenoise" type="checkbox" /> Suppress grain in sharpening</label>
+            <label class="check"><input autocomplete="off" id="upAutoExposure" type="checkbox" /> Auto pre-exposure</label>
           </div>
         </details>
 
         <details>
           <summary>Cache</summary>
           <div class="fields">
-            <label class="check"><input id="train" type="checkbox" checked /> Train every frame</label>
-            <label>Training steps / frame <input id="steps" type="number" min="0" max="16" value="2" /></label>
-            <label title="Plain path tracing on the NRC side until the network has trained this many steps (SVGF 120, OIDN 600 in the showcase)">Warm-up gate (steps) <input id="gateSteps" type="number" min="0" max="5000" value="120" /></label>
-            <label class="check" title="Loads the network this page saved for this scene and lighting (IndexedDB of this page's address)"><input id="loadSaved" type="checkbox" checked /> Start from the saved network</label>
+            <label class="check"><input autocomplete="off" id="train" type="checkbox" checked /> Train every frame</label>
+            <label>Training steps / frame <input autocomplete="off" id="steps" type="number" min="0" max="16" value="2" /></label>
+            <label title="Plain path tracing on the NRC side until the network has trained this many steps (SVGF 120, OIDN 600 in the showcase)">Warm-up gate (steps) <input autocomplete="off" id="gateSteps" type="number" min="0" max="5000" value="120" /></label>
+            <label class="check" title="Loads the network this page saved for this scene and lighting (IndexedDB of this page's address)"><input autocomplete="off" id="loadSaved" type="checkbox" checked /> Start from the saved network</label>
             <div class="row"><button id="saveNet">Save network</button><button id="resetCache">Reset cache</button></div>
           </div>
         </details>
@@ -173,20 +174,21 @@
         <details id="daylight" hidden>
           <summary>Lighting</summary>
           <div class="fields">
-            <label class="check"><input id="interiorLights" type="checkbox" checked /> Interior lights</label>
-            <label>Lamp brightness <input id="lampStrength" type="range" min="0" max="4" step="0.1" value="1"><output></output></label>
-            <label class="check"><input id="skyLight" type="checkbox" checked /> Sky light</label>
-            <label>Sun strength <input id="sunStrength" type="range" min="0" max="6" step="0.1" value="1"><output></output></label>
-            <label>Sun azimuth <input id="sunAzimuth" type="range" min="-180" max="180" step="1"><output></output></label>
-            <label>Sun elevation <input id="sunElevation" type="range" min="1" max="89" step="1"><output></output></label>
-            <label>Sun radius <input id="sunRadius" type="range" min="0" max="2" step="0.001"><output></output></label>
+            <label class="check"><input autocomplete="off" id="interiorLights" type="checkbox" checked /> Interior lights</label>
+            <label>Lamp brightness <input autocomplete="off" id="lampStrength" type="range" min="0" max="4" step="0.1" value="1"><output></output></label>
+            <label class="check"><input autocomplete="off" id="skyLight" type="checkbox" checked /> Sky light</label>
+            <label>Sun strength <input autocomplete="off" id="sunStrength" type="range" min="0" max="6" step="0.1" value="1"><output></output></label>
+            <label>Sun azimuth <input autocomplete="off" id="sunAzimuth" type="range" min="-180" max="180" step="1"><output></output></label>
+            <label>Sun elevation <input autocomplete="off" id="sunElevation" type="range" min="1" max="89" step="1"><output></output></label>
+            <label>Sun radius <input autocomplete="off" id="sunRadius" type="range" min="0" max="2" step="0.001"><output></output></label>
           </div>
         </details>
 
         <details open>
           <summary>Measure</summary>
           <div class="fields">
-            <div class="row"><button class="primary" id="measure">Flicker over 60 frames</button><button id="savePasses">Save passes (PFM)</button></div>
+            <div class="row"><button class="primary" id="measure">Flicker over 60 frames</button><button id="savePasses">Save passes (PFM)</button><button id="stats">Stats of top-left pass</button></div>
+            <p class="note" id="statsNote"></p>
             <table id="flickerTable" aria-label="Flicker per stage"><tbody><tr><td>Mean relative change |ΔL| / L per frame per stage (reprojected: camera motion is not counted), whole image and a 32 px window around the clicked pixel. Use with scripted motion for a repeatable number.</td><td class="v"></td></tr></tbody></table>
             <table id="probeTable" aria-label="Values at the clicked pixel"><tbody><tr><td>Click a pixel to read every pass there.</td><td class="v"></td></tr></tbody></table>
             <p class="note" id="saveNote"></p>

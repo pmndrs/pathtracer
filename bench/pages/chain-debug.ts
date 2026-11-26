@@ -423,6 +423,7 @@ function svgfOptions(): Record<string, unknown> {
     sigmaLuminance: num('sigmaLuminance'),
   };
   if (value('antiLag') !== 'default') o.antiLag = value('antiLag');
+  if (checked('antiLagHistoryScale')) o.antiLagHistoryScale = true;
   // Specular-only options go to the specular signal (the joint pipeline splits when they differ from the diffuse one's).
   const spec: Record<string, unknown> = {};
   if (value('reflectionReprojection') !== 'surface') spec.reflectionReprojection = value('reflectionReprojection');
@@ -716,6 +717,73 @@ async function idle(): Promise<void> {
 
 const PROBE_VIEWS = ['raw', 'denoised', 'diffuse', 'specular', 'emission', 'albedo', 'specF', 'normal', 'viewZ', 'motion', 'motionZ', 'roughness', 'hitD', 'hitS', 'history', 'lambda', 'svgfDiffuse', 'svgfSpecular', 'reactive', 'flicker'];
 
+/** A whole float texture as vec4 per texel (any format, also textures that are not COPY_SRC). */
+const DUMP_WGSL = /* wgsl */ `
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> outV: array<vec4f>;
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let size = textureDimensions(src);
+  if (gid.x >= size.x || gid.y >= size.y) { return; }
+  outV[gid.y * size.x + gid.x] = textureLoad(src, gid.xy, 0);
+}
+`;
+let dumpPipe: { device: GPUDevice; pipe: GPUComputePipeline; layout: GPUBindGroupLayout } | null = null;
+
+async function dumpTexture(device: GPUDevice, tex: GPUTexture): Promise<Float32Array> {
+  if (dumpPipe?.device !== device) {
+    const layout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } }, { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }] });
+    dumpPipe = { device, layout, pipe: device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }), compute: { module: device.createShaderModule({ code: DUMP_WGSL }), entryPoint: 'main' } }) };
+  }
+  const size = tex.width * tex.height * 16;
+  const out = device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  pass.setPipeline(dumpPipe.pipe);
+  pass.setBindGroup(0, device.createBindGroup({ layout: dumpPipe.layout, entries: [{ binding: 0, resource: tex.createView() }, { binding: 1, resource: { buffer: out } }] }));
+  pass.dispatchWorkgroups(Math.ceil(tex.width / 8), Math.ceil(tex.height / 8));
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  const data = new Float32Array(await readBuffer(device, out, size));
+  out.destroy();
+  return data;
+}
+
+/**
+ * Statistics of one pass's channel over the image (the scalar the view shows; luminance for colour passes): mean and percentiles over the
+ * pixels where `mask` (default: every pixel) holds, and the share of pixels at or below `low`. Readback: not in the frame loop.
+ */
+async function passStats(id: string, o: { low?: number; maskHit?: boolean } = {}): Promise<Record<string, number> | string> {
+  const l = live;
+  if (!l) return 'no session';
+  const v = viewById.get(id);
+  const a = l.session.arms[arm()];
+  const tex = v?.get(a);
+  if (!v || !tex) return `${id}: not produced`;
+  await idle();
+  building = true;
+  try {
+    const data = await dumpTexture(l.session.device, tex);
+    // The hit mask is at render resolution: only for passes of that size (not the final image, not the downsampled anti-lag λ).
+    const sameSize = tex.width === a.tex.specF.width && tex.height === a.tex.specF.height;
+    const hit = o.maskHit && sameSize ? await dumpTexture(l.session.device, a.tex.specF) : null;
+    const vals: number[] = [];
+    const n = tex.width * tex.height;
+    for (let i = 0; i < n; i++) {
+      if (hit && (hit[4 * i + 3] as number) <= 0.5) continue;
+      const c = [data[4 * i], data[4 * i + 1], data[4 * i + 2], data[4 * i + 3]] as number[];
+      let x = v.mode === 'scalar' ? (c[v.ch ?? 0] as number) * (v.negate ? -1 : 1) : 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+      if (!Number.isFinite(x)) x = NaN;
+      vals.push(x);
+    }
+    const finite = vals.filter((x) => !Number.isNaN(x)).sort((x, y) => x - y);
+    const q = (f: number) => finite[Math.min(finite.length - 1, Math.floor(f * finite.length))] ?? NaN;
+    const low = o.low ?? NaN;
+    return { pixels: vals.length, nonFinite: vals.length - finite.length, mean: finite.reduce((s2, x) => s2 + x, 0) / Math.max(1, finite.length), p10: q(0.1), p25: q(0.25), p50: q(0.5), p75: q(0.75), p90: q(0.9), ...(Number.isFinite(low) ? { atOrBelowLow: finite.filter((x) => x <= low).length / Math.max(1, finite.length) } : {}) };
+  } finally {
+    building = false;
+  }
+}
+
 const PROBE_WGSL = /* wgsl */ `
 @group(0) @binding(0) var<uniform> at: vec4u;
 @group(0) @binding(1) var src: texture_2d<f32>;
@@ -967,7 +1035,7 @@ for (const id of ['denoiserSel', 'oidnAux', 'stillSamples']) $(id).addEventListe
   applyDenoiser();
   dropFlicker();
 });
-for (const id of ['svgfAlpha', 'maxHistory', 'planeDistance', 'normalThreshold', 'normalTest', 'historyFallback', 'historyFilter', 'antiLag', 'atrousIterations', 'kernel', 'sigmaDepth', 'sigmaNormal', 'sigmaLuminance', 'reflectionReprojection', 'reflectionHitTest', 'upscalePath', 'sharpness', 'upHistory', 'reactive', 'rcasDenoise', 'upAutoExposure', 'fireflyClamp']) $(id).addEventListener('change', applyChain);
+for (const id of ['svgfAlpha', 'maxHistory', 'planeDistance', 'normalThreshold', 'normalTest', 'historyFallback', 'historyFilter', 'antiLag', 'atrousIterations', 'kernel', 'sigmaDepth', 'sigmaNormal', 'sigmaLuminance', 'reflectionReprojection', 'reflectionHitTest', 'antiLagHistoryScale', 'upscalePath', 'sharpness', 'upHistory', 'reactive', 'rcasDenoise', 'upAutoExposure', 'fireflyClamp']) $(id).addEventListener('change', applyChain);
 $('reactiveCap').addEventListener('change', () => void build());
 for (const id of ['arm', 'accumulateStill', 'svgfHistoryLimit', 'spp']) $(id).addEventListener('change', () => {
   live?.session.cutNext();
@@ -1043,6 +1111,12 @@ $('saveNet').addEventListener('click', () => {
   void l.session.cache.exportNetwork().then(({ weights, trained }) => saveNetwork({ key: l.networkKey, lighting, weights, trained, savedAt: Date.now() })).then((ok) => ($('saveNote').textContent = ok ? 'Network saved for this scene and lighting.' : 'Saving the network failed.'));
 });
 $('measure').addEventListener('click', () => void measureFlicker());
+$('stats').addEventListener('click', () => {
+  const id = value('view0');
+  void passStats(id, { maskHit: id !== 'final' }).then((r) => {
+    $('statsNote').textContent = typeof r === 'string' ? r : `${viewById.get(id)?.label}${id !== 'final' ? ' (pixels the primary ray hit)' : ''}: mean ${fmt(r.mean as number)} · p10 ${fmt(r.p10 as number)} · p50 ${fmt(r.p50 as number)} · p90 ${fmt(r.p90 as number)}${r.nonFinite ? ` · ${r.nonFinite} non-finite` : ''}`;
+  });
+});
 $('savePasses').addEventListener('click', () => void savePasses());
 for (const id of LIGHTING_FIELDS) $(id).addEventListener('input', () => {
   if (live && isInterior(live.scene.name)) updateDaylight(live.session);
@@ -1089,4 +1163,4 @@ async function step(n: number): Promise<void> {
     building = false;
   }
 }
-(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, readProbe, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
+(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, readProbe, passStats, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
