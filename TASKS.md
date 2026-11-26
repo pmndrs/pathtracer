@@ -38,8 +38,8 @@ suggestion, pros/cons and the A/B that would settle it.
 | P0.28 | Competitor adapters: yield to the event loop without a GPU sync inside tgpt's timed loop (runner now tolerates a busy page, V17) | — | 🟨 | **Audit 2026-11-26:** runner side done (busy page tolerated, V17); the adapter-side yield is open. minutes-long synchronous loops made `Runtime.evaluate` time out Issue [#48](https://github.com/pmndrs/pathtracer/issues/48). |
 | P0.29 | Report an unbiased error estimate that subtracts the reference's own noise (V18), or use two independent reference seeds | — | ⬜ | Sponza "time to 1e-2" currently waits for test noise ~8e-3 Issue [#48](https://github.com/pmndrs/pathtracer/issues/48). |
 | P0.30 | Check the shared-machine load before timing and refuse or flag (runner: load average, number of GPU-process Chrome instances) | agent:legal | ✅ | `bench/runner/load-check.ts`; `--max-load/--max-gpu-procs/--load-wait/--strict-load`; load + procs in run JSON and CSV note, loaded rows `valid=0`; Windows path (CPU delta, CIM) untested, add to W-tasks |
-| P0.31 | Capsaicin as an optional native GPU cross-check on Windows (W9, D36) | maintainer (Windows) | ⬜ optional | research/notes/11-capsaicin.md §9 has the W9 draft (export Tier 0 + sponza-white, matched EXR→PFM refs `capsaicin-*spp.pfm`, compare vs pbrt/Mitsuba, time ref PT + GI-1.2 on the 3060); D36: optional cross-check and timing baseline only (reference path tracer, opaque scenes), never a gate or a D15 reference; run it when a bias question needs a third opinion Issue [#49](https://github.com/pmndrs/pathtracer/issues/49). |
-| P0.32 | ThreeRT native adapter (internal, inexact report per D20): checkout in `.cache/native/threert`, `threert-render serve`, `--hdr` raw f32 → PFM, overrides clampIndirect off / energyCompensation 1 / `last_direct` on / maxBounces = maxDepth; quad-light closed form first | — | ⬜ | research/notes/16-threert.md §6. Native-only (not in the Chrome runner). UE5 DefaultLit BSDF, so expect a bias floor vs pbrt/Mitsuba; awaits the maintainer's yes (open question below) Issue [#49](https://github.com/pmndrs/pathtracer/issues/49). |
+| P0.31 | Capsaicin as an optional native peer on Windows (W9, D36): reference PT and GI-1.x | maintainer (Windows) | ⬜ optional | research/notes/11-capsaicin.md §9 has the W9 draft (export Tier 0 + sponza-white, matched EXR→PFM refs `capsaicin-*spp.pfm`, compare vs pbrt/Mitsuba, time ref PT + GI-1.2 on the 3060); D36: an optional peer, never a gate or a D15 reference: equal-time quality vs pbrt/Mitsuba, native HW-RT speed on the 3060, GI-1.x vs our real-time chain (inexact report, D20) Issue [#49](https://github.com/pmndrs/pathtracer/issues/49). |
+| P0.32 | ThreeRT native adapter, an optional peer (D36; internal, inexact report per D20): checkout in `.cache/native/threert`, `threert-render serve`, `--hdr` raw f32 → PFM, overrides clampIndirect off / energyCompensation 1 / `last_direct` on / maxBounces = maxDepth; quad-light closed form first | — | ⬜ | research/notes/16-threert.md §6. Native-only (not in the Chrome runner). UE5 DefaultLit BSDF, so expect a bias floor vs pbrt/Mitsuba; D36: optional, never a gate; equal-time quality vs pbrt/Mitsuba and native HW-RT speed on the Mac. Re-clone at `5cb95f6` or later and run the provenance scan first (D35); the clone in research/sources predates it Issue [#49](https://github.com/pmndrs/pathtracer/issues/49). |
 | P0.33 | Bench ideas from ThreeRT: traversal-agreement check at high spp by region means (CPU oracle vs GPU walk, BVH2 vs BVH4); reference-noise row next to every metric; render tests as `{features, analytic, region, tolerance}` modules with an `unsupported` status | — | ⬜ | notes/16-threert.md §5, §7.6 Issue [#48](https://github.com/pmndrs/pathtracer/issues/48). |
 
 ## P1 — Trace core
@@ -453,7 +453,8 @@ glTF loader made public, hand-written API tables, experimental and research feat
 
 ## Open questions for the maintainer
 
-- **ThreeRT as a competitor: add the native adapter (P0.32) now, later, or never?** Suggestion: later, internal only, after P2.9
+- ~~ThreeRT as a competitor: add the native adapter (P0.32) now, later, or never?~~ Settled by D36 (2026-11-26): an optional peer, built when wanted, never required. Notes kept below.
+  Old text: **ThreeRT as a competitor: add the native adapter (P0.32) now, later, or never?** Suggestion: later, internal only, after P2.9
   (sponza-white in our renderer), as a "native HW-RT" row in the separate inexact report (D20).
   - Pro: the only HW ray-query path tracer we can run on this Mac; shows what hardware RT buys over our software BVH on the same
     GPU; MIT; a headless CLI with linear f32 output exists.
@@ -468,7 +469,7 @@ glTF loader made public, hand-written API tables, experimental and research feat
   test in [docs/internal/design/nrc.md](docs/internal/design/nrc.md) §8 (also: gpuweb evidence, Windows Vulkan flag;
   VkNRC licence and native build settled by D28/D29).
 
-- ~~Capsaicin: a third reference renderer, or a cross-check only?~~ Settled by D36 (2026-11-26): an optional cross-check and native timing baseline, never required; pbrt + Mitsuba stay the references.
+- ~~Capsaicin: a third reference renderer, or a cross-check only?~~ Settled by D36 (2026-11-26): an optional peer (equal-time quality, native speed, GI-1.x), never required; pbrt + Mitsuba stay the references.
 
 - ~~Sponza reference spp~~: settled by P0.9: keep 4096 for both (at 2048 the pbrt-vs-Mitsuba floor rises to 6.2e-3 and even 1e-2 becomes unmeasurable on Sponza).
 - V7.4 (partial, scope cut): SVGF on media, whole vs split, vol-cornell-fog 256x256 frame 4: bench/results/v74-media/ (page media-realtime, kernel option frameMedia, chain emissionTemporal); sweeps, moving camera, live page, cloud, docs NOT done.
