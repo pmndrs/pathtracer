@@ -146,7 +146,7 @@ relMSE at 16 / 64 / 256 spp against converged 4096 spp references, as a multiple
 | `vol-cornell-fog` (new: the examples' `volumes` page, fog up to 4 mm under the lamp, blocks inside) | biased (below) | 1.10-1.19x | 0.64-0.68x | pbrt only |
 
 `vol-cornell-fog`: Mitsuba reads -34% against pbrt (darkest near the lamp: -37% top third, -23% bottom), ours +0.7% (pbrt reads ~1% low on this coloured lamp: spectral uplift,
-as on `vol-cornell-smoke`). `vol-cornell-fog-empty` (no blocks) is the same (-33%), so the surfaces inside the fog are not the cause. OPEN: a Mitsuba export or Mitsuba
+as on `vol-cornell-smoke`). `vol-cornell-fog-empty` (no blocks) is the same (-33%), so the surfaces inside the fog are not the cause. OPEN ([#28](https://github.com/pmndrs/pathtracer/issues/28)): a Mitsuba export or Mitsuba
 volpath problem when the medium fills the room around a lamp just outside it; until resolved, judge this scene against pbrt. Equiangular sampling is the lever for the
 fog-near-a-lamp case and is still opt-in.
 
