@@ -425,6 +425,8 @@ export class PipelineArm {
   readonly upscaler!: UpscalerCore;
   /** This frame's camera jitter (pixels, x right, y down; [0, 0] unless the upscaler owns it). Set by `nextJitter()`. */
   jitter: JitterOffset = { x: 0, y: 0 };
+  /** N11.18: A-SVGF gradient samples of this frame for SVGF's `antiLag: 'gradient'` (one texel per 3 x 3 stratum); null = none (the option then sees no valid sample). */
+  gradient: { diffuse: GPUTexture; specular: GPUTexture } | null = null;
   private readonly sums!: GPUBuffer;
   private readonly packBuf!: GPUBuffer;
   private readonly packParams!: GPUBuffer;
@@ -730,7 +732,7 @@ export class PipelineArm {
     const kind: DenoiserKind = options.denoise === false ? 'none' : this.kind;
     if (kind === 'svgf') {
       const dOut = this.denoiser.dispatchBoth(
-        { diffuse: { radiance: t.diffuse, hitDistance: t.hitD }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF } } as never,
+        { diffuse: { radiance: t.diffuse, hitDistance: t.hitD, ...(this.gradient ? { gradient: this.gradient.diffuse } : {}) }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF, ...(this.gradient ? { gradient: this.gradient.specular } : {}) } } as never,
         { depth: this.depth, normal: t.normal, motion: t.motion, roughness: t.roughness, albedo: t.albedo, viewZ: t.viewZ, motionZ: t.motionZ },
         { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near, far, jitter: [this.jitter.x, this.jitter.y], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };

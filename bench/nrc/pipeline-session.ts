@@ -16,6 +16,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 import { cameraKey } from '../realtime/chain-math.ts';
 import { NrcCache, type NrcSettings } from './cache.ts';
 import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from '../realtime/chain.ts';
+import { GradientSamples } from '../realtime/gradient-samples.ts';
 
 export interface SessionOptions {
   scene: SceneDesc;
@@ -66,6 +67,14 @@ export class NrcPipelineSession {
   nrcSpp = 1;
   accumulateStill = false;
   svgfHistoryLimit = 0;
+  /**
+   * N11.18: make A-SVGF gradient samples for the denoiser (`antiLag: 'gradient'`): every frame the previous frame is traced again through
+   * the current scene (`bench/realtime/gradient-samples.ts`; one more path-traced frame per frame). 1 sample per pixel, not with
+   * `accumulateStill`. The arms hand the textures to SVGF as `inputs.gradient` while this is on.
+   */
+  gradientSamples = false;
+  private grad: Partial<Record<ArmName, GradientSamples>> = {};
+  private lastTrain = true;
   readonly samples = { plain: 0, nrc: 0 };
   private stillKey = { plain: '', nrc: '' };
   private camera: PtLookAtCamera | null = null;
@@ -158,6 +167,7 @@ export class NrcPipelineSession {
    * Returns the arms that rendered.
    */
   async frame(camera: PtLookAtCamera, o: { arms?: readonly ArmName[]; train?: boolean; denoise?: boolean } = {}): Promise<ArmName[]> {
+    this.retrace(o.arms ?? ['plain', 'nrc']); // before the kernels learn about this frame: they still hold last frame's camera and jitter
     this.setCamera(camera); // first: a cut resets the arms, which releases a held frame
     const arms = (o.arms ?? ['plain', 'nrc']).filter((a) => o.denoise === false || !this.arms[a].heldFor(camera));
     const encoder = this.device.createCommandEncoder({ label: 'nrc pipeline frame' });
@@ -178,6 +188,45 @@ export class NrcPipelineSession {
       this.device.queue.submit([encoder.finish()]);
       if (f + 1 < frames) this.cache.nextCamera(camera);
     }
+  }
+
+  private gradientOn(): boolean {
+    return this.gradientSamples && !this.accumulateStill && this.plainSpp === 1 && this.nrcSpp === 1;
+  }
+
+  /** The gradient samples' first half: last frame again, with the scene as it is now (its own submit: the kernels' uniforms are per submit). */
+  private retrace(arms: readonly ArmName[]): void {
+    const on = this.gradientOn() && !this.cut && !!this.camera;
+    for (const arm of ['plain', 'nrc'] as const) {
+      const g = this.grad[arm];
+      this.arms[arm].gradient = on && arms.includes(arm) ? (this.grad[arm] ??= new GradientSamples(this.device, this.options.width, this.options.height, arm)) : null;
+      if (!g) continue;
+      if (!on || !arms.includes(arm) || !g.have || (arm === 'nrc' && this.cache.warming)) {
+        g.invalidate();
+        continue;
+      }
+      const encoder = this.device.createCommandEncoder({ label: `gradient retrace ${arm}` });
+      if (arm === 'plain') {
+        this.plain.setFrameIndex(this.plain.samples - 1);
+        this.plain.encode(encoder, 1);
+        g.keepRetrace(encoder, this.plain.frameBuffers.planes);
+      } else {
+        const c = this.cache;
+        const count = (c as unknown as { queryCount: GPUBuffer }).queryCount;
+        // the cache's own frame counter (word 1; the resolve pass bumps it) picks the training tiles: replay last frame's value
+        encoder.copyBufferToBuffer(this.nrcCounter(), 0, count, 4, 4);
+        c.render.setFrameIndex(c.render.samples - 1);
+        c.encodeStage(encoder, 'renderPass', this.lastTrain);
+        c.encodeStage(encoder, 'inference', this.lastTrain);
+        g.keepRetrace(encoder, c.render.frameBuffers.planes);
+      }
+      this.device.queue.submit([encoder.finish()]);
+    }
+  }
+
+  private counterCopy: GPUBuffer | null = null;
+  private nrcCounter(): GPUBuffer {
+    return (this.counterCopy ??= this.device.createBuffer({ label: 'nrc frame counter copy', size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST }));
   }
 
   private beginSamples(encoder: GPUCommandEncoder, arm: ArmName, count: number, key: string): void {
@@ -206,6 +255,8 @@ export class NrcPipelineSession {
       this.plain.encode(encoder, 1);
       arm.accumulate(encoder, this.plain.frameBuffers);
     }
+    if (this.gradientOn()) (this.grad.plain ??= new GradientSamples(this.device, this.options.width, this.options.height, 'plain')).encode(encoder, this.plain.frameBuffers.planes);
+    else this.grad.plain?.invalidate();
     arm.pack(encoder, this.samples.plain);
   }
 
@@ -213,11 +264,24 @@ export class NrcPipelineSession {
     const arm = this.arms.nrc;
     this.applyJitter('nrc');
     this.beginSamples(encoder, 'nrc', this.nrcSpp, key);
+    const grad = this.gradientOn() && !this.cache.warming;
+    if (grad) encoder.copyBufferToBuffer((this.cache as unknown as { queryCount: GPUBuffer }).queryCount, 4, this.nrcCounter(), 0, 4);
     for (let i = 0; i < this.nrcSpp; i++) {
       // Update weights once, after the last render sample, including at the warm-up boundary.
-      this.cache.encodeFrame(encoder, { train: i === this.nrcSpp - 1 && train && this.cache.settings.stepsPerFrame > 0 });
+      this.lastTrain = i === this.nrcSpp - 1 && train && this.cache.settings.stepsPerFrame > 0;
+      if (grad) {
+        // as `encodeFrame`, with the gradient pass between the image and the weight update (the planes are final after 'inference')
+        (this.cache as unknown as { frame: number }).frame++;
+        this.cache.encodeStage(encoder, 'renderPass', this.lastTrain);
+        this.cache.encodeStage(encoder, 'inference', this.lastTrain);
+      } else {
+        this.cache.encodeFrame(encoder, { train: this.lastTrain });
+      }
       arm.accumulate(encoder, this.cache.render.frameBuffers);
+      if (grad && this.lastTrain) this.cache.encodeStage(encoder, 'trainSteps', true);
     }
+    if (grad) (this.grad.nrc ??= new GradientSamples(this.device, this.options.width, this.options.height, 'nrc')).encode(encoder, this.cache.render.frameBuffers.planes);
+    else this.grad.nrc?.invalidate();
     arm.pack(encoder, this.samples.nrc);
   }
 
@@ -282,6 +346,8 @@ export class NrcPipelineSession {
   }
 
   destroy(): void {
+    for (const g of Object.values(this.grad)) g?.destroy();
+    this.counterCopy?.destroy();
     this.arms.plain.destroy();
     this.arms.nrc.destroy();
     this.cache.destroy();

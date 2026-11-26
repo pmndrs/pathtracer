@@ -428,6 +428,8 @@ function svgfOptions(): Record<string, unknown> {
   };
   if (value('antiLag') !== 'default') o.antiLag = value('antiLag');
   if (checked('antiLagHistoryScale')) o.antiLagHistoryScale = true;
+  if (num('antiLagRadius') !== 1) o.antiLagRadius = Math.max(0, Math.round(num('antiLagRadius')));
+  if (checked('secondHistory')) o.secondHistory = true;
   if (value('historyFootprint') !== 'off') {
     o.historyFootprint = value('historyFootprint');
     o.historyFootprintDwell = Math.max(0, num('footprintDwell'));
@@ -478,6 +480,7 @@ function applyFrameSettings(session: NrcPipelineSession): void {
   session.plainSpp = Math.max(1, Math.min(16, Math.round(num('spp')) || 1));
   session.nrcSpp = session.plainSpp;
   session.accumulateStill = checked('accumulateStill');
+  session.gradientSamples = value('antiLag') === 'gradient';
   session.svgfHistoryLimit = Math.max(0, Math.min(4096, Math.round(num('svgfHistoryLimit'))));
   session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
   const gate = Math.max(0, Math.round(num('gateSteps')));
@@ -1212,7 +1215,7 @@ for (const id of ['denoiserSel', 'oidnAux', 'stillSamples']) $(id).addEventListe
   applyDenoiser();
   dropFlicker();
 });
-for (const id of ['svgfAlpha', 'maxHistory', 'planeDistance', 'normalThreshold', 'normalTest', 'historyFallback', 'historyFootprint', 'footprintDwell', 'historyFilter', 'antiLag', 'atrousIterations', 'kernel', 'sigmaDepth', 'sigmaNormal', 'sigmaLuminance', 'reflectionReprojection', 'reflectionHitTest', 'antiLagHistoryScale', 'upscalePath', 'sharpness', 'upHistory', 'reactive', 'rcasDenoise', 'upAutoExposure', 'fireflyClamp']) $(id).addEventListener('change', applyChain);
+for (const id of ['svgfAlpha', 'maxHistory', 'planeDistance', 'normalThreshold', 'normalTest', 'historyFallback', 'historyFootprint', 'footprintDwell', 'antiLagRadius', 'secondHistory', 'historyFilter', 'antiLag', 'atrousIterations', 'kernel', 'sigmaDepth', 'sigmaNormal', 'sigmaLuminance', 'reflectionReprojection', 'reflectionHitTest', 'antiLagHistoryScale', 'upscalePath', 'sharpness', 'upHistory', 'reactive', 'rcasDenoise', 'upAutoExposure', 'fireflyClamp']) $(id).addEventListener('change', applyChain);
 $('reactiveCap').addEventListener('change', () => void build());
 for (const id of ['arm', 'accumulateStill', 'svgfHistoryLimit', 'spp']) $(id).addEventListener('change', () => {
   live?.session.cutNext();
