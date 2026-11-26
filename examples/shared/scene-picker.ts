@@ -35,7 +35,7 @@ export async function scenePicker(ctx: ExampleContext, folder: FolderApi, initia
       ctx.progress('Compiling…');
       const old = current;
       current = { scene, loaded };
-      orbit.set(loaded.camera, false);
+      orbit.set(loaded.camera, false, loaded.bounds);
       await onScene(scene, loaded);
       onCamera();
       ctx.progress(null);

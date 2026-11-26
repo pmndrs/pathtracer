@@ -67,7 +67,7 @@ defineExample(async (ctx) => {
     ctx.progress(`Loading ${name}…`);
     try {
       loaded = await loadScene(params.scene, name);
-      orbit.set(loaded.camera, false);
+      orbit.set(loaded.camera, false, loaded.bounds);
       timings.clear();
       params.results = '';
       pane.refresh();
