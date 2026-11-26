@@ -351,7 +351,7 @@ async function build(): Promise<void> {
       cache: { network: PRESET.network, ...PRESET, trainSelect: 'tile', stepsPerFrame: num('steps') },
       reactive: { cap: num('reactiveCap') || 8, strength: 1 },
       jitter: jk,
-      ...(value('textureLod') !== 'mip0' ? { textureLod: 'cone' as const, textureConeScale: Number(value('textureLod').slice(4)) || 1 } : {}),
+      ...(value('textureLod') === 'mip0' ? { textureLod: 0 as const } : value('textureLod') === 'cone' ? { textureLod: 'cone' as const } : { textureLod: 'cone' as const, textureConeScale: Number(value('textureLod').slice(4)) || 1 }),
     });
     const device = session.device;
     device.addEventListener('uncapturederror', (e) => setStatus(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`, true));
@@ -915,6 +915,42 @@ async function framesThen<T>(l: Live, n: number, label: string, after?: (i: numb
 }
 
 /** Mean of the final image's luminance over the last `k` of `n` frames (a converged image at a still camera). */
+/**
+ * Detail of the settled final image (still camera, `frames` frames, mean of the last 16): mean |4-neighbour Laplacian| of the luminance over
+ * the mean luminance, for the whole image and its bottom third (the Classroom's wood floor). Compares texture filtering settings: a blurrier
+ * image reads lower. Readbacks: a measurement only.
+ */
+async function sharpness(frames = 160): Promise<Record<string, number>> {
+  const l = live;
+  if (!l) return {};
+  await idle();
+  building = true;
+  try {
+    const lum = await settledLuma(l, frames, 16, 'Sharpness: settling');
+    const tex = l.session.arms[arm()].stage('final');
+    const w = Math.floor(tex.width / 2);
+    const h = Math.floor(tex.height / 2);
+    const detail = (y0: number) => {
+      let lap = 0;
+      let sum = 0;
+      let n = 0;
+      for (let y = Math.max(1, y0); y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = y * w + x;
+          lap += Math.abs(4 * lum[i]! - lum[i - 1]! - lum[i + 1]! - lum[i - w]! - lum[i + w]!);
+          sum += lum[i]!;
+          n++;
+        }
+      }
+      return lap / Math.max(sum, 1e-12);
+    };
+    return { whole: detail(0), bottomThird: detail(Math.floor((2 * h) / 3)) };
+  } finally {
+    building = false;
+    setStatus('');
+  }
+}
+
 async function settledLuma(l: Live, n: number, k: number, label: string): Promise<Float32Array> {
   await framesThen(l, n - k, label);
   const imgs = await framesThen(l, k, label, () => finalLuma(l));
@@ -1631,4 +1667,4 @@ async function edgeQuality(o: { frames?: number; refFrames?: number; refSpp?: nu
   });
   return out;
 }
-(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, measureLag, readProbe, passStats, edgeHistory, guideChange, edgeQuality, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
+(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, measureLag, sharpness, readProbe, passStats, edgeHistory, guideChange, edgeQuality, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };

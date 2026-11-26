@@ -39,9 +39,12 @@ export interface SessionOptions {
   /** Who owns the camera jitter (`PipelineSettings.jitter`): 'sampler' (default, per pixel), 'upscaler' (its per-frame sequence) or 'centre'. */
   jitter?: PipelineSettings['jitter'];
   /**
-   * Texture level of detail of both arms' kernels: 0 (default, today: every lookup at mip 0, which aliases the albedo / roughness / normal
-   * guides at 1 spp) or 'cone' (ray-cone footprint, the library's `mode: 'realtime'` choice). `textureConeScale` scales the cone's start
-   * (1 = a full pixel, the default; pbrt's max(1/8, 1/sqrt(spp)) is also 1 at 1 spp).
+   * Texture level of detail of both arms' kernels: 'cone' (default since 2026-11-27: ray-cone footprint, the library's `mode: 'realtime'`
+   * choice; N11.17 cut the interior albedo-guide change 8.7% -> 3.0% per frame) or 0 (every lookup at mip 0, which aliases the albedo /
+   * roughness / normal guides at 1 spp; the setting of every chain study before that date). `textureConeScale` scales the cone's start in
+   * render pixels; default render / display width (0.5 at 2x upscaling: a display pixel's footprint, the usual upscaler mip bias of
+   * log2(render / display)). Classroom, 640x360 -> 2x: a full render pixel (1) blurred the wood (-17% detail on the floor), 0.5 kept most of it
+   * (-8%) with the same flicker gain (N11.17).
    */
   textureLod?: 'cone' | 0;
   textureConeScale?: number;
@@ -72,8 +75,13 @@ export class NrcPipelineSession {
     Object.assign(this, init);
   }
 
+  /** The texture cone's start in render pixels: the option, else one display pixel (render / display width, at most 1). */
+  static coneScale(o: SessionOptions): number {
+    return o.textureConeScale ?? Math.min(1, o.width / o.displayWidth);
+  }
+
   static async create(o: SessionOptions): Promise<NrcPipelineSession> {
-    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.jitter && o.jitter !== 'sampler' ? { cameraJitter: 'engine' as const } : {}), ...(o.textureLod === 'cone' ? { textureLod: 'cone' as const, textureConeScale: o.textureConeScale ?? 1 } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
+    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.jitter && o.jitter !== 'sampler' ? { cameraJitter: 'engine' as const } : {}), ...((o.textureLod ?? 'cone') === 'cone' ? { textureLod: 'cone' as const, textureConeScale: NrcPipelineSession.coneScale(o) } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
     await adapter.load(o.scene);
     const gpu = adapter.gpuContext!;
     const device = gpu.device;
@@ -95,7 +103,7 @@ export class NrcPipelineSession {
       ...(o.cache ?? {}),
     });
     const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}), ...(o.reactive ? { reactive: o.reactive } : {}), ...(o.jitter ? { jitter: o.jitter } : {}) };
-    if (o.textureLod === 'cone' && o.textureConeScale !== undefined) for (const k of [plain, cache.render]) k.setLimits({ ...limits, textureConeScale: o.textureConeScale });
+    if ((o.textureLod ?? 'cone') === 'cone') for (const k of [plain, cache.render]) k.setLimits({ ...limits, textureConeScale: NrcPipelineSession.coneScale(o) });
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
     return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: cache.hash ? cache.description : arm.description });
   }
