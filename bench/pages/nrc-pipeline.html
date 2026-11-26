@@ -99,7 +99,9 @@
           <label class="check"><input id="equalTime" type="checkbox" checked /> Equal time (set by Benchmark)</label>
         </fieldset>
         <fieldset id="daylight" hidden>
-          <h2>Daylight</h2>
+          <h2>Lighting</h2>
+    <label class="check" title="The ceiling lamps and the blackboard light"><input id="interiorLights" type="checkbox" checked /> Interior lights</label>
+    <label class="check" title="Light from the sky through the windows; the sun is separate (set Sun strength to 0)"><input id="skyLight" type="checkbox" checked /> Sky light</label>
     <label>Sun strength <input id="sunStrength" type="range" min="0" max="6" step="0.1" value="1"><output></output></label>
     <label>Sun azimuth <input id="sunAzimuth" type="range" min="-180" max="180" step="1"><output></output></label>
     <label>Sun elevation <input id="sunElevation" type="range" min="1" max="89" step="1"><output></output></label>
@@ -111,6 +113,7 @@
           <label>Sharpness <input id="sharpness" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
           <label>Max history (frames) <input id="upHistory" type="number" min="1" max="64" value="24" /></label>
           <label class="check"><input id="rcasDenoise" type="checkbox" /> Suppress grain in sharpening</label>
+          <label class="check" title="The upscaler's own metering of its internal pre-exposure. Off (fixed at 1) by default: on a dim interior it pushes bright pixels to the top of the upscaler's tonemap, where reprojected history overshoots into bright specks while the camera moves (DIVERGES V343)"><input id="upAutoExposure" type="checkbox" /> Auto pre-exposure</label>
         </fieldset>
         <fieldset>
           <h2>Cache</h2>

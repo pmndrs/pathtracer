@@ -12,7 +12,7 @@
  * No readback in the frame loop; one frame in flight. Headless twin: nrc-pipeline-study.
  */
 import { pagesBase } from '../site-paths.ts';
-import { setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
+import { LIGHTING_FIELDS, setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
 import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 import { uploadImage } from '../runner/page-client.ts';
@@ -23,6 +23,7 @@ import { phase10Settings } from '../nrc/phase10.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
 import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
+import { FlyCamera, flyInputFromCodes } from '../realtime/fly-camera.ts';
 import { materialArgs } from '../nrc/cache.ts';
 import { hasSubgroupMatrix, networkArg } from './mlp-common.ts';
 
@@ -83,27 +84,20 @@ let split = 0.5;
 let fps = 0;
 let lastFrameEnd = 0;
 let lastFrameMs = 0;
+let lastTick = 0;
+/** `KeyboardEvent.code`s held down. */
 const keys = new Set<string>();
-const cam = { position: [0, 0, 0] as [number, number, number], yaw: 0, pitch: 0, yFovDeg: 60, speed: 1 };
+/** Moved on a fixed step from real time on every animation frame, also while a render is in flight (fly-camera.ts). */
+const fly = new FlyCamera();
 
 function setStatus(text: string, error = false): void {
   statusEl.textContent = text;
   statusEl.classList.toggle('err', error);
 }
 
-function camera(): PtLookAtCamera {
-  const d = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.sin(cam.pitch), Math.cos(cam.pitch) * Math.sin(cam.yaw)];
-  return { position: [...cam.position], target: [cam.position[0] + d[0]!, cam.position[1] + d[1]!, cam.position[2] + d[2]!], up: [0, 1, 0], yFovDeg: cam.yFovDeg };
-}
-
 function resetView(scene: SceneDesc, bounds: NrcPipelineSession['bounds']): void {
-  const c = scene.camera as PtLookAtCamera;
-  cam.position = [...c.position] as [number, number, number];
-  const d = [c.target[0] - c.position[0], c.target[1] - c.position[1], c.target[2] - c.position[2]];
-  cam.yaw = Math.atan2(d[2]!, d[0]!);
-  cam.pitch = Math.asin(d[1]! / Math.hypot(d[0]!, d[1]!, d[2]!));
-  cam.yFovDeg = c.yFovDeg;
-  cam.speed = 0.15 * Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
+  fly.setPose(scene.camera as PtLookAtCamera);
+  fly.speed = 0.15 * Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
 }
 
 function backendOptions(device: GPUDevice): void {
@@ -218,24 +212,6 @@ function encodeDisplay(l: Live): void {
   $('tagRight').textContent = c.warming ? `NRC warming · plain PT · ${samples.nrc} spp` : `Path tracing + NRC · ${samples.nrc} spp`;
 }
 
-function moveCamera(dt: number): boolean {
-  if (keys.size === 0) return false;
-  const f = [Math.cos(cam.yaw), 0, Math.sin(cam.yaw)];
-  const r = [-Math.sin(cam.yaw), 0, Math.cos(cam.yaw)];
-  const s = cam.speed * dt * (keys.has('shift') ? 3 : 1);
-  const mv = [0, 0, 0];
-  const add = (v: number[], k: number) => v.forEach((c, i) => (mv[i]! += c * k));
-  if (keys.has('w')) add(f, s);
-  if (keys.has('s')) add(f, -s);
-  if (keys.has('d')) add(r, s);
-  if (keys.has('a')) add(r, -s);
-  if (keys.has('e')) mv[1]! += s;
-  if (keys.has('q')) mv[1]! -= s;
-  if (mv.every((v) => v === 0)) return false;
-  cam.position = cam.position.map((v, i) => v + mv[i]!) as [number, number, number];
-  return true;
-}
-
 function armsOnScreen(): ArmName[] {
   const v = value('view');
   return v === 'plain' ? ['plain'] : v === 'nrc' ? ['nrc'] : ['plain', 'nrc'];
@@ -273,16 +249,19 @@ function applyCacheSettings(session: NrcPipelineSession): void {
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const l = live;
-  if (!l || busy || building || paused) return;
-  const dt = lastFrameEnd ? Math.min(0.1, (now - lastFrameEnd) / 1000) : 0;
-  moveCamera(dt);
+  // The camera follows real time whether or not a frame can start now: a render still in flight delays the picture, not the motion.
+  const dt = lastTick ? (now - lastTick) / 1000 : 0;
+  lastTick = now;
+  if (!l || building || paused) return;
+  fly.advance(dt, flyInputFromCodes(keys));
+  if (busy) return;
   applyCacheSettings(l.session);
   // Only the arms on screen render, so a single side shows its own frame rate.
   busy = true;
   const t0 = performance.now();
   // OIDN is awaited inside frame(); one frame in flight.
   void l.session
-    .frame(camera(), { arms: armsOnScreen(), train: checked('train') })
+    .frame(fly.camera, { arms: armsOnScreen(), train: checked('train') })
     .then(() => {
       encodeDisplay(l);
       return l.session.device.queue.onSubmittedWorkDone();
@@ -374,15 +353,21 @@ canvas.addEventListener('pointermove', (e) => {
     split = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
     return;
   }
-  cam.yaw += e.movementX * 0.004;
-  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch - e.movementY * 0.004));
+  fly.look(e.movementX * 0.004, -e.movementY * 0.004);
 });
 window.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).closest('input, select')) return;
-  keys.add(e.key.toLowerCase());
+  if ((e.target instanceof Element && e.target.closest('input, select, textarea')) || e.metaKey || e.ctrlKey || e.altKey) return;
+  keys.add(e.code);
+  // The arrows move the camera here, not the page.
+  if (e.code.startsWith('Arrow')) e.preventDefault();
 });
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  // macOS sends no keyup for other keys while Command is down: releasing it releases everything.
+  if (e.key === 'Meta') keys.clear();
+});
 window.addEventListener('blur', () => keys.clear());
+document.addEventListener('visibilitychange', () => { keys.clear(); lastTick = 0; });
 
 $('view').addEventListener('change', () => live?.session.cutNext());
 for (const id of ['scene', 'res', 'backend', 'trainLayout', 'maxDepth', 'displayScale']) $(id).addEventListener('change', () => void build());
@@ -406,6 +391,7 @@ for (const id of ['clearImage', 'accumulateStill', 'svgfHistoryLimit']) $(id).ad
 function applyReconstruction(): void {
   const path = value('upscalePath') as 'spatial' | 'bilinear' | 'temporal';
   for (const id of ['sharpness', 'rcasDenoise']) $<HTMLInputElement>(id).disabled = path === 'bilinear';
+  $<HTMLInputElement>('upAutoExposure').disabled = path !== 'temporal';
   $<HTMLInputElement>('upHistory').disabled = path !== 'temporal';
   $<HTMLInputElement>('svgfHistoryLimit').disabled = value('denoiserSel') !== 'svgf';
   $<HTMLInputElement>('svgfAlpha').disabled = value('denoiserSel') !== 'svgf';
@@ -416,11 +402,11 @@ function applyReconstruction(): void {
     arm.setFireflyClamp(Math.max(0, num('fireflyClamp')));
     arm.setSvgfAlpha(Math.max(0.01, Math.min(1, num('svgfAlpha') || 0.1)));
     arm.upscalePath = path;
-    Object.assign(arm.upscaler.settings, { sharpness: Math.min(1, Math.max(0, num('sharpness'))), maxAccumulation: Math.max(1, Math.min(64, num('upHistory'))), rcasDenoise: checked('rcasDenoise') });
+    Object.assign(arm.upscaler.settings, { sharpness: Math.min(1, Math.max(0, num('sharpness'))), maxAccumulation: Math.max(1, Math.min(64, num('upHistory'))), rcasDenoise: checked('rcasDenoise'), autoExposure: checked('upAutoExposure'), exposure: 1 });
     arm.resetHistory();
   }
 }
-for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'svgfAlpha', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
+for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'upAutoExposure', 'svgfAlpha', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
 $('resetView').addEventListener('click', () => {
   if (live) resetView(live.scene, live.session.bounds);
   live?.session.cutNext();
@@ -431,13 +417,15 @@ $('pause').addEventListener('click', () => {
   paused = !paused;
   $('pause').textContent = paused ? 'Resume' : 'Pause';
   lastFrameEnd = 0;
+  lastTick = 0;
   fps = 0;
+  fly.stop();
 });
 
 const args = new URLSearchParams(location.search);
 const hero = pagesBase || args.get('demo') === 'hero' ? await import('../hero/showcase.ts') : undefined;
 hero?.setupHero();
-for (const id of ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius']) $(id).addEventListener('input', () => {
+for (const id of LIGHTING_FIELDS) $(id).addEventListener('input', () => {
   if (live && isInterior(live.scene.name)) updateDaylight(live.session);
 });
 const preset = hero || args.get('phase10') === 'mlp' ? phase10Settings('mlp') : undefined;
@@ -448,6 +436,8 @@ const stage = args.get('stage');
 if (stage === 'denoised' || stage === 'raw' || stage === 'final') $<HTMLSelectElement>('stageSel').value = stage;
 if (!hero && args.get('scene') && [...$<HTMLSelectElement>('scene').options].some(option => option.value === args.get('scene'))) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
+// ?upAutoExposure=1: the upscaler's own pre-exposure metering (the A/B of V343)
+if (args.get('upAutoExposure')) $<HTMLInputElement>('upAutoExposure').checked = args.get('upAutoExposure') === '1';
 // ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8
 if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;
 if (args.get('oidnAux')) $<HTMLSelectElement>('oidnAux').value = args.get('oidnAux') as string;
@@ -472,7 +462,7 @@ async function step(n: number): Promise<void> {
     while (busy) await new Promise((r) => setTimeout(r, 5));
     for (let i = 0; i < n; i++) {
       applyCacheSettings(l.session);
-      await l.session.frame(camera(), { arms: armsOnScreen(), train: checked('train') });
+      await l.session.frame(fly.camera, { arms: armsOnScreen(), train: checked('train') });
       encodeDisplay(l);
       await l.session.device.queue.onSubmittedWorkDone();
     }
@@ -480,4 +470,4 @@ async function step(n: number): Promise<void> {
     building = false;
   }
 }
-(window as unknown as { __nrcPipeline: unknown }).__nrcPipeline = { step, benchmark, saveAB, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, status: () => statusEl.textContent, get live() { return live; } };
+(window as unknown as { __nrcPipeline: unknown }).__nrcPipeline = { step, benchmark, saveAB, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, status: () => statusEl.textContent, get live() { return live; }, fly };

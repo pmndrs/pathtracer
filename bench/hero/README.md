@@ -7,11 +7,19 @@ python3 bench/hero/prepare.py
 node bench/live.ts nrc-hero
 ```
 
-The page opens on Classroom in a WebGPU browser. It trains the compact fp16 MLP continuously at 640 × 360 (fp32 fallback), traces one bounce before querying the cache, denoises color with SVGF and displays the temporal upscaler at 1280 × 720. Startup uses the pipeline's short SVGF training gate. Choose **Plain PT / NRC** for a split with identical reconstruction on both sides. **Pipeline stage** switches between raw color, denoised color, and final output using the current camera and cache. For a presentation, choose **Fullscreen**, then **Render controls** to adjust daylight over the live image. Close the panel for a clear view and choose **Exit fullscreen** to return. Shift-drag moves the divider. Drag to look, use WASD to move and Q/E for height.
+The page opens on Classroom in a WebGPU browser. It trains the compact fp16 MLP continuously at 960 × 540 (fp32 fallback), traces one bounce before querying the cache, denoises color with SVGF and displays the temporal upscaler at 1920 × 1080. On a slower GPU choose 640 × 360 under **Render controls** or open the page with `?res=640x360`. Startup uses the pipeline's short SVGF training gate. Choose **Plain PT / NRC** for a split with identical reconstruction on both sides. **Pipeline stage** switches between raw color, denoised color, and final output using the current camera and cache. For a presentation, choose **Fullscreen**, then **Render controls** to adjust daylight over the live image. Close the panel for a clear view and choose **Exit fullscreen** to return. Shift-drag moves the divider. Drag to look, use WASD or the arrow keys to move, Q/E for height and Shift to move faster. The camera moves on a fixed 1/120 s step from real time (`bench/realtime/fly-camera.ts`), also while a frame is still rendering, so its speed does not depend on the frame rate.
 
 **Classroom** uses the original render camera and evaluated geometry from Christophe Seux’s Blender Cycles Classroom. The web conversion maps the legacy material graphs to color textures and approximate PBR lobes, uses a warm directional sun, blue sky, ceiling emitters and a blackboard area emitter. The Cycles window sampling portals and the exterior fill-light proxy are omitted so the sky is visible and blinds can cast shadows. The point lamps, Cycles compositor, dust and volume passes are omitted. Most color textures are reduced to 512 px, with up to 1024 px for the blackboard. [Original Blender scene archive](https://download.blender.org/demo/test/classroom.zip)
 
 **Sponza** uses Crytek’s atrium from the pinned Khronos glTF Sample Assets revision with the project’s atrium camera, sun and sky. The conversion preserves original base-color maps, glTF material factors and alpha masks at up to 512 px, and omits the normal and metallic-roughness maps. The model files, converted meshes and decoded textures stay in git-ignored asset directories. [Original Sponza and license](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Sponza)
+
+### Lighting
+
+**Render controls → Lighting** has the sun's strength, direction and size, and two switches: **Interior lights** (the ceiling lamps and the blackboard light) and **Sky light** (the sky seen through the windows; the sun is separate, set its strength to 0). The switches rewrite the light table and the emissive materials in the scene buffer, so nothing reloads and the cache relearns the new lighting while you watch. With everything off the image is black.
+
+### Bright specks while moving
+
+The temporal upscaler runs with its **Auto pre-exposure** off here (fixed at 1, DIVERGES V343). With it on, a moving camera showed bright specks in the final stage only (values up to 139 where the denoised frame never exceeds 20; about 17 pixels per 1920 × 1080 frame, on the plain side as much as on the NRC side) and none when still. The raw and the denoised stages are the same moving or still. Turn the switch on under **Render controls → Upscaler**, or open the page with `?upAutoExposure=1`, to see the difference.
 
 ### Comparing reconstruction
 
