@@ -187,7 +187,7 @@
         <details open>
           <summary>Measure</summary>
           <div class="fields">
-            <div class="row"><button class="primary" id="measure">Flicker over 60 frames</button><button id="savePasses">Save passes (PFM)</button><button id="stats">Stats of top-left pass</button></div>
+            <div class="row"><button class="primary" id="measure">Flicker over 60 frames</button><button id="measureLag" title="Lighting step (lamps off, no history cut) and, with scripted motion on, the error while moving against a settled image at the same pose. Takes about a thousand frames">Lag and ghosting</button><button id="savePasses">Save passes (PFM)</button><button id="stats">Stats of top-left pass</button></div>
             <p class="note" id="statsNote"></p>
             <table id="flickerTable" aria-label="Flicker per stage"><tbody><tr><td>Mean relative change |ΔL| / L per frame per stage (reprojected: camera motion is not counted), whole image and a 32 px window around the clicked pixel. Use with scripted motion for a repeatable number.</td><td class="v"></td></tr></tbody></table>
             <table id="probeTable" aria-label="Values at the clicked pixel"><tbody><tr><td>Click a pixel to read every pass there.</td><td class="v"></td></tr></tbody></table>

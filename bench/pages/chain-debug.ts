@@ -300,6 +300,8 @@ let lastFrameEnd = 0;
 let lastTick = 0;
 let frameIndex = 0;
 let motionFrame = 0;
+/** Holds the scripted motion at `motionFrame` (the lag measurement renders one pose of the path for many frames). */
+let motionHold = false;
 /** The clicked texel, as uv in [0, 1] (the zoom centre too). */
 let probe: [number, number] | null = null;
 const keys = new Set<string>();
@@ -654,7 +656,7 @@ async function renderOne(l: Live): Promise<void> {
   stepFlickerMap(l);
   draw(l);
   frameIndex++;
-  if (value('motion') !== 'off') motionFrame++;
+  if (value('motion') !== 'off' && !motionHold) motionFrame++;
 }
 
 function frame(now: number): void {
@@ -879,6 +881,167 @@ async function measureFlicker(frames = 60, stages: readonly string[] = MEASURE_S
   return result;
 }
 
+/** Luminance of the final image, every 2nd texel in x and y (a readback: measurements only). */
+async function finalLuma(l: Live): Promise<Float32Array> {
+  const tex = l.session.arms[arm()].stage('final');
+  const d = await dumpTexture(l.session.device, tex);
+  const w = Math.floor(tex.width / 2);
+  const h = Math.floor(tex.height / 2);
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = 4 * (2 * y * tex.width + 2 * x);
+      const v = 0.2126 * d[i]! + 0.7152 * d[i + 1]! + 0.0722 * d[i + 2]!;
+      out[y * w + x] = Number.isFinite(v) ? v : 0;
+    }
+  }
+  return out;
+}
+
+async function framesThen<T>(l: Live, n: number, label: string, after?: (i: number) => Promise<T>): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) {
+    if (i % 8 === 0) setStatus(`${label}: frame ${i} of ${n}…`);
+    await renderOne(l);
+    await l.session.device.queue.onSubmittedWorkDone();
+    if (after) out.push(await after(i));
+  }
+  return out;
+}
+
+/** Mean of the final image's luminance over the last `k` of `n` frames (a converged image at a still camera). */
+async function settledLuma(l: Live, n: number, k: number, label: string): Promise<Float32Array> {
+  await framesThen(l, n - k, label);
+  const imgs = await framesThen(l, k, label, () => finalLuma(l));
+  const mean = new Float32Array(imgs[0]!.length);
+  for (const img of imgs) for (let i = 0; i < mean.length; i++) mean[i]! += img[i]! / k;
+  return mean;
+}
+
+/**
+ * What a long history costs (N11.16), on the final image with the current settings. Readbacks every recorded frame: a measurement, never
+ * the frame loop.
+ * - Lighting step (`light`: 'lamps' switches the interior lights off, 'sun' halves the sun, 'none' skips): the camera is still, the image
+ *   settles, the lighting changes WITHOUT a history cut (as a game's light switch does), and per frame t after the change the residual
+ *   r(t) = Σ|L(t) − L_end| / Σ|L_start − L_end| over the pixels the change moves by more than 20 % (L_start, L_end: means of 16 settled frames).
+ *   `floor` is the same ratio for single settled frames (noise alone). The lighting is restored afterwards.
+ * - Motion (with the scripted motion on): the view settles at phase 0, the path runs to frame `motionFrames`, and at frames `keep` the final
+ *   image is kept; then the camera is held at each kept pose, the history cut, and the settled image there is the reference. Per pose: relMSE
+ *   Σ(m − r)² / (r² + 1e-2) per pixel (mean), the share of pixels off by more than 20 % + 0.01 (trails and smears; noise after the chain rarely
+ *   is), and the relative mean bias.
+ */
+async function measureLag(o: { light?: 'lamps' | 'sun' | 'none'; settle?: number; after?: number; keep?: readonly number[] } = {}): Promise<Record<string, number>> {
+  const l = live;
+  if (!l) return {};
+  await idle();
+  building = true;
+  const result: Record<string, number> = {};
+  const settle = o.settle ?? 128;
+  const after = o.after ?? 32;
+  const motion = value('motion');
+  const keepAt = o.keep ?? [8, 20, 40, 59];
+  try {
+    // --- lighting step
+    const light = o.light ?? (isInterior(l.scene.name) ? (!$('interiorLights').closest('label')!.hidden ? 'lamps' : 'sun') : 'none');
+    if (light !== 'none') {
+      motionHold = true;
+      motionFrame = 0;
+      l.session.cutNext();
+      const field = light === 'lamps' ? $<HTMLInputElement>('interiorLights') : $<HTMLInputElement>('sunStrength');
+      const before = light === 'lamps' ? field.checked : field.valueAsNumber;
+      const set = (v: boolean | number) => {
+        if (typeof v === 'boolean') field.checked = v;
+        else field.value = String(v);
+        // The controls cut the history on a lighting change (the showcase wants an instant switch); the lag test is about the chain that keeps it.
+        const session = l.session as { cutNext: () => void };
+        session.cutNext = () => {};
+        try {
+          updateDaylight(l.session);
+        } finally {
+          delete (session as Partial<typeof session>).cutNext;
+        }
+      };
+      try {
+        const start = await settledLuma(l, settle, 16, 'Lag: settling');
+        set(light === 'lamps' ? false : (before as number) * 0.5);
+        const run = await framesThen(l, after, 'Lag: after the lighting change', () => finalLuma(l));
+        await framesThen(l, settle - 16, 'Lag: settling on the new lighting');
+        const lastFrames = await framesThen(l, 16, 'Lag: settled', () => finalLuma(l));
+        const end = new Float32Array(start.length);
+        for (const img of lastFrames) for (let i = 0; i < end.length; i++) end[i]! += img[i]! / 16;
+        const mask: number[] = [];
+        let step = 0;
+        for (let i = 0; i < end.length; i++) {
+          const d = Math.abs(start[i]! - end[i]!);
+          if (d > 0.2 * Math.max(start[i]!, end[i]!) && d > 1e-3) {
+            mask.push(i);
+            step += d;
+          }
+        }
+        const resid = (img: Float32Array) => mask.reduce((s, i) => s + Math.abs(img[i]! - end[i]!), 0) / Math.max(step, 1e-12);
+        const r = run.map(resid);
+        result.light_pixels = mask.length / end.length;
+        for (const t of [1, 2, 4, 8, 16, 32]) if (t <= r.length) result[`light_r${t}`] = r[t - 1]!;
+        result.light_floor = lastFrames.map(resid).reduce((s, x) => s + x, 0) / lastFrames.length;
+        const firstBelow = (x: number) => r.findIndex((v) => v < x) + 1 || Infinity;
+        result.light_frames_to_half = firstBelow(0.5);
+        result.light_frames_to_tenth = firstBelow(Math.max(0.1, 1.5 * result.light_floor));
+      } finally {
+        set(before);
+        motionHold = false;
+      }
+    }
+    // --- motion
+    if (motion !== 'off') {
+      motionHold = true;
+      motionFrame = 0;
+      l.session.cutNext();
+      await framesThen(l, settle, 'Ghosting: settling at the start pose');
+      motionHold = false;
+      const last = Math.max(...keepAt);
+      const kept = new Map<number, Float32Array>();
+      await framesThen(l, last + 1, 'Ghosting: moving', async (i) => {
+        // renderOne draws pose `motionFrame` and then advances it: the pose just drawn is one behind.
+        const pose = motionFrame - 1;
+        if (keepAt.includes(pose)) kept.set(pose, await finalLuma(l));
+        return i;
+      });
+      motionHold = true;
+      for (const [pose, m] of kept) {
+        motionFrame = pose;
+        l.session.cutNext();
+        const ref = await settledLuma(l, settle, 16, `Ghosting: reference at pose ${pose}`);
+        let rel = 0;
+        let off = 0;
+        let sm = 0;
+        let sr = 0;
+        for (let i = 0; i < ref.length; i++) {
+          const d = m[i]! - ref[i]!;
+          rel += (d * d) / (ref[i]! * ref[i]! + 1e-2);
+          if (Math.abs(d) > 0.2 * ref[i]! + 0.01) off++;
+          sm += m[i]!;
+          sr += ref[i]!;
+        }
+        result[`motion_relmse_f${pose}`] = rel / ref.length;
+        result[`motion_off20_f${pose}`] = off / ref.length;
+        result[`motion_bias_f${pose}`] = sm / Math.max(sr, 1e-12) - 1;
+      }
+      const poses = [...kept.keys()];
+      result.motion_relmse = poses.reduce((s, p) => s + result[`motion_relmse_f${p}`]!, 0) / poses.length;
+      result.motion_off20 = poses.reduce((s, p) => s + result[`motion_off20_f${p}`]!, 0) / poses.length;
+      motionFrame = 0;
+    }
+    const table = $('flickerTable').querySelector('tbody') as HTMLTableSectionElement;
+    table.replaceChildren(row('lag / ghosting', ''), ...Object.entries(result).map(([k, v]) => row(k, fmt(v))));
+    console.info('chain-debug lag', result);
+  } finally {
+    motionHold = false;
+    building = false;
+    setStatus('');
+  }
+  return result;
+}
+
 async function savePasses(): Promise<void> {
   const l = live;
   if (!l) return;
@@ -1084,6 +1247,7 @@ $('saveNet').addEventListener('click', () => {
   void l.session.cache.exportNetwork().then(({ weights, trained }) => saveNetwork({ key: l.networkKey, lighting, weights, trained, savedAt: Date.now() })).then((ok) => ($('saveNote').textContent = ok ? 'Network saved for this scene and lighting.' : 'Saving the network failed.'));
 });
 $('measure').addEventListener('click', () => void measureFlicker());
+$('measureLag').addEventListener('click', () => void measureLag());
 $('stats').addEventListener('click', () => {
   const id = value('view0');
   void passStats(id, { maskHit: id !== 'final' }).then((r) => {
@@ -1136,4 +1300,4 @@ async function step(n: number): Promise<void> {
     building = false;
   }
 }
-(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, readProbe, passStats, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
+(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, measureLag, readProbe, passStats, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
