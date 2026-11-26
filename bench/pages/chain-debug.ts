@@ -11,7 +11,7 @@
  *
  * The camera-jitter switch is the experiment behind the page (2026-11-26): with the sampler's per-pixel jitter a thin edge flips between
  * foreground and background in the 1-spp guides (normal, viewZ, albedo) every frame, which looks like a disocclusion to SVGF; `centre` and
- * the per-frame Halton modes build the kernels with `integrator.cameraJitter: 'engine'` (one offset for the whole image per frame).
+ * `upscaler` hands the upscaler core's per-frame sequence to the kernels (`integrator.cameraJitter: 'engine'`) and the upscaler reconstructs with it; `centre` has no jitter.
  */
 import { pagesBase } from '../site-paths.ts';
 import { LIGHTING_FIELDS, lightingState, setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
@@ -279,7 +279,7 @@ class FlickerMap {
 interface Live {
   session: NrcPipelineSession;
   scene: SceneDesc;
-  jitterKind: 'sampler' | 'engine';
+  jitter: Jitter;
   networkKey: string;
   context: GPUCanvasContext;
   pipeline: GPURenderPipeline;
@@ -312,7 +312,8 @@ function setStatus(text: string, error = false): void {
 }
 
 const arm = (): ArmName => (value('arm') === 'plain' ? 'plain' : 'nrc');
-const jitterKind = (): 'sampler' | 'engine' => (value('jitter') === 'sampler' ? 'sampler' : 'engine');
+type Jitter = 'sampler' | 'upscaler' | 'centre';
+const jitterOwner = (): Jitter => (value('jitter') === 'upscaler' ? 'upscaler' : value('jitter') === 'centre' ? 'centre' : 'sampler');
 
 function networkKeyParts(scene: SceneDesc, session: NrcPipelineSession): Promise<string> {
   return sceneHash(scene).then((h) => networkKey({ sceneHash: h, network: JSON.stringify([PRESET.network, PRESET]), maxDepth: NrcPipelineSession.limits(session.options).maxDepth }));
@@ -335,7 +336,7 @@ async function build(): Promise<void> {
     live?.session.destroy();
     live = null;
     const scene = isInterior(sceneId) ? await loadInterior(sceneId) : (SCENES[sceneId] as SceneDesc);
-    const jk = jitterKind();
+    const jk = jitterOwner();
     const session = await NrcPipelineSession.create({
       scene,
       width: w,
@@ -347,7 +348,7 @@ async function build(): Promise<void> {
       precision: 'f16',
       cache: { network: PRESET.network, ...PRESET, trainSelect: 'tile', stepsPerFrame: num('steps') },
       reactive: { cap: num('reactiveCap') || 8, strength: 1 },
-      cameraJitter: jk,
+      jitter: jk,
     });
     const device = session.device;
     device.addEventListener('uncapturederror', (e) => setStatus(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`, true));
@@ -376,7 +377,7 @@ async function build(): Promise<void> {
     });
     const flickerPipe = await device.createComputePipelineAsync({ label: 'chain debug flicker', layout: device.createPipelineLayout({ bindGroupLayouts: [flickerLayout] }), compute: { module: device.createShaderModule({ label: 'chain debug flicker', code: FLICKER_WGSL }), entryPoint: 'main' } });
     const key = session.cache.canExportNetwork ? await networkKeyParts(scene, session) : '';
-    live = { session, scene, jitterKind: jk, networkKey: key, context, pipeline, layout, params, flickerPipe, flickerLayout };
+    live = { session, scene, jitter: jk, networkKey: key, context, pipeline, layout, params, flickerPipe, flickerLayout };
     $('daylight').hidden = !isInterior(sceneId);
     if (isInterior(sceneId)) {
       if (sameScene) updateDaylight(session);
@@ -476,28 +477,7 @@ function applyFrameSettings(session: NrcPipelineSession): void {
   session.setGate(Math.ceil(gate / 16), 16);
 }
 
-// ---------------------------------------------------------------- camera: jitter, scripted motion, pin
-
-function halton(i: number, b: number): number {
-  let f = 1;
-  let r = 0;
-  for (let k = i; k > 0; k = Math.floor(k / b)) {
-    f /= b;
-    r += f * (k % b);
-  }
-  return r;
-}
-
-function applyJitter(session: NrcPipelineSession): void {
-  if (live?.jitterKind !== 'engine') return;
-  const j = value('jitter');
-  if (j === 'centre') session.setJitter(0, 0);
-  else {
-    const n = j === 'halton16' ? 16 : 8;
-    const i = (frameIndex % n) + 1;
-    session.setJitter(halton(i, 2) - 0.5, halton(i, 3) - 0.5);
-  }
-}
+// ---------------------------------------------------------------- camera: scripted motion, pin
 
 /** The camera of this frame: the fly camera, moved by the scripted motion (one step per rendered frame, so runs repeat). */
 function frameCamera(): PtLookAtCamera {
@@ -669,7 +649,6 @@ function stepFlickerMap(l: Live): void {
 
 async function renderOne(l: Live): Promise<void> {
   applyFrameSettings(l.session);
-  applyJitter(l.session);
   const camera = frameCamera();
   await l.session.frame(camera, { arms: [arm()], train: checked('train') });
   stepFlickerMap(l);
@@ -1019,12 +998,6 @@ function togglePause(): void {
 }
 
 for (const id of ['scene', 'res', 'displayScale', 'maxDepth', 'jitter']) $(id).addEventListener('change', () => {
-  // Per-frame jitter modes share one kernel: only a switch to or from the sampler's jitter rebuilds.
-  if (id === 'jitter' && live && live.jitterKind === jitterKind()) {
-    live.session.cutNext();
-    dropFlicker();
-    return;
-  }
   if (id === 'scene') {
     history.replaceState(null, '', location.pathname + location.search);
     fillPins();

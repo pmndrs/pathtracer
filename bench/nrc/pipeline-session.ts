@@ -36,8 +36,8 @@ export interface SessionOptions {
   oidn?: Partial<OidnArmSettings>;
   /** Reactive mask from the SVGF history length for the upscaler (`PipelineSettings.reactive`; then `arm.reactiveEnabled` switches it). Default off. */
   reactive?: PipelineSettings['reactive'];
-  /** Camera-ray jitter: 'sampler' (default, per pixel and sample) or 'engine' (one offset per frame for the whole image, `setJitter`; chain-debug). */
-  cameraJitter?: 'sampler' | 'engine';
+  /** Who owns the camera jitter (`PipelineSettings.jitter`): 'sampler' (default, per pixel), 'upscaler' (its per-frame sequence) or 'centre'. */
+  jitter?: PipelineSettings['jitter'];
 }
 
 export type ArmName = 'plain' | 'nrc';
@@ -66,7 +66,7 @@ export class NrcPipelineSession {
   }
 
   static async create(o: SessionOptions): Promise<NrcPipelineSession> {
-    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.cameraJitter === 'engine' ? { cameraJitter: 'engine' as const } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
+    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.jitter && o.jitter !== 'sampler' ? { cameraJitter: 'engine' as const } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
     await adapter.load(o.scene);
     const gpu = adapter.gpuContext!;
     const device = gpu.device;
@@ -87,7 +87,7 @@ export class NrcPipelineSession {
       training: 'inline',
       ...(o.cache ?? {}),
     });
-    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}), ...(o.reactive ? { reactive: o.reactive } : {}) };
+    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}), ...(o.reactive ? { reactive: o.reactive } : {}), ...(o.jitter ? { jitter: o.jitter } : {}) };
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
     return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: cache.hash ? cache.description : arm.description });
   }
@@ -127,12 +127,6 @@ export class NrcPipelineSession {
   setGate(frames: number, steps = 16): void {
     this.cache.settings.warmupFrames = Math.max(0, Math.round(frames));
     this.cache.settings.warmupStepsPerFrame = Math.max(0, Math.round(steps));
-  }
-
-  /** With `cameraJitter: 'engine'`: the camera ray's offset in every pixel for the next frames of both kernels (pixels, [-0.5, 0.5], 0 = centre). */
-  setJitter(x: number, y: number): void {
-    this.plain.setCameraJitter(x, y);
-    this.cache.render.setCameraJitter(x, y);
   }
 
   /** Both arms switch denoiser (the comparison needs the same chain). */
@@ -181,8 +175,16 @@ export class NrcPipelineSession {
     this.samples[arm] += count;
   }
 
+  /** The arm's jitter for this frame onto its kernel (with an engine-owned jitter; the sampler's own jitter needs nothing). */
+  private applyJitter(arm: ArmName): void {
+    const j = this.arms[arm].nextJitter();
+    if ((this.options.jitter ?? 'sampler') === 'sampler') return;
+    (arm === 'plain' ? this.plain : this.cache.render).setCameraJitter(j.x, j.y);
+  }
+
   encodePlain(encoder: GPUCommandEncoder, key = ''): void {
     const arm = this.arms.plain;
+    this.applyJitter('plain');
     this.beginSamples(encoder, 'plain', this.plainSpp, key);
     for (let k = 0; k < this.plainSpp; k++) {
       this.plain.encode(encoder, 1);
@@ -193,6 +195,7 @@ export class NrcPipelineSession {
 
   encodeCache(encoder: GPUCommandEncoder, train: boolean, key = ''): void {
     const arm = this.arms.nrc;
+    this.applyJitter('nrc');
     this.beginSamples(encoder, 'nrc', this.nrcSpp, key);
     for (let i = 0; i < this.nrcSpp; i++) {
       // Update weights once, after the last render sample, including at the warm-up boundary.
