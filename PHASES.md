@@ -4,7 +4,7 @@ Agreed 2026-11-13 (decisions D1–D21 in [DECISIONS.md](DECISIONS.md)); no longe
 number from the bench. Details and rationale: [spec/SPEC-draft.md](spec/SPEC-draft.md) §11. Task-level progress:
 [TASKS.md](TASKS.md). Phases overlap: a phase starts as soon as what it needs exists, and its gate is checked when the
 numbers are in.
-Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-19._
+Status: ⬜ not started · 🟨 in progress · ✅ done. _Last updated 2026-11-26._
 
 The NRC research track has its own [phase overview and Mac results](docs/internal/design/nrc-experiments.md#phase-table) and [Windows agent queue](docs/internal/design/nrc-windows-handoff.md#phase-15-agent-queue).
 
@@ -80,18 +80,20 @@ Already done early: our own blue-noise textures (P0.17, D16).
 (`docs/internal/design/realtime.md`). Left: wavefront frame mode (P4.1b), ReSTIR defaults and the unification (P4.2d / P4.2g), R3, R6-R9.
 **Progress (2026-11-18, closed provisionally, D32):** the real-time path exists on both schedulers (megakernel and wavefront agree per pixel), ReSTIR DI is opt-in with unbiased defaults, and the chain is measured on the M5 Pro; the 30 fps gate on the RTX 3060L waits for P4.5b (Windows). Open: P4.2d (candidates / k / historyCap at equal chain cost), R3, R6-R9, the N / NRC integration. P4.5-P4.7 built and measured on the M5 Pro without a cache (`bench/realtime/`, page `realtime-pipeline`, docs/internal/design/realtime.md section 5, bench/results/REALTIME-PIPELINE.md): kernel -> SVGF -> upscaler, one jitter owner (the sampler), reactive mask, preview chain. Provisional frame 19.6 ms (51 fps) at 960 x 540 -> 1080p, maxDepth 2 (31.0 ms with biased ReSTIR); steadier in motion than the preview pipeline's OIDN (boil 2.5x lower, FLIP 20% lower). The 30 fps gate on the 3060L is estimated at 23-32 fps without ReSTIR and waits for the 3060 run (P4.5b).
 
-## 🟨 P5 — Breadth
+## ✅ P5 — Breadth (built; bindless verdict pending a real GPU)
 
 Items: bindless Tier 3, ReSTIR GI, spectral + dispersion, volumes (WebVDB), MaterialX -> WGSL, tracing support for gi's Split RC, coop-matrix denoiser.
 Each item gated on its own bench row.
+
+**Progress (2026-11-26):** all seven items are built and merged. The subgroup-matrix denoiser merged in Denoiser (pmndrs/denoiser#36). Bindless is built but its verdict needs a GPU whose compute path supports the resource table (issue #32). Open findings are GitHub issues (#25 dispersion on long glass paths, #27 media in the real-time chain).
 
 **Merged on main (2026-11-18, four branches, `bench/results/VOLUMES.md`, docs/internal/design/{volumes,spectral,restir-gi,materialx}.md):** built = ReSTIR GI (TASKS P5.1-P5.5), volumes (P5.v1-P5.v8), spectral + dispersion (P5.s1-P5.s4, P2.28), MaterialX -> WGSL (P5.m1-P5.m7). Split RC tracing support for gi built since (TASKS P5.rc1-P5.rc6, docs/internal/design/split-rc-tracing.md). Wavefront ports done since: ReSTIR GI (P5.6) and volumes + spectral (V270-V272), each per pixel equal to the megakernel (DispersionTest at full depth open, P5.s9); MaterialX runs on both. Subgroup-matrix denoiser built on Denoiser branch `feat/wgsl-sgm-v2` (fp32 1.3-1.4x on M5, fp16 portable still faster on Apple). Bindless Tier 3 built since (P1.4c2, megakernel, `TextureOptions.binding: 'table'`, default kernels byte-identical): Chrome 160 Canary exposes the table on the M5 but Metal fails compute passes with it and SwiftShader breaks divergent indices, so its verdict is the 3060's (W17). Left = the 3060 runs. Combinations that were never run together throw (`p5-combinations.test.ts`): spectral x volumes, spectral x restir, volumes x restir; group-2 binding table in CLAUDE.md.
 
 **Progress (2026-11-18):** volumes built (TASKS P5.v1-P5.v8): homogeneous and dense-grid media on the megakernel, delta tracking, NEE through media with MIS, scene schema and pbrt / Mitsuba exporters, real VDB via WebVDB; seven closed forms pass and four scenes agree with pbrt and Mitsuba at the references' own noise floor (`bench/results/VOLUMES.md`, docs/internal/design/volumes.md). Open: brick-majorant timing and defaults (quiet pass), wavefront support, NanoVDB traversal.
 
-## ⬜ V — Volumes: the best web path tracer for media (track, 2026-11-21)
+## ✅ V — Volumes: the best web path tracer for media (track, 2026-11-21; V1-V6 closed 2026-11-25, V7.1-V7.5b merged)
 
 V0 (validation, droplet phases, volume outputs, r16 grids, offset bound) is done; V1 housekeeping and cheap speed, V2 noise per time, V3 memory and scale, V4 lights in
 media and outdoor fog, V5 real time and preview with media, V6 web parity and demos. Phases, gates, tasks and the orchestration protocol (small time-boxed tasks,
-minute-scale checks, orchestrator review between rounds): [docs/internal/design/volumes-plan.md](docs/internal/design/volumes-plan.md).
+minute-scale checks, orchestrator review between rounds): [docs/internal/design/volumes-plan.md](docs/internal/design/volumes-plan.md). Remaining work and the default decisions are GitHub issues #9-#24 and #26-#28.
 
