@@ -38,6 +38,13 @@ export interface SessionOptions {
   reactive?: PipelineSettings['reactive'];
   /** Who owns the camera jitter (`PipelineSettings.jitter`): 'sampler' (default, per pixel), 'upscaler' (its per-frame sequence) or 'centre'. */
   jitter?: PipelineSettings['jitter'];
+  /**
+   * Texture level of detail of both arms' kernels: 0 (default, today: every lookup at mip 0, which aliases the albedo / roughness / normal
+   * guides at 1 spp) or 'cone' (ray-cone footprint, the library's `mode: 'realtime'` choice). `textureConeScale` scales the cone's start
+   * (1 = a full pixel, the default; pbrt's max(1/8, 1/sqrt(spp)) is also 1 at 1 spp).
+   */
+  textureLod?: 'cone' | 0;
+  textureConeScale?: number;
 }
 
 export type ArmName = 'plain' | 'nrc';
@@ -66,7 +73,7 @@ export class NrcPipelineSession {
   }
 
   static async create(o: SessionOptions): Promise<NrcPipelineSession> {
-    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.jitter && o.jitter !== 'sampler' ? { cameraJitter: 'engine' as const } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
+    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.jitter && o.jitter !== 'sampler' ? { cameraJitter: 'engine' as const } : {}), ...(o.textureLod === 'cone' ? { textureLod: 'cone' as const, textureConeScale: o.textureConeScale ?? 1 } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
     await adapter.load(o.scene);
     const gpu = adapter.gpuContext!;
     const device = gpu.device;
@@ -88,6 +95,7 @@ export class NrcPipelineSession {
       ...(o.cache ?? {}),
     });
     const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}), ...(o.reactive ? { reactive: o.reactive } : {}), ...(o.jitter ? { jitter: o.jitter } : {}) };
+    if (o.textureLod === 'cone' && o.textureConeScale !== undefined) for (const k of [plain, cache.render]) k.setLimits({ ...limits, textureConeScale: o.textureConeScale });
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
     return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: cache.hash ? cache.description : arm.description });
   }

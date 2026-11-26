@@ -324,7 +324,7 @@ function networkKeyParts(scene: SceneDesc, session: NrcPipelineSession): Promise
 async function build(): Promise<void> {
   if (building) return;
   building = true;
-  const rebuild = ['scene', 'res', 'displayScale', 'maxDepth', 'jitter'];
+  const rebuild = ['scene', 'res', 'displayScale', 'maxDepth', 'jitter', 'textureLod'];
   for (const id of rebuild) $<HTMLInputElement>(id).disabled = true;
   try {
     while (busy) await new Promise((r) => setTimeout(r, 5));
@@ -351,6 +351,7 @@ async function build(): Promise<void> {
       cache: { network: PRESET.network, ...PRESET, trainSelect: 'tile', stepsPerFrame: num('steps') },
       reactive: { cap: num('reactiveCap') || 8, strength: 1 },
       jitter: jk,
+      ...(value('textureLod') !== 'mip0' ? { textureLod: 'cone' as const, textureConeScale: Number(value('textureLod').slice(4)) || 1 } : {}),
     });
     const device = session.device;
     device.addEventListener('uncapturederror', (e) => setStatus(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`, true));
@@ -427,6 +428,10 @@ function svgfOptions(): Record<string, unknown> {
   };
   if (value('antiLag') !== 'default') o.antiLag = value('antiLag');
   if (checked('antiLagHistoryScale')) o.antiLagHistoryScale = true;
+  if (value('historyFootprint') !== 'off') {
+    o.historyFootprint = value('historyFootprint');
+    o.historyFootprintDwell = Math.max(0, num('footprintDwell'));
+  }
   // Specular-only options go to the specular signal (the joint pipeline splits when they differ from the diffuse one's).
   const spec: Record<string, unknown> = {};
   if (value('reflectionReprojection') !== 'surface') spec.reflectionReprojection = value('reflectionReprojection');
@@ -1160,7 +1165,7 @@ function togglePause(): void {
   fly.stop();
 }
 
-for (const id of ['scene', 'res', 'displayScale', 'maxDepth', 'jitter']) $(id).addEventListener('change', () => {
+for (const id of ['scene', 'res', 'displayScale', 'maxDepth', 'jitter', 'textureLod']) $(id).addEventListener('change', () => {
   if (id === 'scene') {
     history.replaceState(null, '', location.pathname + location.search);
     fillPins();
@@ -1171,7 +1176,7 @@ for (const id of ['denoiserSel', 'oidnAux', 'stillSamples']) $(id).addEventListe
   applyDenoiser();
   dropFlicker();
 });
-for (const id of ['svgfAlpha', 'maxHistory', 'planeDistance', 'normalThreshold', 'normalTest', 'historyFallback', 'historyFilter', 'antiLag', 'atrousIterations', 'kernel', 'sigmaDepth', 'sigmaNormal', 'sigmaLuminance', 'reflectionReprojection', 'reflectionHitTest', 'antiLagHistoryScale', 'upscalePath', 'sharpness', 'upHistory', 'reactive', 'rcasDenoise', 'upAutoExposure', 'fireflyClamp']) $(id).addEventListener('change', applyChain);
+for (const id of ['svgfAlpha', 'maxHistory', 'planeDistance', 'normalThreshold', 'normalTest', 'historyFallback', 'historyFootprint', 'footprintDwell', 'historyFilter', 'antiLag', 'atrousIterations', 'kernel', 'sigmaDepth', 'sigmaNormal', 'sigmaLuminance', 'reflectionReprojection', 'reflectionHitTest', 'antiLagHistoryScale', 'upscalePath', 'sharpness', 'upHistory', 'reactive', 'rcasDenoise', 'upAutoExposure', 'fireflyClamp']) $(id).addEventListener('change', applyChain);
 $('reactiveCap').addEventListener('change', () => void build());
 for (const id of ['arm', 'accumulateStill', 'svgfHistoryLimit', 'spp']) $(id).addEventListener('change', () => {
   live?.session.cutNext();
@@ -1270,6 +1275,7 @@ const pick = (id: string, v: string | null) => {
 pick('scene', args.get('scene'));
 pick('res', args.get('res'));
 pick('jitter', args.get('jitter'));
+pick('textureLod', args.get('textureLod'));
 pick('denoiserSel', args.get('denoiser'));
 pick('layout', args.get('layout'));
 pick('arm', args.get('arm'));
@@ -1300,4 +1306,329 @@ async function step(n: number): Promise<void> {
     building = false;
   }
 }
-(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, measureLag, readProbe, passStats, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
+/**
+ * Edge history (N11.17): over `frames` rendered frames, per render pixel, how often the primary-vertex guides changed surface between
+ * consecutive frames (normal cosine below `cos`, depth off by more than `dz` relative, or hit / miss changed) and what SVGF's diffuse
+ * history length is at the end. Splits the pixels whose history is below `cap` into "guides flipped" and "guides stable", and returns
+ * the bounding boxes of the largest stable-but-short clusters (16 px cells) so they can be found on screen. Readbacks between frames.
+ */
+async function edgeHistory(o: { frames?: number; cos?: number; dz?: number; cap?: number; trace?: [number, number][] } = {}): Promise<Record<string, unknown> | string> {
+  const l = live;
+  if (!l) return 'no session';
+  const frames = o.frames ?? 32;
+  const cosT = o.cos ?? 0.95;
+  const dzT = o.dz ?? 0.02;
+  const a = l.session.arms[arm()];
+  const dev = l.session.device;
+  const w = a.tex.normal.width;
+  const h = a.tex.normal.height;
+  const n = w * h;
+  const flips = new Uint16Array(n);
+  const minHist = new Float32Array(n).fill(1e9);
+  let pn: Float32Array | null = null;
+  let pz: Float32Array | null = null;
+  let hist: Float32Array | null = null;
+  let hit: Float32Array | null = null;
+  const traces: Record<string, unknown[]> = {};
+  for (let f = 0; f < frames; f++) {
+    await step(1);
+    await idle();
+    building = true;
+    try {
+      const cn = await dumpTexture(dev, a.tex.normal);
+      const cz = await dumpTexture(dev, a.tex.viewZ);
+      const acc = a.denoiserDebug('accum');
+      hist = acc ? await dumpTexture(dev, acc) : null;
+      hit = await dumpTexture(dev, a.tex.specF);
+      for (let i = 0; i < n; i++) {
+        if (hist) minHist[i] = Math.min(minHist[i] as number, hist[4 * i + 3] as number);
+        if (!pn || !pz) continue;
+        const z0 = -(pz[4 * i] as number);
+        const z1 = -(cz[4 * i] as number);
+        const l0 = Math.hypot(pn[4 * i] as number, pn[4 * i + 1] as number, pn[4 * i + 2] as number);
+        const l1 = Math.hypot(cn[4 * i] as number, cn[4 * i + 1] as number, cn[4 * i + 2] as number);
+        const s0 = l0 > 0.1 && z0 > 0;
+        const s1 = l1 > 0.1 && z1 > 0;
+        if (!s0 && !s1) continue;
+        let flip = s0 !== s1;
+        if (!flip) {
+          const d = ((pn[4 * i] as number) * (cn[4 * i] as number) + (pn[4 * i + 1] as number) * (cn[4 * i + 1] as number) + (pn[4 * i + 2] as number) * (cn[4 * i + 2] as number)) / (l0 * l1);
+          flip = d < cosT || Math.abs(z1 - z0) > dzT * Math.max(z0, z1);
+        }
+        if (flip) flips[i] = (flips[i] as number) + 1;
+      }
+      for (const [x, y] of o.trace ?? []) {
+        const i = y * w + x;
+        (traces[`${x},${y}`] ??= []).push({ f, j: [Number(a.jitter.x.toFixed(3)), Number(a.jitter.y.toFixed(3))], n: [cn[4 * i], cn[4 * i + 1], cn[4 * i + 2]].map((v) => Number((v as number).toFixed(3))), z: Number((-(cz[4 * i] as number)).toFixed(4)), hist: hist ? Number((hist[4 * i + 3] as number).toFixed(2)) : null });
+      }
+      pn = cn;
+      pz = cz;
+    } finally {
+      building = false;
+    }
+  }
+  if (!hist || !hit) return 'no SVGF history (denoiser not SVGF?)';
+  const cap = o.cap ?? 63.5;
+  let hitPx = 0, short = 0, low8 = 0, flipped = 0, flippedShort = 0, flippedLow8 = 0, stableShort = 0, stableLow8 = 0;
+  const cell = 16;
+  const cw = Math.ceil(w / cell);
+  const cells = new Uint32Array(cw * Math.ceil(h / cell));
+  const flipHist: number[] = [];
+  const stableShortPx: [number, number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    if ((hit[4 * i + 3] as number) <= 0.5) continue;
+    hitPx++;
+    const hl = hist[4 * i + 3] as number;
+    const fl = (flips[i] as number) > 0;
+    if (fl) { flipped++; flipHist.push(hl); }
+    if (hl < cap) {
+      short++;
+      if (fl) flippedShort++;
+      else {
+        stableShort++;
+        cells[Math.floor(Math.floor(i / w) / cell) * cw + Math.floor((i % w) / cell)]!++;
+        if (stableShortPx.length < 4000) stableShortPx.push([i % w, Math.floor(i / w), hl]);
+      }
+    }
+    if (hl <= 8) { low8++; if (fl) flippedLow8++; else stableLow8++; }
+  }
+  flipHist.sort((x, y) => x - y);
+  const q = (f: number) => flipHist[Math.min(flipHist.length - 1, Math.floor(f * flipHist.length))] ?? NaN;
+  const top = [...cells].map((c, k) => ({ c, x: (k % cw) * cell, y: Math.floor(k / cw) * cell })).filter((c) => c.c > 0).sort((p, r) => r.c - p.c).slice(0, 12);
+  const out = {
+    frames, width: w, height: h, hitPixels: hitPx,
+    belowCap: short / hitPx, atOrBelow8: low8 / hitPx,
+    flippedShare: flipped / hitPx,
+    belowCapFlipped: flippedShort / Math.max(1, short), belowCapStable: stableShort / Math.max(1, short),
+    low8Flipped: flippedLow8 / Math.max(1, low8), low8Stable: stableLow8 / Math.max(1, low8),
+    flippedHistory: { p10: q(0.1), p50: q(0.5), p90: q(0.9), belowCap: flipHist.filter((x) => x < cap).length / Math.max(1, flipHist.length) },
+    stableShortCells: top, traces,
+  };
+  (window as unknown as { __edgeHistory: unknown }).__edgeHistory = { ...out, flips, minHist, stableShortPx };
+  return out;
+}
+/**
+ * Guide stability (N11.17): the frame-to-frame change of every guide plane at a still camera over `frames` frames, split into edge pixels
+ * (a depth step above `edge` (relative) or a normal cosine below 0.95 against a 4-neighbour in ANY of the frames, dilated by one pixel:
+ * geometric coverage under jitter) and interior pixels (texture aliasing, Monte Carlo noise). The mask is built from all frames first
+ * (two passes over the kept dumps), so an edge the jitter only sometimes shows still counts. `bitDiff_<plane>` = the share of float
+ * values that differ at all between consecutive frames (0 = bit-identical planes). Per plane and region: the mean change
+ * (normal: 1 - cosine; depth: relative; albedo / specular factor: relative luminance; roughness: absolute) and the share of pixel-frames
+ * whose change is above the plane's threshold (normal cosine < 0.95, depth 2 %, albedo / specular factor 5 %, roughness 0.05).
+ */
+async function guideChange(o: { frames?: number; edge?: number; worst?: 'albedo' | 'normal' | 'viewZ' | 'specF' | 'roughness' } = {}): Promise<Record<string, unknown> | string> {
+  const l = live;
+  if (!l) return 'no session';
+  const frames = o.frames ?? 16;
+  const a = l.session.arms[arm()];
+  const dev = l.session.device;
+  const w = a.tex.normal.width;
+  const h = a.tex.normal.height;
+  const n = w * h;
+  const planes = ['normal', 'viewZ', 'albedo', 'specF', 'roughness'] as const;
+  const tex = { normal: a.tex.normal, viewZ: a.tex.viewZ, albedo: a.tex.albedo, specF: a.tex.specF, roughness: a.tex.roughness };
+  const thr = { normal: 0.05, viewZ: 0.02, albedo: 0.05, specF: 0.05, roughness: 0.05 };
+  const sum = { edge: Object.fromEntries(planes.map((k) => [k, 0])), interior: Object.fromEntries(planes.map((k) => [k, 0])) } as Record<string, Record<string, number>>;
+  const over = { edge: Object.fromEntries(planes.map((k) => [k, 0])), interior: Object.fromEntries(planes.map((k) => [k, 0])) } as Record<string, Record<string, number>>;
+  const count = { edge: 0, interior: 0 } as Record<string, number>;
+  const lum = (d: Float32Array, i: number) => 0.2126 * (d[4 * i] as number) + 0.7152 * (d[4 * i + 1] as number) + 0.0722 * (d[4 * i + 2] as number);
+  const dumps: Record<string, Float32Array>[] = [];
+  for (let f = 0; f <= frames; f++) {
+    await step(1);
+    await idle();
+    building = true;
+    try {
+      const cur: Record<string, Float32Array> = {};
+      for (const k of planes) cur[k] = await dumpTexture(dev, tex[k]);
+      dumps.push(cur);
+    } finally {
+      building = false;
+    }
+  }
+  const raw = new Uint8Array(n);
+  const edge = o.edge ?? 0.03;
+  for (const cur of dumps) {
+    const cz = cur.viewZ as Float32Array, cn = cur.normal as Float32Array;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const z0 = -(cz[4 * i] as number);
+      for (const [dx, dy] of [[1, 0], [0, 1]] as const) {
+        if (x + dx >= w || y + dy >= h) continue;
+        const j = (y + dy) * w + x + dx;
+        const z1 = -(cz[4 * j] as number);
+        const dn = (cn[4 * i] as number) * (cn[4 * j] as number) + (cn[4 * i + 1] as number) * (cn[4 * j + 1] as number) + (cn[4 * i + 2] as number) * (cn[4 * j + 2] as number);
+        if ((z0 > 0) !== (z1 > 0) || Math.abs(z1 - z0) > edge * Math.max(z0, z1) || (z0 > 0 && dn < 0.95)) { raw[i] = 1; raw[j] = 1; }
+      }
+    }
+  }
+  const edgeMask = new Uint8Array(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let e = 0;
+    for (let dy = -1; dy <= 1 && !e; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h && raw[yy * w + xx]) { e = 1; break; }
+    }
+    edgeMask[y * w + x] = e;
+  }
+  const bits = Object.fromEntries(planes.map((k) => [k, 0])) as Record<string, number>;
+  const changed = { edge: Object.fromEntries(planes.map((k) => [k, 0])), interior: Object.fromEntries(planes.map((k) => [k, 0])) } as Record<string, Record<string, number>>;
+  const worst: { x: number; y: number; d: number }[] = [];
+  // interior albedo change: pixel-frames above 5 % / 20 % / 50 %, the summed change of those above 20 % (sharp albedo edges inside a
+  // surface: decals, print, panel joints), and how many pixel-frames changed the class flag (albedo alpha = share of specular-class samples)
+  const alb = { o5: 0, o20: 0, o50: 0, sum20: 0 };
+  let classFlips = 0;
+  for (let f = 1; f < dumps.length; f++) {
+    const prev = dumps[f - 1]!, cur = dumps[f]!;
+    const pn = prev.normal as Float32Array, cn = cur.normal as Float32Array, pz = prev.viewZ as Float32Array, cz = cur.viewZ as Float32Array;
+    for (const k of planes) {
+      const a0 = new Uint32Array((prev[k] as Float32Array).buffer), a1 = new Uint32Array((cur[k] as Float32Array).buffer);
+      let c = 0;
+      for (let i = 0; i < a0.length; i++) if (a0[i] !== a1[i]) c++;
+      bits[k] = (bits[k] as number) + c / a0.length / frames;
+    }
+    for (let i = 0; i < n; i++) {
+      const z0 = -(pz[4 * i] as number), z1 = -(cz[4 * i] as number);
+      if (!(z0 > 0) || !(z1 > 0)) continue;
+      const r = edgeMask[i] ? 'edge' : 'interior';
+      count[r]!++;
+      const l0 = Math.hypot(pn[4 * i] as number, pn[4 * i + 1] as number, pn[4 * i + 2] as number) || 1;
+      const l1 = Math.hypot(cn[4 * i] as number, cn[4 * i + 1] as number, cn[4 * i + 2] as number) || 1;
+      const d: Record<string, number> = {
+        normal: Math.max(0, 1 - ((pn[4 * i] as number) * (cn[4 * i] as number) + (pn[4 * i + 1] as number) * (cn[4 * i + 1] as number) + (pn[4 * i + 2] as number) * (cn[4 * i + 2] as number)) / (l0 * l1)),
+        viewZ: Math.abs(z1 - z0) / Math.max(z0, z1),
+        roughness: Math.abs(((cur.roughness as Float32Array)[4 * i] as number) - ((prev.roughness as Float32Array)[4 * i] as number)),
+      };
+      for (const k of ['albedo', 'specF'] as const) {
+        const p0 = lum(prev[k] as Float32Array, i), p1 = lum(cur[k] as Float32Array, i);
+        d[k] = Math.abs(p1 - p0) / Math.max(1e-4, 0.5 * (p0 + p1));
+      }
+      for (const k of planes) {
+        sum[r]![k]! += d[k] as number;
+        if ((d[k] as number) > thr[k]) over[r]![k]!++;
+        if ((d[k] as number) > 1e-6) changed[r]![k]!++;
+      }
+      if (Math.abs(((cur.albedo as Float32Array)[4 * i + 3] as number) - ((prev.albedo as Float32Array)[4 * i + 3] as number)) > 1e-6) classFlips++;
+      if (r === 'interior') {
+        const da = d.albedo as number;
+        if (da > 0.05) alb.o5++;
+        if (da > 0.2) { alb.o20++; alb.sum20 += da; }
+        if (da > 0.5) alb.o50++;
+      }
+      if (r === 'interior' && f === 1 && (d[o.worst ?? 'albedo'] as number) > 0.2 && worst.length < 400) worst.push({ x: i % w, y: Math.floor(i / w), d: Number((d[o.worst ?? 'albedo'] as number).toFixed(3)) });
+    }
+  }
+  const out: Record<string, unknown> = { frames, edgeShare: count.edge! / Math.max(1, count.edge! + count.interior!) };
+  for (const k of planes) out[`bitDiff_${k}`] = Number((bits[k] as number).toExponential(2));
+  // per region and plane: [mean change, share of pixel-frames over the threshold, share that changed at all]
+  for (const r of ['edge', 'interior']) for (const k of planes) out[`${r}_${k}`] = [Number((sum[r]![k]! / Math.max(1, count[r]!)).toExponential(2)), Number((over[r]![k]! / Math.max(1, count[r]!)).toFixed(4)), Number((changed[r]![k]! / Math.max(1, count[r]!)).toFixed(4))];
+  const ni = Math.max(1, count.interior!);
+  out.interiorAlbedo = { over5: Number((alb.o5 / ni).toFixed(4)), over20: Number((alb.o20 / ni).toFixed(4)), over50: Number((alb.o50 / ni).toFixed(4)), meanWithoutOver20: Number(((sum.interior!.albedo! - alb.sum20) / ni).toExponential(2)) };
+  out.classFlipShare = Number((classFlips / Math.max(1, count.edge! + count.interior!)).toFixed(4));
+  out.worstInterior = worst.slice(0, 40);
+  return out;
+}
+/** Mean linear RGB of a stage over `frames` frames at the current (still) pose, and per pixel the mean of |L(t) - L(t-1)| (luminance). */
+async function stageMean(l: Live, get: (a: PipelineArm) => GPUTexture | undefined, frames: number): Promise<{ mean: Float32Array; change: Float32Array; width: number; height: number }> {
+  const a = l.session.arms[arm()];
+  let mean: Float32Array | null = null;
+  let change: Float32Array | null = null;
+  let prevL: Float32Array | null = null;
+  let width = 0, height = 0;
+  for (let f = 0; f < frames; f++) {
+    await step(1);
+    await idle();
+    building = true;
+    try {
+      const tex = get(a);
+      if (!tex) throw new Error('stage not produced');
+      const d = await dumpTexture(l.session.device, tex);
+      width = tex.width; height = tex.height;
+      const n = width * height;
+      mean ??= new Float32Array(3 * n);
+      change ??= new Float32Array(n);
+      const cl = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const r = d[4 * i] as number, g = d[4 * i + 1] as number, b = d[4 * i + 2] as number;
+        mean[3 * i] = (mean[3 * i] as number) + r / frames; mean[3 * i + 1] = (mean[3 * i + 1] as number) + g / frames; mean[3 * i + 2] = (mean[3 * i + 2] as number) + b / frames;
+        cl[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (prevL) change[i] = (change[i] as number) + Math.abs((cl[i] as number) - (prevL[i] as number)) / (frames - 1);
+      }
+      prevL = cl;
+    } finally {
+      building = false;
+    }
+  }
+  return { mean: mean as Float32Array, change: change as Float32Array, width, height };
+}
+
+let edgeRef: { key: string; mean: Float32Array; width: number; height: number; cls: Uint8Array } | null = null;
+
+/**
+ * Edge quality at a still camera (N11.17). Reference: the mean of the raw beauty over `refFrames` frames at `refSpp` samples per frame
+ * (kept per camera pose, jitter owner and texture LOD; the pixel-area average under a per-frame jitter). Pixel classes, from a 24-frame
+ * `edgeHistory` window run when the reference is made (so make the first call with anti-lag off and footprint history off: the classes
+ * then say what the plain reprojection test does): `lost` = guides changed surface and the SVGF history is below the cap, `kept` =
+ * guides changed surface and the history is at the cap, `rest` = guides stable. Then over `frames` frames, per class: the mean absolute
+ * luminance error and the mean signed error of the mean denoised image against the reference, over the mean reference luminance (the
+ * filter's bias), and the still flicker (mean |dL| / mean L per frame) of the denoised and final stages. Many readbacks: a measurement,
+ * not a frame loop.
+ */
+async function edgeQuality(o: { frames?: number; refFrames?: number; refSpp?: number } = {}): Promise<Record<string, number> | string> {
+  const l = live;
+  if (!l) return 'no session';
+  const a0 = l.session.arms[arm()];
+  const key = `${cameraKey(frameCamera())}|${l.jitter}|${arm()}|${a0.tex.raw.width}|${value('textureLod')}`;
+  if (edgeRef?.key !== key) {
+    const e = await edgeHistory({ frames: 24 });
+    if (typeof e === 'string') return e;
+    const flips = (window as unknown as { __edgeHistory: { flips: Uint16Array } }).__edgeHistory.flips;
+    const acc = a0.denoiserDebug('accum');
+    const hist = acc ? await dumpTexture(l.session.device, acc) : null;
+    const cls = new Uint8Array(flips.length);
+    for (let i = 0; i < flips.length; i++) cls[i] = (flips[i] as number) > 0 ? (hist && (hist[4 * i + 3] as number) < 63.5 ? 2 : 1) : 0;
+    const spp = $<HTMLInputElement>('spp').value;
+    $<HTMLInputElement>('spp').value = String(o.refSpp ?? 16);
+    const r = await stageMean(l, (a) => a.tex.raw, o.refFrames ?? 128);
+    $<HTMLInputElement>('spp').value = spp;
+    edgeRef = { key, mean: r.mean, width: r.width, height: r.height, cls };
+    await step(80);
+  }
+  const ref = edgeRef;
+  const frames = o.frames ?? 64;
+  const den = await stageMean(l, (a) => a.stage('denoised'), frames);
+  const fin = await stageMean(l, (a) => a.stage('final'), Math.max(8, frames >> 1));
+  const hit = await dumpTexture(l.session.device, a0.tex.specF);
+  const lum = (m: Float32Array, i: number) => 0.2126 * (m[3 * i] as number) + 0.7152 * (m[3 * i + 1] as number) + 0.0722 * (m[3 * i + 2] as number);
+  const names = ['rest', 'kept', 'lost'] as const;
+  const acc = names.map(() => ({ n: 0, ch: 0, l: 0, bias: 0, refL: 0, abs: 0, fch: 0, fl: 0 }));
+  const n = ref.width * ref.height;
+  let hitN = 0;
+  for (let i = 0; i < n; i++) {
+    if ((hit[4 * i + 3] as number) <= 0.5) continue;
+    hitN++;
+    const s = acc[ref.cls[i] as number]!;
+    const d = lum(den.mean, i) - lum(ref.mean, i);
+    s.n++; s.ch += den.change[i] as number; s.l += lum(den.mean, i);
+    s.bias += d; s.abs += Math.abs(d); s.refL += lum(ref.mean, i);
+  }
+  const sx = fin.width / ref.width, sy = fin.height / ref.height;
+  for (let y = 0; y < fin.height; y++) for (let x = 0; x < fin.width; x++) {
+    const ri = Math.min(ref.height - 1, Math.floor(y / sy)) * ref.width + Math.min(ref.width - 1, Math.floor(x / sx));
+    if ((hit[4 * ri + 3] as number) <= 0.5) continue;
+    const s = acc[ref.cls[ri] as number]!;
+    const i = y * fin.width + x;
+    s.fch += fin.change[i] as number; s.fl += lum(fin.mean, i);
+  }
+  const r4 = (v: number) => Number(v.toPrecision(4));
+  const out: Record<string, number> = {};
+  names.forEach((k, c) => {
+    const s = acc[c]!;
+    out[`${k}_share`] = r4(s.n / Math.max(1, hitN));
+    out[`${k}_absErr`] = r4(s.abs / s.refL);
+    out[`${k}_bias`] = r4(s.bias / s.refL);
+    out[`${k}_denFlicker`] = r4(s.ch / s.l);
+    out[`${k}_finFlicker`] = r4(s.fch / s.fl);
+  });
+  return out;
+}
+(window as unknown as { __chainDebug: unknown }).__chainDebug = { step, measureFlicker, measureLag, readProbe, passStats, edgeHistory, guideChange, edgeQuality, setProbe: (u: number, v: number) => { probe = [u, v]; }, pause: (p: boolean) => { if (p !== paused) togglePause(); }, get live() { return live; }, fly, cameraKey: () => cameraKey(frameCamera()) };
