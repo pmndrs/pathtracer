@@ -701,11 +701,10 @@ To go back: restore `pnpm-workspace.yaml` and `pnpm install --offline` (or onlin
   resolve must also write the demodulated planes (`resolveWgsl(frame)` in `bench/nrc/cache.ts`), or `diffuse x albedo + specular x specFactor` falls short of the beauty by
   exactly the cache's light; `nrc-pipeline-study` checks the identity (`plane_identity_*`). rg16float / r16float are not storage formats in core WebGPU: the pipeline packs
   into one buffer and `copyBufferToTexture`s (rows 256-byte aligned) instead of writing 12 storage textures (also past the 4-8 storage-texture limit).
-- pmndrs/upscaler is three-shaped (`new Upscaler({ renderer })`) but only uses `backend.device`, `backend.get(tex).texture` and `initTexture`: `UpscalerHost` in
-  `bench/nrc/pipeline.ts` stands in, no three renderer. Its dist imports its OWN `three` (0.186, from the upscaler checkout), not bench's 0.187: harmless because only
-  `.elements` of our camera stand-in's matrices cross over. Link: `@pmndrs/upscaler` `link:../../upscaler` (Windows worktree: junction `.claude/worktrees/upscaler` ->
-  `GitHub/upscaler/upscaler`); `bench/runner/server.ts` adds its realpath to `fs.allow`. Its `beginFrame` must still run with `jitter: false`: it snapshots the projection
-  `_writeReproject` reads.
+- pmndrs/upscaler: the bench chain and the examples' chain drive the engine-free core (`@pmndrs/upscaler/core`, `UpscalerCore({ device })`, since npm 0.6.0): our GPUTextures go in
+  as they are and the camera is `{ near, far, perspective }`; the old three-shaped `Upscaler({ renderer })` with an `UpscalerHost` stand-in is gone from both. The bench links
+  `@pmndrs/upscaler` `link:../../upscaler` (Windows worktree: junction `.claude/worktrees/upscaler` -> `GitHub/upscaler/upscaler`; `bench/runner/server.ts` adds its realpath to
+  `fs.allow`), the examples and the Pages build (`site.yml`) use npm 0.6.0.
 - Windows laptop (Intel UHD + RTX 3060): the desktop app's browser pane and a default Chrome window get the Intel GPU (`powerPreference` is ignored on Windows, crbug
   369219127): `nrc-pipeline` ran at ~1 fps there. Use the runner (`--gpu nvidia`, pins the LUID) or set Chrome to "High performance" in Windows graphics settings.
 - The Mitsuba / pbrt reference PFMs are not on the Windows machine (only their JSON sidecars; references are git-ignored and were rendered on the Mac). `nrc-pipeline-study`

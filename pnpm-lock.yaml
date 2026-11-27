@@ -91,8 +91,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/raytracer
       '@pmndrs/upscaler':
-        specifier: ^0.5.0
-        version: 0.5.0(three@0.187.0)
+        specifier: ^0.6.0
+        version: 0.6.0(three@0.187.0)
       denoiser:
         specifier: ^2.0.0
         version: 2.0.0(three@0.187.0)
@@ -399,10 +399,27 @@ packages:
       three:
         optional: true
 
-  '@pmndrs/upscaler@0.5.0':
-    resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
+  '@pmndrs/downsampler@0.1.1':
+    resolution: {integrity: sha512-WIeAeJn4CAfDpZaXo0yXyrrqF8tehcpnzVJUPX//S+V1r5+7FcqxZp+4PQsU3Rphoxg0/3z4x2aBY2T44us1sg==}
     peerDependencies:
+      three: '>=0.170.0'
+    peerDependenciesMeta:
+      three:
+        optional: true
+
+  '@pmndrs/upscaler@0.6.0':
+    resolution: {integrity: sha512-L8yyjU1vc3vB283OThPb1NO2DS4o1Ul7k7YcI6uPFtuPtXmlad/S+NUgUBFc3oRaAnIId0y9Go7BD/iz305H6g==}
+    peerDependencies:
+      '@babylonjs/core': '>=9.31.0 <10'
+      pixi.js: '>=8.22.0 <9'
       three: '>=0.184.0'
+    peerDependenciesMeta:
+      '@babylonjs/core':
+        optional: true
+      pixi.js:
+        optional: true
+      three:
+        optional: true
 
   '@rollup/rollup-android-arm-eabi@4.68.2':
     resolution: {integrity: sha512-ItKrNMkEL3hy85kLBXwB0+M6CWWVI8vr7RV+Eb7oDlQIMXLaiEhGfdaj5jAUadYn2v3nwzAhIRl/nLyjAqV9vQ==}
@@ -1392,8 +1409,14 @@ snapshots:
     optionalDependencies:
       three: 0.187.0
 
-  '@pmndrs/upscaler@0.5.0(three@0.187.0)':
+  '@pmndrs/downsampler@0.1.1(three@0.187.0)':
+    optionalDependencies:
+      three: 0.187.0
+
+  '@pmndrs/upscaler@0.6.0(three@0.187.0)':
     dependencies:
+      '@pmndrs/downsampler': 0.1.1(three@0.187.0)
+    optionalDependencies:
       three: 0.187.0
 
   '@rollup/rollup-android-arm-eabi@4.68.2':
