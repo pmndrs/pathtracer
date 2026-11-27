@@ -62,7 +62,7 @@ jobs:
           corepack yarn build:lib
       - name: Install upscaler and bench dependencies
         run: |
-          npm install --prefix pages-deps --no-save --ignore-scripts @pmndrs/upscaler@0.5.0 three@0.187.0
+          npm install --prefix pages-deps --no-save --ignore-scripts @pmndrs/upscaler@0.6.0 three@0.187.0
           ln -s "$PWD/pages-deps/node_modules/@pmndrs/upscaler" upscaler
           cd pathtracer
           corepack pnpm install --frozen-lockfile

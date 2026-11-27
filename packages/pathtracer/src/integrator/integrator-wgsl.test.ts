@@ -99,7 +99,7 @@ describe('integrator WGSL', () => {
     // The A/B baselines (everything on the page, long names) stay available and are the pre-P2.10 sizes.
     const raw = ptMegakernelWgsl(caps, { format: {}, layout, prune: false, shortenNames: false }).length;
     expect(raw).toBeGreaterThan(52_000);
-    expect(raw).toBeLessThan(55_000);
+    expect(raw).toBeLessThan(55_500); // bvh 0.1.1's walk (literal-bound loops, tMax box padding) is ~50-100 B longer
   });
 
   it('an environment-map scene adds the map code (about 2.8 KB minified) and stays under 44.5 KB; uniform sampling of a map is the A/B baseline', () => {
@@ -312,11 +312,12 @@ describe('integrator WGSL', () => {
       expect(size({ mix: true })).toBeLessThan(legacy + 150);
       expect(size({ thin: true })).toBeLessThan(legacy + 600);
       expect(size({ medium: true })).toBeLessThan(legacy + 400);
-      // Caps raised by 150 B (P-W1): the constant-bounded walk loops (rtBoundWalkLoops) add ~130 B to every kernel with both walks.
+      // Caps raised by 150 B (P-W1): the constant-bounded walk loops (bvh writes them itself since 0.1.1) add ~130 B to every kernel with both walks,
+      // and bvh 0.1.1's walk (tMax box padding) another ~90 B.
       // D32: the default albedo layering carries the `texture` correction (+0.8 KB of text) and the scene copy is packed (-0.1 KB).
       expect(size({ layered: true }, { layering: 'albedo' })).toBeLessThan(50_600);
       expect(size({ layered: true }, { layering: 'stochastic' })).toBeLessThan(50_750);
-      expect(size(all, { layering: 'albedo' })).toBeLessThan(51_100);
+      expect(size(all, { layering: 'albedo' })).toBeLessThan(51_250);
       expect(size(all, { layering: 'stochastic' })).toBeLessThan(51_550);
       expect(size(all, { layering: 'stochastic' }, { envMap: true, envSampling: 'importance' })).toBeLessThan(54_350);
     });

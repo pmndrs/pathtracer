@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@pmndrs/bvh": "^0.1.0",
+    "@pathtracer/mlp": "workspace:*",
+    "@pmndrs/bvh": "^0.1.1",
     "@pmndrs/downsampler": "^0.1.0",
     "@pmndrs/pathtracer": "workspace:*",
     "@pmndrs/raytracer": "workspace:*",
-    "@pathtracer/mlp": "workspace:*",
     "jpeg-js": "0.4.4"
   },
   "scripts": {

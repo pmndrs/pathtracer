@@ -114,60 +114,10 @@ export function assertBvhLayout(version: number = TRACER_GPU_LAYOUT_VERSION): vo
   }
 }
 
-/** The comment bvh's walk functions end with (each leaves only through a `return` inside its endless `loop`). */
-const WALK_TAIL = "// No return here: the loop above only exits through 'return'.";
-/** What each walk function returns once its pop loop finds the stack empty, in the order the functions appear. */
-const WALK_RETURNS = ['return bvhFinishClosest(result, hitRecord, hitSlot);', 'return false;'];
-
-/**
- * P-W1 (Windows/NVIDIA): rewrites the descent and pop `loop {}` of bvh's two walk functions as `for` loops with a constant bound,
- * the only loop shape Tint's PreventInfiniteLoops leaves alone (index declared in the for-init, `< constant`, `++`). Every other
- * loop gets an injected 64-bit iteration counter; inside the megakernel (both walks inlined into the bounce loop) the counters
- * of these two loops made DXC's SM 6.6+ code on an RTX 3060 3.7x slower (Sponza, Chrome D3D12: 66 -> 17.7 ms per sample at depth
- * 1; Vulkan, Metal and the wavefront kernels never paid it). Same paths: the bound, 2^32 - 1 iterations per loop, is never reached
- * by a walk that terminates. Returns the text unchanged when bvh's walk is not the expected shape (`rtBoundWalkLoopsApplies`;
- * a unit test checks it applies to every walk variant, so a bvh change that breaks the pattern fails the tests, not a user).
- */
-export function rtBoundWalkLoops(walk: string): string {
-  if (!rtBoundWalkLoopsApplies(walk)) return walk;
-  let index = 0;
-  const bounded = walk.replace(/\bloop \{/g, () => {
-    const step = `rtWalkStep${index++}`; // unique per walk loop (rtShortenWgsl wants unique names)
-    return `for (var ${step} = 0u; ${step} < 0xffffffffu; ${step}++) {`;
-  });
-  if (bounded.includes(WALK_TAIL)) {
-    const [head = '', ...rest] = bounded.split(WALK_TAIL);
-    return rest.reduce((out, part, i) => out + WALK_RETURNS[i] + part, head);
-  }
-  // Wide walks (bvh4 / cwbvh8, X1.i): the helper loops end in `break` and already `return` after the loop; the two walk functions end with the loop, so each gets its final return.
-  return WIDE_WALK_FUNCTIONS.reduce((out, [name, ret]) => {
-    const start = out.indexOf(`fn ${name}(`);
-    const end = out.indexOf('\n    }\n}\n', start);
-    return out.slice(0, end + 7) + `    ${ret}\n` + out.slice(end + 7);
-  }, bounded);
-}
-
-/** The wide walks' two entry functions (each ends with its endless descent loop) and the return the rewrite appends. */
-const WIDE_WALK_FUNCTIONS: ReadonlyArray<readonly [string, string]> = [
-  // Unreachable (the loop only leaves through its own returns, and 2^32 - 1 iterations are never run), so the miss record serves whatever the walk calls its locals (bvh4 `single` has its own).
-  ['bvhWalkClosest', 'return BvhHit(-1.0, 0u, 0u, vec2f(0.0), true, BVH_NO_MATERIAL, vec3f(0.0));'],
-  ['bvhWalkAny', 'return false;'],
-];
-
-/**
- * True when `rtBoundWalkLoops` recognises bvh's walk: the binary walk (four `loop`s, two functions ending in WALK_TAIL) or a wide walk
- * (bvh4 / cwbvh8: every `loop` rewritable, both walk functions ending with the loop). Anything else is left alone.
- */
-export function rtBoundWalkLoopsApplies(walk: string): boolean {
-  const loops = (walk.match(/\bloop \{/g) ?? []).length;
-  if (loops === 0 || !/\bfn bvhWalkClosest\b[\s\S]*\bfn bvhWalkAny\b/.test(walk)) return false;
-  if (walk.includes(WALK_TAIL)) return loops === 4 && walk.split(WALK_TAIL).length === 3;
-  return WIDE_WALK_FUNCTIONS.every(([name]) => {
-    const start = walk.indexOf(`fn ${name}(`);
-    const end = start < 0 ? -1 : walk.indexOf('\n    }\n}\n', start);
-    return end > 0 && !walk.slice(start, end).includes('\n}\n') && /\bloop \{/.test(walk.slice(start, end));
-  });
-}
+// P-W1 (Windows/NVIDIA): Tint's PreventInfiniteLoops gives every loop it cannot prove finite a 64-bit iteration counter; inside the
+// megakernel those counters on the walk's descent and pop loops made DXC's SM 6.6+ code on an RTX 3060 3.7x slower. Since bvh 0.1.1
+// (bvh#3) the walk writes those loops as `for` loops with a literal bound itself, so the text is used as bvh emits it
+// (`walk-loops.test.ts` fails if a bvh release brings an unbounded loop back).
 
 function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string {
   assertBvhLayout();
@@ -183,7 +133,7 @@ function bvhWalk(options: RtModuleOptions & { traceSlot: BindingSlot }): string 
     ...(format.wideWalk ? { wideWalk: format.wideWalk } : {}),
     ...(format.wideDecode ? { wideDecode: format.wideDecode } : {}),
   });
-  return rtBoundWalkLoops(walk);
+  return walk;
 }
 
 /** Removes `//` line comments and block comments, keeping every line break (WGSL has no string literals, so no `//` is ever text). */

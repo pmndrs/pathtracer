@@ -31,7 +31,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "@pmndrs/bvh": "^0.1.0",
+    "@pmndrs/bvh": "^0.1.1",
     "@pmndrs/downsampler": "^0.1.0"
   },
   "devDependencies": {

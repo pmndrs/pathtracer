@@ -838,7 +838,8 @@ try {
   await drainDevice(device);
   if (deviceErrors.length) failures.push(`device errors: ${deviceErrors.join('; ')}`);
   for (const [key, value] of Object.entries(tally)) metrics[key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = value;
-  if (failures.length) throw new Error(`rc-interval-check failed: ${failures.join(', ')}\n${examples.join('\n')}`);
+  // The tallies go into the error too: a failed run otherwise loses every count (plain-walk tMax / tMin misses, ties, ...).
+  if (failures.length) throw new Error(`rc-interval-check failed: ${failures.join(', ')}\ntallies ${JSON.stringify(tally)}\n${examples.join('\n')}`);
 
   reportResult(
     {
