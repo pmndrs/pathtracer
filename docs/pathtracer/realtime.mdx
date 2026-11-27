@@ -92,11 +92,11 @@ The library stops at the frame planes. A full real-time pipeline adds a temporal
 
 1. **Path trace** at a reduced size (for example half the display), one `encode(encoder, 1)`.
 2. **Pack.** A compute pass copies the planes into the textures the denoiser takes (`rgba16float` colour and guides, `r32float` depth), and derives device depth from view depth with the camera's projection.
-3. **Denoise.** A temporal diffuse/specular filter (SVGF in the bench, from `pmndrs/denoiser`) takes plane 0 and plane 1 as its two inputs, the factors in planes 4 and 5 to remodulate, the normal, depth, roughness and motion as guides, and the hit distances. Its camera data comes from your current and previous cameras, with zero jitter.
+3. **Denoise.** A temporal diffuse/specular filter (SVGF, `DiffuseSpecularDenoiser` from `denoiser/realtime`) takes plane 0 and plane 1 as its two inputs, the factors in planes 4 and 5 to remodulate, the normal, depth, roughness and motion as guides, and the hit distances. Its camera data comes from your current and previous cameras, with zero jitter. The example also offers OIDN (`Denoiser` from `denoiser`): a neural network on the raw beauty with the albedo factor and a view-space normal as guides, averaged over the frames of a still camera. Its weights load from the package's default CDN URL (`tzaUrl` overrides it).
 4. **Composite.** Diffuse plus specular, then the emission plane added on top.
 5. **Upscale** with [`@pmndrs/upscaler`](https://github.com/pmndrs/upscaler) in temporal mode, jitter off: colour, depth, and plane 3's motion as velocity.
 6. **Tone map** to the canvas.
 
-The denoiser and the upscaler submit their own command buffers; nothing in the chain reads back to the CPU. The temporal upscaler darkens small, very bright emitters seen directly (a lamp in view loses part of its energy); the rest of the image keeps its brightness.
+The denoiser and the upscaler submit their own command buffers; nothing in the chain reads back to the CPU. The temporal upscaler does not keep the energy of small, very bright emitters seen directly: in the example's Cornell box the lamp reads about 30% dark behind SVGF and about 55% bright behind OIDN, while the rest of the image keeps its brightness (within 2%).
 
 ReSTIR DI and GI add better light sampling to the same loop. See [ReSTIR](/pathtracer/restir).

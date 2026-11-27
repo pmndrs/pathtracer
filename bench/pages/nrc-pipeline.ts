@@ -579,7 +579,7 @@ if (hero && !args.get('res') && args.get('preset') !== 'classroom-native') {
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
 if (args.get('stepsMoving')) $<HTMLInputElement>('stepsMoving').value = args.get('stepsMoving') as string;
 if (args.get('upHistoryMoving')) $<HTMLInputElement>('upHistoryMoving').value = args.get('upHistoryMoving') as string;
-// ?upAutoExposure=1: the upscaler's own pre-exposure metering (the A/B of V343)
+// ?upAutoExposure=1: the upscaler's own pre-exposure metering (the A/B of V344)
 if (args.get('upAutoExposure')) $<HTMLInputElement>('upAutoExposure').checked = args.get('upAutoExposure') === '1';
 // ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8
 if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;

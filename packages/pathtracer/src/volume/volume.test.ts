@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, brickTrack, deltaTrack, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance, ptMediumEmissionSegment } from './volume.ts';
+import { heightDistance, heightOpticalDepth, PT_VOLUME_OUTPUT_VEC4, f16BitsToF32, f32ToF16Bits, ptDecodeVolumeOutputs, ptF16Bits, ptRoundGridF16, ptQuantizeGridR8, ptR8Bytes, ptTexelBound, ATLAS_CELL, ATLAS_EMPTY, atlasDensityAtIndex, brickAtlasMemory, buildBrickAtlas, brickDims, brickMajorants, ddaSegments, residualTransmittance, telescopingTransmittance, brickTrack, deltaTrack, gridDensityStochastic, gridBoundaryFactor, gridDensity, gridWorldToIndex, hgPhase, hgSampleCos, ptMediumFrom, ptMediumMajorant, slabSingleScatter, slabSingleScatterPhase, slabTransmittance, transmittance, ptMediumEmissionSegment } from './volume.ts';
 
 /** Small deterministic generator (mulberry32). */
 function rng(seed: number): () => number {
@@ -307,6 +307,70 @@ describe('r16float grids (P5.v18)', () => {
     expect(() => ptF16Bits(r, true)).not.toThrow();
     // the majorant must come from the rounded grid: 0.7 rounds UP (to 0.70020), past the f32 value
     expect(r[2]).toBeGreaterThan(g[2] as number);
+  });
+});
+
+describe('V7.6 stochastic density lookup twin', () => {
+  const [nx, ny, nz] = [5, 4, 3] as const;
+  const r0 = rng(11);
+  const data = new Float32Array(nx * ny * nz).map(() => 0.1 + r0());
+  const grid = { resolution: [nx, ny, nz] as [number, number, number], worldToIndex: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], densityMax: Math.max(...data) } as unknown as Parameters<typeof gridDensity>[0];
+  const manual = gridDensity(grid, data);
+
+  it('reads one texel of the trilinear support per lookup and its mean is the manual trilinear value (inside, at the border, outside)', () => {
+    const r = rng(12);
+    for (const p of [[1.3, 2.6, 0.4], [3.9, 0.1, 1.5], [-0.4, 1.2, 0.7], [4.6, 3.3, 2.2], [2, 1, 1], [-1.5, 1, 1], [0.25, 3.75, -0.5]] as const) {
+      const taps: number[] = [];
+      const stoch = gridDensityStochastic(grid, data, r, taps);
+      const n = 200000;
+      let sum = 0, sq = 0;
+      for (let i = 0; i < n; i++) {
+        const v = stoch(p[0], p[1], p[2]);
+        sum += v;
+        sq += v * v;
+      }
+      expect(taps.length).toBeLessThanOrEqual(n); // at most one texel per lookup (none when the pick is outside the grid)
+      const mean = sum / n;
+      const se = Math.sqrt(Math.max(sq / n - mean * mean, 0) / n);
+      expect(Math.abs(mean - manual(p[0], p[1], p[2]))).toBeLessThanOrEqual(4 * se + 1e-12);
+      for (const t of taps.slice(0, 64)) {
+        const i = t % nx, j = Math.floor(t / nx) % ny, k = Math.floor(t / (nx * ny));
+        expect(i === Math.floor(p[0]) || i === Math.floor(p[0]) + 1).toBe(true);
+        expect(j === Math.floor(p[1]) || j === Math.floor(p[1]) + 1).toBe(true);
+        expect(k === Math.floor(p[2]) || k === Math.floor(p[2]) + 1).toBe(true);
+      }
+    }
+    // a texel centre: always that texel, no noise
+    const exact = gridDensityStochastic(grid, data, r);
+    for (let i = 0; i < 16; i++) expect(exact(2, 1, 1)).toBe(data[2 + nx * (1 + ny * 1)]);
+  });
+
+  it('tracking stays unbiased: delta-tracked survival and ratio-tracked transmittance through the one-tap density match the manual line integral', () => {
+    const m = ptMediumFrom([1.5, 2, 1], [0, 0, 0], 0, 1, grid);
+    const o = [1.3, 0.7, -0.5] as const;
+    const d = [0.6, 0.48, 0.64] as const;
+    const len = 3.5;
+    let tau = 0;
+    const sub = 20000;
+    for (let i = 0; i < sub; i++) {
+      const t = ((i + 0.5) / sub) * len;
+      tau += manual(o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t) * (len / sub);
+    }
+    const r = rng(13);
+    const stoch = gridDensityStochastic(grid, data, r);
+    const n = 300000;
+    const delta = [0, 0, 0], ratio = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const e = deltaTrack(m, o, d, len, r, stoch);
+      if (e.kind === 'pass') for (let c = 0; c < 3; c++) delta[c] = (delta[c] as number) + (e.weight[c] as number);
+      const tr = transmittance(m, o, d, len, r, stoch);
+      for (let c = 0; c < 3; c++) ratio[c] = (ratio[c] as number) + (tr[c] as number);
+    }
+    for (let c = 0; c < 3; c++) {
+      const expected = Math.exp(-(m.sigmaT[c] as number) * tau);
+      expect((delta[c] as number) / n).toBeCloseTo(expected, 2);
+      expect((ratio[c] as number) / n).toBeCloseTo(expected, 2);
+    }
   });
 });
 

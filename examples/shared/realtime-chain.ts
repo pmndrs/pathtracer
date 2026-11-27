@@ -2,17 +2,23 @@
  * The real-time chain behind a path tracer that renders one sample per pixel per frame:
  *
  *   PtMegakernel { mode: 'realtime' } (render size)  ->  pack: frame planes -> textures (and a depth guide from viewZ)
- *     ->  denoiser `DiffuseSpecularDenoiser` (SVGF on demodulated diffuse + specular, remodulated)  ->  composite (+ emission plane, sky)
+ *     ->  denoiser: SVGF (`denoiser/realtime` `DiffuseSpecularDenoiser`, demodulated diffuse + specular, remodulated) + composite (+ emission plane, sky)
+ *                   or OIDN (`denoiser` `Denoiser`, a neural network on the raw frame with albedo and normal guides)
  *     ->  `@pmndrs/upscaler` temporal path (render size -> display size)
  *
  * A trimmed copy of the bench's `bench/realtime/chain.ts` (the page that measured it: `realtime-pipeline`, docs/internal/design/realtime.md
- * section 5), without its OIDN arm, meters and A/B knobs. One jitter owner: the path tracer's sampler (pair 0); the denoiser gets jitter
- * [0, 0] and the upscaler runs with `jitter: false`. Motion is jitter-free by construction (the planes project world points through both cameras).
+ * section 5), without its meters and A/B knobs. One jitter owner: the path tracer's sampler (pair 0); the denoiser gets jitter [0, 0] and
+ * the upscaler runs with `jitter: false`. Motion is jitter-free by construction (the planes project world points through both cameras).
  *
  * Per frame:  chain.beginFrame(encoder); pt.encode(encoder, 1); chain.accumulate(encoder, pt.frameBuffers); chain.pack(encoder);
- *             submit; chain.post(camera)  (the denoiser and the upscaler record and submit their own command buffers; no readback)
+ *             submit; await chain.post(camera)  (the denoiser and the upscaler record and submit their own command buffers; no readback).
+ * `post` returns nothing for SVGF and a promise for OIDN, which waits for its network. With OIDN and a still camera, `heldFor(camera)` says
+ * the finished still frame is being held: skip tracing and `post` until the camera moves.
+ *
+ * OIDN's weights load from `denoiser`'s default URL (jsDelivr, pmndrs/denoiser-weights) the first time OIDN runs; `tzaUrl` overrides it.
  */
 import { DiffuseSpecularDenoiser } from 'denoiser/realtime';
+import type { Denoiser } from 'denoiser';
 import { Upscaler } from '@pmndrs/upscaler';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 
@@ -30,6 +36,11 @@ const norm = (a: readonly number[]): V3 => {
   const l = Math.hypot(a[0]!, a[1]!, a[2]!);
   return [a[0]! / l, a[1]! / l, a[2]! / l];
 };
+
+/** Exact identity of a camera (a moved camera restarts OIDN's progressive mean). */
+function cameraKey(c: PtLookAtCamera): string {
+  return [...c.position, ...c.target, ...c.up, c.yFovDeg].join(',');
+}
 
 /** World -> view, the same basis as the path tracer's camera (right = forward x up). */
 export function viewMatrix(c: PtLookAtCamera): Float32Array {
@@ -231,6 +242,49 @@ fn chainComposite(@builtin(global_invocation_id) gid: vec3u) {
 }
 `;
 
+/**
+ * OIDN input: the progressive mean of the raw beauty, albedo factor and normal while the camera stays still (restarted on motion or a cut),
+ * the normal rotated to view space (OIDN's convention: x right, y up, z toward the camera; 0 where nothing was hit).
+ */
+const OIDN_PREP_WGSL = /* wgsl */ `
+struct P { reset: u32, w: u32, h: u32, count: f32, right: vec4f, up: vec4f, back: vec4f }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var raw: texture_2d<f32>;
+@group(0) @binding(2) var albedoIn: texture_2d<f32>;
+@group(0) @binding(3) var normalIn: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read_write> prog: array<vec4f>;
+@group(0) @binding(5) var outColor: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(6) var outAlbedo: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(7) var outNormal: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn chainOidnPrep(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x >= p.w || gid.y >= p.h) { return; }
+  let q = gid.xy;
+  let i = (gid.y * p.w + gid.x) * 3u;
+  var sc = vec4f(textureLoad(raw, q, 0).xyz, 0.0);
+  var sa = vec4f(textureLoad(albedoIn, q, 0).xyz, 0.0);
+  var sn = vec4f(textureLoad(normalIn, q, 0).xyz, 0.0);
+  if (p.reset == 0u) {
+    sc += prog[i];
+    sa += prog[i + 1u];
+    sn += prog[i + 2u];
+  }
+  prog[i] = sc;
+  prog[i + 1u] = sa;
+  prog[i + 2u] = sn;
+  let inv = 1.0 / p.count;
+  let l = length(sn.xyz);
+  var nv = vec3f(0.0);
+  if (l > 1e-6) {
+    let u = sn.xyz / l;
+    nv = vec3f(dot(u, p.right.xyz), dot(u, p.up.xyz), dot(u, p.back.xyz));
+  }
+  textureStore(outColor, q, vec4f(max(sc.xyz * inv, vec3f(0.0)), 1.0));
+  textureStore(outAlbedo, q, vec4f(clamp(sa.xyz * inv, vec3f(0.0), vec3f(1.0)), 1.0));
+  textureStore(outNormal, q, vec4f(nv, 1.0));
+}
+`;
+
 // ---------------------------------------------------------------- the chain
 
 export interface RealtimeChainSettings {
@@ -243,8 +297,27 @@ export interface RealtimeChainSettings {
   /** Clip planes of the chain's camera in metres. The denoiser reads viewZ beyond `far` as sky, so `far` must reach past the scene. */
   near: number;
   far: number;
+  /** OIDN weights base URL (default: `denoiser`'s own, jsDelivr). */
+  tzaUrl?: string;
 }
 
+/** OIDN network size: fast = the `_small` network, balanced = the standard one. */
+export type OidnQuality = 'fast' | 'balanced';
+
+export interface OidnSettings {
+  /** Network while the camera moves and until `stillFrames` still frames have been averaged. */
+  moving: OidnQuality;
+  /** Network once `stillFrames` frames of a still camera have been averaged. */
+  still: OidnQuality;
+  /** Still frames averaged before the `still` network runs (a few samples are enough for the standard network). */
+  stillFrames: number;
+  /** After the `still` network ran, keep that frame: no tracing or denoising until the camera moves. */
+  hold: boolean;
+}
+
+export const DEFAULT_OIDN: OidnSettings = { moving: 'fast', still: 'balanced', stillFrames: 8, hold: true };
+
+export type DenoiserKind = 'svgf' | 'oidn' | 'none';
 export type ChainStage = 'raw' | 'denoised' | 'final';
 export type UpscalePath = 'temporal' | 'spatial' | 'bilinear';
 
@@ -253,10 +326,22 @@ const align = (n: number, a: number) => Math.ceil(n / a) * a;
 export class RealtimeChain {
   readonly device: GPUDevice;
   readonly s: RealtimeChainSettings;
-  /** Run the denoiser (off: the raw frame goes to the upscaler). */
-  denoise = true;
+  /** The denoiser: SVGF (temporal, demodulated), OIDN (neural, per frame) or none (the raw frame goes to the upscaler). Switch with `setDenoiser`. */
+  private kindValue: DenoiserKind = 'svgf';
+  oidn: OidnSettings = { ...DEFAULT_OIDN };
+  /** What the last `post` ran (the OIDN network and frame count, or the denoiser kind). */
+  lastDenoiser = '';
   private path: UpscalePath = 'temporal';
-  private readonly denoiser: DiffuseSpecularDenoiser;
+  private readonly svgf: DiffuseSpecularDenoiser;
+  private readonly oidnPrepPipe: GPUComputePipeline;
+  private readonly oidnParams: GPUBuffer;
+  private readonly oidnProg: GPUBuffer;
+  private readonly oidnTex: { color: GPUTexture; albedo: GPUTexture; normal: GPUTexture };
+  private oidnGroup: GPUBindGroup | null = null;
+  private readonly oidnNets = new Map<OidnQuality, Promise<Denoiser>>();
+  private oidnCount = 0;
+  private oidnCamera = '';
+  private oidnHeld = false;
   private readonly upscaler: Upscaler;
   private readonly host: UpscalerHost;
   private readonly upCamera = new UpscalerCamera();
@@ -286,13 +371,17 @@ export class RealtimeChain {
   private resetNext = true;
 
   private constructor(device: GPUDevice, s: RealtimeChainSettings, parts: {
-    denoiser: DiffuseSpecularDenoiser; upscaler: Upscaler; host: UpscalerHost; sums: GPUBuffer; packBuf: GPUBuffer; packParams: GPUBuffer; accumParams: GPUBuffer;
+    svgf: DiffuseSpecularDenoiser; oidnPrepPipe: GPUComputePipeline; oidnParams: GPUBuffer; oidnProg: GPUBuffer; oidnTex: RealtimeChain['oidnTex']; upscaler: Upscaler; host: UpscalerHost; sums: GPUBuffer; packBuf: GPUBuffer; packParams: GPUBuffer; accumParams: GPUBuffer;
     accumPipe: GPUComputePipeline; packPipe: GPUComputePipeline; compositePipe: GPUComputePipeline; depthPipe: GPURenderPipeline; depthGroup: GPUBindGroup;
     stride8: number; stride4: number; base4: number; tex: RealtimeChain['tex']; depth: GPUTexture; color: GPUTexture; keys: RealtimeChain['keys'];
   }) {
     this.device = device;
     this.s = s;
-    this.denoiser = parts.denoiser;
+    this.svgf = parts.svgf;
+    this.oidnPrepPipe = parts.oidnPrepPipe;
+    this.oidnParams = parts.oidnParams;
+    this.oidnProg = parts.oidnProg;
+    this.oidnTex = parts.oidnTex;
     this.upscaler = parts.upscaler;
     this.host = parts.host;
     this.sums = parts.sums;
@@ -335,7 +424,7 @@ export class RealtimeChain {
     const color = mk('color', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T | COPY_DST_T);
     const module = (code: string, name: string) => device.createShaderModule({ label: `chain ${name}`, code });
     const depthModule = module(DEPTH_WGSL, 'depth');
-    const [accumPipe, packPipe, compositePipe, depthPipe] = await Promise.all([
+    const [accumPipe, packPipe, compositePipe, depthPipe, oidnPrepPipe] = await Promise.all([
       device.createComputePipelineAsync({ label: 'chain accumulate', layout: 'auto', compute: { module: module(ACCUM_WGSL, 'accumulate'), entryPoint: 'chainAccumulate' } }),
       device.createComputePipelineAsync({ label: 'chain pack', layout: 'auto', compute: { module: module(PACK_WGSL, 'pack'), entryPoint: 'chainPack' } }),
       device.createComputePipelineAsync({ label: 'chain composite', layout: 'auto', compute: { module: module(COMPOSITE_WGSL, 'composite'), entryPoint: 'chainComposite' } }),
@@ -345,19 +434,60 @@ export class RealtimeChain {
         fragment: { module: depthModule, entryPoint: 'fs', targets: [] },
         depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' },
       }),
+      device.createComputePipelineAsync({ label: 'chain oidn prep', layout: 'auto', compute: { module: module(OIDN_PREP_WGSL, 'oidn prep'), entryPoint: 'chainOidnPrep' } }),
     ]);
+    const storageTex = TEX | GPUTextureUsage.STORAGE_BINDING;
+    const oidnTex = { color: mk('oidn color', 'rgba16float', storageTex), albedo: mk('oidn albedo', 'rgba16float', storageTex), normal: mk('oidn normal', 'rgba16float', storageTex) };
+    const oidnProg = device.createBuffer({ label: 'chain oidn mean', size: n * 3 * 16, usage: GPUBufferUsage.STORAGE });
+    const oidnParams = device.createBuffer({ label: 'chain oidn params', size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const depthParams = device.createBuffer({ label: 'chain depth params', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(depthParams, 0, new Float32Array([s.near, s.far, 0, 0]));
     const depthGroup = device.createBindGroup({ layout: depthPipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: depthParams } }, { binding: 1, resource: tex.viewZ.createView() }] });
 
-    const denoiser = new DiffuseSpecularDenoiser(device, { remodulate: true } as never);
-    denoiser.configure({ width: w, height: h });
+    const svgf = new DiffuseSpecularDenoiser(device, { remodulate: true } as never);
+    svgf.configure({ width: w, height: h });
     const host = new UpscalerHost(device);
     const upscaler = new Upscaler({ renderer: host as never });
     upscaler.configure({ displayWidth: s.displayWidth, displayHeight: s.displayHeight, renderWidth: w, renderHeight: h, path: 'temporal', jitter: false });
     await upscaler.init();
     const keys = { color: host.texture(color, 'chain color'), depth: host.texture(depth, 'chain depth'), velocity: host.texture(tex.motion, 'chain motion') };
-    return new RealtimeChain(device, s, { denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, stride8, stride4, base4, tex, depth, color, keys });
+    return new RealtimeChain(device, s, { svgf, oidnPrepPipe, oidnParams, oidnProg, oidnTex, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, stride8, stride4, base4, tex, depth, color, keys });
+  }
+
+  get denoiser(): DenoiserKind {
+    return this.kindValue;
+  }
+
+  /** Switches the denoiser; the histories and OIDN's average restart. Picking OIDN starts loading its networks. */
+  setDenoiser(kind: DenoiserKind): void {
+    this.kindValue = kind;
+    this.oidnCount = 0;
+    this.oidnCamera = '';
+    this.oidnHeld = false;
+    this.resetNext = true;
+    if (kind === 'oidn') void this.ready();
+  }
+
+  /** Loads the OIDN networks of the current settings (the first `post` waits for them anyway). */
+  async ready(): Promise<void> {
+    if (this.kindValue !== 'oidn') return;
+    await Promise.all([this.net(this.oidn.moving), this.net(this.oidn.still)]);
+  }
+
+  /** One `Denoiser` per network size: a size change in one instance would reload its weights. */
+  private net(quality: OidnQuality): Promise<Denoiser> {
+    let net = this.oidnNets.get(quality);
+    if (!net) {
+      const precision = this.device.features.has('shader-f16') ? 'fp16' : 'fp32';
+      net = import('denoiser').then(({ Denoiser }) => Denoiser.create({ device: this.device, precision, quality, ...(this.s.tzaUrl ? { tzaUrl: this.s.tzaUrl } : {}) }));
+      this.oidnNets.set(quality, net);
+    }
+    return net;
+  }
+
+  /** OIDN with `hold`: true while this camera's finished still frame is held (skip tracing and `post`). */
+  heldFor(camera: PtLookAtCamera): boolean {
+    return this.kindValue === 'oidn' && this.oidnHeld && !this.resetNext && cameraKey(camera) === this.oidnCamera;
   }
 
   /** Drop the denoiser's and the upscaler's history on the next `post` (a camera cut). */
@@ -424,21 +554,22 @@ export class RealtimeChain {
    * Denoise, composite, upscale; call after the frame's tracing and `pack` were submitted. `camera` is this frame's (unjittered) camera; the
    * previous one is remembered. Records and submits its own work (the denoiser and the upscaler submit theirs).
    */
-  post(camera: PtLookAtCamera, deltaTime = 1 / 60): void {
+  post(camera: PtLookAtCamera, deltaTime = 1 / 60): Promise<void> | void {
     const { width: w, height: h, near, far } = this.s;
     const view = viewMatrix(camera);
     const proj = projectionMatrix(camera.yFovDeg, w / h, near, far);
     const reset = this.resetNext;
     this.resetNext = false;
     if (reset) {
-      this.denoiser.resetHistory();
+      this.svgf.resetHistory();
       this.prevView = view;
       this.prevProj = proj;
     }
+    if (this.kindValue === 'oidn') return this.postOidn(camera, reset, deltaTime, view, proj);
     const t = this.tex;
     const encoder = this.device.createCommandEncoder({ label: 'chain composite' });
-    if (this.denoise) {
-      const out = this.denoiser.dispatchBoth(
+    if (this.kindValue === 'svgf') {
+      const out = this.svgf.dispatchBoth(
         { diffuse: { radiance: t.diffuse, hitDistance: t.hitD }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF } } as never,
         { depth: this.depth, normal: t.normal, motion: t.motion, roughness: t.roughness, albedo: t.albedo, viewZ: t.viewZ, motionZ: t.motionZ },
         { view, projection: proj, prevView: this.prevView!, prevProjection: this.prevProj!, near, far, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
@@ -453,6 +584,62 @@ export class RealtimeChain {
       encoder.copyTextureToTexture({ texture: t.raw }, { texture: this.color }, { width: w, height: h });
     }
     this.device.queue.submit([encoder.finish()]);
+    this.lastDenoiser = this.kindValue;
+    this.upscale(camera, reset, deltaTime, view, proj);
+  }
+
+  /**
+   * OIDN on this frame: the progressive mean of a still camera (restarted when it moves or after a cut), the `moving` network until
+   * `stillFrames` frames are averaged, then the `still` network (and with `hold` the frame is kept). Waits for the network; writes `color`.
+   */
+  private async postOidn(camera: PtLookAtCamera, cut: boolean, deltaTime: number, view: Float32Array, proj: Float32Array): Promise<void> {
+    const { width: w, height: h } = this.s;
+    const key = cameraKey(camera);
+    const moved = cut || key !== this.oidnCamera;
+    this.oidnCamera = key;
+    this.oidnCount = moved ? 1 : this.oidnCount + 1;
+    this.oidnHeld = false;
+    const f = norm(sub(camera.target, camera.position));
+    const r = norm(cross(f, camera.up));
+    const u = cross(r, f);
+    const p = new ArrayBuffer(64);
+    new Uint32Array(p, 0, 3).set([moved ? 1 : 0, w, h]);
+    new Float32Array(p, 12, 1).set([this.oidnCount]);
+    new Float32Array(p, 16, 12).set([r[0], r[1], r[2], 0, u[0], u[1], u[2], 0, -f[0], -f[1], -f[2], 0]);
+    this.device.queue.writeBuffer(this.oidnParams, 0, p);
+    this.oidnGroup ??= this.device.createBindGroup({
+      layout: this.oidnPrepPipe.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.oidnParams } },
+        { binding: 1, resource: this.tex.raw.createView() },
+        { binding: 2, resource: this.tex.albedo.createView() },
+        { binding: 3, resource: this.tex.normal.createView() },
+        { binding: 4, resource: { buffer: this.oidnProg } },
+        { binding: 5, resource: this.oidnTex.color.createView() },
+        { binding: 6, resource: this.oidnTex.albedo.createView() },
+        { binding: 7, resource: this.oidnTex.normal.createView() },
+      ],
+    });
+    const encoder = this.device.createCommandEncoder({ label: 'chain oidn prep' });
+    const pass = encoder.beginComputePass({ label: 'chain oidn prep' });
+    pass.setPipeline(this.oidnPrepPipe);
+    pass.setBindGroup(0, this.oidnGroup);
+    pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
+    const o = this.oidn;
+    const still = this.oidnCount >= o.stillFrames;
+    const quality = still ? o.still : o.moving;
+    const net = await this.net(quality);
+    const out = await net.denoiseTextures({ color: this.oidnTex.color, albedo: this.oidnTex.albedo, normal: this.oidnTex.normal, hdr: true, output: this.color, transfer: 'linear' });
+    if (!out) throw new Error('OIDN: the run was aborted');
+    this.lastDenoiser = `OIDN ${quality === 'fast' ? 'small' : 'standard'} network, ${this.oidnCount} frame${this.oidnCount === 1 ? '' : 's'} averaged`;
+    if (still && o.hold) this.oidnHeld = true;
+    this.upscale(camera, cut, deltaTime, view, proj);
+  }
+
+  private upscale(camera: PtLookAtCamera, reset: boolean, deltaTime: number, view: Float32Array, proj: Float32Array): void {
+    const { width: w, height: h, near, far } = this.s;
     this.upCamera.near = near;
     this.upCamera.far = far;
     this.upCamera.set(camera, w / h);
@@ -488,10 +675,12 @@ export class RealtimeChain {
   }
 
   destroy(): void {
-    this.denoiser.dispose();
+    this.svgf.dispose();
     this.upscaler.dispose();
-    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams]) b.destroy();
-    for (const t of [...Object.values(this.tex), this.depth, this.color]) t.destroy();
+    // dispose() keeps the device (destroyDevice() would take ours down with it).
+    for (const net of this.oidnNets.values()) void net.then((d) => d.dispose(), () => {});
+    for (const b of [this.sums, this.packBuf, this.packParams, this.accumParams, this.oidnParams, this.oidnProg]) b.destroy();
+    for (const t of [...Object.values(this.tex), ...Object.values(this.oidnTex), this.depth, this.color]) t.destroy();
   }
 }
 

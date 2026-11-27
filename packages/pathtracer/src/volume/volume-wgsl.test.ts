@@ -58,6 +58,30 @@ describe('integrator.volumes (P5)', () => {
     expect(build({ ...gridded, densityFilter: 'manual' })).toBe(build(gridded));
   });
 
+  it("V7.6 densityFilter 'stochastic' reads ONE texel per lookup (three draws, no sampler, dense and atlas), and is refused with telescoping", () => {
+    const body = (text: string): string => text.slice(text.indexOf('fn ptVolDensity('), text.indexOf('\n}\n', text.indexOf('fn ptVolDensity(')));
+    for (const base of [gridded, bricked, atlased]) {
+      const text = build({ ...base, densityFilter: 'stochastic' });
+      const fn = body(text);
+      expect(fn.match(/textureLoad\(ptVolGrid/g)).toHaveLength(1);
+      expect(fn.match(/ptVolRand\(\)/g)).toHaveLength(3);
+      expect(fn).not.toContain('for (');
+      expect(text).not.toContain('ptVolSampler');
+      expect(text).not.toContain('textureSampleLevel(ptVolGrid');
+      expect(balanced(text)).toBe(true);
+      for (const name of declaredIdentifiers(text)) expect(RESERVED.has(name), name).toBe(false);
+    }
+    // a homogeneous table has no grid: the option changes nothing
+    expect(build({ ...homog, densityFilter: 'stochastic' })).toBe(build(homog));
+    expect(() => ptVolumeValidate({ ...bricked, densityFilter: 'stochastic', shadowTracking: 'telescoping' })).toThrow(/stochastic/);
+    // the wavefront's intersect and shadow kernels take the lookup with the stream it draws from
+    for (const parts of [['seedOf', 'bind', 'tables', 'density', 'flight'], ['seedOf', 'bind', 'tables', 'density', 'tr']] as const) {
+      const text = ptVolumeWgsl({ ...gridded, densityFilter: 'stochastic' }, parts);
+      expect(text).toContain('fn ptVolRand(');
+      expect(body(text).match(/textureLoad\(ptVolGrid/g)).toHaveLength(1);
+    }
+  });
+
   it("V2.2 shadowTracking 'residual' reads the minorant (vec4 DDA cell), needs a brick grid, and leaves the brick text unchanged without it", () => {
     const residual: PtVolumeOptions = { ...bricked, shadowTracking: 'residual' };
     const text = build(residual);

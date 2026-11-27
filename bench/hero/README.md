@@ -31,7 +31,7 @@ Two settings change while the camera moves and return a quarter of a second afte
 
 ### Bright specks while moving
 
-The temporal upscaler runs with its **Auto pre-exposure** off here (fixed at 1, DIVERGES V343; reported as pmndrs/upscaler#118). With it on, a moving camera showed bright specks in the final stage only (values up to 139 where the denoised frame never exceeds 20; about 17 pixels per 1920 × 1080 frame, on the plain side as much as on the NRC side) and none when still. The raw and the denoised stages are the same moving or still. Turn the switch on under **Render controls → Upscaler**, or open the page with `?upAutoExposure=1`, to see the difference.
+The temporal upscaler runs with its **Auto pre-exposure** off here (fixed at 1, DIVERGES V344; reported as pmndrs/upscaler#118). With it on, a moving camera showed bright specks in the final stage only (values up to 139 where the denoised frame never exceeds 20; about 17 pixels per 1920 × 1080 frame, on the plain side as much as on the NRC side) and none when still. The raw and the denoised stages are the same moving or still. Turn the switch on under **Render controls → Upscaler**, or open the page with `?upAutoExposure=1`, to see the difference.
 
 ### Comparing reconstruction
 
