@@ -44,5 +44,8 @@ upscaler needs it for anti-aliasing and super-resolution.
 - `node bench/live.ts chain-debug` -> http://127.0.0.1:5291/bench/pages/chain-debug.html (next free port if taken).
 - `__chainDebug`: `measureLag`, `sharpness`, `guideChange`, `edgeHistory({ trace })`, `edgeQuality`; drive frames yourself, the
   app's browser pane fires rAF about once a second.
-- The bench's `bench/node_modules/denoiser` currently links the Denoiser worktree. Restore with
-  `ln -sfn ../../../Denoiser/packages/denoiser bench/node_modules/denoiser`.
+- The bench links the main Denoiser checkout again (2026-11-27). To try the branch options (`historyFootprint`, `secondHistory`) point it at
+  the worktree: `ln -sfn ~/Developer/Denoiser/.claude/worktrees/chain-edge-history/packages/denoiser bench/node_modules/denoiser`;
+  restore with `ln -sfn ../../../Denoiser/packages/denoiser bench/node_modules/denoiser`.
+- Status: shipped as a known issue (TASKS N11.19); the showcase runs with accumulate while still, `antiLagRadius: 0` and
+  `antiLagHistoryScale` on.

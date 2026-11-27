@@ -510,19 +510,24 @@ function applyReconstruction(): void {
   $<HTMLInputElement>('upAutoExposure').disabled = path !== 'temporal';
   $<HTMLInputElement>('upHistory').disabled = path !== 'temporal';
   $<HTMLInputElement>('svgfHistoryLimit').disabled = value('denoiserSel') !== 'svgf';
-  $<HTMLInputElement>('svgfAlpha').disabled = value('denoiserSel') !== 'svgf';
+  for (const id of ['svgfAlpha', 'antiLagLocal', 'antiLagKeep']) $<HTMLInputElement>(id).disabled = value('denoiserSel') !== 'svgf';
   $<HTMLSelectElement>('oidnAux').disabled = !value('denoiserSel').startsWith('oidn');
   $<HTMLInputElement>('stillSamples').disabled = value('denoiserSel') !== 'oidn';
   if (!live) return;
   for (const arm of Object.values(live.session.arms)) {
     arm.setFireflyClamp(Math.max(0, num('fireflyClamp')));
-    arm.setSvgfAlpha(Math.max(0.01, Math.min(1, num('svgfAlpha') || 0.1)));
+    // N11.18: the anti-lag options that keep a still view's history (A-SVGF 'auto' stays on; see chain-debug for the rest).
+    arm.setDenoiserOptions({
+      temporalAlpha: Math.max(0.01, Math.min(1, num('svgfAlpha') || 0.1)),
+      ...(checked('antiLagLocal') ? { antiLagRadius: 0 } : {}),
+      ...(checked('antiLagKeep') ? { antiLagHistoryScale: true } : {}),
+    });
     arm.upscalePath = path;
     Object.assign(arm.upscaler.settings, { sharpness: Math.min(1, Math.max(0, num('sharpness'))), maxAccumulation: Math.max(1, Math.min(64, num('upHistory'))), rcasDenoise: checked('rcasDenoise'), autoExposure: checked('upAutoExposure'), exposure: 1 });
     arm.resetHistory();
   }
 }
-for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'upAutoExposure', 'svgfAlpha', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
+for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'upAutoExposure', 'svgfAlpha', 'antiLagLocal', 'antiLagKeep', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
 $('resetView').addEventListener('click', () => {
   if (live) resetView(live.scene, live.session.bounds);
   live?.session.cutNext();

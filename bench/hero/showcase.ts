@@ -107,6 +107,7 @@ export function setupHero() {
   });
   document.querySelector<HTMLInputElement>('#accumulateStill')!.checked = true;
   document.querySelector<HTMLInputElement>('#rcasDenoise')!.checked = true;
+  for (const id of ['antiLagLocal', 'antiLagKeep']) document.querySelector<HTMLInputElement>('#' + id)!.checked = true;
   const native = new URLSearchParams(location.search).get('preset') === 'classroom-native';
   document.querySelector<HTMLSelectElement>('#res')!.value = native ? '1280x720' : '960x540';
   if (native) {
