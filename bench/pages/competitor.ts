@@ -77,7 +77,7 @@ try {
     ...(args['pt_equiangular'] === '1' ? { volumeEquiangular: true } : {}),
     ...(args['pt_forced_grid'] === '1' ? { volumeForcedGrid: true } : {}),
     ...(args['pt_vspg'] === '1' ? { volumeGuiding: 'vspg' as const } : {}),
-    ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : {}),
+    ...(args['pt_density_filter'] === 'hardware' ? { volumeDensityFilter: 'hardware' as const } : args['pt_density_filter'] === 'stochastic' ? { volumeDensityFilter: 'stochastic' as const } : {}),
     ...(args['pt_grid_layout'] === 'atlas' ? { volumeGridLayout: 'atlas' as const } : {}),
     ...(args['pt_volume_outputs'] === '1' ? { volumeOutputs: true } : {}),
     ...(args['pt_volume_grid'] ? { volumeGridFormat: args['pt_volume_grid'] as 'r32float' | 'r16float' | 'r8unorm' } : {}),

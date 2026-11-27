@@ -69,6 +69,7 @@ export function ptVolumeValidate(v: PtVolumeOptions): void {
   });
   if ((v.shadowTracking === 'residual' || v.shadowTracking === 'telescoping') && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError(`integrator.volumes: shadowTracking '${v.shadowTracking}' needs a grid medium with majorant 'brick'`);
   if (v.freeFlight === 'decomposition' && !(v.majorant === 'brick' && v.media.some((m) => m.grid))) throw new RangeError("integrator.volumes: freeFlight 'decomposition' needs a grid medium with majorant 'brick' (and the brick minima)");
+  if (v.densityFilter === 'stochastic' && v.shadowTracking === 'telescoping') throw new RangeError("integrator.volumes: densityFilter 'stochastic' cannot be combined with shadowTracking 'telescoping' (it exponentiates a marched optical depth, which is not linear in the density; V7.6)");
   const grids = v.media.filter((m) => m.grid);
   if (grids.length > 1) {
     const [a] = grids;
@@ -160,6 +161,7 @@ export function ptVolumeWgsl(v: PtVolumeOptions, parts: readonly PtVolumePart[] 
   const ratio = ptVolumeRatioShadows(v);
   const brick = grid && v.majorant === 'brick';
   const hw = grid && v.densityFilter === 'hardware';
+  const stoch = grid && v.densityFilter === 'stochastic'; // V7.6: one texel, picked with its trilinear weight
   const atlas = grid && v.gridLayout === 'atlas';
   const roulette = v.trRoulette === true;
   const tele = brick && v.shadowTracking === 'telescoping';
@@ -347,6 +349,10 @@ ${atlas ? `    let fl = floor(gx);
     }
     let org = vec3i(i32(pk & 1023u), i32((pk >> 10u) & 1023u), i32((pk >> 20u) & 1023u)) * 9 + i0 - (c * 8 - vec3i(1));
 ${hw ? `    return textureSampleLevel(ptVolGrid, ptVolSampler, (vec3f(org) + fr + vec3f(0.5)) / vec3f(textureDimensions(ptVolGrid)), 0.0).x;
+` : stoch ? `    let ux = ptVolRand();
+    let uy = ptVolRand();
+    let uz = ptVolRand();
+    return textureLoad(ptVolGrid, vec3u(org + select(vec3i(0), vec3i(1), vec3f(ux, uy, uz) < fr)), 0).x;
 ` : `    var acc = 0.0;
     for (var cc = 0u; cc < 8u; cc++) {
         let o = vec3i(i32(cc & 1u), i32((cc >> 1u) & 1u), i32((cc >> 2u) & 1u));
@@ -358,6 +364,16 @@ ${hw ? `    return textureSampleLevel(ptVolGrid, ptVolSampler, (vec3f(org) + fr 
 `}` : hw ? `    let nf = vec3f(m.info.y, m.info.z, m.info.w);
     let bf = clamp(gx + vec3f(1.0), vec3f(0.0), vec3f(1.0)) * clamp(nf - gx, vec3f(0.0), vec3f(1.0));
     return bf.x * bf.y * bf.z * textureSampleLevel(ptVolGrid, ptVolSampler, (gx + vec3f(0.5)) / nf, 0.0).x;
+` : stoch ? `    let dims = vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w));
+    let fl = floor(gx);
+    let ux = ptVolRand();
+    let uy = ptVolRand();
+    let uz = ptVolRand();
+    let ii = vec3i(fl) + select(vec3i(0), vec3i(1), vec3f(ux, uy, uz) < gx - fl);
+    if (any(ii < vec3i(0)) || any(ii >= dims)) {
+        return 0.0;
+    }
+    return textureLoad(ptVolGrid, vec3u(ii), 0).x;
 ` : `    let dims = vec3i(i32(m.info.y), i32(m.info.z), i32(m.info.w));
     let fl = floor(gx);
     let fr = gx - fl;
