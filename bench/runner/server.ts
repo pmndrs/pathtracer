@@ -45,7 +45,7 @@ function linkedDenoiserRoot(): string | null {
   }
 }
 
-/** The checkout of the linked `@pmndrs/upscaler` (nrc-pipeline, track N M9), or null when it is not linked. Its dist imports its own `three`. */
+/** Where `@pmndrs/upscaler` resolves (npm 0.6.0, or a checkout linked with a local override; nrc-pipeline, track N M9), or null when it is missing. */
 function linkedUpscalerRoot(): string | null {
   try {
     return realpathSync(resolve(REPOSITORY_ROOT, 'bench', 'node_modules', '@pmndrs', 'upscaler'));

@@ -1,6 +1,6 @@
 # The GitHub Pages site: the pmndrs/docs site at the root (docs/*.mdx), the examples gallery under /examples/ (examples/), and the
 # Classroom showcase under /examples/showcase/classroom/ (bench/hero). scripts/build-site.mjs does the building; this workflow
-# provides what it needs (the denoiser sibling, the upscaler, the prepared Classroom scene) and deploys the result.
+# provides what it needs (the denoiser sibling, the prepared Classroom scene) and deploys the result. The upscaler comes from npm.
 # The Classroom steps may fail (Blender download, the denoiser build) without blocking the docs and examples: the site then deploys
 # without the showcase and the run summary says so.
 name: Deploy docs and examples to GitHub Pages
@@ -60,12 +60,9 @@ jobs:
           git lfs pull --include='packages/denoiser/tzas/rt_hdr_alb*.tza,packages/denoiser/tzas/rt_hdr_calb_cnrm*.tza,packages/denoiser/tzas/rt_ldr.tza,packages/denoiser/tzas/rt_ldr_small.tza'
           corepack yarn install --immutable
           corepack yarn build:lib
-      - name: Install upscaler and bench dependencies
-        run: |
-          npm install --prefix pages-deps --no-save --ignore-scripts @pmndrs/upscaler@0.6.0 three@0.187.0
-          ln -s "$PWD/pages-deps/node_modules/@pmndrs/upscaler" upscaler
-          cd pathtracer
-          corepack pnpm install --frozen-lockfile
+      - name: Install bench dependencies
+        working-directory: pathtracer
+        run: corepack pnpm install --frozen-lockfile
       # Blender: cached by version (download.blender.org has answered GitHub runners with 403), else the first of
       # download.blender.org and its official mirrors that serves it. The sha256 check holds whatever the source.
       - name: Cache Blender
