@@ -47,5 +47,5 @@ upscaler needs it for anti-aliasing and super-resolution.
 - The bench links the main Denoiser checkout again (2026-11-27). To try the branch options (`historyFootprint`, `secondHistory`) point it at
   the worktree: `ln -sfn ~/Developer/Denoiser/.claude/worktrees/chain-edge-history/packages/denoiser bench/node_modules/denoiser`;
   restore with `ln -sfn ../../../Denoiser/packages/denoiser bench/node_modules/denoiser`.
-- Status: shipped as a known issue (TASKS N11.19); the showcase runs with accumulate while still, `antiLagRadius: 0` and
+- Status: shipped as a known issue (TASKS N11.19, tracked in pmndrs/denoiser#51); the showcase runs with accumulate while still, `antiLagRadius: 0` and
   `antiLagHistoryScale` on.
