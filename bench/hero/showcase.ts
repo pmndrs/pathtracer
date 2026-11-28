@@ -16,7 +16,7 @@ export function setupHero() {
   header.innerHTML = '<div><p class="hero-project">WebGPU path tracer</p><h1>Radiance cache</h1></div><div class="hero-toolbar"><div class="hero-selector"><label for="scene">Interior</label></div><button type="button" aria-controls="hero-settings" aria-haspopup="dialog" aria-expanded="false">Render controls</button></div>';
   const footer = document.createElement('footer');
   footer.className = 'hero-footer';
-  footer.innerHTML = '<div class="hero-controls"><div><label for="stageSel">Pipeline stage</label></div><div><label for="view">Comparison</label></div><div><label for="exposure">Exposure</label></div><div class="hero-actions"></div></div><p class="hero-help">Drag to look · WASD to move · Q / E for height · Shift-drag the split</p><p class="hero-credit"></p> <a class="quality-link" href="./nrc-classroom-quality.html">Classroom quality bench ↗</a>';
+  footer.innerHTML = '<div class="hero-controls"><div><label for="stageSel">Pipeline stage</label></div><div><label for="view">Comparison</label></div><div><label for="exposure">Exposure</label></div><div class="hero-actions"></div></div><p class="hero-help">Drag to look · WASD or arrows to move · Q / E for height · Shift to move faster · Shift-drag the split</p><p class="hero-credit"></p> <a class="quality-link" href="./nrc-classroom-quality.html">Classroom quality bench ↗</a>';
   const guide = document.createElement('a');
   guide.className = 'quality-link';
   guide.href = 'https://pmndrs.github.io/pathtracer/examples/learn/nrc/';
@@ -107,8 +107,9 @@ export function setupHero() {
   });
   document.querySelector<HTMLInputElement>('#accumulateStill')!.checked = true;
   document.querySelector<HTMLInputElement>('#rcasDenoise')!.checked = true;
+  for (const id of ['antiLagLocal', 'antiLagKeep']) document.querySelector<HTMLInputElement>('#' + id)!.checked = true;
   const native = new URLSearchParams(location.search).get('preset') === 'classroom-native';
-  document.querySelector<HTMLSelectElement>('#res')!.value = native ? '1280x720' : '640x360';
+  document.querySelector<HTMLSelectElement>('#res')!.value = native ? '1280x720' : '960x540';
   if (native) {
     document.querySelector<HTMLSelectElement>('#displayScale')!.value = '1';
     document.querySelector<HTMLInputElement>('#maxDepth')!.value = '10';

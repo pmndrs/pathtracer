@@ -3,11 +3,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@pmndrs/bvh": "^0.1.0",
+    "@pathtracer/mlp": "workspace:*",
+    "@pmndrs/bvh": "^0.1.1",
     "@pmndrs/downsampler": "^0.1.0",
     "@pmndrs/pathtracer": "workspace:*",
     "@pmndrs/raytracer": "workspace:*",
-    "@pathtracer/mlp": "workspace:*",
     "jpeg-js": "0.4.4"
   },
   "scripts": {
@@ -26,7 +26,7 @@
   },
   "devDependencies": {
     "@meimu/mutracer": "0.3.1",
-    "@pmndrs/upscaler": "link:../../upscaler",
+    "@pmndrs/upscaler": "^0.6.0",
     "@types/three": "0.187.0",
     "denoiser": "link:../../Denoiser/packages/denoiser",
     "three": "0.187.0",

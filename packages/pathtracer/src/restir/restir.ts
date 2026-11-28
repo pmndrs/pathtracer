@@ -38,6 +38,7 @@ type BuildOptions = Pick<PtMegakernelOptions, 'format' | 'layout' | 'integrator'
 export function ptRestirUnsupported(options: Pick<PtMegakernelOptions, 'integrator' | 'textures'> & Partial<Pick<PtMegakernelOptions, 'layout'>>): string | null {
   const o = resolveIntegratorOptions({ ...options.integrator, ...(options.textures ? { textures: true } : {}) });
   if (!o.restir) return 'integrator.restir is not set';
+  if (o.cameraJitter === 'engine') return "integrator.cameraJitter 'engine' is not supported with ReSTIR (the G-buffer pass draws its own camera jitter)";
   if (!o.nee) return 'ReSTIR DI replaces next-event estimation at the first vertex: integrator.nee must be on';
   if (o.hooks) return 'path hooks are not supported with ReSTIR yet';
   const m = o.materials;

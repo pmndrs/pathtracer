@@ -85,8 +85,10 @@ defineExample(async (ctx) => {
       renderer = nextRenderer;
       sync();
       orbit?.dispose();
-      orbit = new OrbitCamera(canvas, camera);
+      // The file camera's target is only a point one unit ahead of it: the orbit pivots on the model (same picture, same direction).
+      orbit = new OrbitCamera(canvas, camera, next.bounds);
       orbit.onChange = () => renderer?.setCamera(orbit!.camera);
+      renderer.setCamera(orbit.camera);
       if (!(params.fileCamera && next.cameras[0])) orbit.frame(next.bounds.min, next.bounds.max);
       stats.set('triangles', next.gltf.stats.triangles.toLocaleString());
       stats.set('materials', next.materials.length);

@@ -1,8 +1,10 @@
-// P-W1: bvh's walk loops are rewritten as constant-bounded `for` loops (no Tint loop counter). The rewrite must apply to every walk
-// variant the installed bvh emits, or a bvh change silently brings back the 3.7x D3D12 slowdown on NVIDIA.
+// P-W1: Tint gives every loop it cannot prove finite a 64-bit iteration counter, and on Chrome D3D12 (DXC SM 6.6+, RTX 3060) those
+// counters on the walk's descent and pop loops made the megakernel 3.7x slower. bvh 0.1.1 (bvh#3) writes those loops with a literal
+// bound itself (we used to rewrite them, `rtBoundWalkLoops`, removed with V294). This test fails if a bvh release brings an
+// unbounded loop back into any walk variant the raytracer can compile.
 import { describe, expect, it } from 'vitest';
 import { traceModuleWgsl, type AnyHitOrder } from '@pmndrs/bvh';
-import { rtBoundWalkLoops, rtBoundWalkLoopsApplies } from './modules.ts';
+import { stripWgslComments } from './modules.ts';
 
 const variants: Array<Parameters<typeof traceModuleWgsl>[0]> = [];
 for (const rayMasks of [true, false])
@@ -11,51 +13,26 @@ for (const rayMasks of [true, false])
       for (const anyHitOrder of [undefined, 'far', 'near', 'larger'] as (AnyHitOrder | undefined)[])
         for (const positionLayout of triangleLeaves === 'indexed' ? (['vec4', 'packed'] as const) : ([undefined] as const))
           variants.push({ traceSlot: { group: 0, firstBinding: 0 }, rayMasks, triangleLeaves, nodeFormat, ...(anyHitOrder ? { anyHitOrder } : {}), ...(positionLayout ? { positionLayout } : {}) });
-
-// Wide walks (X1.i): six loops, bounded the same way, the two walk functions get their final return.
-const wideVariants: Array<Parameters<typeof traceModuleWgsl>[0]> = [];
 for (const nodeFormat of ['bvh4', 'cwbvh8'] as const)
   for (const wideDecode of ['exact', 'folded'] as const)
     for (const wideWalk of nodeFormat === 'bvh4' ? (['nested', 'single'] as const) : ([undefined] as const))
-      for (const rayMasks of [true, false]) wideVariants.push({ traceSlot: { group: 0, firstBinding: 0 }, rayMasks, nodeFormat, wideDecode, ...(wideWalk ? { wideWalk } : {}) });
+      for (const rayMasks of [true, false]) variants.push({ traceSlot: { group: 0, firstBinding: 0 }, rayMasks, nodeFormat, wideDecode, ...(wideWalk ? { wideWalk } : {}) });
 
-describe('rtBoundWalkLoops on wide walks (X1.i)', () => {
-  it('applies to every wide variant, leaves no bare loop and ends both walks with a return', () => {
-    for (const options of wideVariants) {
-      const walk = traceModuleWgsl(options);
-      expect(rtBoundWalkLoopsApplies(walk), JSON.stringify(options)).toBe(true);
-      const loops = (walk.match(/\bloop \{/g) ?? []).length;
-      const out = rtBoundWalkLoops(walk);
-      expect(out, JSON.stringify(options)).not.toMatch(/\bloop \{/);
-      for (let i = 0; i < loops; i++) expect(out).toContain(`for (var rtWalkStep${i} = 0u; rtWalkStep${i} < 0xffffffffu; rtWalkStep${i}++) {`);
-      expect(out).not.toContain(`rtWalkStep${loops}`);
-      const closest = out.slice(out.indexOf('fn bvhWalkClosest'), out.indexOf('fn bvhWalkAny'));
-      expect(closest.trimEnd()).toMatch(/return BvhHit\(-1\.0, 0u, 0u, vec2f\(0\.0\), true, BVH_NO_MATERIAL, vec3f\(0\.0\)\);\s*\}$/);
-      const any = out.slice(out.indexOf('fn bvhWalkAny'));
-      expect(any.slice(0, any.indexOf('\n}\n') + 2)).toMatch(/return false;\s*\}$/);
-    }
-  });
-});
+/** The one loop shape Tint leaves without a counter: index declared in the init, compared with a literal first, `++`. */
+const LITERAL_FOR = /^for \(var (\w+) = \d+u?; \1 < (?:0x[0-9a-f]+|\d+)u?; \1\+\+\)$/;
+/** Runtime-bounded loops that remain: a leaf's triangle loop (P-W1 measured no cost for these). */
+const ALLOWED = new Set(['for (var i = 0u; i < count; i += 1u)']);
 
-describe('rtBoundWalkLoops (P-W1)', () => {
-  it('applies to every walk variant of the installed bvh', () => {
-    for (const options of variants) expect(rtBoundWalkLoopsApplies(traceModuleWgsl(options)), JSON.stringify(options)).toBe(true);
-  });
-
-  it('leaves no bare loop in the walk, bounds four loops with unique constant-bounded indices, and gives both walks a final return', () => {
+describe('bvh walk loops (P-W1, bvh#3)', () => {
+  it('has no `loop {}` or `while`, and every `for` either has a literal bound or is a leaf triangle loop, in every walk variant', () => {
     for (const options of variants) {
-      const out = rtBoundWalkLoops(traceModuleWgsl(options));
-      expect(out).not.toMatch(/\bloop \{/);
-      for (let i = 0; i < 4; i++) expect(out).toContain(`for (var rtWalkStep${i} = 0u; rtWalkStep${i} < 0xffffffffu; rtWalkStep${i}++) {`);
-      expect(out).not.toContain('rtWalkStep4');
-      const closest = out.slice(out.indexOf('fn bvhWalkClosest'), out.indexOf('fn bvhWalkAny'));
-      expect(closest.trimEnd()).toMatch(/return bvhFinishClosest\(result, hitRecord, hitSlot\);\s*\}$/);
-      const any = out.slice(out.indexOf('fn bvhWalkAny'));
-      expect(any.slice(0, any.indexOf('\n}\n') + 2)).toMatch(/return false;\s*\}$/);
+      const walk = stripWgslComments(traceModuleWgsl(options));
+      const label = JSON.stringify(options);
+      expect(walk, label).not.toMatch(/\bloop\s*\{/);
+      expect(walk, label).not.toMatch(/\bwhile\b/);
+      const fors = walk.match(/\bfor \([^)]*\)/g) ?? [];
+      expect(fors.length, label).toBeGreaterThan(0);
+      for (const f of fors) expect(LITERAL_FOR.test(f) || ALLOWED.has(f), `${label}: ${f}`).toBe(true);
     }
-  });
-
-  it('returns text it does not recognise unchanged', () => {
-    expect(rtBoundWalkLoops('fn f() { loop { break; } }')).toBe('fn f() { loop { break; } }');
   });
 });

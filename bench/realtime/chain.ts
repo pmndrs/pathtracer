@@ -4,9 +4,11 @@
  *   path tracer (integrator.frame, N samples)  ->  pack (planes -> denoiser / upscaler textures)  ->  Denoiser `DiffuseSpecularDenoiser`
  *   (SVGF, demodulated diffuse + specular, remodulated)  ->  composite (+ sky)  ->  pmndrs/upscaler temporal path (render res -> display res)
  *
- * One `PipelineArm` per arm. Jitter: the path tracer's sampler (pair 0, per pixel) is the pipeline's only jitter owner; the denoiser gets
- * `jitter` [0, 0] and the upscaler runs with `jitter: false` (it reprojects, clips and accumulates, but adds no camera offset). Motion is
- * jitter-free by construction (the planes project world points through the two unjittered cameras).
+ * One `PipelineArm` per arm. Jitter has exactly one owner (`PipelineSettings.jitter`): `'sampler'` (the path tracer's pair 0, a different
+ * point per pixel; the upscaler then runs with `jitter: false`), `'upscaler'` (the upscaler core's per-frame sequence: `nextJitter()` hands it to
+ * the path tracer's `setCameraJitter` and to the denoiser's camera, and the upscaler reconstructs with it) or `'centre'` (no jitter). Motion is
+ * jitter-free by construction (the planes project world points through the two unjittered cameras) and follows the `@pmndrs/motion-vectors`
+ * contract: `.xy` NDC current - previous, `.z` the flag (2 camera-only, 0 no surface, 4 no previous position), `.w` the previous linear depth.
  *
  * Shared by `bench/nrc/pipeline-session.ts` (the cache arms) and `bench/realtime/session.ts` (the plain real-time kernel, P4.5 / P4.6, no cache):
  * the chain does not care what filled the frame planes.
@@ -16,9 +18,9 @@
  */
 import { DiffuseSpecularDenoiser } from 'denoiser/realtime';
 import { ScalarReduction } from '@pmndrs/downsampler/webgpu';
-import { Upscaler } from '@pmndrs/upscaler';
+import { UpscalerCore, type JitterOffset } from '@pmndrs/upscaler/core';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
-import { AUTO_EXPOSURE, cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix, worldMatrix } from './chain-math.ts';
+import { AUTO_EXPOSURE, cameraKey, cross, norm, PIPE_FAR, PIPE_NEAR, projectionMatrix, sub, viewMatrix } from './chain-math.ts';
 
 export { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatrix } from './chain-math.ts';
 
@@ -26,66 +28,6 @@ export { PIPE_FAR, PIPE_NEAR, projectionMatrix, resample, viewMatrix, worldMatri
 const TEX = GPUTextureUsage.TEXTURE_BINDING;
 const COPY_DST_T = GPUTextureUsage.COPY_DST;
 const COPY_SRC_T = GPUTextureUsage.COPY_SRC;
-
-/**
- * The camera object the upscaler reads (it is written for three's cameras: `near`, `far`, `isPerspectiveCamera`, `projectionMatrix`,
- * `matrixWorld`, `matrixWorldInverse`, and it calls `updateProjectionMatrix` / `updateMatrixWorld`). Only `.elements` of the matrices is read.
- */
-class UpscalerCamera {
-  readonly isPerspectiveCamera = true;
-  near = PIPE_NEAR;
-  far = PIPE_FAR;
-  readonly projectionMatrix = { elements: new Float32Array(16) };
-  readonly matrixWorld = { elements: new Float32Array(16) };
-  readonly matrixWorldInverse = { elements: new Float32Array(16) };
-  set(c: PtLookAtCamera, aspect: number): void {
-    this.projectionMatrix.elements.set(projectionMatrix(c.yFovDeg, aspect, this.near, this.far));
-    this.matrixWorld.elements.set(worldMatrix(c));
-    this.matrixWorldInverse.elements.set(viewMatrix(c));
-  }
-  updateProjectionMatrix(): void {}
-  updateMatrixWorld(): void {}
-}
-
-/**
- * The renderer the upscaler expects is three's `WebGPURenderer`; it only uses `backend.device`, `backend.get(texture).texture` and
- * `initTexture(texture)` for its own StorageTextures (three r186 shapes, `upscaler/src/internal/threeWebGPU.ts`). This stand-in serves them
- * from our device, so no three renderer runs. Inputs are registered as plain key objects (`texture()`).
- */
-class UpscalerHost {
-  private readonly map = new WeakMap<object, { texture: GPUTexture }>();
-  readonly device: GPUDevice;
-  readonly backend: { device: GPUDevice; get: (o: object) => { texture: GPUTexture } | undefined };
-  constructor(device: GPUDevice) {
-    this.device = device;
-    this.backend = { device, get: (o) => this.map.get(o) };
-  }
-  /** three StorageTexture -> GPUTexture: (format, type) RGBA + HalfFloat = rgba16float, Red + Float = r32float, RGBA + UnsignedByte = rgba8unorm. */
-  initTexture(tex: { image: { width: number; height: number }; format: number; type: number; name?: string; addEventListener(type: 'dispose', listener: () => void): void }): void {
-    if (this.map.has(tex)) return;
-    const RGBA = 1023;
-    const RED = 1028;
-    const FLOAT = 1015;
-    const HALF = 1016;
-    const UBYTE = 1009;
-    const format: GPUTextureFormat | null = tex.format === RGBA && tex.type === HALF ? 'rgba16float' : tex.format === RED && tex.type === FLOAT ? 'r32float' : tex.format === RGBA && tex.type === UBYTE ? 'rgba8unorm' : null;
-    if (!format) throw new Error(`UpscalerHost: no format for three texture "${tex.name}" (format ${tex.format}, type ${tex.type})`);
-    const texture = this.device.createTexture({ label: tex.name ?? 'upscaler', size: { width: tex.image.width, height: tex.image.height }, format, usage: TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T | COPY_DST_T });
-    this.map.set(tex, { texture });
-    tex.addEventListener('dispose', () => { texture.destroy(); this.map.delete(tex); });
-  }
-  /** A key object the upscaler accepts as a three texture, backed by `texture`. */
-  texture(texture: GPUTexture, name: string): object {
-    const key = { name, uuid: name };
-    this.map.set(key, { texture });
-    return key;
-  }
-  gpu(key: object): GPUTexture {
-    const t = this.map.get(key)?.texture;
-    if (!t) throw new Error('UpscalerHost: unknown texture');
-    return t;
-  }
-}
 
 // ---------------------------------------------------------------- WGSL
 
@@ -134,7 +76,7 @@ fn pipeAccumulate(@builtin(global_invocation_id) gid: vec3u) {
  * 8..12 r32float (viewZ, motionZ, roughness, diffuse hit distance, specular hit distance).
  */
 const PACK_WGSL = /* wgsl */ `
-struct P { w: u32, h: u32, spp: f32, stride8: u32, stride4: u32, base4: u32, _a: u32, _b: u32 }
+struct P { w: u32, h: u32, spp: f32, stride8: u32, stride4: u32, base4: u32, reset: u32, _b: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> sums: array<vec4f>;
 @group(0) @binding(2) var<storage, read> planes: array<vec4f>;
@@ -172,7 +114,15 @@ fn pipePack(@builtin(global_invocation_id) gid: vec3u) {
   put16(3u, x, y, vec4f(aF * signalInv, sums[3u * n + i].w * signalInv));   // w: share of specular-class samples
   put16(4u, x, y, vec4f(sF * signalInv, sums[4u * n + i].w * signalInv));   // w: share of samples whose primary ray hit
   put16(5u, x, y, vec4f(nz.xyz, 0.0));
-  put16(6u, x, y, vec4f(mo.xy, 0.0, 0.0));
+  // Motion in the @pmndrs/motion-vectors contract: .z flag (0 no surface, 2 camera-only: the planes' motion is the camera's, V124;
+  // 4 no previous position: a cut, or the point was behind the previous camera), .w the previous linear depth (-(viewZ + motionZ)).
+  var motion = vec4f(0.0);
+  if (nz.w < 0.0) {
+    let prevDepth = -(nz.w + mo.w);
+    if (p.reset == 1u || !(prevDepth > 0.0)) { motion = vec4f(0.0, 0.0, 4.0, 0.0); }
+    else { motion = vec4f(mo.xy, 2.0, prevDepth); }
+  }
+  put16(6u, x, y, motion);
   put16(7u, x, y, clampHalf(vec4f(sums[5u * n + i].xyz * signalInv, 1.0)));   // emission: mean over the samples, added back after the filter
   put32(0u, x, y, nz.w);
   put32(1u, x, y, mo.w);
@@ -445,6 +395,12 @@ export interface PipelineSettings {
    */
   near?: number;
   far?: number;
+  /**
+   * Who owns the camera jitter (one owner per pipeline). `'sampler'` (default): the path tracer's own per-pixel point, the upscaler runs with
+   * `jitter: false`. `'upscaler'`: the upscaler core's per-frame sequence (`nextJitter()`; the kernels need `integrator.cameraJitter: 'engine'`).
+   * `'centre'`: no jitter (pixel centres; aliased, for diagnosis).
+   */
+  jitter?: 'sampler' | 'upscaler' | 'centre';
 }
 
 const align = (n: number, a: number) => Math.ceil(n / a) * a;
@@ -465,9 +421,12 @@ export class PipelineArm {
   denoiser!: DiffuseSpecularDenoiser;
   upscalePath: 'temporal' | 'spatial' | 'bilinear' = 'temporal';
   private activePath = this.upscalePath;
-  readonly upscaler!: Upscaler;
-  private readonly host!: UpscalerHost;
-  private readonly upCamera = new UpscalerCamera();
+  /** The upscaler's engine-free core (`@pmndrs/upscaler/core`): our textures go in as they are. */
+  readonly upscaler!: UpscalerCore;
+  /** This frame's camera jitter (pixels, x right, y down; [0, 0] unless the upscaler owns it). Set by `nextJitter()`. */
+  jitter: JitterOffset = { x: 0, y: 0 };
+  /** N11.18: A-SVGF gradient samples of this frame for SVGF's `antiLag: 'gradient'` (one texel per 3 x 3 stratum); null = none (the option then sees no valid sample). */
+  gradient: { diffuse: GPUTexture; specular: GPUTexture } | null = null;
   private readonly sums!: GPUBuffer;
   private readonly packBuf!: GPUBuffer;
   private readonly packParams!: GPUBuffer;
@@ -490,7 +449,6 @@ export class PipelineArm {
   readonly depth!: GPUTexture;
   /** Denoised + composited colour (render res): the upscaler's input. */
   readonly color!: GPUTexture;
-  private readonly keys!: { color: object; depth: object; velocity: object; reactive?: object };
   /** Reactive mask (rgba8unorm, `.r`, render res; only with `settings.reactive`) and the display-referred output (rgba8unorm sRGB, display res). */
   readonly reactiveMask?: GPUTexture;
   readonly display!: GPUTexture;
@@ -605,14 +563,12 @@ export class PipelineArm {
     const emisHist = et ? ([mk('emission history a', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T), mk('emission history b', 'rgba16float', TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T)] as [GPUTexture, GPUTexture]) : undefined;
     const emisPipe = et ? await device.createComputePipelineAsync({ label: `${label} emission temporal`, layout: 'auto', compute: { module: module(EMIS_TEMPORAL_WGSL, 'emission temporal'), entryPoint: 'pipeEmisTemporal' } }) : undefined;
     const emisParams = et ? device.createBuffer({ label: `${label} emission params`, size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : undefined;
-    const host = new UpscalerHost(device);
-    const upscaler = new Upscaler({ renderer: host as never });
-    upscaler.configure({ displayWidth: s.displayWidth, displayHeight: s.displayHeight, renderWidth: w, renderHeight: h, path: 'temporal', jitter: false });
-    await upscaler.init();
+    const upscaler = new UpscalerCore({ device });
+    upscaler.configure({ displayWidth: s.displayWidth, displayHeight: s.displayHeight, renderWidth: w, renderHeight: h, path: 'temporal', jitter: s.jitter === 'upscaler' });
+    await upscaler.prepare();
     Object.assign(upscaler.settings, s.upscaler ?? {});
-    const keys = { color: host.texture(color, `${label} color`), depth: host.texture(depth, `${label} depth`), velocity: host.texture(tex.motion, `${label} motion`), ...(reactiveMask ? { reactive: host.texture(reactiveMask, `${label} reactive`) } : {}) };
     // The accumulate and pack groups need the kernel's planes buffer: built on the first `accumulate`.
-    const arm = new PipelineArm({ device, s, denoiser, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, keys, oidnPrepPipe, oidnParams, oidnProg, oidnTex, display, reactiveMask, reactivePipe, reactiveParams, tonemapPipe, tonemapParams, emisHist, emisPipe, emisParams });
+    const arm = new PipelineArm({ device, s, denoiser, upscaler, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, flickerPipe, stride8, stride4, base4, tex, depth, color, oidnPrepPipe, oidnParams, oidnProg, oidnTex, display, reactiveMask, reactivePipe, reactiveParams, tonemapPipe, tonemapParams, emisHist, emisPipe, emisParams });
     if (et) arm.emissionTemporal = { enabled: true, alpha: et.alpha ?? 0.1, clip: et.clip ?? 0 };
     arm.setDenoiser(s.denoise ?? 'svgf', s.oidn ?? {});
     return arm;
@@ -645,11 +601,43 @@ export class PipelineArm {
   }
 
   setSvgfAlpha(alpha: number): void {
-    if ('temporalAlpha' in this.denoiser.options.diffuse && this.denoiser.options.diffuse.temporalAlpha === alpha) return;
+    this.setDenoiserOptions({ ...this.denoiserOverrides, temporalAlpha: alpha });
+  }
+
+  /** SVGF options on top of `settings.denoiser` (the last `setDenoiserOptions`). */
+  private denoiserOverrides: Record<string, unknown> = {};
+  private denoiserKey = '{}';
+
+  /**
+   * Rebuilds the SVGF denoiser with `options` on top of `settings.denoiser` (`remodulate` stays on) and drops its history; a call with the
+   * options already in use does nothing. The bench's chain-debug page drives every SVGF option through it.
+   */
+  setDenoiserOptions(options: Record<string, unknown>): void {
+    const key = JSON.stringify(options);
+    if (key === this.denoiserKey) return;
+    this.denoiserKey = key;
+    this.denoiserOverrides = { ...options };
     this.denoiser.dispose();
-    this.denoiser = new DiffuseSpecularDenoiser(this.device, { ...this.s.denoiser, temporalAlpha: alpha, remodulate: true });
+    this.denoiser = new DiffuseSpecularDenoiser(this.device, { ...this.s.denoiser, ...options, remodulate: true } as never);
     this.denoiser.configure({ width: this.s.width, height: this.s.height });
+    this.lastSvgf = null;
     this.resetHistory();
+  }
+
+  /** The SVGF outputs of the last `post` (diffuse and specular, remodulated, render res); null before the first SVGF frame. */
+  lastSvgf: { diffuse: GPUTexture; specular: GPUTexture } | null = null;
+
+  /**
+   * Internal textures of the denoiser (the Denoiser package's `@internal` debug access, may move): 'accum' = the diffuse signal's temporal
+   * accumulation (rgb, alpha = history length in frames), 'gradient' = the anti-lag lambda (with `antiLag` on).
+   */
+  denoiserDebug(name: 'accum' | 'gradient'): GPUTexture | undefined {
+    return (this.denoiser as unknown as { pipes: { debugTexture(n: string): GPUTexture | undefined }[] }).pipes[0]?.debugTexture(name);
+  }
+
+  /** What OIDN is fed (the progressive mean of the raw beauty, the albedo factor, the view-space normal; render res, rgba16float). */
+  get oidnInputs(): { color: GPUTexture; albedo: GPUTexture; normal: GPUTexture } {
+    return this.oidnTex;
   }
 
   /** Loads the OIDN networks of the current settings (await before timing). */
@@ -698,7 +686,7 @@ export class PipelineArm {
     const p = new ArrayBuffer(32);
     new Uint32Array(p, 0, 2).set([w, h]);
     new Float32Array(p, 8, 1).set([spp]);
-    new Uint32Array(p, 12, 3).set([this.stride8, this.stride4, this.base4]);
+    new Uint32Array(p, 12, 4).set([this.stride8, this.stride4, this.base4, this.resetNext ? 1 : 0]);
     this.device.queue.writeBuffer(this.packParams, 0, p);
     const pass = encoder.beginComputePass({ label: 'pipe pack' });
     pass.setPipeline(this.packPipe);
@@ -744,10 +732,11 @@ export class PipelineArm {
     const kind: DenoiserKind = options.denoise === false ? 'none' : this.kind;
     if (kind === 'svgf') {
       const dOut = this.denoiser.dispatchBoth(
-        { diffuse: { radiance: t.diffuse, hitDistance: t.hitD }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF } } as never,
+        { diffuse: { radiance: t.diffuse, hitDistance: t.hitD, ...(this.gradient ? { gradient: this.gradient.diffuse } : {}) }, specular: { radiance: t.specular, hitDistance: t.hitS, demodulation: t.specF, ...(this.gradient ? { gradient: this.gradient.specular } : {}) } } as never,
         { depth: this.depth, normal: t.normal, motion: t.motion, roughness: t.roughness, albedo: t.albedo, viewZ: t.viewZ, motionZ: t.motionZ },
-        { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near, far, jitter: [0, 0], position: [...camera.position] as [number, number, number] },
+        { view, projection: proj, prevView: this.prevView as Float32Array, prevProjection: this.prevProj as Float32Array, near, far, jitter: [this.jitter.x, this.jitter.y], position: [...camera.position] as [number, number, number] },
       ) as unknown as { diffuse: GPUTexture; specular: GPUTexture };
+      this.lastSvgf = dOut;
       const encoder = this.device.createCommandEncoder({ label: 'pipe composite' });
       let emission = t.emission;
       if (this.emisHist && this.emisPipe && this.emisParams) {
@@ -796,8 +785,8 @@ export class PipelineArm {
     }
     if (this.activePath !== this.upscalePath) {
       this.activePath = this.upscalePath;
-      this.upscaler.configure({ displayWidth: this.s.displayWidth, displayHeight: this.s.displayHeight, renderWidth: w, renderHeight: h, path: this.activePath, jitter: false });
-      await this.upscaler.init();
+      this.upscaler.configure({ displayWidth: this.s.displayWidth, displayHeight: this.s.displayHeight, renderWidth: w, renderHeight: h, path: this.activePath, jitter: this.s.jitter === 'upscaler' });
+      await this.upscaler.prepare();
       this.tonemapGroup = null;
     }
     if (options.upscale !== false) this.upscale(camera, reset, options.deltaTime ?? 1 / 60, kind === 'svgf' && this.reactiveEnabled);
@@ -806,14 +795,22 @@ export class PipelineArm {
     this.prevProj = proj;
   }
 
+  /**
+   * Starts a frame's jitter: with `jitter: 'upscaler'` the upscaler core's next sequence offset (render it with `setCameraJitter`), else [0, 0].
+   * Call once per rendered frame, before the path tracing of that frame.
+   */
+  nextJitter(): JitterOffset {
+    const j = this.s.jitter === 'upscaler' ? this.upscaler.beginFrame() : null;
+    this.jitter = { x: j?.x ?? 0, y: j?.y ?? 0 };
+    return this.jitter;
+  }
+
   /** The upscaler on `color` (render res -> display res). `reactive`: pass the reactive mask (only when `settings.reactive` and the SVGF branch wrote it this frame). */
-  upscale(camera: PtLookAtCamera, reset: boolean, deltaTime = 1 / 60, reactive = false): void {
-    this.upCamera.near = this.s.near ?? PIPE_NEAR;
-    this.upCamera.far = this.s.far ?? PIPE_FAR;
-    this.upCamera.set(camera, this.s.width / this.s.height);
-    this.upscaler.beginFrame(this.upCamera as never);
-    this.upscaler.endFrame(this.upCamera as never);
-    this.upscaler.dispatch({ color: this.keys.color, depth: this.keys.depth, velocity: this.keys.velocity, ...(reactive && this.keys.reactive ? { reactive: this.keys.reactive } : {}), reset, deltaTime } as never, this.upCamera as never);
+  upscale(_camera: PtLookAtCamera, reset: boolean, deltaTime = 1 / 60, reactive = false): void {
+    this.upscaler.dispatch(
+      { color: this.color, depth: this.depth, velocity: this.tex.motion, ...(reactive && this.reactiveMask ? { reactive: this.reactiveMask } : {}), reset, deltaTime },
+      { near: this.s.near ?? PIPE_NEAR, far: this.s.far ?? PIPE_FAR, perspective: true },
+    );
   }
 
   /**
@@ -924,7 +921,7 @@ export class PipelineArm {
   stage(s: PipelineStage): GPUTexture {
     if (s === 'raw') return this.tex.raw;
     if (s === 'denoised') return this.color;
-    return this.host.gpu(this.upscaler.outputTexture as unknown as object);
+    return this.upscaler.output;
   }
 
   // ---- stability meter (headless twin): per-pixel sum of |L_t - L_(t-1)| per stage, read once at the end.

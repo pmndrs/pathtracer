@@ -41,6 +41,7 @@ export function ptwfUnsupported(options: PtIntegratorOptions): string | null {
   // P5 follow-up (V270): `integrator.volumes` (the intersect kernel runs free flight and the interface skips, shade handles the scatter vertex, the shadow kernel the transmittance) and
   // `integrator.spectral` (the wavelengths are recomputed from pixel and sample in shade; one hero bit in the path state) run on the wavefront.
   // P4.1b: `sampler: 'bluenoise'` and `integrator.frame` run on the wavefront (the frame planes live in the accumulation buffer's tail, like the AOVs: the two cannot be combined).
+  if (o.cameraJitter === 'engine') return "integrator.cameraJitter 'engine' (the engine-owned camera jitter is megakernel only)";
   if (o.volumes?.equiangular) return 'integrator.volumes.equiangular (equiangular distance sampling builds on the forced NEE, megakernel only: V4.1)';
   if (o.volumes?.guiding === 'vspg') return "integrator.volumes.guiding 'vspg' (volume scattering probability guiding is megakernel only: V4.3)";
   if (o.volumes?.marchSamples && o.volumes.marchSamples > 1) return 'integrator.volumes.marchSamples (stratified march estimate builds on the forced NEE, megakernel only: V7.1)';

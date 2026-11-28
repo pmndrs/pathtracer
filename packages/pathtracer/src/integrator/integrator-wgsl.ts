@@ -154,6 +154,13 @@ export interface PtIntegratorOptions extends PtBsdfOptions {
    */
   primary?: PtPrimary;
   /**
+   * Who places the camera ray inside the pixel. `'sampler'` (default): the sampler's pair 0, a different point per pixel and sample (the kernel text is unchanged).
+   * `'engine'`: one offset for the whole image per encode, set with `PtMegakernel.setCameraJitter(x, y)` (pixels, [-0.5, 0.5], 0 = centre; it rides in the w lanes of
+   * `origin` / `right`, as the V-buffer's does), so the real-time chain can own the jitter (a fixed centre, or a per-frame sequence a temporal upscaler knows) and the
+   * 1-spp guides do not flip between foreground and background at an edge every frame. Megakernel only; pair 0 is then not consumed. Implied by `primary: 'vbuffer'`.
+   */
+  cameraJitter?: 'sampler' | 'engine';
+  /**
    * R1, ray-class material LOD (a real-time setting, BIASED: never for reference renders). `'full'` (default): every vertex evaluates the full
    * material and the kernel text is unchanged. `'secondary'`: vertices at depth >= `materialLodDepth` (the hits of indirect rays) evaluate a reduced
    * material (`ptBsdfReduced`, adapter.ts): the layered lobe / coat becomes a stochastic GGX-or-Lambert choice with the same directional albedo, a coated
@@ -257,6 +264,7 @@ export interface ResolvedIntegratorOptions {
   counters: boolean;
   aovs: boolean;
   primary: PtPrimary;
+  cameraJitter: 'sampler' | 'engine';
   /** R1: `'off'` (full material everywhere: no code changes), `'branch'` (megakernel and wavefront primary kernel: `depth >= lodDepth` at run time), `'always'` (wavefront secondary shade kernel). */
   lod: 'off' | 'branch' | 'always';
   lodDepth: number;
@@ -331,7 +339,7 @@ export function resolveIntegratorOptions(o: PtIntegratorOptions = {}): ResolvedI
   const spectral = resolveSpectralOptions(o.spectral);
   if (spectral && (o.hooks || o.frame || o.aovs || o.restir)) throw new Error('integrator.spectral does not combine with hooks, frame, aovs or restir (their RGB planes / callbacks are not wavelength aware)');
   if (spectral && o.volumes) throw new Error('integrator.spectral does not combine with volumes yet (media sigma_a / sigma_s are RGB and the delta-tracking lanes are not wavelength aware)');
-  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', frameMedia: !!(o.frame && o.volumes && o.frameMedia), accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
+  return { sampler: o.sampler ?? 'owen-sobol', blueNoise: { ...(o.blueNoisePairs !== undefined ? { pairs: o.blueNoisePairs } : {}), ...(o.blueNoiseShift ? { shift: o.blueNoiseShift } : {}) }, frame: o.frame ?? false, frameEmission: o.frame ? (o.frameEmission ?? 'mirror') : 'none', frameMedia: !!(o.frame && o.volumes && o.frameMedia), accumulate: o.accumulate ?? !(o.frame ?? false), nee: o.nee ?? true, envSampling: o.envSampling ?? 'uniform', envMap: o.envMap ?? false, sunVisible: o.sunVisible ?? false, textures: o.textures ?? false, textureLod: o.textureLod ?? 0, alphaMask, alphaPolicy, alphaShadow, alphaRoulette, alphaFirstK, alphaCoverage, alphaMixedMask, alphaTransmit, materials: o.materials ?? null, hooks: o.hooks ?? null, counters: o.counters ?? false, aovs: o.aovs ?? false, primary: o.primary ?? 'trace', cameraJitter: o.cameraJitter ?? 'sampler', lod: (o.materialLod ?? 'full') === 'secondary' ? (o.lodKernel === 'secondary' ? 'always' : 'branch') : 'off', lodDepth: Math.max(0, Math.floor(o.materialLodDepth ?? 1)), restir: !!o.restir, restirShared: !!(o.restir && o.restir.sharedHit && (o.primary ?? 'trace') === 'trace'), restirGi: !!(o.restir && o.restir.gi), volumes: o.volumes ?? null, spectral, mtlx: !!o.materialx && (o.textures ?? false), mtlxNormal: !!o.materialx?.normal && (o.textures ?? false) };
 }
 
 /** Shadow rays of this kernel honour cutouts (`ptVisibleMasked`); false: plain any-hit `rtVisible`. Only meaningful with `alphaMask`. */
@@ -894,7 +902,7 @@ ${sd ? `    let maxVolDepth = bitcast<u32>(ptParams.forward.w);
 ` : ''}    let rrStart = ptParams.limits.y;
     let pixelSeed = ptPixelSeed(px.x, px.y, dims.w);
 ${spec ? `    ptSpecBegin(ptSample2D(pixelSeed, sampleIndex, 1u).x);
-` : ''}    let jitter = ${vb ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER)'};
+` : ''}    let jitter = ${vb || o.cameraJitter === 'engine' ? 'vec2f(ptParams.origin.w, ptParams.right.w)' : 'ptSample2D(pixelSeed, sampleIndex, PT_PAIR_JITTER)'};
     let ndc = vec2f(((f32(px.x) + jitter.x) / f32(dims.x)) * 2.0 - 1.0, 1.0 - ((f32(px.y) + jitter.y) / f32(dims.y)) * 2.0);
     let origin = ptParams.origin.xyz;
     var ray = RtRay(origin, 0.0, normalize(ptParams.forward.xyz + ptParams.right.xyz * ndc.x + ptParams.up.xyz * ndc.y), PT_FAR);

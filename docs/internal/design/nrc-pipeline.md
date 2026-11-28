@@ -86,11 +86,9 @@ weights). `denoiseTextures` waits for its GPU work (no buffer is mapped), so `po
 
 ## 4. Upscaler: pmndrs/upscaler, temporal path
 
-The only upscaler sibling is pmndrs/upscaler (`GitHub/upscaler/upscaler` on Windows, `~/Developer/upscaler` on the Mac; bench links it as
-`@pmndrs/upscaler` via `link:../../upscaler`, a worktree needs the `.claude/worktrees/upscaler` junction). Its API wants three's
-`WebGPURenderer`, but it only touches `backend.device`, `backend.get(texture).texture` and `initTexture(texture)` for its own
-StorageTextures. `UpscalerHost` (bench/realtime/chain.ts) provides those three from our device, so no three renderer runs; its camera stand-in gives
-`near`, `far`, `projectionMatrix`, `matrixWorld`, `matrixWorldInverse`. Inputs: colour (rgba16float, denoised), depth (depth32float from
+The only upscaler sibling is pmndrs/upscaler (`GitHub/upscaler/upscaler` on Windows, `~/Developer/upscaler` on the Mac; bench installs
+`@pmndrs/upscaler` 0.6.0 from npm since 2026-11-28; it linked `../../upscaler` before). It is driven through its engine-free core
+(`UpscalerCore`, `@pmndrs/upscaler/core`): our textures go in as they are, the camera is `{ near, far, perspective }`. Inputs: colour (rgba16float, denoised), depth (depth32float from
 viewZ), velocity (our motion plane: NDC current − previous, the same convention as three's `velocity` node). Settings: defaults
 (sharpness 0.8, auto exposure, 24-frame accumulation), the same in both arms.
 

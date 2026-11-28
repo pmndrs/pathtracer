@@ -19,7 +19,7 @@
  */
 import { DiffuseSpecularDenoiser } from 'denoiser/realtime';
 import type { Denoiser } from 'denoiser';
-import { Upscaler } from '@pmndrs/upscaler';
+import { UpscalerCore } from '@pmndrs/upscaler/core';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 
 const TEX = GPUTextureUsage.TEXTURE_BINDING;
@@ -51,14 +51,6 @@ export function viewMatrix(c: PtLookAtCamera): Float32Array {
   return new Float32Array([r[0], u[0], -f[0], 0, r[1], u[1], -f[1], 0, r[2], u[2], -f[2], 0, -dot(r, p), -dot(u, p), dot(f, p), 1]);
 }
 
-function worldMatrix(c: PtLookAtCamera): Float32Array {
-  const f = norm(sub(c.target, c.position));
-  const r = norm(cross(f, c.up));
-  const u = cross(r, f);
-  const p = c.position;
-  return new Float32Array([r[0], r[1], r[2], 0, u[0], u[1], u[2], 0, -f[0], -f[1], -f[2], 0, p[0], p[1], p[2], 1]);
-}
-
 /** three's `makePerspective` for WebGPU (depth 0 at near, 1 at far). */
 export function projectionMatrix(yFovDeg: number, aspect: number, near: number, far: number): Float32Array {
   const t = 1 / Math.tan((yFovDeg * Math.PI) / 360);
@@ -69,62 +61,6 @@ export function projectionMatrix(yFovDeg: number, aspect: number, near: number, 
   m[11] = -1;
   m[14] = (-far * near) / (far - near);
   return m;
-}
-
-// ---------------------------------------------------------------- the upscaler's three-shaped inputs
-
-/** The camera object the upscaler reads (written for three's cameras; only `.elements` of the matrices is read). */
-class UpscalerCamera {
-  readonly isPerspectiveCamera = true;
-  near = 0.05;
-  far = 200;
-  readonly projectionMatrix = { elements: new Float32Array(16) };
-  readonly matrixWorld = { elements: new Float32Array(16) };
-  readonly matrixWorldInverse = { elements: new Float32Array(16) };
-  set(c: PtLookAtCamera, aspect: number): void {
-    this.projectionMatrix.elements.set(projectionMatrix(c.yFovDeg, aspect, this.near, this.far));
-    this.matrixWorld.elements.set(worldMatrix(c));
-    this.matrixWorldInverse.elements.set(viewMatrix(c));
-  }
-  updateProjectionMatrix(): void {}
-  updateMatrixWorld(): void {}
-}
-
-/**
- * The upscaler is written for three's `WebGPURenderer` but only uses `backend.device`, `backend.get(texture).texture` and `initTexture(texture)`
- * for its own storage textures. This stand-in serves them from our device, so no three renderer runs; inputs are plain key objects (`texture()`).
- */
-class UpscalerHost {
-  private readonly map = new WeakMap<object, { texture: GPUTexture }>();
-  readonly device: GPUDevice;
-  readonly backend: { device: GPUDevice; get: (o: object) => { texture: GPUTexture } | undefined };
-  constructor(device: GPUDevice) {
-    this.device = device;
-    this.backend = { device, get: (o) => this.map.get(o) };
-  }
-  /** three StorageTexture -> GPUTexture: (format, type) RGBA + HalfFloat = rgba16float, Red + Float = r32float, RGBA + UnsignedByte = rgba8unorm. */
-  initTexture(tex: { image: { width: number; height: number }; format: number; type: number; name?: string; addEventListener(type: 'dispose', listener: () => void): void }): void {
-    if (this.map.has(tex)) return;
-    const RGBA = 1023, RED = 1028, FLOAT = 1015, HALF = 1016, UBYTE = 1009;
-    const format: GPUTextureFormat | null = tex.format === RGBA && tex.type === HALF ? 'rgba16float' : tex.format === RED && tex.type === FLOAT ? 'r32float' : tex.format === RGBA && tex.type === UBYTE ? 'rgba8unorm' : null;
-    if (!format) throw new Error(`UpscalerHost: no format for three texture "${tex.name}" (format ${tex.format}, type ${tex.type})`);
-    const texture = this.device.createTexture({ label: tex.name ?? 'upscaler', size: { width: tex.image.width, height: tex.image.height }, format, usage: TEX | GPUTextureUsage.STORAGE_BINDING | COPY_SRC_T | COPY_DST_T });
-    this.map.set(tex, { texture });
-    tex.addEventListener('dispose', () => {
-      texture.destroy();
-      this.map.delete(tex);
-    });
-  }
-  texture(texture: GPUTexture, name: string): object {
-    const key = { name, uuid: name };
-    this.map.set(key, { texture });
-    return key;
-  }
-  gpu(key: object): GPUTexture {
-    const t = this.map.get(key)?.texture;
-    if (!t) throw new Error('UpscalerHost: unknown texture');
-    return t;
-  }
 }
 
 // ---------------------------------------------------------------- WGSL
@@ -342,9 +278,8 @@ export class RealtimeChain {
   private oidnCount = 0;
   private oidnCamera = '';
   private oidnHeld = false;
-  private readonly upscaler: Upscaler;
-  private readonly host: UpscalerHost;
-  private readonly upCamera = new UpscalerCamera();
+  /** The upscaler's engine-free core (`@pmndrs/upscaler/core`): our textures go in as they are. */
+  private readonly upscaler: UpscalerCore;
   private readonly sums: GPUBuffer;
   private readonly packBuf: GPUBuffer;
   private readonly packParams: GPUBuffer;
@@ -365,15 +300,14 @@ export class RealtimeChain {
   private readonly depth: GPUTexture;
   /** Denoised and composited colour (render size): the upscaler's input. */
   private readonly color: GPUTexture;
-  private readonly keys: { color: object; depth: object; velocity: object };
   private prevView: Float32Array | null = null;
   private prevProj: Float32Array | null = null;
   private resetNext = true;
 
   private constructor(device: GPUDevice, s: RealtimeChainSettings, parts: {
-    svgf: DiffuseSpecularDenoiser; oidnPrepPipe: GPUComputePipeline; oidnParams: GPUBuffer; oidnProg: GPUBuffer; oidnTex: RealtimeChain['oidnTex']; upscaler: Upscaler; host: UpscalerHost; sums: GPUBuffer; packBuf: GPUBuffer; packParams: GPUBuffer; accumParams: GPUBuffer;
+    svgf: DiffuseSpecularDenoiser; oidnPrepPipe: GPUComputePipeline; oidnParams: GPUBuffer; oidnProg: GPUBuffer; oidnTex: RealtimeChain['oidnTex']; upscaler: UpscalerCore; sums: GPUBuffer; packBuf: GPUBuffer; packParams: GPUBuffer; accumParams: GPUBuffer;
     accumPipe: GPUComputePipeline; packPipe: GPUComputePipeline; compositePipe: GPUComputePipeline; depthPipe: GPURenderPipeline; depthGroup: GPUBindGroup;
-    stride8: number; stride4: number; base4: number; tex: RealtimeChain['tex']; depth: GPUTexture; color: GPUTexture; keys: RealtimeChain['keys'];
+    stride8: number; stride4: number; base4: number; tex: RealtimeChain['tex']; depth: GPUTexture; color: GPUTexture;
   }) {
     this.device = device;
     this.s = s;
@@ -383,7 +317,6 @@ export class RealtimeChain {
     this.oidnProg = parts.oidnProg;
     this.oidnTex = parts.oidnTex;
     this.upscaler = parts.upscaler;
-    this.host = parts.host;
     this.sums = parts.sums;
     this.packBuf = parts.packBuf;
     this.packParams = parts.packParams;
@@ -399,7 +332,6 @@ export class RealtimeChain {
     this.tex = parts.tex;
     this.depth = parts.depth;
     this.color = parts.color;
-    this.keys = parts.keys;
   }
 
   static async create(device: GPUDevice, s: RealtimeChainSettings): Promise<RealtimeChain> {
@@ -446,12 +378,10 @@ export class RealtimeChain {
 
     const svgf = new DiffuseSpecularDenoiser(device, { remodulate: true } as never);
     svgf.configure({ width: w, height: h });
-    const host = new UpscalerHost(device);
-    const upscaler = new Upscaler({ renderer: host as never });
+    const upscaler = new UpscalerCore({ device });
     upscaler.configure({ displayWidth: s.displayWidth, displayHeight: s.displayHeight, renderWidth: w, renderHeight: h, path: 'temporal', jitter: false });
-    await upscaler.init();
-    const keys = { color: host.texture(color, 'chain color'), depth: host.texture(depth, 'chain depth'), velocity: host.texture(tex.motion, 'chain motion') };
-    return new RealtimeChain(device, s, { svgf, oidnPrepPipe, oidnParams, oidnProg, oidnTex, upscaler, host, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, stride8, stride4, base4, tex, depth, color, keys });
+    await upscaler.prepare();
+    return new RealtimeChain(device, s, { svgf, oidnPrepPipe, oidnParams, oidnProg, oidnTex, upscaler, sums, packBuf, packParams, accumParams, accumPipe, packPipe, compositePipe, depthPipe, depthGroup, stride8, stride4, base4, tex, depth, color });
   }
 
   get denoiser(): DenoiserKind {
@@ -546,7 +476,7 @@ export class RealtimeChain {
     if (path === this.path) return;
     this.path = path;
     this.upscaler.configure({ displayWidth: this.s.displayWidth, displayHeight: this.s.displayHeight, renderWidth: this.s.width, renderHeight: this.s.height, path, jitter: false });
-    await this.upscaler.init();
+    await this.upscaler.prepare();
     this.resetNext = true;
   }
 
@@ -639,13 +569,8 @@ export class RealtimeChain {
   }
 
   private upscale(camera: PtLookAtCamera, reset: boolean, deltaTime: number, view: Float32Array, proj: Float32Array): void {
-    const { width: w, height: h, near, far } = this.s;
-    this.upCamera.near = near;
-    this.upCamera.far = far;
-    this.upCamera.set(camera, w / h);
-    this.upscaler.beginFrame(this.upCamera as never);
-    this.upscaler.endFrame(this.upCamera as never);
-    this.upscaler.dispatch({ color: this.keys.color, depth: this.keys.depth, velocity: this.keys.velocity, reset, deltaTime } as never, this.upCamera as never);
+    const { near, far } = this.s;
+    this.upscaler.dispatch({ color: this.color, depth: this.depth, velocity: this.tex.motion, reset, deltaTime }, { near, far, perspective: true });
     this.prevView = view;
     this.prevProj = proj;
   }
@@ -654,7 +579,7 @@ export class RealtimeChain {
   stage(s: ChainStage): GPUTexture {
     if (s === 'raw') return this.tex.raw;
     if (s === 'denoised') return this.color;
-    return this.host.gpu(this.upscaler.outputTexture as unknown as object);
+    return this.upscaler.output;
   }
 
   /** A stage as linear RGBA f32, row 0 = top (a readback for checks: never in a frame loop). */

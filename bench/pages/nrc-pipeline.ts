@@ -12,7 +12,9 @@
  * No readback in the frame loop; one frame in flight. Headless twin: nrc-pipeline-study.
  */
 import { pagesBase } from '../site-paths.ts';
-import { setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
+import { LIGHTING_FIELDS, lightingState, setupDaylight, updateDaylight } from '../nrc/daylight-controls.ts';
+import { forgetNetwork, loadNetwork, networkKey, saveNetwork, sceneHash, usableNetwork } from '../nrc/network-store.ts';
+import { cameraKey } from '../realtime/chain-math.ts';
 import { isInterior, loadInterior } from '../scenes/interiors.ts';
 import type { PtLookAtCamera } from '@pmndrs/pathtracer';
 import { uploadImage } from '../runner/page-client.ts';
@@ -23,6 +25,7 @@ import { phase10Settings } from '../nrc/phase10.ts';
 import { sponzaWhite } from '../scenes/tier2/sponza-white.ts';
 import { NrcPipelineSession, type ArmName } from '../nrc/pipeline-session.ts';
 import { readTextureRgba16f, type PipelineStage } from '../realtime/chain.ts';
+import { FlyCamera, flyInputFromCodes } from '../realtime/fly-camera.ts';
 import { materialArgs } from '../nrc/cache.ts';
 import { hasSubgroupMatrix, networkArg } from './mlp-common.ts';
 
@@ -66,6 +69,8 @@ fn tone(c: vec3f) -> vec3f {
 `;
 
 interface Live {
+  /** Key of this session's saved network (N11.9); empty when the cache has no weights to save. */
+  networkKey: string;
   session: NrcPipelineSession;
   scene: SceneDesc;
   context: GPUCanvasContext;
@@ -83,27 +88,49 @@ let split = 0.5;
 let fps = 0;
 let lastFrameEnd = 0;
 let lastFrameMs = 0;
+let lastTick = 0;
+/**
+ * While the camera moves (N11.13) the page trains less and keeps a shorter upscaler history. "Moving" is from the first frame whose
+ * camera differs from the last one until MOVING_HOLD_MS after the last such frame, so a pause between two key presses does not flap.
+ */
+const MOVING_HOLD_MS = 250;
+let lastCameraKey = '';
+let movedAt = -Infinity;
+function cameraMoving(now: number): boolean {
+  const key = cameraKey(fly.camera);
+  if (key !== lastCameraKey) {
+    if (lastCameraKey) movedAt = now;
+    lastCameraKey = key;
+  }
+  return now - movedAt < MOVING_HOLD_MS;
+}
+/** Saved network (N11.9): saved at most this often, and only after this many training steps under the current lighting. */
+const SAVE_EVERY_MS = 20000;
+const SAVE_MIN_STEPS = 600;
+let lastSaveAt = 0;
+let saving = false;
+/** `trained.steps` when the lighting last changed or the network was loaded / reset: the network is saved once it has relearned. */
+let networkFreshFrom = 0;
+/** Auto resolution: frame times (ms) at 960 x 540 with one side on screen; decided once from their median. */
+const AUTO_RES_SKIP = 60;
+const AUTO_RES_SAMPLES = 60;
+const AUTO_RES_SLOW_MS = 50;
+const RES_STORE = 'nrc-hero-res';
+let framesSinceBuild = 0;
+let autoResTimes: number[] = [];
+/** `KeyboardEvent.code`s held down. */
 const keys = new Set<string>();
-const cam = { position: [0, 0, 0] as [number, number, number], yaw: 0, pitch: 0, yFovDeg: 60, speed: 1 };
+/** Moved on a fixed step from real time on every animation frame, also while a render is in flight (fly-camera.ts). */
+const fly = new FlyCamera();
 
 function setStatus(text: string, error = false): void {
   statusEl.textContent = text;
   statusEl.classList.toggle('err', error);
 }
 
-function camera(): PtLookAtCamera {
-  const d = [Math.cos(cam.pitch) * Math.cos(cam.yaw), Math.sin(cam.pitch), Math.cos(cam.pitch) * Math.sin(cam.yaw)];
-  return { position: [...cam.position], target: [cam.position[0] + d[0]!, cam.position[1] + d[1]!, cam.position[2] + d[2]!], up: [0, 1, 0], yFovDeg: cam.yFovDeg };
-}
-
 function resetView(scene: SceneDesc, bounds: NrcPipelineSession['bounds']): void {
-  const c = scene.camera as PtLookAtCamera;
-  cam.position = [...c.position] as [number, number, number];
-  const d = [c.target[0] - c.position[0], c.target[1] - c.position[1], c.target[2] - c.position[2]];
-  cam.yaw = Math.atan2(d[2]!, d[0]!);
-  cam.pitch = Math.asin(d[1]! / Math.hypot(d[0]!, d[1]!, d[2]!));
-  cam.yFovDeg = c.yFovDeg;
-  cam.speed = 0.15 * Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
+  fly.setPose(scene.camera as PtLookAtCamera);
+  fly.speed = 0.15 * Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
 }
 
 function backendOptions(device: GPUDevice): void {
@@ -130,6 +157,8 @@ async function build(): Promise<void> {
     const [w, h] = value('res').split('x').map(Number) as [number, number];
     setStatus(`Loading ${sceneId} at ${w} × ${h}, compiling the kernels…`);
     const sameScene = live?.scene.name === sceneId;
+    // A rebuild of the same scene (resolution, layout) keeps what the network learned.
+    const carried = sameScene && live?.networkKey ? { key: live.networkKey, lighting: lightingState(), ...(await live.session.cache.exportNetwork().catch(() => undefined)) } : undefined;
     live?.params.destroy();
     live?.session.destroy();
     live = null;
@@ -167,7 +196,10 @@ async function build(): Promise<void> {
     const pipeline = await device.createRenderPipelineAsync({ label: 'nrc pipeline display', layout: 'auto', vertex: { module, entryPoint: 'vs' }, fragment: { module, entryPoint: 'fs', targets: [{ format }] }, primitive: { topology: 'triangle-list' } });
     const params = device.createBuffer({ label: 'nrc pipeline display params', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    live = { session, scene, context, pipeline, params, sampler, groups: new Map() };
+    const key = session.cache.canExportNetwork
+      ? networkKey({ sceneHash: await sceneHash(scene), network: JSON.stringify([network, backend === 'hash' ? 'hash' : preset ?? materialArgs(args.get('factorization'), args.get('materialInputs'), args.get('directionInput'))]), maxDepth: NrcPipelineSession.limits(session.options).maxDepth })
+      : '';
+    live = { networkKey: key, session, scene, context, pipeline, params, sampler, groups: new Map() };
     applyDenoiser();
     applyReconstruction();
     $('daylight').hidden = !isInterior(sceneId);
@@ -175,6 +207,22 @@ async function build(): Promise<void> {
       if (sameScene) updateDaylight(session);
       else setupDaylight(session);
     }
+    $<HTMLInputElement>('rememberNetwork').disabled = !key;
+    if (key) {
+      const lighting = lightingState();
+      // A carried network was read from this scene a moment ago; a stored one must match the key, the lighting and the weight count.
+      const kept = carried?.weights && carried.trained && carried.key === key && carried.weights.length === session.cache.weightCount ? { weights: carried.weights, trained: carried.trained } : undefined;
+      const stored = !kept && checked('rememberNetwork') ? await loadNetwork(key) : undefined;
+      const start = kept ?? (usableNetwork(stored, key, lighting, session.cache.weightCount) ? stored : undefined);
+      if (start) {
+        session.cache.loadWeights(start.weights, start.trained);
+        console.info(`nrc: ${kept ? 'kept the' : 'loaded the saved'} network (${start.trained.steps} training steps)`);
+      }
+    }
+    networkFreshFrom = session.cache.trained.steps;
+    lastSaveAt = performance.now();
+    framesSinceBuild = 0;
+    autoResTimes = [];
     session.cutNext();
     setStatus('');
   } catch (error) {
@@ -218,24 +266,6 @@ function encodeDisplay(l: Live): void {
   $('tagRight').textContent = c.warming ? `NRC warming · plain PT · ${samples.nrc} spp` : `Path tracing + NRC · ${samples.nrc} spp`;
 }
 
-function moveCamera(dt: number): boolean {
-  if (keys.size === 0) return false;
-  const f = [Math.cos(cam.yaw), 0, Math.sin(cam.yaw)];
-  const r = [-Math.sin(cam.yaw), 0, Math.cos(cam.yaw)];
-  const s = cam.speed * dt * (keys.has('shift') ? 3 : 1);
-  const mv = [0, 0, 0];
-  const add = (v: number[], k: number) => v.forEach((c, i) => (mv[i]! += c * k));
-  if (keys.has('w')) add(f, s);
-  if (keys.has('s')) add(f, -s);
-  if (keys.has('d')) add(r, s);
-  if (keys.has('a')) add(r, -s);
-  if (keys.has('e')) mv[1]! += s;
-  if (keys.has('q')) mv[1]! -= s;
-  if (mv.every((v) => v === 0)) return false;
-  cam.position = cam.position.map((v, i) => v + mv[i]!) as [number, number, number];
-  return true;
-}
-
 function armsOnScreen(): ArmName[] {
   const v = value('view');
   return v === 'plain' ? ['plain'] : v === 'nrc' ? ['nrc'] : ['plain', 'nrc'];
@@ -261,9 +291,54 @@ function gateFrames(): number {
   return autoGateFrames(value('denoiserSel'), perFrame);
 }
 
-/** Training steps and the warm-up gate from the controls (every frame: rAF loop and `step`). */
+/** Saves the network if it is worth it: remembered, past the warm-up gate, and trained long enough under the current lighting. */
+function saveTrainedNetwork(l: Live): void {
+  const { cache } = l.session;
+  if (saving || !l.networkKey || !checked('rememberNetwork') || cache.warming || cache.trained.steps - networkFreshFrom < SAVE_MIN_STEPS) return;
+  saving = true;
+  lastSaveAt = performance.now();
+  const lighting = lightingState();
+  void cache
+    .exportNetwork()
+    .then(({ weights, trained }) => (live === l && lighting === lightingState() ? saveNetwork({ key: l.networkKey, lighting, weights, trained, savedAt: Date.now() }) : false))
+    .catch(() => false)
+    .finally(() => { saving = false; });
+}
+
+/** Once per visit: if frames at 960 x 540 take longer than AUTO_RES_SLOW_MS, drop to 640 x 360 (the network is kept across the rebuild). */
+function autoResolution(l: Live): void {
+  if (!checked('autoRes') || value('res') !== '960x540' || armsOnScreen().length !== 1 || l.session.cache.warming) return;
+  if (++framesSinceBuild <= AUTO_RES_SKIP) return;
+  autoResTimes.push(lastFrameMs);
+  if (autoResTimes.length < AUTO_RES_SAMPLES) return;
+  const median = [...autoResTimes].sort((a, b) => a - b)[AUTO_RES_SAMPLES >> 1]!;
+  $<HTMLInputElement>('autoRes').checked = false;
+  const res = median > AUTO_RES_SLOW_MS ? '640x360' : '960x540';
+  rememberResolution(res, false);
+  console.info(`nrc: median frame ${median.toFixed(1)} ms at 960 x 540 -> ${res}`);
+  if (res === value('res')) return;
+  $<HTMLSelectElement>('res').value = res;
+  void build();
+}
+
+/** A size picked by hand is kept for later visits; the automatic choice only for this tab, so a busy moment does not stick. */
+function rememberResolution(res: string, manual: boolean): void {
+  try {
+    if (hero) (manual ? localStorage : sessionStorage).setItem(RES_STORE, res);
+  } catch {
+    // no storage: decided again next visit
+  }
+}
+
+/** Training steps, the upscaler history and the warm-up gate from the controls (every frame: rAF loop and `step`). */
 function applyCacheSettings(session: NrcPipelineSession): void {
-  session.cache.settings.stepsPerFrame = Math.max(0, Math.round(num('steps')));
+  const moving = cameraMoving(performance.now());
+  const steps = Math.max(0, Math.round(num('steps')));
+  session.cache.settings.stepsPerFrame = moving ? Math.min(steps, Math.max(0, Math.round(num('stepsMoving')))) : steps;
+  // A run-time setting of the upscaler: the history is kept, only its cap moves, so stopping grows it back without a reset.
+  const history = Math.max(1, Math.min(64, num('upHistory')));
+  const cap = moving ? Math.min(history, Math.max(1, num('upHistoryMoving') || history)) : history;
+  for (const arm of Object.values(session.arms)) if (arm.upscaler.settings.maxAccumulation !== cap) arm.upscaler.settings.maxAccumulation = cap;
   session.accumulateStill = checked('accumulateStill');
   session.svgfHistoryLimit = Math.max(0, Math.min(4096, Math.round(num('svgfHistoryLimit'))));
   session.nrcSpp = Math.max(1, Math.min(16, Math.round(num('nrcSpp')) || 1));
@@ -273,16 +348,19 @@ function applyCacheSettings(session: NrcPipelineSession): void {
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const l = live;
-  if (!l || busy || building || paused) return;
-  const dt = lastFrameEnd ? Math.min(0.1, (now - lastFrameEnd) / 1000) : 0;
-  moveCamera(dt);
+  // The camera follows real time whether or not a frame can start now: a render still in flight delays the picture, not the motion.
+  const dt = lastTick ? (now - lastTick) / 1000 : 0;
+  lastTick = now;
+  if (!l || building || paused) return;
+  fly.advance(dt, flyInputFromCodes(keys));
+  if (busy) return;
   applyCacheSettings(l.session);
   // Only the arms on screen render, so a single side shows its own frame rate.
   busy = true;
   const t0 = performance.now();
   // OIDN is awaited inside frame(); one frame in flight.
   void l.session
-    .frame(camera(), { arms: armsOnScreen(), train: checked('train') })
+    .frame(fly.camera, { arms: armsOnScreen(), train: checked('train') })
     .then(() => {
       encodeDisplay(l);
       return l.session.device.queue.onSubmittedWorkDone();
@@ -291,6 +369,8 @@ function frame(now: number): void {
       busy = false;
       const end = performance.now();
       lastFrameMs = end - t0;
+      if (end - lastSaveAt > SAVE_EVERY_MS && !cameraMoving(end)) saveTrainedNetwork(l);
+      autoResolution(l);
       if (lastFrameEnd) fps = fps ? 0.9 * fps + 0.1 * (1000 / (end - lastFrameEnd)) : 1000 / (end - lastFrameEnd);
       lastFrameEnd = end;
       const den = l.session.arms.nrc.lastDenoiser || l.session.arms.plain.lastDenoiser;
@@ -374,15 +454,25 @@ canvas.addEventListener('pointermove', (e) => {
     split = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
     return;
   }
-  cam.yaw += e.movementX * 0.004;
-  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch - e.movementY * 0.004));
+  fly.look(e.movementX * 0.004, -e.movementY * 0.004);
 });
 window.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).closest('input, select')) return;
-  keys.add(e.key.toLowerCase());
+  if ((e.target instanceof Element && e.target.closest('input, select, textarea')) || e.metaKey || e.ctrlKey || e.altKey) return;
+  keys.add(e.code);
+  // The arrows move the camera here, not the page.
+  if (e.code.startsWith('Arrow')) e.preventDefault();
 });
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  // macOS sends no keyup for other keys while Command is down: releasing it releases everything.
+  if (e.key === 'Meta') keys.clear();
+});
 window.addEventListener('blur', () => keys.clear());
+document.addEventListener('visibilitychange', () => {
+  keys.clear();
+  lastTick = 0;
+  if (document.hidden && live) saveTrainedNetwork(live);
+});
 
 $('view').addEventListener('change', () => live?.session.cutNext());
 for (const id of ['scene', 'res', 'backend', 'trainLayout', 'maxDepth', 'displayScale']) $(id).addEventListener('change', () => void build());
@@ -400,27 +490,44 @@ for (const id of ['denoiserSel', 'oidnAux', 'stillSamples']) $(id).addEventListe
 $('plainSpp').addEventListener('change', () => {
   if (live) live.session.plainSpp = Math.max(1, Math.min(16, Math.round(num('plainSpp')) || 1));
 });
-$('resetCache').addEventListener('click', () => { live?.session.cache.resetNetwork(); live?.session.cutNext(); });
+$('resetCache').addEventListener('click', () => {
+  if (!live) return;
+  live.session.cache.resetNetwork();
+  live.session.cutNext();
+  networkFreshFrom = 0;
+  if (live.networkKey) void forgetNetwork(live.networkKey);
+});
+// A resolution picked by hand is kept for the next visit and ends the automatic choice.
+$('res').addEventListener('change', () => {
+  $<HTMLInputElement>('autoRes').checked = false;
+  rememberResolution(value('res'), true);
+});
 $('fireflyClamp').addEventListener('change', () => live?.session.cutNext());
 for (const id of ['clearImage', 'accumulateStill', 'svgfHistoryLimit']) $(id).addEventListener(id === 'clearImage' ? 'click' : 'change', () => live?.session.cutNext());
 function applyReconstruction(): void {
   const path = value('upscalePath') as 'spatial' | 'bilinear' | 'temporal';
   for (const id of ['sharpness', 'rcasDenoise']) $<HTMLInputElement>(id).disabled = path === 'bilinear';
+  $<HTMLInputElement>('upAutoExposure').disabled = path !== 'temporal';
   $<HTMLInputElement>('upHistory').disabled = path !== 'temporal';
   $<HTMLInputElement>('svgfHistoryLimit').disabled = value('denoiserSel') !== 'svgf';
-  $<HTMLInputElement>('svgfAlpha').disabled = value('denoiserSel') !== 'svgf';
+  for (const id of ['svgfAlpha', 'antiLagLocal', 'antiLagKeep']) $<HTMLInputElement>(id).disabled = value('denoiserSel') !== 'svgf';
   $<HTMLSelectElement>('oidnAux').disabled = !value('denoiserSel').startsWith('oidn');
   $<HTMLInputElement>('stillSamples').disabled = value('denoiserSel') !== 'oidn';
   if (!live) return;
   for (const arm of Object.values(live.session.arms)) {
     arm.setFireflyClamp(Math.max(0, num('fireflyClamp')));
-    arm.setSvgfAlpha(Math.max(0.01, Math.min(1, num('svgfAlpha') || 0.1)));
+    // N11.18: the anti-lag options that keep a still view's history (A-SVGF 'auto' stays on; see chain-debug for the rest).
+    arm.setDenoiserOptions({
+      temporalAlpha: Math.max(0.01, Math.min(1, num('svgfAlpha') || 0.1)),
+      ...(checked('antiLagLocal') ? { antiLagRadius: 0 } : {}),
+      ...(checked('antiLagKeep') ? { antiLagHistoryScale: true } : {}),
+    });
     arm.upscalePath = path;
-    Object.assign(arm.upscaler.settings, { sharpness: Math.min(1, Math.max(0, num('sharpness'))), maxAccumulation: Math.max(1, Math.min(64, num('upHistory'))), rcasDenoise: checked('rcasDenoise') });
+    Object.assign(arm.upscaler.settings, { sharpness: Math.min(1, Math.max(0, num('sharpness'))), maxAccumulation: Math.max(1, Math.min(64, num('upHistory'))), rcasDenoise: checked('rcasDenoise'), autoExposure: checked('upAutoExposure'), exposure: 1 });
     arm.resetHistory();
   }
 }
-for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'svgfAlpha', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
+for (const id of ['denoiserSel', 'upscalePath', 'sharpness', 'upHistory', 'rcasDenoise', 'upAutoExposure', 'svgfAlpha', 'antiLagLocal', 'antiLagKeep', 'fireflyClamp']) $(id).addEventListener('change', applyReconstruction);
 $('resetView').addEventListener('click', () => {
   if (live) resetView(live.scene, live.session.bounds);
   live?.session.cutNext();
@@ -431,23 +538,49 @@ $('pause').addEventListener('click', () => {
   paused = !paused;
   $('pause').textContent = paused ? 'Resume' : 'Pause';
   lastFrameEnd = 0;
+  lastTick = 0;
   fps = 0;
+  fly.stop();
 });
 
 const args = new URLSearchParams(location.search);
 const hero = pagesBase || args.get('demo') === 'hero' ? await import('../hero/showcase.ts') : undefined;
 hero?.setupHero();
-for (const id of ['sunStrength', 'sunAzimuth', 'sunElevation', 'sunRadius']) $(id).addEventListener('input', () => {
-  if (live && isInterior(live.scene.name)) updateDaylight(live.session);
+for (const id of LIGHTING_FIELDS) $(id).addEventListener('input', () => {
+  if (!live || !isInterior(live.scene.name)) return;
+  updateDaylight(live.session);
+  // The network now has other lighting to learn: it is saved again once it has.
+  networkFreshFrom = live.session.cache.trained.steps;
 });
 const preset = hero || args.get('phase10') === 'mlp' ? phase10Settings('mlp') : undefined;
 const network = preset?.network ?? networkArg(args.get('network'));
 if (preset) $<HTMLInputElement>('steps').value = String(preset.stepsPerFrame);
+// While moving: half the steps, at least one (the showcase preset trains 2 per frame, so 1).
+if (preset) $<HTMLInputElement>('stepsMoving').value = String(Math.max(1, Math.floor((preset.stepsPerFrame ?? 2) / 2)));
 if (args.has('svgfHistory')) $<HTMLInputElement>('svgfHistoryLimit').value = args.get('svgfHistory')!;
 const stage = args.get('stage');
 if (stage === 'denoised' || stage === 'raw' || stage === 'final') $<HTMLSelectElement>('stageSel').value = stage;
 if (!hero && args.get('scene') && [...$<HTMLSelectElement>('scene').options].some(option => option.value === args.get('scene'))) $<HTMLSelectElement>('scene').value = args.get('scene') as string;
+// The showcase remembers the network and picks its resolution; the bench page does neither unless asked (?saved=1, ?autoRes=1), so a
+// study never starts warm by accident.
+$<HTMLInputElement>('rememberNetwork').checked = args.has('saved') ? args.get('saved') === '1' : !!hero;
+$<HTMLInputElement>('autoRes').checked = args.has('autoRes') ? args.get('autoRes') === '1' : !!hero && !args.get('res') && args.get('preset') !== 'classroom-native';
+if (hero && !args.get('res') && args.get('preset') !== 'classroom-native') {
+  try {
+    const stored = localStorage.getItem(RES_STORE) ?? sessionStorage.getItem(RES_STORE);
+    if (stored && [...$<HTMLSelectElement>('res').options].some((option) => option.value === stored)) {
+      $<HTMLSelectElement>('res').value = stored;
+      if (!args.has('autoRes')) $<HTMLInputElement>('autoRes').checked = false;
+    }
+  } catch {
+    // no storage
+  }
+}
 if (args.get('res')) $<HTMLSelectElement>('res').value = args.get('res') as string;
+if (args.get('stepsMoving')) $<HTMLInputElement>('stepsMoving').value = args.get('stepsMoving') as string;
+if (args.get('upHistoryMoving')) $<HTMLInputElement>('upHistoryMoving').value = args.get('upHistoryMoving') as string;
+// ?upAutoExposure=1: the upscaler's own pre-exposure metering (the A/B of V344)
+if (args.get('upAutoExposure')) $<HTMLInputElement>('upAutoExposure').checked = args.get('upAutoExposure') === '1';
 // ?denoiser=svgf|oidn|oidn-fast|oidn-std|none  ?oidnAux=albedo  ?stillSamples=8
 if (args.get('denoiser')) $<HTMLSelectElement>('denoiserSel').value = args.get('denoiser') as string;
 if (args.get('oidnAux')) $<HTMLSelectElement>('oidnAux').value = args.get('oidnAux') as string;
@@ -472,7 +605,7 @@ async function step(n: number): Promise<void> {
     while (busy) await new Promise((r) => setTimeout(r, 5));
     for (let i = 0; i < n; i++) {
       applyCacheSettings(l.session);
-      await l.session.frame(camera(), { arms: armsOnScreen(), train: checked('train') });
+      await l.session.frame(fly.camera, { arms: armsOnScreen(), train: checked('train') });
       encodeDisplay(l);
       await l.session.device.queue.onSubmittedWorkDone();
     }
@@ -480,4 +613,4 @@ async function step(n: number): Promise<void> {
     building = false;
   }
 }
-(window as unknown as { __nrcPipeline: unknown }).__nrcPipeline = { step, benchmark, saveAB, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, status: () => statusEl.textContent, get live() { return live; } };
+(window as unknown as { __nrcPipeline: unknown }).__nrcPipeline = { step, benchmark, saveAB, saveNetwork: () => { if (live) saveTrainedNetwork(live); }, pause: (p: boolean) => { paused = p; }, get fps() { return fps; }, status: () => statusEl.textContent, get live() { return live; }, fly };

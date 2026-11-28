@@ -104,12 +104,12 @@ export const EXAMPLES: readonly ExampleEntry[] = [
     title: 'Classroom',
     summary: 'An interior lit by the sun through the windows, with a neural radiance cache, SVGF and temporal upscaling.',
     description:
-      'Blender’s Classroom scene path traced at 640 × 360, one bounce traced before a neural radiance cache that trains while you look around, ' +
-      'denoised with SVGF and upscaled to 1280 × 720. Split the view to compare plain path tracing with the cache, change the daylight, or step through the pipeline stages.',
+      'Blender’s Classroom scene path traced at 960 × 540, one bounce traced before a neural radiance cache that trains while you look around, ' +
+      'denoised with SVGF and upscaled to 1920 × 1080. Split the view to compare plain path tracing with the cache, change the daylight, switch the lamps or the sky off, or step through the pipeline stages.',
     brief: {
       kind: "showcase",
-      shows: "A full real-time pipeline on a real interior: path tracing at 640 × 360 with a neural radiance cache for the light after the first bounce, SVGF denoising, and temporal upscaling to 1280 × 720.",
-      tryThis: ["Set Pipeline stage to Raw radiance to see what the path tracer gives in one frame, then Denoiser output, then Final output", "Choose Plain PT / NRC to split the view: the left half has no cache", "Open Render controls to move the sun"],
+      shows: "A full real-time pipeline on a real interior: path tracing at 960 × 540 with a neural radiance cache for the light after the first bounce, SVGF denoising, and temporal upscaling to 1920 × 1080.",
+      tryThis: ["Set Pipeline stage to Raw radiance to see what the path tracer gives in one frame, then Denoiser output, then Final output", "Choose Plain PT / NRC to split the view: the left half has no cache", "Open Render controls to move the sun, or switch the interior lights or the sky off and watch the cache relearn"],
       compare: "Comparison: Plain path tracing (no cache) and Pipeline stage: Raw radiance (no denoiser, no upscaler)",
     },
     category: 'showcase',

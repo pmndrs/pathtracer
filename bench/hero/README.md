@@ -7,11 +7,31 @@ python3 bench/hero/prepare.py
 node bench/live.ts nrc-hero
 ```
 
-The page opens on Classroom in a WebGPU browser. It trains the compact fp16 MLP continuously at 640 × 360 (fp32 fallback), traces one bounce before querying the cache, denoises color with SVGF and displays the temporal upscaler at 1280 × 720. Startup uses the pipeline's short SVGF training gate. Choose **Plain PT / NRC** for a split with identical reconstruction on both sides. **Pipeline stage** switches between raw color, denoised color, and final output using the current camera and cache. For a presentation, choose **Fullscreen**, then **Render controls** to adjust daylight over the live image. Close the panel for a clear view and choose **Exit fullscreen** to return. Shift-drag moves the divider. Drag to look, use WASD to move and Q/E for height.
+The page opens on Classroom in a WebGPU browser. It trains the compact fp16 MLP continuously at 960 × 540 (fp32 fallback), traces one bounce before querying the cache, denoises color with SVGF and displays the temporal upscaler at 1920 × 1080. On a slower GPU choose 640 × 360 under **Render controls** or open the page with `?res=640x360`. Startup uses the pipeline's short SVGF training gate. Choose **Plain PT / NRC** for a split with identical reconstruction on both sides. **Pipeline stage** switches between raw color, denoised color, and final output using the current camera and cache. For a presentation, choose **Fullscreen**, then **Render controls** to adjust daylight over the live image. Close the panel for a clear view and choose **Exit fullscreen** to return. Shift-drag moves the divider. Drag to look, use WASD or the arrow keys to move, Q/E for height and Shift to move faster. The camera moves on a fixed 1/120 s step from real time (`bench/realtime/fly-camera.ts`), also while a frame is still rendering, so its speed does not depend on the frame rate.
 
 **Classroom** uses the original render camera and evaluated geometry from Christophe Seux’s Blender Cycles Classroom. The web conversion maps the legacy material graphs to color textures and approximate PBR lobes, uses a warm directional sun, blue sky, ceiling emitters and a blackboard area emitter. The Cycles window sampling portals and the exterior fill-light proxy are omitted so the sky is visible and blinds can cast shadows. The point lamps, Cycles compositor, dust and volume passes are omitted. Most color textures are reduced to 512 px, with up to 1024 px for the blackboard. [Original Blender scene archive](https://download.blender.org/demo/test/classroom.zip)
 
 **Sponza** uses Crytek’s atrium from the pinned Khronos glTF Sample Assets revision with the project’s atrium camera, sun and sky. The conversion preserves original base-color maps, glTF material factors and alpha masks at up to 512 px, and omits the normal and metallic-roughness maps. The model files, converted meshes and decoded textures stay in git-ignored asset directories. [Original Sponza and license](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Sponza)
+
+### Lighting
+
+**Render controls → Lighting** has the sun's strength, direction and size, and two switches: **Interior lights** (the ceiling lamps and the blackboard light) and **Sky light** (the sky seen through the windows; the sun is separate, set its strength to 0). The switches rewrite the light table and the emissive materials in the scene buffer, so nothing reloads and the cache relearns the new lighting while you watch. With everything off the image is black.
+
+**Lamp brightness** scales the interior emitters (0 to 4 times what the scene ships with); the image responds linearly (denoised mean 0.044 with the lamps off, 0.083 at 0.5×, 0.122 at 1×, 0.200 at 2×).
+
+### While the camera moves
+
+Two settings change while the camera moves and return a quarter of a second after it stops: the cache trains fewer steps per frame (**Cache → Steps / frame while moving**, 1 instead of 2) and the upscaler keeps a shorter history (**Upscaler → Max history while moving**, 8 frames instead of 24: less trailing, more grain). Both are first guesses that have not been tuned by eye; set either to its still value to switch it off (`?stepsMoving=2&upHistoryMoving=24`).
+
+### Starting warm, and slower GPUs
+
+**Cache → Remember the trained network** (on) keeps the trained weights in the browser and loads them on the next visit, so the page does not start with plain path tracing behind the warm-up gate. A saved network is only used for the scene, settings and lighting it was trained under; **Reset cache** forgets it, `?saved=0` switches it off.
+
+**Scene → Lower the resolution if the GPU is slow** (on) measures the first seconds at 960 × 540 and drops to 640 × 360 once if a frame takes longer than 50 ms; the network is kept across the switch. A size you pick yourself is remembered and ends the automatic choice (`?autoRes=0`, or any `?res=`).
+
+### Bright specks while moving
+
+The temporal upscaler runs with its **Auto pre-exposure** off here (fixed at 1, DIVERGES V344; reported as pmndrs/upscaler#118). With it on, a moving camera showed bright specks in the final stage only (values up to 139 where the denoised frame never exceeds 20; about 17 pixels per 1920 × 1080 frame, on the plain side as much as on the NRC side) and none when still. The raw and the denoised stages are the same moving or still. Turn the switch on under **Render controls → Upscaler**, or open the page with `?upAutoExposure=1`, to see the difference.
 
 ### Comparing reconstruction
 

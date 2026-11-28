@@ -34,7 +34,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm >= 11.5.1; pnpm publish runs npm under the hood.
       - run: npm install -g npm@latest
-      # Only the published packages: bench links sibling checkouts (Denoiser, upscaler) that CI does not have.
+      # Only the published packages: bench links a sibling checkout (Denoiser) that CI does not have.
       - run: pnpm install --frozen-lockfile --filter ./packages/raytracer --filter ./packages/pathtracer
       - run: pnpm -r --filter "./packages/*" run build
       - run: pnpm -r publish --access public --no-git-checks

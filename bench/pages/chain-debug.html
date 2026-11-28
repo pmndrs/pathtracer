@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chain debug</title>
+    <style>
+      :root {
+        --bg: #f3f4f6;
+        --panel: #ffffff;
+        --fg: #16191f;
+        --muted: #5b6372;
+        --line: #d9dde4;
+        --accent: #1f6feb;
+        --warn: #b45309;
+        --mono: ui-monospace, 'SF Mono', Menlo, monospace;
+        --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #0e1013; --panel: #171a1f; --fg: #e6e8ec; --muted: #9aa3b2; --line: #2a2f37; --accent: #5b9cff; --warn: #f0a04b; color-scheme: dark; }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); }
+      .app { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 12px; height: 100%; padding: 12px; }
+      @media (max-width: 900px) { .app { grid-template-columns: 1fr; height: auto; } }
+      .view { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+      .stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; }
+      .frame { position: relative; max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9; width: 100%; }
+      canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+      .tags { position: absolute; inset: 0; pointer-events: none; display: grid; }
+      .tags.single { grid-template: 1fr / 1fr; }
+      .tags.grid { grid-template: 1fr 1fr / 1fr 1fr; }
+      .tags span { align-self: start; justify-self: start; margin: 6px; padding: 1px 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 11px; font-family: var(--mono); }
+      .status { color: var(--muted); font-family: var(--mono); font-size: 12px; min-height: 1.5em; }
+      .status.err { color: var(--warn); white-space: pre-wrap; }
+      aside { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+      h1 { font-size: 15px; margin: 0; }
+      details { border-top: 1px solid var(--line); padding-top: 8px; }
+      summary { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; cursor: pointer; margin-bottom: 6px; }
+      .fields { display: flex; flex-direction: column; gap: 5px; }
+      [hidden] { display: none !important; }
+      label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      label.check { justify-content: flex-start; }
+      select, input[type='number'], input[type='text'] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; max-width: 170px; }
+      input[type='number'] { width: 80px; }
+      input[type='range'] { width: 130px; }
+      button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px; cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; }
+      table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+      td { padding: 1px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+      td.v { text-align: right; white-space: nowrap; }
+      .note { color: var(--muted); font-size: 12px; margin: 0; }
+      kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="view">
+        <div class="stage">
+          <div class="frame" id="frameBox">
+            <canvas id="canvas" width="1920" height="1080" aria-label="Real-time chain debug view: the selected pass or passes"></canvas>
+            <div class="tags single" id="tags"><span></span><span></span><span></span><span></span></div>
+          </div>
+        </div>
+        <div class="status" id="status">Loading…</div>
+      </div>
+      <aside>
+        <div>
+          <h1>Real-time chain debug</h1>
+          <p class="note">Every pass of path tracing → pack → denoiser → upscaler, one at a time or four at once. Drag to look, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Q</kbd>/<kbd>E</kbd> down/up. Click a pixel to read every pass there and to centre the zoom. <kbd>Space</kbd> pauses, <kbd>.</kbd> steps one frame.</p>
+        </div>
+
+        <details open>
+          <summary>View</summary>
+          <div class="fields">
+            <label>Layout <select autocomplete="off" id="layout"><option value="single">One pass</option><option value="grid" selected>Four passes (2 × 2)</option></select></label>
+            <label>Top left <select autocomplete="off" id="view0" class="viewSel"></select></label>
+            <label>Top right <select autocomplete="off" id="view1" class="viewSel"></select></label>
+            <label>Bottom left <select autocomplete="off" id="view2" class="viewSel"></select></label>
+            <label>Bottom right <select autocomplete="off" id="view3" class="viewSel"></select></label>
+            <label title="Magnifies around the clicked pixel, nearest texel">Zoom <select autocomplete="off" id="zoom"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select></label>
+            <label>Exposure (EV) <input autocomplete="off" id="exposure" type="range" min="-4" max="4" step="0.25" value="0" /></label>
+            <label title="Scalar passes (top-left pass): the value range mapped onto the colour ramp. Filled in from the pass's default when you pick it">Range (top left) <span><input autocomplete="off" id="lo" type="number" step="any" /> <input autocomplete="off" id="hi" type="number" step="any" /></span></label>
+            <label class="check"><input autocomplete="off" id="logScale" type="checkbox" /> Log scale (top left)</label>
+            <label title="Which pass the temporal-change view measures">Temporal change of <select autocomplete="off" id="flickerSrc"></select></label>
+            <label class="check" title="Compare each pixel with the previous frame at the point it showed then (motion vectors), so camera motion itself is not counted as flicker"><input autocomplete="off" id="reproject" type="checkbox" checked /> Reproject with motion vectors</label>
+            <p class="note">Scalar passes use a blue → red ramp; NaN and infinity show magenta. "Temporal change" is a running mean of |L(t) − L(t−1)| / L per pixel, the previous frame taken where the pixel was (motion vectors): the flicker map.</p>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Camera</summary>
+          <div class="fields">
+            <div class="row"><button id="pause">Pause</button><button id="stepOne">Step 1 frame</button><button id="resetView">Scene camera</button></div>
+            <label title="A name for the next pin (optional)">Pin name <input autocomplete="off" id="pinName" type="text" placeholder="e.g. coat rack" /></label>
+            <div class="row"><button id="pinView">Pin this view</button><button id="copyLink">Copy link</button></div>
+            <label>Pinned views <select autocomplete="off" id="pinSel"></select></label>
+            <div class="row"><button id="gotoPin">Go to pin</button><button id="forgetPin">Forget pin</button></div>
+            <label title="Moves the camera the same way every time, so artefacts that show only in motion can be compared between settings">Scripted motion <select autocomplete="off" id="motion"><option value="off">Off (keys and mouse)</option><option value="strafe">Strafe left / right</option><option value="pan">Pan left / right</option><option value="dolly">Dolly in / out</option></select></label>
+            <label>Motion amplitude <input autocomplete="off" id="motionAmp" type="number" min="0" step="0.01" value="0.15" /></label>
+            <label>Motion period (frames) <input autocomplete="off" id="motionPeriod" type="number" min="4" step="1" value="120" /></label>
+            <p class="note" id="pinNote"></p>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Path tracing</summary>
+          <div class="fields">
+            <label>Scene <select autocomplete="off" id="scene"><option value="hero-classroom" selected>Classroom (color)</option><option value="hero-sponza">Sponza (color)</option><option value="sponza-white">Sponza (grey)</option><option value="cornell">Cornell box</option></select></label>
+            <label>Render resolution <select autocomplete="off" id="res"><option value="480x270">480 × 270</option><option value="640x360">640 × 360</option><option value="960x540" selected>960 × 540</option><option value="1280x720">1280 × 720</option></select></label>
+            <label>Display scale <select autocomplete="off" id="displayScale"><option value="2">2×</option><option value="1">1× (native)</option></select></label>
+            <label>Source <select autocomplete="off" id="arm"><option value="nrc" selected>Path tracing + NRC</option><option value="plain">Plain path tracing</option></select></label>
+            <label title="Who owns the sub-pixel jitter (one owner per pipeline; a change rebuilds). Per pixel: the sampler's own point, different for every pixel and frame; the upscaler runs without jitter. Upscaler: its per-frame sequence, given to the path tracer and the denoiser, and the upscaler reconstructs with it. Off: pixel centres (aliased, for diagnosis)">Camera jitter <select autocomplete="off" id="jitter"><option value="sampler" selected>Per pixel (sampler)</option><option value="upscaler">Per frame: the upscaler's sequence</option><option value="centre">Off: pixel centre</option></select></label>
+            <label title="Texture level of detail of the path tracer (a change rebuilds). Mip 0: every lookup at the finest level (before 2026-11-27; the albedo, roughness and normal-map guides alias at 1 spp). Ray cone: the footprint of the pixel picks the mip level, scale = the cone's start in pixels">Texture LOD <select autocomplete="off" id="textureLod"><option value="mip0">Mip 0 (aliases)</option><option value="cone" selected>Ray cone, one display pixel (default)</option><option value="cone1">Ray cone, 1 render px</option><option value="cone0.5">Ray cone, 0.5 render px</option><option value="cone2">Ray cone, 2 px</option></select></label>
+            <label>Samples / frame <input autocomplete="off" id="spp" type="number" min="1" max="16" value="1" /></label>
+            <label>Max path depth <input autocomplete="off" id="maxDepth" type="number" min="1" max="32" placeholder="Scene" /></label>
+            <label title="Limit each sample's linear luminance before averaging; 0 disables the clamp">Firefly clamp <input autocomplete="off" id="fireflyClamp" type="number" min="0" step="0.1" value="0" /></label>
+            <label class="check"><input autocomplete="off" id="accumulateStill" type="checkbox" /> Accumulate while still</label>
+            <label title="Effective sample history fed into SVGF while still (0 = every sample)">SVGF input history (spp) <input autocomplete="off" id="svgfHistoryLimit" type="number" min="0" max="4096" step="1" value="16" /></label>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Denoiser</summary>
+          <div class="fields">
+            <label>Denoiser <select autocomplete="off" id="denoiserSel"><option value="svgf" selected>SVGF (temporal)</option><option value="oidn">OIDN: small net, standard at N still</option><option value="oidn-fast">OIDN small net always</option><option value="oidn-std">OIDN standard net always</option><option value="none">None (raw to upscaler)</option></select></label>
+            <label title="Minimum weight of the current frame in the temporal blend">Current-frame weight <input autocomplete="off" id="svgfAlpha" type="number" min="0.01" max="1" step="0.01" value="0.1" /></label>
+            <label title="History length cap (frames)">Max history <input autocomplete="off" id="maxHistory" type="number" min="1" max="256" value="64" /></label>
+            <label title="Disocclusion: plane-distance threshold relative to the camera distance">Plane distance <input autocomplete="off" id="planeDistance" type="number" min="0" step="0.001" value="0.01" /></label>
+            <label title="Disocclusion: minimum cosine between the current and previous normals">Normal threshold <input autocomplete="off" id="normalThreshold" type="number" min="-1" max="1" step="0.01" value="0.95" /></label>
+            <label title="'soft' retries a failed footprint at a looser normal with a short history; 'relative' relaxes to the 3x3 neighbourhood's own spread">Normal test <select autocomplete="off" id="normalTest"><option value="soft" selected>soft</option><option value="center">center</option><option value="relative">relative</option></select></label>
+            <label title="History when no tap of the 2x2 footprint passes: SVGF's 3x3 fallback (meant for thin geometry), none, or strict">History fallback <select autocomplete="off" id="historyFallback"><option value="3x3" selected>3 × 3</option><option value="off">off</option><option value="strict">strict</option></select></label>
+            <label title="Denoiser option historyFootprint (N11.17; only on Denoiser branch fix/jitter-edge-history, ignored by Denoiser main): where a pixel would restart because its one-sample guides changed surface under the jitter, keep the history of footprint taps that are another sample of the same pixel footprint. neighbour: the tap's surface is still shown by one of the 8 neighbours this frame; plane: the tap's point is within the plane distance, whatever its normal; both: either. The history length is capped at dwell / motion (px per frame)">Footprint history (Denoiser branch only) <select autocomplete="off" id="historyFootprint"><option value="off" selected>off (restart)</option><option value="neighbour">neighbour</option><option value="plane">plane</option><option value="both">both</option></select></label>
+            <label title="historyFootprintDwell: footprint history is capped at this / motion in pixels per frame">Footprint dwell (px, branch only) <input autocomplete="off" id="footprintDwell" type="number" min="0" step="0.25" value="1" /></label>
+            <label>History filter <select autocomplete="off" id="historyFilter"><option value="bilinear" selected>bilinear</option><option value="catmull-rom">Catmull-Rom</option></select></label>
+            <label title="A-SVGF: shortens the history where the image changed">Anti-lag <select autocomplete="off" id="antiLag"><option value="default" selected>package default</option><option value="off">off</option><option value="auto">auto</option><option value="gradient">gradient (retraced samples)</option></select></label>
+            <label title="antiLagRadius: the max filter of lambda over neighbouring 3 x 3 strata (1 = 3 x 3 strata, 0 = none)">Anti-lag radius (strata) <input autocomplete="off" id="antiLagRadius" type="number" min="0" max="3" step="1" value="1" /></label>
+            <label class="check" title="secondHistory (Denoiser branch, N11.18): each pixel also keeps the last other surface it showed, with its own colour, moments and history length; a pixel that alternates between two surfaces under the jitter continues the matching one"><input autocomplete="off" id="secondHistory" type="checkbox" /> Second history per pixel (Denoiser branch only)</label>
+            <label class="check" title="With anti-lag on: keep (1 − λ) × the history length instead of A-SVGF's reset to 1 / α (a small λ from noise then no longer caps a still view at ~6 frames)"><input autocomplete="off" id="antiLagHistoryScale" type="checkbox" /> Anti-lag scales history (keeps it)</label>
+            <label>À-trous iterations <input autocomplete="off" id="atrousIterations" type="number" min="0" max="8" value="5" /></label>
+            <label>Kernel <select autocomplete="off" id="kernel"><option value="3x3" selected>3 × 3</option><option value="5x5">5 × 5</option></select></label>
+            <label title="Edge stop on view depth">σ depth <input autocomplete="off" id="sigmaDepth" type="number" min="0" step="0.1" value="1" /></label>
+            <label title="Edge stop on normals (power)">σ normal <input autocomplete="off" id="sigmaNormal" type="number" min="0" step="1" value="128" /></label>
+            <label title="Edge stop on luminance, in standard deviations">σ luminance <input autocomplete="off" id="sigmaLuminance" type="number" min="0" step="0.1" value="4" /></label>
+            <label title="Which point the specular history follows: the surface, the reflected image, or both blended">Reflection reprojection <select autocomplete="off" id="reflectionReprojection"><option value="surface" selected>surface</option><option value="virtual">virtual</option><option value="dual">dual</option></select></label>
+            <label class="check" title="Drop specular history whose reflected hit distance changed (the reflection's own disocclusion test)"><input autocomplete="off" id="reflectionHitTest" type="checkbox" /> Reflection hit-distance test</label>
+            <label>OIDN guides <select autocomplete="off" id="oidnAux"><option value="albedo+normal" selected>albedo + normal</option><option value="albedo">albedo only</option></select></label>
+            <label title="OIDN denoises the mean of the frames since the camera last moved; after this many the standard net runs once">OIDN still samples <input autocomplete="off" id="stillSamples" type="number" min="1" max="64" value="8" /></label>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Upscaler</summary>
+          <div class="fields">
+            <label>Upscaling <select autocomplete="off" id="upscalePath"><option value="temporal">Temporal</option><option value="spatial">Spatial</option><option value="bilinear">Bilinear</option></select></label>
+            <label>Sharpness <input autocomplete="off" id="sharpness" type="number" min="0" max="1" step="0.05" value="0.8" /></label>
+            <label>Max history (frames) <input autocomplete="off" id="upHistory" type="number" min="1" max="64" value="24" /></label>
+            <label class="check" title="Feeds the upscaler a reactive mask from the SVGF history length: freshly disoccluded pixels favour the current frame (SVGF only)"><input autocomplete="off" id="reactive" type="checkbox" /> Reactive mask from SVGF history</label>
+            <label>Reactive cap (frames) <input autocomplete="off" id="reactiveCap" type="number" min="1" max="64" value="8" /></label>
+            <label class="check"><input autocomplete="off" id="rcasDenoise" type="checkbox" /> Suppress grain in sharpening</label>
+            <label class="check"><input autocomplete="off" id="upAutoExposure" type="checkbox" /> Auto pre-exposure</label>
+          </div>
+        </details>
+
+        <details>
+          <summary>Cache</summary>
+          <div class="fields">
+            <label class="check"><input autocomplete="off" id="train" type="checkbox" checked /> Train every frame</label>
+            <label>Training steps / frame <input autocomplete="off" id="steps" type="number" min="0" max="16" value="2" /></label>
+            <label title="Plain path tracing on the NRC side until the network has trained this many steps (SVGF 120, OIDN 600 in the showcase)">Warm-up gate (steps) <input autocomplete="off" id="gateSteps" type="number" min="0" max="5000" value="120" /></label>
+            <label class="check" title="Loads the network this page saved for this scene and lighting (IndexedDB of this page's address)"><input autocomplete="off" id="loadSaved" type="checkbox" checked /> Start from the saved network</label>
+            <div class="row"><button id="saveNet">Save network</button><button id="resetCache">Reset cache</button></div>
+          </div>
+        </details>
+
+        <details id="daylight" hidden>
+          <summary>Lighting</summary>
+          <div class="fields">
+            <label class="check"><input autocomplete="off" id="interiorLights" type="checkbox" checked /> Interior lights</label>
+            <label>Lamp brightness <input autocomplete="off" id="lampStrength" type="range" min="0" max="4" step="0.1" value="1"><output></output></label>
+            <label class="check"><input autocomplete="off" id="skyLight" type="checkbox" checked /> Sky light</label>
+            <label>Sun strength <input autocomplete="off" id="sunStrength" type="range" min="0" max="6" step="0.1" value="1"><output></output></label>
+            <label>Sun azimuth <input autocomplete="off" id="sunAzimuth" type="range" min="-180" max="180" step="1"><output></output></label>
+            <label>Sun elevation <input autocomplete="off" id="sunElevation" type="range" min="1" max="89" step="1"><output></output></label>
+            <label>Sun radius <input autocomplete="off" id="sunRadius" type="range" min="0" max="2" step="0.001"><output></output></label>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Measure</summary>
+          <div class="fields">
+            <div class="row"><button class="primary" id="measure">Flicker over 60 frames</button><button id="measureLag" title="Lighting step (lamps off, no history cut) and, with scripted motion on, the error while moving against a settled image at the same pose. Takes about a thousand frames">Lag and ghosting</button><button id="savePasses">Save passes (PFM)</button><button id="stats">Stats of top-left pass</button></div>
+            <p class="note" id="statsNote"></p>
+            <table id="flickerTable" aria-label="Flicker per stage"><tbody><tr><td>Mean relative change |ΔL| / L per frame per stage (reprojected: camera motion is not counted), whole image and a 32 px window around the clicked pixel. Use with scripted motion for a repeatable number.</td><td class="v"></td></tr></tbody></table>
+            <table id="probeTable" aria-label="Values at the clicked pixel"><tbody><tr><td>Click a pixel to read every pass there.</td><td class="v"></td></tr></tbody></table>
+            <p class="note" id="saveNote"></p>
+          </div>
+        </details>
+      </aside>
+    </div>
+    <script type="module" src="./chain-debug.ts"></script>
+  </body>
+</html>

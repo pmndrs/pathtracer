@@ -16,6 +16,7 @@ import type { SceneDesc } from '../scenes/schema.ts';
 import { cameraKey } from '../realtime/chain-math.ts';
 import { NrcCache, type NrcSettings } from './cache.ts';
 import { PipelineArm, type DenoiserKind, type OidnArmSettings, type PipelineSettings } from '../realtime/chain.ts';
+import { GradientSamples } from '../realtime/gradient-samples.ts';
 
 export interface SessionOptions {
   scene: SceneDesc;
@@ -34,6 +35,20 @@ export interface SessionOptions {
   /** Denoiser of both arms: 'svgf' (default), 'oidn' (with `oidn` settings), 'none'. */
   denoise?: DenoiserKind;
   oidn?: Partial<OidnArmSettings>;
+  /** Reactive mask from the SVGF history length for the upscaler (`PipelineSettings.reactive`; then `arm.reactiveEnabled` switches it). Default off. */
+  reactive?: PipelineSettings['reactive'];
+  /** Who owns the camera jitter (`PipelineSettings.jitter`): 'sampler' (default, per pixel), 'upscaler' (its per-frame sequence) or 'centre'. */
+  jitter?: PipelineSettings['jitter'];
+  /**
+   * Texture level of detail of both arms' kernels: 'cone' (default since 2026-11-27: ray-cone footprint, the library's `mode: 'realtime'`
+   * choice; N11.17 cut the interior albedo-guide change 8.7% -> 3.0% per frame) or 0 (every lookup at mip 0, which aliases the albedo /
+   * roughness / normal guides at 1 spp; the setting of every chain study before that date). `textureConeScale` scales the cone's start in
+   * render pixels; default render / display width (0.5 at 2x upscaling: a display pixel's footprint, the usual upscaler mip bias of
+   * log2(render / display)). Classroom, 640x360 -> 2x: a full render pixel (1) blurred the wood (-17% detail on the floor), 0.5 kept most of it
+   * (-8%) with the same flicker gain (N11.17).
+   */
+  textureLod?: 'cone' | 0;
+  textureConeScale?: number;
 }
 
 export type ArmName = 'plain' | 'nrc';
@@ -52,6 +67,14 @@ export class NrcPipelineSession {
   nrcSpp = 1;
   accumulateStill = false;
   svgfHistoryLimit = 0;
+  /**
+   * N11.18: make A-SVGF gradient samples for the denoiser (`antiLag: 'gradient'`): every frame the previous frame is traced again through
+   * the current scene (`bench/realtime/gradient-samples.ts`; one more path-traced frame per frame). 1 sample per pixel, not with
+   * `accumulateStill`. The arms hand the textures to SVGF as `inputs.gradient` while this is on.
+   */
+  gradientSamples = false;
+  private grad: Partial<Record<ArmName, GradientSamples>> = {};
+  private lastTrain = true;
   readonly samples = { plain: 0, nrc: 0 };
   private stillKey = { plain: '', nrc: '' };
   private camera: PtLookAtCamera | null = null;
@@ -61,8 +84,13 @@ export class NrcPipelineSession {
     Object.assign(this, init);
   }
 
+  /** The texture cone's start in render pixels: the option, else one display pixel (render / display width, at most 1). */
+  static coneScale(o: SessionOptions): number {
+    return o.textureConeScale ?? Math.min(1, o.width / o.displayWidth);
+  }
+
   static async create(o: SessionOptions): Promise<NrcPipelineSession> {
-    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
+    const adapter = new PtMegakernelAdapter({ nee: true, frame: true, sampler: 'bluenoise', scenePacking: 'packed', ...(o.jitter && o.jitter !== 'sampler' ? { cameraJitter: 'engine' as const } : {}), ...((o.textureLod ?? 'cone') === 'cone' ? { textureLod: 'cone' as const, textureConeScale: NrcPipelineSession.coneScale(o) } : {}), ...(o.maxDepth ? { maxDepth: o.maxDepth } : {}) });
     await adapter.load(o.scene);
     const gpu = adapter.gpuContext!;
     const device = gpu.device;
@@ -83,7 +111,8 @@ export class NrcPipelineSession {
       training: 'inline',
       ...(o.cache ?? {}),
     });
-    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}) };
+    const ps: PipelineSettings = { width: o.width, height: o.height, displayWidth: o.displayWidth, displayHeight: o.displayHeight, ...(o.denoiser ? { denoiser: o.denoiser } : {}), ...(o.upscaler ? { upscaler: o.upscaler } : {}), ...(o.denoise ? { denoise: o.denoise } : {}), ...(o.oidn ? { oidn: o.oidn } : {}), ...(o.reactive ? { reactive: o.reactive } : {}), ...(o.jitter ? { jitter: o.jitter } : {}) };
+    if ((o.textureLod ?? 'cone') === 'cone') for (const k of [plain, cache.render]) k.setLimits({ ...limits, textureConeScale: NrcPipelineSession.coneScale(o) });
     const [pa, na] = await Promise.all([PipelineArm.create(device, ps, 'plain'), PipelineArm.create(device, ps, 'nrc')]);
     return new NrcPipelineSession({ adapter, device, plain, cache, arms: { plain: pa, nrc: na }, options: o, bounds, inferDescription: cache.hash ? cache.description : arm.description });
   }
@@ -138,6 +167,7 @@ export class NrcPipelineSession {
    * Returns the arms that rendered.
    */
   async frame(camera: PtLookAtCamera, o: { arms?: readonly ArmName[]; train?: boolean; denoise?: boolean } = {}): Promise<ArmName[]> {
+    this.retrace(o.arms ?? ['plain', 'nrc']); // before the kernels learn about this frame: they still hold last frame's camera and jitter
     this.setCamera(camera); // first: a cut resets the arms, which releases a held frame
     const arms = (o.arms ?? ['plain', 'nrc']).filter((a) => o.denoise === false || !this.arms[a].heldFor(camera));
     const encoder = this.device.createCommandEncoder({ label: 'nrc pipeline frame' });
@@ -160,6 +190,45 @@ export class NrcPipelineSession {
     }
   }
 
+  private gradientOn(): boolean {
+    return this.gradientSamples && !this.accumulateStill && this.plainSpp === 1 && this.nrcSpp === 1;
+  }
+
+  /** The gradient samples' first half: last frame again, with the scene as it is now (its own submit: the kernels' uniforms are per submit). */
+  private retrace(arms: readonly ArmName[]): void {
+    const on = this.gradientOn() && !this.cut && !!this.camera;
+    for (const arm of ['plain', 'nrc'] as const) {
+      const g = this.grad[arm];
+      this.arms[arm].gradient = on && arms.includes(arm) ? (this.grad[arm] ??= new GradientSamples(this.device, this.options.width, this.options.height, arm)) : null;
+      if (!g) continue;
+      if (!on || !arms.includes(arm) || !g.have || (arm === 'nrc' && this.cache.warming)) {
+        g.invalidate();
+        continue;
+      }
+      const encoder = this.device.createCommandEncoder({ label: `gradient retrace ${arm}` });
+      if (arm === 'plain') {
+        this.plain.setFrameIndex(this.plain.samples - 1);
+        this.plain.encode(encoder, 1);
+        g.keepRetrace(encoder, this.plain.frameBuffers.planes);
+      } else {
+        const c = this.cache;
+        const count = (c as unknown as { queryCount: GPUBuffer }).queryCount;
+        // the cache's own frame counter (word 1; the resolve pass bumps it) picks the training tiles: replay last frame's value
+        encoder.copyBufferToBuffer(this.nrcCounter(), 0, count, 4, 4);
+        c.render.setFrameIndex(c.render.samples - 1);
+        c.encodeStage(encoder, 'renderPass', this.lastTrain);
+        c.encodeStage(encoder, 'inference', this.lastTrain);
+        g.keepRetrace(encoder, c.render.frameBuffers.planes);
+      }
+      this.device.queue.submit([encoder.finish()]);
+    }
+  }
+
+  private counterCopy: GPUBuffer | null = null;
+  private nrcCounter(): GPUBuffer {
+    return (this.counterCopy ??= this.device.createBuffer({ label: 'nrc frame counter copy', size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST }));
+  }
+
   private beginSamples(encoder: GPUCommandEncoder, arm: ArmName, count: number, key: string): void {
     const pipeline = this.arms[arm];
     pipeline.setSignalHistoryLimit(key && pipeline.kind === 'svgf' ? this.svgfHistoryLimit : 0);
@@ -171,24 +240,48 @@ export class NrcPipelineSession {
     this.samples[arm] += count;
   }
 
+  /** The arm's jitter for this frame onto its kernel (with an engine-owned jitter; the sampler's own jitter needs nothing). */
+  private applyJitter(arm: ArmName): void {
+    const j = this.arms[arm].nextJitter();
+    if ((this.options.jitter ?? 'sampler') === 'sampler') return;
+    (arm === 'plain' ? this.plain : this.cache.render).setCameraJitter(j.x, j.y);
+  }
+
   encodePlain(encoder: GPUCommandEncoder, key = ''): void {
     const arm = this.arms.plain;
+    this.applyJitter('plain');
     this.beginSamples(encoder, 'plain', this.plainSpp, key);
     for (let k = 0; k < this.plainSpp; k++) {
       this.plain.encode(encoder, 1);
       arm.accumulate(encoder, this.plain.frameBuffers);
     }
+    if (this.gradientOn()) (this.grad.plain ??= new GradientSamples(this.device, this.options.width, this.options.height, 'plain')).encode(encoder, this.plain.frameBuffers.planes);
+    else this.grad.plain?.invalidate();
     arm.pack(encoder, this.samples.plain);
   }
 
   encodeCache(encoder: GPUCommandEncoder, train: boolean, key = ''): void {
     const arm = this.arms.nrc;
+    this.applyJitter('nrc');
     this.beginSamples(encoder, 'nrc', this.nrcSpp, key);
+    const grad = this.gradientOn() && !this.cache.warming;
+    if (grad) encoder.copyBufferToBuffer((this.cache as unknown as { queryCount: GPUBuffer }).queryCount, 4, this.nrcCounter(), 0, 4);
     for (let i = 0; i < this.nrcSpp; i++) {
       // Update weights once, after the last render sample, including at the warm-up boundary.
-      this.cache.encodeFrame(encoder, { train: i === this.nrcSpp - 1 && train && this.cache.settings.stepsPerFrame > 0 });
+      this.lastTrain = i === this.nrcSpp - 1 && train && this.cache.settings.stepsPerFrame > 0;
+      if (grad) {
+        // as `encodeFrame`, with the gradient pass between the image and the weight update (the planes are final after 'inference')
+        (this.cache as unknown as { frame: number }).frame++;
+        this.cache.encodeStage(encoder, 'renderPass', this.lastTrain);
+        this.cache.encodeStage(encoder, 'inference', this.lastTrain);
+      } else {
+        this.cache.encodeFrame(encoder, { train: this.lastTrain });
+      }
       arm.accumulate(encoder, this.cache.render.frameBuffers);
+      if (grad && this.lastTrain) this.cache.encodeStage(encoder, 'trainSteps', true);
     }
+    if (grad) (this.grad.nrc ??= new GradientSamples(this.device, this.options.width, this.options.height, 'nrc')).encode(encoder, this.cache.render.frameBuffers.planes);
+    else this.grad.nrc?.invalidate();
     arm.pack(encoder, this.samples.nrc);
   }
 
@@ -253,6 +346,8 @@ export class NrcPipelineSession {
   }
 
   destroy(): void {
+    for (const g of Object.values(this.grad)) g?.destroy();
+    this.counterCopy?.destroy();
     this.arms.plain.destroy();
     this.arms.nrc.destroy();
     this.cache.destroy();
